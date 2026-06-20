@@ -1271,7 +1271,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
           departmentId: text(80),
           name: text(120),
           level: z.coerce.number().int().min(1).max(999).default(1),
-          permissions: z.record(z.any()).default({})
+          permissions: z.record(z.string(), z.any()).default({})
         }),
         req,
         res
@@ -1394,7 +1394,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
     requireAuth,
     requireAdmin,
     asyncHandler(async (req, res) => {
-      const body = parseBody(z.object({ key: text(80), value: z.record(z.any()).default({}) }), req, res);
+      const body = parseBody(z.object({ key: text(80), value: z.record(z.string(), z.any()).default({}) }), req, res);
       if (!body) return;
 
       const prisma = getPrisma();
