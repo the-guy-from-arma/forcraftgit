@@ -1,11 +1,14 @@
 import crypto from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
+import type { SignOptions } from "jsonwebtoken";
 import { getPrisma } from "./db.js";
 import { canAccessAdmin, canAccessDepartment, canAccessDispatch, publicUser } from "./security.js";
 
 const DEFAULT_DEV_SECRET = "faircroft-coreone-dev-secret-change-me";
-const DEFAULT_JWT_EXPIRES = "7d";
+type JwtExpiresIn = NonNullable<SignOptions["expiresIn"]>;
+
+const DEFAULT_JWT_EXPIRES: JwtExpiresIn = "7d";
 
 export type AuthedRequest = Request & {
   auth: {
@@ -29,20 +32,36 @@ function getJwtSecret(): string {
   return secret || DEFAULT_DEV_SECRET;
 }
 
-function getJwtExpires(): string {
-  return process.env.JWT_EXPIRES_IN || DEFAULT_JWT_EXPIRES;
+function getJwtExpires(): JwtExpiresIn {
+  const configured = process.env.JWT_EXPIRES_IN?.trim();
+  if (!configured) return DEFAULT_JWT_EXPIRES;
+
+  if (/^\d+$/.test(configured)) return Number(configured);
+  if (/^\d+(ms|s|m|h|d|w|y)$/i.test(configured)) return configured as JwtExpiresIn;
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("JWT_EXPIRES_IN must be a duration like 7d, 12h, 30m, or a number of seconds.");
+  }
+
+  return DEFAULT_JWT_EXPIRES;
 }
 
 function getTokenExpiryMs(): number {
   const configured = getJwtExpires();
-  const match = configured.match(/^(\d+)([hdm])$/);
+  if (typeof configured === "number") return configured * 1000;
+
+  const match = configured.match(/^(\d+)(ms|s|m|h|d|w|y)$/i);
   if (!match) return 7 * 24 * 60 * 60 * 1000;
 
   const value = Number(match[1]);
-  const unit = match[2];
-  if (unit === "h") return value * 60 * 60 * 1000;
+  const unit = match[2].toLowerCase();
+  if (unit === "ms") return value;
+  if (unit === "s") return value * 1000;
   if (unit === "m") return value * 60 * 1000;
-  return value * 24 * 60 * 60 * 1000;
+  if (unit === "h") return value * 60 * 60 * 1000;
+  if (unit === "d") return value * 24 * 60 * 60 * 1000;
+  if (unit === "w") return value * 7 * 24 * 60 * 60 * 1000;
+  return value * 365 * 24 * 60 * 60 * 1000;
 }
 
 export async function issueSession(user: any, req: Request) {
