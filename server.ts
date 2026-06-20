@@ -6,8 +6,8 @@ import express from "express";
 import helmet from "helmet";
 import next from "next";
 import { Server as SocketIOServer } from "socket.io";
-import { registerApi } from "./src/server/routes";
-import { registerSocketHandlers } from "./src/server/socket";
+import { registerApi } from "./src/server/routes.js";
+import { registerSocketHandlers } from "./src/server/socket.js";
 
 const dev = process.env.NODE_ENV !== "production";
 const port = Number(process.env.PORT || 3000);

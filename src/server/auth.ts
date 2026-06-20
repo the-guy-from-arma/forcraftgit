@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
-import { getPrisma } from "./db";
-import { canAccessAdmin, canAccessDepartment, canAccessDispatch, publicUser } from "./security";
+import { getPrisma } from "./db.js";
+import { canAccessAdmin, canAccessDepartment, canAccessDispatch, publicUser } from "./security.js";
 
 const defaultDevSecret = "faircroft-coreone-dev-secret-change-me";
 

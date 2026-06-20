@@ -1,7 +1,7 @@
 import type { Server as SocketIOServer } from "socket.io";
-import { getPrisma } from "./db";
-import { resolveUserFromToken } from "./auth";
-import { canAccessDepartment, canAccessDispatch, cleanText, unitStatusLabels } from "./security";
+import { getPrisma } from "./db.js";
+import { resolveUserFromToken } from "./auth.js";
+import { canAccessDepartment, canAccessDispatch, cleanText, unitStatusLabels } from "./security.js";
 
 export function registerSocketHandlers(io: SocketIOServer) {
   io.use(async (socket, next) => {

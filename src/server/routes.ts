@@ -3,7 +3,7 @@ import type { Express, Request, Response } from "express";
 import type { Server as SocketIOServer } from "socket.io";
 import type { Prisma } from "@prisma/client";
 import { z } from "zod";
-import { getPrisma } from "./db";
+import { getPrisma } from "./db.js";
 import {
   AuthedRequest,
   bearerToken,
@@ -13,7 +13,7 @@ import {
   requireDepartment,
   requireDispatcher,
   respondWithMe
-} from "./auth";
+} from "./auth.js";
 import {
   auditAction,
   cleanText,
@@ -22,7 +22,7 @@ import {
   publicUser,
   roleForDepartmentType,
   unitStatusLabels
-} from "./security";
+} from "./security.js";
 
 type Handler = (req: Request, res: Response) => Promise<void>;
 
