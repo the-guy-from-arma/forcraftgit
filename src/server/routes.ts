@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import type { Express, Request, Response } from "express";
 import type { Server as SocketIOServer } from "socket.io";
+import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { getPrisma } from "./db";
 import {
@@ -629,7 +630,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
             title: "CAD Assignment",
             body: `${assignment.cadCall.callNumber}: ${assignment.cadCall.type} at ${assignment.cadCall.location}`,
             type: "cad_assignment",
-            payload: { cadCallId: assignment.cadCallId, assignmentId: assignment.id }
+            payload: { cadCallId: assignment.cadCallId, assignmentId: assignment.id } as Prisma.InputJsonValue
           }
         });
         io.to(`user:${assignment.cadUnit.user.id}`).emit("notification", notification);
@@ -1103,7 +1104,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
               title: "Department Application Approved",
               body: `Approved for ${application.department.name}. MDT access is now enabled.`,
               type: "application",
-              payload: { applicationId: application.id, departmentId: application.departmentId }
+              payload: { applicationId: application.id, departmentId: application.departmentId } as Prisma.InputJsonValue
             }
           });
         } else {
@@ -1120,7 +1121,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
               title: "Department Application Decision",
               body: `Application for ${application.department.name} was denied.${body.reason ? ` Reason: ${body.reason}` : ""}`,
               type: "application",
-              payload: { applicationId: application.id, departmentId: application.departmentId }
+              payload: { applicationId: application.id, departmentId: application.departmentId } as Prisma.InputJsonValue
             }
           });
         }

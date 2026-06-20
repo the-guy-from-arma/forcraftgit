@@ -1,4 +1,5 @@
 import type { Request } from "express";
+import type { Prisma } from "@prisma/client";
 import sanitizeHtml from "sanitize-html";
 import type { PrismaClient } from "@prisma/client";
 
@@ -68,7 +69,7 @@ export async function auditAction(
       action: input.action,
       entity: input.entity,
       entityId: input.entityId || null,
-      metadata: input.metadata || {},
+      metadata: (input.metadata || {}) as Prisma.InputJsonValue,
       ipAddress: clientIp(req),
       userAgent: req.headers["user-agent"]
     }
