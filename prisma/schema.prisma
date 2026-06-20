@@ -103,6 +103,7 @@ model User {
   licenses            License[]
   permits             Permit[]
   warrantsCreated     Warrant[]              @relation("WarrantCreator")
+  citations           Citation[]             @relation("CitationUser")
   citationsIssued     Citation[]             @relation("CitationOfficer")
   reports             IncidentReport[]       @relation("IncidentAuthor")
   arrestReports       ArrestReport[]         @relation("ArrestOfficer")
@@ -114,6 +115,7 @@ model User {
   assignmentsMade     UnitAssignment[]       @relation("AssignmentDispatcher")
   bolosCreated        Bolo[]                 @relation("BoloCreator")
   auditLogs           AuditLog[]             @relation("AuditActor")
+  calls                Call911[]             @relation("Call911Caller")
   notifications       Notification[]
   sessions            Session[]
   dispatchMessages    DispatchMessage[]
@@ -258,7 +260,7 @@ model Warrant {
 model Citation {
   id          String       @id @default(cuid())
   userId      String?
-  user        User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user        User?        @relation("CitationUser", fields: [userId], references: [id], onDelete: SetNull)
   subjectName String
   officerId   String?
   officer     User?        @relation("CitationOfficer", fields: [officerId], references: [id], onDelete: SetNull)
@@ -333,7 +335,7 @@ model EMSReport {
 model Call911 {
   id             String        @id @default(cuid())
   callerId       String?
-  caller         User?         @relation(fields: [callerId], references: [id], onDelete: SetNull)
+  caller         User?         @relation("Call911Caller", fields: [callerId], references: [id], onDelete: SetNull)
   emergencyType  String
   location       String
   description    String
