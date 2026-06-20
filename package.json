@@ -2,6 +2,7 @@
   "name": "faircroft-coreone",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "FairCroft CoreOne roleplay CAD/MDT and civilian government portal.",
   "scripts": {
     "dev": "tsx watch server.ts",
