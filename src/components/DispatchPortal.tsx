@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useRef, useState } from "react";
-import { io, Socket } from "socket.io-client";
+import { FormEvent, useCallback, useEffect, useState } from "react";
+import { io } from "socket.io-client";
 import { AccessPanel } from "./AccessPanel";
 import { Footer } from "./Footer";
 import { apiFetch, getToken, logout } from "@/lib/api-client";
@@ -15,18 +15,30 @@ export function DispatchPortal() {
   const [dashboard, setDashboard] = useState<any>(null);
   const [alert, setAlert] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
-  const socketRef = useRef<Socket | null>(null);
+
+  const loadQueue = useCallback(async () => {
+    const payload = await apiFetch<{ calls: any[] }>("/api/dispatch/queue");
+    setQueue(payload.calls);
+  }, []);
+
+  const loadDashboard = useCallback(async () => {
+    const payload = await apiFetch<any>("/api/cad/dashboard");
+    setDashboard(payload);
+  }, []);
+
+  const loadAll = useCallback(async () => {
+    await Promise.all([loadQueue(), loadDashboard()]);
+  }, [loadDashboard, loadQueue]);
 
   useEffect(() => {
     if (!allowed) return;
-    void loadAll();
-
+    const timer = window.setTimeout(() => void loadAll(), 0);
     const socket = io({ auth: { token: getToken() } });
-    socketRef.current = socket;
+
     socket.on("911:incoming", (call) => {
       beep();
       setQueue((current) => [call, ...current.filter((item) => item.id !== call.id)]);
-      setAlert(`INCOMING 911: ${call.emergencyType} — ${call.location}`);
+      setAlert(`INCOMING 911: ${call.emergencyType} - ${call.location}`);
     });
     socket.on("911:accepted", ({ callId, cadCall }) => {
       setQueue((current) => current.filter((item) => item.id !== callId));
@@ -38,24 +50,10 @@ export function DispatchPortal() {
     socket.on("unit:status", () => void loadDashboard());
 
     return () => {
+      window.clearTimeout(timer);
       socket.disconnect();
-      socketRef.current = null;
     };
-  }, [allowed]);
-
-  async function loadAll() {
-    await Promise.all([loadQueue(), loadDashboard()]);
-  }
-
-  async function loadQueue() {
-    const payload = await apiFetch<{ calls: any[] }>("/api/dispatch/queue");
-    setQueue(payload.calls);
-  }
-
-  async function loadDashboard() {
-    const payload = await apiFetch<any>("/api/cad/dashboard");
-    setDashboard(payload);
-  }
+  }, [allowed, loadAll, loadDashboard]);
 
   async function acceptCall(id: string) {
     setFormError(null);
@@ -92,7 +90,7 @@ export function DispatchPortal() {
   if (!dashboard) {
     return (
       <main className="dispatch-shell center-screen">
-        <div className="terminal-card">Opening FairCroft Communications Center…</div>
+        <div className="terminal-card">Opening FairCroft Communications Center...</div>
       </main>
     );
   }
@@ -104,10 +102,11 @@ export function DispatchPortal() {
           <div>
             <p className="eyebrow">FairCroft Communications Dispatch</p>
             <h1>Command Center</h1>
-            <p>{user?.name} · {roleLabel(user?.role)}</p>
+            <p>{user?.name} / {roleLabel(user?.role)}</p>
           </div>
           <nav>
             <Link href="/mdt">MDT</Link>
+            <Link href="/government">Government OS</Link>
             <Link href="/civilian">PDA</Link>
             <button
               onClick={async () => {
@@ -139,7 +138,7 @@ export function DispatchPortal() {
                 <h3>{call.location}</h3>
                 <p>{call.description}</p>
                 <small>
-                  Caller: {call.callerName} · Callback: {call.callbackNumber}
+                  Caller: {call.callerName} / Callback: {call.callbackNumber}
                 </small>
                 <button className="button danger" onClick={() => acceptCall(call.id)}>
                   Accept / Create CAD
@@ -178,8 +177,8 @@ export function DispatchPortal() {
                     Select active call
                   </option>
                   {dashboard.calls?.map((call: any) => (
-                    <option value={call.id} key={call.id}>
-                      {call.callNumber} — {call.type}
+                    <option key={call.id} value={call.id}>
+                      {call.callNumber} - {call.type}
                     </option>
                   ))}
                 </select>
@@ -191,13 +190,13 @@ export function DispatchPortal() {
                     Select unit
                   </option>
                   {dashboard.units?.map((unit: any) => (
-                    <option value={unit.id} key={unit.id}>
-                      {unit.unitNumber} — {unitStatusLabels[unit.status]}
+                    <option key={unit.id} value={unit.id}>
+                      {unit.unitNumber} - {unitStatusLabels[unit.status]}
                     </option>
                   ))}
                 </select>
               </label>
-              <button className="button terminal wide">Assign Unit</button>
+              <button className="button terminal">Assign Unit</button>
             </form>
           </div>
 
@@ -208,10 +207,10 @@ export function DispatchPortal() {
             </div>
             <div className="unit-tile-grid">
               {dashboard.units?.map((unit: any) => (
-                <div key={unit.id} className="unit-tile">
+                <div className="unit-tile" key={unit.id}>
                   <strong>{unit.unitNumber}</strong>
                   <span>{unitStatusLabels[unit.status]}</span>
-                  <small>{unit.department?.code} · {unit.user?.name || "Unstaffed"}</small>
+                  <small>{unit.user?.name || "Unstaffed"}</small>
                 </div>
               ))}
             </div>
@@ -225,21 +224,21 @@ export function DispatchPortal() {
 
 function beep() {
   try {
-    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-    const context = new AudioContext();
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    const audio = new AudioContextClass();
+    const oscillator = audio.createOscillator();
+    const gain = audio.createGain();
+    oscillator.frequency.value = 920;
     oscillator.type = "square";
-    oscillator.frequency.value = 880;
     gain.gain.value = 0.08;
     oscillator.connect(gain);
-    gain.connect(context.destination);
+    gain.connect(audio.destination);
     oscillator.start();
     window.setTimeout(() => {
       oscillator.stop();
-      void context.close();
-    }, 520);
+      void audio.close();
+    }, 420);
   } catch {
-    // Browser may block audio until interaction; visual alert still fires.
+    // Browser autoplay policies can block audio; the visual alert remains active.
   }
 }

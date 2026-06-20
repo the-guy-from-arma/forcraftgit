@@ -15,6 +15,7 @@ export const departmentRoles = new Set([
 ]);
 
 export const dispatcherRoles = new Set(["dispatcher", "site_admin", "owner"]);
+export const governmentRoles = new Set(["government_employee", "dispatcher", "site_admin", "owner"]);
 export const adminRoles = new Set(["site_admin", "owner"]);
 export const ownerRoles = new Set(["owner"]);
 
@@ -24,6 +25,10 @@ export function canAccessDepartment(role?: string) {
 
 export function canAccessDispatch(role?: string) {
   return !!role && dispatcherRoles.has(role);
+}
+
+export function canAccessGovernment(role?: string) {
+  return !!role && governmentRoles.has(role);
 }
 
 export function canAccessAdmin(role?: string) {
@@ -77,6 +82,7 @@ export async function auditAction(
 }
 
 export function roleForDepartmentType(type: string) {
+  if (type === "government") return "government_employee";
   if (type === "dispatch") return "dispatcher";
   if (type === "police") return "police";
   if (type === "sheriff") return "sheriff";

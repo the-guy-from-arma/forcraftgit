@@ -1,60 +1,193 @@
-# FairCroft CoreOne Python PWA
+# FairCroft CoreOne
 
-FairCroft CoreOne is a fictional roleplay CAD/MDT and civilian-government portal. This deployment path is Python-only: no Node build, no `node_modules`, no npm/pnpm install step.
+FairCroft CoreOne is a fictional roleplay government operating system with a civilian phone/PDA portal, government employee DMV/passport OS, department CAD/MDT, dispatch console, live 911 queue, admin job assignment workflow, and PostgreSQL-backed records.
 
-## What is included
+It is not a real emergency system, law-enforcement system, medical system, NCIC system, CJIS system, or government integration.
 
-- Installable PWA served from `static/`
-- Civilian PDA with profile, records, department applications, and roleplay 911 submission
-- Dispatch console with 911 queue, CAD conversion, unit assignment, and unit board
-- Department MDT with active calls, unit status, BOLOs, warrants, citation writer, reports, search, chat/radio log, shift clock, and roster
-- Admin console with overview metrics, application decisions, users, departments, ranks/permissions, civilian notes, audit logs, and settings
-- Dependency-free Python backend using `http.server` and SQLite
-- Role-based bearer-token sessions
+## Stack
 
-## Local run
+- Next.js App Router frontend
+- Custom Node/Express server
+- Socket.IO live dispatch and MDT notifications
+- PostgreSQL only for persistent data
+- Prisma ORM and Prisma migrations
+- JWT sessions stored in PostgreSQL
+- bcrypt password hashing
+- Role-based access control
+- Railway/Docker deployment ready
+
+## Database policy
+
+FairCroft CoreOne uses PostgreSQL as the only production persistence layer.
+
+No SQLite. No local JSON database. No file-based records. `DATABASE_URL` is required at startup.
+
+The project uses Prisma because the requested application stack is Node/Express + Prisma. SQLAlchemy and Alembic are Python tools, so their equivalents here are:
+
+- `prisma migrate dev --name <name>` instead of `alembic revision --autogenerate`
+- `prisma migrate deploy` instead of `alembic upgrade head`
+- `prisma migrate reset` / generated migration rollback workflows instead of `alembic downgrade`
+
+## Required environment variables
+
+Copy `.env.example` and set:
 
 ```bash
-python app.py
+DATABASE_URL="postgresql://username:password@host:5432/faircroft"
+PORT=3000
+NODE_ENV=development
+JWT_SECRET="replace-with-a-long-random-secret"
+SECRET_KEY="replace-with-another-long-random-secret"
+JWT_EXPIRES_IN="7d"
+CORS_ORIGIN="http://localhost:3000"
 ```
 
-Then open:
+Railway will provide `DATABASE_URL` when you attach Railway PostgreSQL. In production, do not use the example secrets.
+
+## Docker-first local run
+
+No host `node_modules` are required. Docker builds dependencies inside the image.
+
+Run everything in Docker:
+
+```bash
+docker compose up --build
+```
+
+That starts:
+
+- `postgres` using PostgreSQL 16
+- `app` using the project `Dockerfile`
+- Prisma migrations during container startup
+- Seed data because `SEED_ON_START=true` in `docker-compose.yml`
+
+Open:
 
 ```text
 http://localhost:3000
 ```
 
-Seed owner:
+To stop containers:
 
-```text
-owner@faircroft.local / ChangeMe123!
+```bash
+docker compose down
 ```
 
-## Environment
+To remove the local Docker Postgres volume and reset data:
 
-Copy `.env.example` if you want local variables.
+```bash
+docker compose down -v
+```
 
-- `PORT` defaults to `3000`
-- `HOST` defaults to `0.0.0.0`
-- `DATABASE_PATH` defaults to `./faircroft.sqlite3`, or `/data/faircroft.sqlite3` when `/data` exists
-- `SESSION_EXPIRES_IN` defaults to `7d`
-- `OWNER_EMAIL`, `OWNER_PASSWORD`, and `OWNER_NAME` control the seeded owner
+## Demo accounts seeded
 
-## Railway / Docker
+- Owner: `owner@faircroft.local / ChangeMe123!`
+- Admin: `admin@faircroft.local / Password123!`
+- DMV Clerk: `dmv@faircroft.local / Password123!`
+- Dispatch: `dispatcher@faircroft.local / Password123!`
+- Police: `police@faircroft.local / Password123!`
+- Sheriff: `sheriff@faircroft.local / Password123!`
+- Fire: `fire@faircroft.local / Password123!`
+- EMS: `ems@faircroft.local / Password123!`
+- Civilian: `civilian@faircroft.local / Password123!`
 
-Railway uses the `Dockerfile`, which is now:
+Change these immediately for any shared roleplay server.
 
-- `python:3.12-slim`
-- copies only `app.py` and `static/`
-- starts with `python app.py`
+## Railway deployment
 
-Healthcheck:
+1. Create a Railway project from this repository.
+2. Add a Railway PostgreSQL service.
+3. Ensure the web service has these variables:
+   - `DATABASE_URL`
+   - `JWT_SECRET`
+   - `SECRET_KEY`
+   - `NODE_ENV=production`
+   - `PORT` is managed by Railway.
+   - Optional first deploy: `SEED_ON_START=true`
+4. Railway uses `Dockerfile` and `railway.json`.
+5. Startup runs:
+
+```bash
+pnpm exec prisma migrate deploy
+node dist/server.js
+```
+
+Health endpoint:
 
 ```text
 GET /api/health
+GET /api/health/db
 ```
 
-## Notes
+## Useful commands
 
-- This is for fictional roleplay only. It is not a real public-safety, medical, CJIS, NCIC, or emergency system.
-- SQLite is built in. For persistent Railway data, attach a volume and set `DATABASE_PATH` to a path inside that volume.
+Run commands inside the Docker app container. The Docker/Railway path does not require host `node_modules`.
+
+```bash
+docker compose exec app pnpm run build
+docker compose exec app pnpm run typecheck
+docker compose exec app pnpm run lint
+docker compose exec app pnpm run db:generate
+docker compose exec app pnpm run db:deploy
+docker compose exec app pnpm run db:seed
+```
+
+## Core experiences
+
+Civilian users boot into a phone/PDA-style government portal with:
+
+- Profile
+- Passport / civilian ID intake
+- Driver license
+- Vehicle registration
+- Firearm permit
+- Business license
+- Warrants
+- Tickets/citations
+- 911 call form
+- Emergency contacts
+- Civilian records
+- Court notices
+- Department applications
+- My jobs / enabled OS apps
+
+Newly registered users start as `unverified_civ`. They can open the DMV/passport apps to request fictional verification, driver licenses, and vehicle registrations. Profile photos include the reminder that images must be game-character photos, not real photos.
+
+Government employees get a separate Government OS for:
+
+- DMV/passport/identity application queue
+- Driver license, passport, vehicle, firearm permit, and business license decisions
+- Civilian/vehicle/license/permit record search
+- Live Socket.IO government queue updates
+
+Approved department users get the dark CAD/MDT:
+
+- Dashboard
+- Active calls
+- Create call
+- Assign units
+- Unit status
+- BOLOs and warrants
+- People, vehicle, and plate search
+- Citation writer
+- Incident, arrest, fire, and roleplay-only EMS reports
+- Dispatch chat
+- Radio log
+- Call history
+- Shift clock
+- Department roster
+
+Dispatchers receive live 911 alerts over Socket.IO, accept calls into CAD incidents, assign units, and trigger live MDT notifications.
+
+## Security notes
+
+- Passwords are hashed with bcrypt.
+- JWT sessions are backed by PostgreSQL `Session` records.
+- Department/admin APIs are guarded server-side.
+- Failed logins, permission denials, and admin actions write `AuditLog` rows.
+- Form input is validated with Zod and sanitized.
+- The app never exposes password hashes, JWT secrets, or database connection strings.
+
+## Roleplay disclaimer
+
+FairCroft CoreOne is fictional software for roleplay communities. It must not be used for real emergency response, criminal justice data, medical care, public records, or government operations.

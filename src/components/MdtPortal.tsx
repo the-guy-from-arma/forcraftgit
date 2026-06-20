@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
 import { AccessPanel } from "./AccessPanel";
 import { Footer } from "./Footer";
 import { apiFetch, getToken, logout } from "@/lib/api-client";
-import { canUseAdmin, canUseDispatch, roleLabel, unitStatusLabels } from "@/lib/roles";
+import { canUseAdmin, canUseDispatch, canUseGovernment, roleLabel, unitStatusLabels } from "@/lib/roles";
 import { useAuth } from "./useAuth";
 
 const modules = [
@@ -43,10 +43,22 @@ export function MdtPortal() {
   const [chatBody, setChatBody] = useState("");
   const socketRef = useRef<Socket | null>(null);
 
+  const loadDashboard = useCallback(async () => {
+    const payload = await apiFetch<any>("/api/cad/dashboard");
+    setDashboard(payload);
+  }, []);
+
+  const loadRecords = useCallback(async () => {
+    const payload = await apiFetch<any>("/api/cad/records");
+    setRecords(payload);
+  }, []);
+
   useEffect(() => {
     if (!allowed) return;
-    void loadDashboard();
-    void loadRecords();
+    const timer = window.setTimeout(() => {
+      void loadDashboard();
+      void loadRecords();
+    }, 0);
 
     const socket = io({ auth: { token: getToken() } });
     socketRef.current = socket;
@@ -63,22 +75,16 @@ export function MdtPortal() {
     socket.on("dispatch:message", (message) => {
       setDashboard((current: any) => current && { ...current, messages: [...(current.messages || []), message].slice(-60) });
     });
+    socket.on("radio:log", (radioLog) => {
+      setDashboard((current: any) => current && { ...current, radioLogs: [...(current.radioLogs || []), radioLog].slice(-120) });
+    });
 
     return () => {
+      window.clearTimeout(timer);
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [allowed]);
-
-  async function loadDashboard() {
-    const payload = await apiFetch<any>("/api/cad/dashboard");
-    setDashboard(payload);
-  }
-
-  async function loadRecords() {
-    const payload = await apiFetch<any>("/api/cad/records");
-    setRecords(payload);
-  }
+  }, [allowed, loadDashboard, loadRecords]);
 
   async function submitCreateCall(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -128,6 +134,31 @@ export function MdtPortal() {
     await loadRecords();
   }
 
+  async function startShift(unitId?: string) {
+    setFormError(null);
+    try {
+      await apiFetch("/api/cad/shift/start", {
+        method: "POST",
+        body: { unitId: unitId || undefined }
+      });
+      setNotice("Shift clock started and saved to PostgreSQL.");
+      await loadDashboard();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Unable to start shift.");
+    }
+  }
+
+  async function endShift() {
+    setFormError(null);
+    try {
+      await apiFetch("/api/cad/shift/end", { method: "POST", body: {} });
+      setNotice("Shift clock ended and saved to PostgreSQL.");
+      await loadDashboard();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Unable to end shift.");
+    }
+  }
+
   async function submitForm(
     event: FormEvent<HTMLFormElement>,
     path: string,
@@ -165,13 +196,12 @@ export function MdtPortal() {
 
   const activeCalls = dashboard?.calls || [];
   const units = dashboard?.units || [];
-  const memberships = user?.memberships || [];
-
   const roster = useMemo(() => {
+    const memberships = user?.memberships || [];
     return memberships.flatMap((membership: any) =>
       membership.department?.memberships?.length ? membership.department.memberships : [membership]
     );
-  }, [memberships]);
+  }, [user?.memberships]);
 
   if (!allowed) {
     return <AccessPanel loading={loading} error={error} title="Department MDT locked" message="An approved department role is required." />;
@@ -180,32 +210,30 @@ export function MdtPortal() {
   if (!dashboard) {
     return (
       <main className="mdt-shell center-screen">
-        <div className="terminal-card">Establishing CoreOne MDT data link…</div>
+        <div className="terminal-card">Establishing CoreOne MDT data link...</div>
       </main>
     );
   }
 
   return (
     <>
-      <main className="mdt-shell">
-        <aside className="mdt-sidebar">
-          <div className="mdt-brand">
+      <main className="mdt-shell mdt-terminal-os">
+        <header className="mdt-command-topbar">
+          <div className="mdt-brand floating-brand">
             <span>FC</span>
             <div>
               <strong>CoreOne MDT</strong>
               <small>{roleLabel(user?.role)}</small>
             </div>
           </div>
-          <nav>
-            {modules.map((module) => (
-              <button key={module} className={activeModule === module ? "active" : ""} onClick={() => setActiveModule(module)}>
-                {module}
-              </button>
-            ))}
-          </nav>
-          <div className="mdt-sidebar-footer">
-            <Link href="/civilian">Civilian PDA</Link>
+          <div className="terminal-status">
+            <span className="live-dot" />
+            LIVE CAD LINK
+          </div>
+          <div className="floating-actions mdt-actions">
+            <Link href="/civilian">PDA</Link>
             {canUseDispatch(user?.role) && <Link href="/dispatch">Dispatch</Link>}
+            {canUseGovernment(user?.role) && <Link href="/government">Government OS</Link>}
             {canUseAdmin(user?.role) && <Link href="/admin">Admin</Link>}
             <button
               onClick={async () => {
@@ -216,42 +244,53 @@ export function MdtPortal() {
               Sign out
             </button>
           </div>
-        </aside>
+        </header>
 
-        <section className="mdt-workspace">
-          <header className="mdt-topbar">
-            <div>
-              <p className="eyebrow">FairCroft Department Terminal</p>
-              <h1>{activeModule}</h1>
+        <nav className="mdt-module-dock" aria-label="MDT modules">
+          {modules.map((module) => (
+            <button key={module} className={activeModule === module ? "active" : ""} onClick={() => setActiveModule(module)}>
+              {module}
+            </button>
+          ))}
+        </nav>
+
+        <section className="mdt-window-stage">
+          {notice && <div className="mdt-alert-pop success-strip terminal-strip">{notice}</div>}
+          {formError && <div className="mdt-alert-pop error-strip terminal-strip">{formError}</div>}
+          <div className="mdt-command-window">
+            <div className="window-chrome terminal-chrome">
+              <div className="window-lights">
+                <span />
+                <span />
+                <span />
+              </div>
+              <strong>{activeModule}</strong>
+              <small>Mounted terminal / roleplay records only</small>
             </div>
-            <div className="terminal-status">
-              <span className="live-dot" />
-              LIVE CAD LINK
-            </div>
-          </header>
-          {notice && <div className="success-strip terminal-strip">{notice}</div>}
-          {formError && <div className="error-strip terminal-strip">{formError}</div>}
-          <MdtModule
-            activeModule={activeModule}
-            dashboard={dashboard}
-            records={records}
-            activeCalls={activeCalls}
-            units={units}
-            roster={roster}
-            searchResults={searchResults}
-            canDispatch={canUseDispatch(user?.role)}
-            chatBody={chatBody}
-            setChatBody={setChatBody}
-            sendChat={sendChat}
-            search={search}
-            submitCreateCall={submitCreateCall}
-            submitAssign={submitAssign}
-            submitUnitStatus={submitUnitStatus}
-            submitBolo={submitBolo}
-            submitWarrant={submitWarrant}
-            submitCitation={submitCitation}
-            submitReport={submitReport}
-          />
+            <MdtModule
+              activeModule={activeModule}
+              dashboard={dashboard}
+              records={records}
+              activeCalls={activeCalls}
+              units={units}
+              roster={roster}
+              searchResults={searchResults}
+              canDispatch={canUseDispatch(user?.role)}
+              chatBody={chatBody}
+              setChatBody={setChatBody}
+              sendChat={sendChat}
+              search={search}
+              submitCreateCall={submitCreateCall}
+              submitAssign={submitAssign}
+              submitUnitStatus={submitUnitStatus}
+              submitBolo={submitBolo}
+              submitWarrant={submitWarrant}
+              submitCitation={submitCitation}
+              submitReport={submitReport}
+              startShift={startShift}
+              endShift={endShift}
+            />
+          </div>
         </section>
       </main>
       <Footer />
@@ -279,7 +318,9 @@ function MdtModule(props: any) {
     submitBolo,
     submitWarrant,
     submitCitation,
-    submitReport
+    submitReport,
+    startShift,
+    endShift
   } = props;
 
   if (activeModule === "Dashboard") {
@@ -304,7 +345,7 @@ function MdtModule(props: any) {
       <TerminalForm onSubmit={submitCreateCall}>
         <label>
           Call type
-          <input name="type" placeholder="Traffic Stop, Structure Fire, Medical Aid…" required />
+          <input name="type" placeholder="Traffic Stop, Structure Fire, Medical Aid..." required />
         </label>
         <label>
           Location
@@ -377,7 +418,7 @@ function MdtModule(props: any) {
     const vehicle = activeModule !== "People Search";
     return (
       <SearchPanel
-        placeholder={vehicle ? "Plate, VIN, make, model…" : "Name, email, identifier…"}
+        placeholder={vehicle ? "Plate, VIN, make, model..." : "Name, email, identifier..."}
         onSearch={(query) => search(vehicle ? "vehicles" : "people", query)}
         results={searchResults}
       />
@@ -385,19 +426,21 @@ function MdtModule(props: any) {
   }
 
   if (activeModule === "Dispatch Chat" || activeModule === "Radio Log") {
+    const radioMode = activeModule === "Radio Log";
+    const feed = radioMode ? dashboard.radioLogs || [] : dashboard.messages || [];
     return (
       <div className="chat-panel">
         <div className="chat-log">
-          {(dashboard.messages || []).map((message: any) => (
+          {feed.map((message: any) => (
             <div key={message.id} className="chat-line">
               <span>{new Date(message.createdAt).toLocaleTimeString()}</span>
-              <strong>{message.user?.name || "Unit"}</strong>
-              <p>{message.body}</p>
+              <strong>{radioMode ? message.unit?.unitNumber || message.user?.name || "Radio" : message.user?.name || "Unit"}</strong>
+              <p>{message.message || message.body}</p>
             </div>
           ))}
         </div>
         <div className="chat-compose">
-          <input value={chatBody} onChange={(event) => setChatBody(event.target.value)} placeholder="Transmit dispatch message…" />
+          <input value={chatBody} onChange={(event) => setChatBody(event.target.value)} placeholder="Transmit dispatch message..." />
           <button className="button terminal" onClick={sendChat}>
             TX
           </button>
@@ -406,7 +449,9 @@ function MdtModule(props: any) {
     );
   }
 
-  if (activeModule === "Shift Clock") return <ShiftClock />;
+  if (activeModule === "Shift Clock") {
+    return <ShiftClock activeShift={dashboard.activeShift} units={units} onStart={startShift} onEnd={endShift} />;
+  }
   if (activeModule === "Department Roster") return <Roster roster={roster} units={units} />;
 
   return <TerminalEmpty title={activeModule} body="Module reserved for future FairCroft community expansion." />;
@@ -686,14 +731,48 @@ function RecordRail({ records }: { records?: any[] }) {
   );
 }
 
-function ShiftClock() {
-  const [started] = useState(new Date());
+function ShiftClock({
+  activeShift,
+  units,
+  onStart,
+  onEnd
+}: {
+  activeShift?: any;
+  units: any[];
+  onStart: (unitId?: string) => void;
+  onEnd: () => void;
+}) {
+  const [selectedUnit, setSelectedUnit] = useState("");
   const [now, setNow] = useState(new Date());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(timer);
   }, []);
 
+  if (!activeShift) {
+    return (
+      <div className="shift-clock">
+        <span>SHIFT CLOCK</span>
+        <strong>OFF DUTY</strong>
+        <label>
+          Unit assignment
+          <select value={selectedUnit} onChange={(event) => setSelectedUnit(event.target.value)}>
+            <option value="">No assigned unit</option>
+            {units.map((unit) => (
+              <option key={unit.id} value={unit.id}>
+                {unit.unitNumber} — {unitStatusLabels[unit.status]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button className="button terminal" onClick={() => onStart(selectedUnit)}>
+          Start Shift
+        </button>
+      </div>
+    );
+  }
+
+  const started = new Date(activeShift.clockInAt);
   const elapsed = Math.floor((now.getTime() - started.getTime()) / 1000);
   const h = String(Math.floor(elapsed / 3600)).padStart(2, "0");
   const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2, "0");
@@ -705,6 +784,10 @@ function ShiftClock() {
         {h}:{m}:{s}
       </strong>
       <p>Started {started.toLocaleString()}</p>
+      <p>{activeShift.unit?.unitNumber ? `Unit ${activeShift.unit.unitNumber}` : "No unit attached"}</p>
+      <button className="button terminal" onClick={onEnd}>
+        End Shift
+      </button>
     </div>
   );
 }

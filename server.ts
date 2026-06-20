@@ -5,6 +5,7 @@ import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import { Server as SocketIOServer } from "socket.io";
+import { initializeDatabase, shutdownDatabase } from "./src/server/database.js";
 import { registerApi } from "./src/server/routes.js";
 import { registerSocketHandlers } from "./src/server/socket.js";
 
@@ -20,6 +21,7 @@ const allowedOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(",").map((origin) => origin.trim())
   : undefined;
 
+await initializeDatabase();
 await nextApp.prepare();
 
 const app = express();
@@ -56,3 +58,20 @@ app.all("*", (req, res) => handle(req, res));
 httpServer.listen(port, hostname, () => {
   console.log(`FairCroft CoreOne ready on ${hostname}:${port}`);
 });
+
+let shuttingDown = false;
+async function shutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[server] ${signal} received. Closing FairCroft CoreOne gracefully.`);
+
+  httpServer.close(async () => {
+    await shutdownDatabase();
+    process.exit(0);
+  });
+
+  setTimeout(() => process.exit(1), 10_000).unref();
+}
+
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));

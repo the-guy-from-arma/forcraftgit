@@ -3,7 +3,7 @@ import type { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import type { SignOptions } from "jsonwebtoken";
 import { getPrisma } from "./db.js";
-import { canAccessAdmin, canAccessDepartment, canAccessDispatch, publicUser } from "./security.js";
+import { auditAction, canAccessAdmin, canAccessDepartment, canAccessDispatch, canAccessGovernment, publicUser } from "./security.js";
 
 const DEFAULT_DEV_SECRET = "faircroft-coreone-dev-secret-change-me";
 type JwtExpiresIn = NonNullable<SignOptions["expiresIn"]>;
@@ -144,9 +144,38 @@ function authorizationError(res: Response, message: string) {
   res.status(403).json({ error: message });
 }
 
+async function auditSecurityEvent(
+  req: Request,
+  input: {
+    actorId?: string | null;
+    action: string;
+    reason: string;
+  }
+) {
+  try {
+    await auditAction(getPrisma(), req, {
+      actorId: input.actorId || null,
+      action: input.action,
+      entity: "Route",
+      entityId: null,
+      metadata: {
+        method: req.method,
+        route: req.originalUrl,
+        reason: input.reason
+      }
+    });
+  } catch {
+    // Authentication and authorization failures should never expose database internals to callers.
+  }
+}
+
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const resolved = await resolveUserFromToken(bearerToken(req));
   if (!resolved) {
+    void auditSecurityEvent(req, {
+      action: "auth.required.denied",
+      reason: "missing_or_invalid_session"
+    });
     res.status(401).json({ error: "Authentication required." });
     return;
   }
@@ -158,6 +187,11 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 export function requireDepartment(req: Request, res: Response, next: NextFunction) {
   const authed = req as AuthedRequest;
   if (!canAccessDepartment(authed.auth?.user?.role)) {
+    void auditSecurityEvent(req, {
+      actorId: authed.auth?.user?.id,
+      action: "permission.department.denied",
+      reason: `role:${authed.auth?.user?.role || "unknown"}`
+    });
     return authorizationError(res, "Department access required.");
   }
   next();
@@ -166,7 +200,25 @@ export function requireDepartment(req: Request, res: Response, next: NextFunctio
 export function requireDispatcher(req: Request, res: Response, next: NextFunction) {
   const authed = req as AuthedRequest;
   if (!canAccessDispatch(authed.auth?.user?.role)) {
+    void auditSecurityEvent(req, {
+      actorId: authed.auth?.user?.id,
+      action: "permission.dispatch.denied",
+      reason: `role:${authed.auth?.user?.role || "unknown"}`
+    });
     return authorizationError(res, "Dispatch access required.");
+  }
+  next();
+}
+
+export function requireGovernment(req: Request, res: Response, next: NextFunction) {
+  const authed = req as AuthedRequest;
+  if (!canAccessGovernment(authed.auth?.user?.role)) {
+    void auditSecurityEvent(req, {
+      actorId: authed.auth?.user?.id,
+      action: "permission.government.denied",
+      reason: `role:${authed.auth?.user?.role || "unknown"}`
+    });
+    return authorizationError(res, "Government employee access required.");
   }
   next();
 }
@@ -174,6 +226,11 @@ export function requireDispatcher(req: Request, res: Response, next: NextFunctio
 export function requireAdmin(req: Request, res: Response, next: NextFunction) {
   const authed = req as AuthedRequest;
   if (!canAccessAdmin(authed.auth?.user?.role)) {
+    void auditSecurityEvent(req, {
+      actorId: authed.auth?.user?.id,
+      action: "permission.admin.denied",
+      reason: `role:${authed.auth?.user?.role || "unknown"}`
+    });
     return authorizationError(res, "Administrator access required.");
   }
   next();

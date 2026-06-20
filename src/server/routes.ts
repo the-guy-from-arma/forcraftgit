@@ -3,6 +3,7 @@ import type { Express, Request, Response } from "express";
 import type { Server as SocketIOServer } from "socket.io";
 import type { Prisma } from "@prisma/client";
 import { z } from "zod";
+import { checkDatabaseHealth } from "./database.js";
 import { getPrisma } from "./db.js";
 import {
   AuthedRequest,
@@ -12,6 +13,7 @@ import {
   requireAuth,
   requireDepartment,
   requireDispatcher,
+  requireGovernment,
   respondWithMe
 } from "./auth.js";
 import {
@@ -83,15 +85,94 @@ const userInclude = {
   }
 };
 
+const cadCallInclude = {
+  assignments: {
+    include: {
+      cadUnit: {
+        include: {
+          department: true,
+          user: { select: { id: true, name: true, role: true, phone: true } }
+        }
+      }
+    }
+  },
+  notes: {
+    include: { author: { select: { id: true, name: true, role: true } } },
+    orderBy: { createdAt: "desc" },
+    take: 25
+  },
+  statusHistory: {
+    include: { actor: { select: { id: true, name: true, role: true } } },
+    orderBy: { createdAt: "asc" }
+  },
+  dispatchLogs: {
+    include: { dispatcher: { select: { id: true, name: true, role: true } } },
+    orderBy: { createdAt: "desc" },
+    take: 25
+  }
+} satisfies Prisma.CadCallInclude;
+
+const governmentApplicationTypes = [
+  "driver_license",
+  "passport",
+  "vehicle_registration",
+  "firearm_permit",
+  "business_license"
+] as const;
+
+const governmentApplicationLabels: Record<(typeof governmentApplicationTypes)[number], string> = {
+  driver_license: "Driver License",
+  passport: "FairCroft Passport / Civilian ID",
+  vehicle_registration: "Vehicle Registration",
+  firearm_permit: "Firearm Permit",
+  business_license: "Business License"
+};
+
+function recordPayload(value: Prisma.JsonValue | null | undefined): Record<string, any> {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, any>;
+  return {};
+}
+
 export function registerApi(app: Express, io: SocketIOServer) {
   app.get(
     "/api/health",
     asyncHandler(async (_req, res) => {
-      res.json({
-        ok: true,
+      const database = await checkDatabaseHealth();
+      res.status(database.ok ? 200 : 503).json({
+        ok: database.ok,
         name: "FairCroft CoreOne",
         roleplayOnly: true,
+        persistence: "postgresql",
+        database,
         timestamp: new Date().toISOString()
+      });
+    })
+  );
+
+  app.get(
+    "/api/health/db",
+    asyncHandler(async (_req, res) => {
+      const database = await checkDatabaseHealth();
+      res.status(database.ok ? 200 : 503).json(database);
+    })
+  );
+
+  app.get(
+    "/api/system/announcements",
+    requireAuth,
+    asyncHandler(async (_req, res) => {
+      const prisma = getPrisma();
+      const now = new Date();
+      const announcements = await prisma.governmentAnnouncement.findMany({
+        where: {
+          active: true,
+          OR: [{ expiresAt: null }, { expiresAt: { gt: now } }]
+        },
+        orderBy: [{ priority: "desc" }, { publishedAt: "desc" }],
+        take: 20
+      });
+      res.json({
+        announcements
       });
     })
   );
@@ -110,7 +191,9 @@ export function registerApi(app: Express, io: SocketIOServer) {
           address: optionalText(160),
           city: optionalText(80),
           state: optionalText(12),
-          postalCode: optionalText(20)
+          postalCode: optionalText(20),
+          characterPhotoUrl: optionalText(500),
+          characterPhotoNoticeAccepted: z.boolean().optional().default(false)
         }),
         req,
         res
@@ -131,7 +214,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
           passwordHash,
           name: `${body.firstName} ${body.lastName}`,
           phone: body.phone,
-          role: "civilian",
+          role: "unverified_civ",
           profile: {
             create: {
               firstName: body.firstName,
@@ -141,7 +224,10 @@ export function registerApi(app: Express, io: SocketIOServer) {
               address: body.address,
               city: body.city || "FairCroft",
               state: body.state || "FC",
-              postalCode: body.postalCode
+              postalCode: body.postalCode,
+              characterPhotoUrl: body.characterPhotoUrl,
+              characterPhotoNoticeAccepted: body.characterPhotoNoticeAccepted,
+              verificationStatus: "unverified"
             }
           }
         },
@@ -180,11 +266,24 @@ export function registerApi(app: Express, io: SocketIOServer) {
       });
 
       if (!user || !(await bcrypt.compare(body.password, user.passwordHash))) {
+        await auditAction(prisma, req, {
+          actorId: user?.id || null,
+          action: "auth.login.failed",
+          entity: "User",
+          entityId: user?.id || null,
+          metadata: { email: body.email }
+        });
         res.status(401).json({ error: "Invalid email or password." });
         return;
       }
 
       if (user.suspended) {
+        await auditAction(prisma, req, {
+          actorId: user.id,
+          action: "auth.login.suspended",
+          entity: "User",
+          entityId: user.id
+        });
         res.status(403).json({ error: "This account is suspended." });
         return;
       }
@@ -222,7 +321,17 @@ export function registerApi(app: Express, io: SocketIOServer) {
     asyncHandler(async (req, res) => {
       const prisma = getPrisma();
       const user = authed(req);
-      const [freshUser, vehicles, licenses, permits, warrants, citations, applications, notifications] =
+      const [
+        freshUser,
+        vehicles,
+        licenses,
+        permits,
+        warrants,
+        citations,
+        applications,
+        governmentApplications,
+        notifications
+      ] =
         await Promise.all([
           prisma.user.findUnique({ where: { id: user.id }, include: userInclude }),
           prisma.vehicle.findMany({ where: { ownerId: user.id }, orderBy: { createdAt: "desc" } }),
@@ -240,6 +349,11 @@ export function registerApi(app: Express, io: SocketIOServer) {
             include: { department: true },
             orderBy: { submittedAt: "desc" }
           }),
+          prisma.governmentApplication.findMany({
+            where: { userId: user.id },
+            include: { reviewedBy: { select: { id: true, name: true, role: true } } },
+            orderBy: { submittedAt: "desc" }
+          }),
           prisma.notification.findMany({
             where: { userId: user.id },
             orderBy: { createdAt: "desc" },
@@ -255,6 +369,8 @@ export function registerApi(app: Express, io: SocketIOServer) {
         warrants,
         citations,
         applications,
+        governmentApplications,
+        jobs: freshUser?.memberships || [],
         notifications
       });
     })
@@ -271,6 +387,8 @@ export function registerApi(app: Express, io: SocketIOServer) {
           city: optionalText(80),
           state: optionalText(12),
           postalCode: optionalText(20),
+          characterPhotoUrl: optionalText(500),
+          characterPhotoNoticeAccepted: z.boolean().optional(),
           notes: optionalText(500)
         }),
         req,
@@ -282,7 +400,16 @@ export function registerApi(app: Express, io: SocketIOServer) {
       const user = authed(req);
       const profile = await prisma.civilianProfile.update({
         where: { userId: user.id },
-        data: body
+        data: {
+          phone: body.phone,
+          address: body.address,
+          city: body.city,
+          state: body.state,
+          postalCode: body.postalCode,
+          characterPhotoUrl: body.characterPhotoUrl,
+          characterPhotoNoticeAccepted: body.characterPhotoNoticeAccepted,
+          notes: body.notes
+        }
       });
 
       await auditAction(prisma, req, {
@@ -293,6 +420,396 @@ export function registerApi(app: Express, io: SocketIOServer) {
       });
 
       res.json({ profile });
+    })
+  );
+
+  app.post(
+    "/api/civilian/dmv-applications",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(
+        z.object({
+          type: z.enum(governmentApplicationTypes),
+          legalName: optionalText(140),
+          dateOfBirth: optionalText(40),
+          address: optionalText(180),
+          city: optionalText(80),
+          state: optionalText(12),
+          postalCode: optionalText(20),
+          characterPhotoUrl: optionalText(500),
+          photoNoticeAccepted: z.boolean().optional().default(false),
+          licenseClass: optionalText(20),
+          passportReason: optionalText(400),
+          make: optionalText(80),
+          model: optionalText(80),
+          year: z.coerce.number().int().min(1900).max(2100).optional(),
+          color: optionalText(40),
+          plate: optionalText(20),
+          vin: optionalText(40),
+          permitType: optionalText(80),
+          businessName: optionalText(140),
+          businessType: optionalText(120),
+          notes: optionalText(900)
+        }),
+        req,
+        res
+      );
+      if (!body) return;
+
+      if (body.type === "passport" && !body.photoNoticeAccepted) {
+        res.status(422).json({ error: "Passport applications require confirming the photo is of a game character, not a real person." });
+        return;
+      }
+
+      if (body.type === "vehicle_registration" && (!body.make || !body.model || !body.year || !body.color)) {
+        res.status(422).json({ error: "Vehicle registration requires make, model, year, and color." });
+        return;
+      }
+
+      const prisma = getPrisma();
+      const user = authed(req);
+      const profile = await prisma.civilianProfile.findUnique({ where: { userId: user.id } });
+      const label = governmentApplicationLabels[body.type];
+
+      const application = await prisma.governmentApplication.create({
+        data: {
+          userId: user.id,
+          type: body.type,
+          payload: {
+            label,
+            legalName: body.legalName || user.name,
+            dateOfBirth: body.dateOfBirth || profile?.dateOfBirth?.toISOString() || null,
+            address: body.address || profile?.address || null,
+            city: body.city || profile?.city || "FairCroft",
+            state: body.state || profile?.state || "FC",
+            postalCode: body.postalCode || profile?.postalCode || null,
+            characterPhotoUrl: body.characterPhotoUrl || profile?.characterPhotoUrl || null,
+            photoNoticeAccepted: body.photoNoticeAccepted,
+            licenseClass: body.licenseClass || "D",
+            passportReason: body.passportReason || null,
+            make: body.make || null,
+            model: body.model || null,
+            year: body.year || null,
+            color: body.color || null,
+            plate: body.plate || null,
+            vin: body.vin || null,
+            permitType: body.permitType || null,
+            businessName: body.businessName || null,
+            businessType: body.businessType || null,
+            notes: body.notes || null
+          } as Prisma.InputJsonValue
+        },
+        include: {
+          user: { select: { id: true, name: true, email: true, role: true, profile: true } }
+        }
+      });
+
+      await auditAction(prisma, req, {
+        actorId: user.id,
+        action: "government.application.submit",
+        entity: "GovernmentApplication",
+        entityId: application.id,
+        metadata: { type: body.type }
+      });
+
+      io.to("government-services").emit("government:application", application);
+      res.status(201).json({ application });
+    })
+  );
+
+  app.post(
+    "/api/civilian/vehicles/register",
+    requireAuth,
+    asyncHandler(async (req, res) => {
+      req.body = { ...req.body, type: "vehicle_registration" };
+      const body = parseBody(
+        z.object({
+          type: z.literal("vehicle_registration"),
+          make: text(80),
+          model: text(80),
+          year: z.coerce.number().int().min(1900).max(2100),
+          color: text(40),
+          plate: optionalText(20),
+          vin: optionalText(40),
+          notes: optionalText(900)
+        }),
+        req,
+        res
+      );
+      if (!body) return;
+
+      const prisma = getPrisma();
+      const user = authed(req);
+      const application = await prisma.governmentApplication.create({
+        data: {
+          userId: user.id,
+          type: "vehicle_registration",
+          payload: {
+            label: governmentApplicationLabels.vehicle_registration,
+            make: body.make,
+            model: body.model,
+            year: body.year,
+            color: body.color,
+            plate: body.plate || null,
+            vin: body.vin || null,
+            notes: body.notes || null
+          } as Prisma.InputJsonValue
+        },
+        include: {
+          user: { select: { id: true, name: true, email: true, role: true, profile: true } }
+        }
+      });
+
+      await auditAction(prisma, req, {
+        actorId: user.id,
+        action: "government.vehicle-registration.submit",
+        entity: "GovernmentApplication",
+        entityId: application.id
+      });
+
+      io.to("government-services").emit("government:application", application);
+      res.status(201).json({ application });
+    })
+  );
+
+  app.get(
+    "/api/government/dmv-applications",
+    requireAuth,
+    requireGovernment,
+    asyncHandler(async (req, res) => {
+      const prisma = getPrisma();
+      const status = parseQuery(req.query.status, 20);
+      const applications = await prisma.governmentApplication.findMany({
+        where: status && ["pending", "approved", "denied"].includes(status) ? { status: status as any } : {},
+        include: {
+          user: { select: { id: true, name: true, email: true, role: true, phone: true, profile: true } },
+          reviewedBy: { select: { id: true, name: true, role: true } }
+        },
+        orderBy: [{ status: "asc" }, { submittedAt: "desc" }],
+        take: 200
+      });
+      res.json({ applications, labels: governmentApplicationLabels });
+    })
+  );
+
+  app.post(
+    "/api/government/dmv-applications/:id/decision",
+    requireAuth,
+    requireGovernment,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(
+        z.object({
+          decision: z.enum(["approved", "denied"]),
+          reason: optionalText(600)
+        }),
+        req,
+        res
+      );
+      if (!body) return;
+
+      const prisma = getPrisma();
+      const reviewer = authed(req);
+      const application = await prisma.governmentApplication.findUnique({
+        where: { id: req.params.id },
+        include: { user: { select: { id: true, name: true, email: true, role: true, phone: true, profile: true } } }
+      });
+      if (!application || application.status !== "pending") {
+        res.status(404).json({ error: "Pending government application not found." });
+        return;
+      }
+
+      const payload = recordPayload(application.payload);
+      const label = governmentApplicationLabels[application.type as keyof typeof governmentApplicationLabels] || application.type;
+
+      const result = await prisma.$transaction(async (tx) => {
+        const decided = await tx.governmentApplication.update({
+          where: { id: application.id },
+          data: {
+            status: body.decision,
+            decisionReason: body.reason,
+            reviewedById: reviewer.id,
+            reviewedAt: new Date()
+          },
+          include: {
+            user: { select: { id: true, name: true, email: true, role: true, phone: true, profile: true } },
+            reviewedBy: { select: { id: true, name: true, role: true } }
+          }
+        });
+
+        let createdRecord: any = null;
+        if (body.decision === "approved") {
+          const now = new Date();
+          const expiresAt = new Date(now);
+          expiresAt.setFullYear(now.getFullYear() + 4);
+
+          if (application.type === "driver_license") {
+            createdRecord = await tx.license.create({
+              data: {
+                userId: application.userId,
+                number: makeCallNumber("FC-DL"),
+                class: cleanText(payload.licenseClass, 20) || "D",
+                status: "active",
+                expiresAt
+              }
+            });
+
+            if (application.user.role === "unverified_civ") {
+              await tx.user.update({ where: { id: application.userId }, data: { role: "civilian" } });
+            }
+            await tx.civilianProfile.update({
+              where: { userId: application.userId },
+              data: {
+                verificationStatus: "verified",
+                characterPhotoUrl: cleanText(payload.characterPhotoUrl, 500) || application.user.profile?.characterPhotoUrl,
+                characterPhotoNoticeAccepted: Boolean(payload.photoNoticeAccepted)
+              }
+            });
+          } else if (application.type === "passport") {
+            createdRecord = await tx.civilianProfile.update({
+              where: { userId: application.userId },
+              data: {
+                passportNumber: makeCallNumber("FC-PASS"),
+                passportStatus: "active",
+                verificationStatus: "verified",
+                characterPhotoUrl: cleanText(payload.characterPhotoUrl, 500) || application.user.profile?.characterPhotoUrl,
+                characterPhotoNoticeAccepted: true
+              }
+            });
+
+            if (application.user.role === "unverified_civ") {
+              await tx.user.update({ where: { id: application.userId }, data: { role: "civilian" } });
+            }
+          } else if (application.type === "vehicle_registration") {
+            const generatedPlate = makeCallNumber("FC-PLT").replace(/-/g, "").slice(0, 16).toUpperCase();
+            createdRecord = await tx.vehicle.create({
+              data: {
+                ownerId: application.userId,
+                make: cleanText(payload.make, 80) || "Unknown",
+                model: cleanText(payload.model, 80) || "Vehicle",
+                year: Number(payload.year) || new Date().getFullYear(),
+                color: cleanText(payload.color, 40) || "Unlisted",
+                plate: (cleanText(payload.plate, 20) || generatedPlate).toUpperCase(),
+                vin: cleanText(payload.vin, 40) || undefined,
+                registrationStatus: "active",
+                expiresAt
+              }
+            });
+          } else if (application.type === "firearm_permit" || application.type === "business_license") {
+            const permitLabel =
+              application.type === "business_license"
+                ? `Business License${payload.businessName ? ` - ${cleanText(payload.businessName, 100)}` : ""}`
+                : cleanText(payload.permitType, 80) || "Firearm Permit";
+
+            createdRecord = await tx.permit.create({
+              data: {
+                userId: application.userId,
+                type: permitLabel,
+                number: makeCallNumber(application.type === "business_license" ? "FC-BIZ" : "FC-PER"),
+                status: "active",
+                expiresAt,
+                notes: cleanText(payload.notes, 500) || undefined
+              }
+            });
+          }
+        }
+
+        await tx.notification.create({
+          data: {
+            userId: application.userId,
+            title: `${label} ${body.decision === "approved" ? "Approved" : "Denied"}`,
+            body:
+              body.decision === "approved"
+                ? `${label} was approved by FairCroft Government Services.`
+                : `${label} was denied.${body.reason ? ` Reason: ${body.reason}` : ""}`,
+            type: "government_application",
+            payload: { applicationId: application.id, recordId: createdRecord?.id || null } as Prisma.InputJsonValue
+          }
+        });
+
+        return { application: decided, createdRecord };
+      });
+
+      await auditAction(prisma, req, {
+        actorId: reviewer.id,
+        action: `government.application.${body.decision}`,
+        entity: "GovernmentApplication",
+        entityId: application.id,
+        metadata: { type: application.type, recordId: result.createdRecord?.id || null }
+      });
+
+      io.to(`user:${application.userId}`).emit("notification", {
+        title: `${label} ${body.decision}`,
+        body: `Your ${label} application was ${body.decision}.`
+      });
+      io.to("government-services").emit("government:application-decision", result.application);
+      res.json(result);
+    })
+  );
+
+  app.get(
+    "/api/government/records/search",
+    requireAuth,
+    requireGovernment,
+    asyncHandler(async (req, res) => {
+      const q = parseQuery(req.query.q, 120);
+      const prisma = getPrisma();
+      if (!q) {
+        res.json({ people: [], vehicles: [], licenses: [], permits: [] });
+        return;
+      }
+
+      const [people, vehicles, licenses, permits] = await Promise.all([
+        prisma.user.findMany({
+          where: {
+            OR: [
+              { name: { contains: q, mode: "insensitive" } },
+              { email: { contains: q, mode: "insensitive" } },
+              { profile: { firstName: { contains: q, mode: "insensitive" } } },
+              { profile: { lastName: { contains: q, mode: "insensitive" } } },
+              { profile: { passportNumber: { contains: q, mode: "insensitive" } } }
+            ]
+          },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+            phone: true,
+            profile: true,
+            licenses: true,
+            permits: true,
+            vehicles: true,
+            memberships: { where: { active: true }, include: { department: true, rank: true } }
+          },
+          take: 20
+        }),
+        prisma.vehicle.findMany({
+          where: {
+            OR: [
+              { plate: { contains: q, mode: "insensitive" } },
+              { vin: { contains: q, mode: "insensitive" } },
+              { make: { contains: q, mode: "insensitive" } },
+              { model: { contains: q, mode: "insensitive" } }
+            ]
+          },
+          include: { owner: { select: { id: true, name: true, role: true, profile: true } } },
+          take: 20
+        }),
+        prisma.license.findMany({
+          where: { number: { contains: q, mode: "insensitive" } },
+          include: { user: { select: { id: true, name: true, role: true, profile: true } } },
+          take: 20
+        }),
+        prisma.permit.findMany({
+          where: {
+            OR: [{ number: { contains: q, mode: "insensitive" } }, { type: { contains: q, mode: "insensitive" } }]
+          },
+          include: { user: { select: { id: true, name: true, role: true, profile: true } } },
+          take: 20
+        })
+      ]);
+
+      res.json({ people, vehicles, licenses, permits });
     })
   );
 
@@ -352,7 +869,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
         include: { department: true }
       });
 
-      if (user.role === "civilian") {
+      if (user.role === "civilian" || user.role === "unverified_civ") {
         await prisma.user.update({
           where: { id: user.id },
           data: { role: "pending_department" }
@@ -393,6 +910,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
       const user = authed(req);
       const call = await prisma.call911.create({
         data: {
+          callNumber: makeCallNumber("FC-911"),
           callerId: user.id,
           emergencyType: body.emergencyType,
           location: body.location,
@@ -462,6 +980,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
         const cadCall = await tx.cadCall.create({
           data: {
             call911Id: updated911.id,
+            departmentId: user.memberships?.[0]?.departmentId,
             callNumber: makeCallNumber("FC-CAD"),
             type: updated911.emergencyType,
             location: updated911.location,
@@ -469,11 +988,31 @@ export function registerApi(app: Express, io: SocketIOServer) {
             priority: updated911.priority,
             status: "active",
             acceptedById: user.id,
-            createdById: user.id
+            createdById: user.id,
+            statusHistory: {
+              create: {
+                toStatus: "active",
+                actorId: user.id,
+                note: `Converted from ${updated911.callNumber}.`
+              }
+            },
+            dispatchLogs: {
+              create: {
+                call911Id: updated911.id,
+                dispatcherId: user.id,
+                action: "dispatch.911.accept",
+                message: `${updated911.callNumber} accepted and converted to CAD incident.`
+              }
+            },
+            notes: {
+              create: {
+                authorId: user.id,
+                body: `Originating 911 caller: ${updated911.callerName} (${updated911.callbackNumber}).`,
+                isSystem: true
+              }
+            }
           },
-          include: {
-            assignments: { include: { cadUnit: { include: { department: true, user: true } } } }
-          }
+          include: cadCallInclude
         });
 
         await tx.call911.update({
@@ -507,12 +1046,10 @@ export function registerApi(app: Express, io: SocketIOServer) {
       const user = authed(req);
       const departmentIds = (user.memberships || []).map((membership: any) => membership.departmentId);
 
-      const [calls, units, bolos, warrants, messages, notifications] = await Promise.all([
+      const [calls, units, bolos, warrants, messages, radioLogs, bulletins, activeShift, notifications] = await Promise.all([
         prisma.cadCall.findMany({
           where: { status: { in: ["active", "assigned", "on_scene"] as any } },
-          include: {
-            assignments: { include: { cadUnit: { include: { department: true, user: true } } } }
-          },
+          include: cadCallInclude,
           orderBy: { createdAt: "desc" },
           take: 40
         }),
@@ -528,10 +1065,48 @@ export function registerApi(app: Express, io: SocketIOServer) {
           orderBy: { createdAt: "desc" },
           take: 40
         }),
+        prisma.radioLog.findMany({
+          where: departmentIds.length ? { OR: [{ departmentId: { in: departmentIds } }, { departmentId: null }] } : {},
+          include: {
+            user: { select: { id: true, name: true, role: true } },
+            unit: { select: { id: true, unitNumber: true, status: true } },
+            cadCall: { select: { id: true, callNumber: true, type: true } }
+          },
+          orderBy: { createdAt: "desc" },
+          take: 80
+        }),
+        prisma.departmentBulletin.findMany({
+          where: departmentIds.length
+            ? {
+                departmentId: { in: departmentIds },
+                active: true,
+                OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }]
+              }
+            : { active: true },
+          include: { department: true, author: { select: { id: true, name: true, role: true } } },
+          orderBy: [{ priority: "desc" }, { createdAt: "desc" }],
+          take: 20
+        }),
+        prisma.shiftLog.findFirst({
+          where: { userId: user.id, clockOutAt: null },
+          include: { department: true, unit: true },
+          orderBy: { clockInAt: "desc" }
+        }),
         prisma.notification.findMany({ where: { userId: user.id }, orderBy: { createdAt: "desc" }, take: 20 })
       ]);
 
-      res.json({ calls, units, bolos, warrants, messages: messages.reverse(), notifications, unitStatusLabels });
+      res.json({
+        calls,
+        units,
+        bolos,
+        warrants,
+        messages: messages.reverse(),
+        radioLogs: radioLogs.reverse(),
+        bulletins,
+        activeShift,
+        notifications,
+        unitStatusLabels
+      });
     })
   );
 
@@ -542,9 +1117,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
     asyncHandler(async (_req, res) => {
       const prisma = getPrisma();
       const calls = await prisma.cadCall.findMany({
-        include: {
-          assignments: { include: { cadUnit: { include: { department: true, user: true } } } }
-        },
+        include: cadCallInclude,
         orderBy: { createdAt: "desc" },
         take: 100
       });
@@ -573,17 +1146,30 @@ export function registerApi(app: Express, io: SocketIOServer) {
       const user = authed(req);
       const cadCall = await prisma.cadCall.create({
         data: {
+          departmentId: user.memberships?.[0]?.departmentId,
           callNumber: makeCallNumber("FC-CAD"),
           type: body.type,
           location: body.location,
           description: body.description,
           priority: body.priority,
           status: "active",
-          createdById: user.id
+          createdById: user.id,
+          statusHistory: {
+            create: {
+              toStatus: "active",
+              actorId: user.id,
+              note: "CAD incident created."
+            }
+          },
+          dispatchLogs: {
+            create: {
+              dispatcherId: user.id,
+              action: "cad.call.create",
+              message: `CAD incident created by ${user.name}.`
+            }
+          }
         },
-        include: {
-          assignments: { include: { cadUnit: { include: { department: true, user: true } } } }
-        }
+        include: cadCallInclude
       });
 
       await auditAction(prisma, req, {
@@ -608,20 +1194,55 @@ export function registerApi(app: Express, io: SocketIOServer) {
 
       const prisma = getPrisma();
       const user = authed(req);
-      const assignment = await prisma.unitAssignment.create({
-        data: {
-          cadCallId: req.params.id,
-          cadUnitId: body.unitId,
-          assignedById: user.id
-        },
-        include: {
-          cadCall: true,
-          cadUnit: { include: { department: true, user: { select: { id: true, name: true, role: true } } } }
-        }
+      const unit = await prisma.cadUnit.findUnique({
+        where: { id: body.unitId },
+        include: { department: true, user: { select: { id: true, name: true, role: true } } }
       });
+      if (!unit) {
+        res.status(404).json({ error: "CAD unit not found." });
+        return;
+      }
 
-      await prisma.cadCall.update({ where: { id: req.params.id }, data: { status: "assigned" } });
-      await prisma.cadUnit.update({ where: { id: body.unitId }, data: { status: "TEN_97_EN_ROUTE" } });
+      const assignment = await prisma.$transaction(async (tx) => {
+        const savedAssignment = await tx.unitAssignment.create({
+          data: {
+            cadCallId: req.params.id,
+            cadUnitId: body.unitId,
+            departmentId: unit.departmentId,
+            assignedById: user.id
+          },
+          include: {
+            cadCall: true,
+            cadUnit: { include: { department: true, user: { select: { id: true, name: true, role: true } } } }
+          }
+        });
+
+        await tx.cadCall.update({
+          where: { id: req.params.id },
+          data: {
+            status: "assigned",
+            statusHistory: {
+              create: {
+                fromStatus: savedAssignment.cadCall.status,
+                toStatus: "assigned",
+                actorId: user.id,
+                note: `${unit.unitNumber} assigned.`
+              }
+            },
+            dispatchLogs: {
+              create: {
+                dispatcherId: user.id,
+                action: "cad.unit.assign",
+                message: `${unit.unitNumber} assigned by ${user.name}.`
+              }
+            }
+          }
+        });
+
+        await tx.cadUnit.update({ where: { id: body.unitId }, data: { status: "TEN_97_EN_ROUTE" } });
+
+        return savedAssignment;
+      });
 
       if (assignment.cadUnit.user?.id) {
         const notification = await prisma.notification.create({
@@ -706,6 +1327,22 @@ export function registerApi(app: Express, io: SocketIOServer) {
         include: { department: true, user: { select: { id: true, name: true, role: true } } }
       });
 
+      const radioLog = await prisma.radioLog.create({
+        data: {
+          departmentId: unit.departmentId,
+          unitId: unit.id,
+          userId: user.id,
+          channel: "status",
+          code: body.status,
+          message: `${unit.unitNumber} marked ${unitStatusLabels[body.status]}.`
+        },
+        include: {
+          user: { select: { id: true, name: true, role: true } },
+          unit: { select: { id: true, unitNumber: true, status: true } },
+          cadCall: { select: { id: true, callNumber: true, type: true } }
+        }
+      });
+
       await auditAction(prisma, req, {
         actorId: user.id,
         action: "cad.unit.status",
@@ -715,7 +1352,204 @@ export function registerApi(app: Express, io: SocketIOServer) {
       });
 
       io.to("department-users").emit("unit:status", unit);
+      io.to("department-users").emit("radio:log", radioLog);
       res.json({ unit });
+    })
+  );
+
+  app.post(
+    "/api/cad/calls/:id/notes",
+    requireAuth,
+    requireDepartment,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(z.object({ body: text(1000), isSystem: z.boolean().optional().default(false) }), req, res);
+      if (!body) return;
+
+      const prisma = getPrisma();
+      const user = authed(req);
+      const note = await prisma.cadCallNote.create({
+        data: {
+          cadCallId: req.params.id,
+          authorId: user.id,
+          body: body.body,
+          isSystem: body.isSystem
+        },
+        include: { author: { select: { id: true, name: true, role: true } }, cadCall: true }
+      });
+
+      await prisma.dispatchLog.create({
+        data: {
+          cadCallId: req.params.id,
+          dispatcherId: user.id,
+          action: "cad.call.note",
+          message: body.body
+        }
+      });
+
+      await auditAction(prisma, req, {
+        actorId: user.id,
+        action: "cad.call.note",
+        entity: "CadCallNote",
+        entityId: note.id,
+        metadata: { cadCallId: req.params.id }
+      });
+
+      io.to("department-users").emit("cad:call-note", note);
+      res.status(201).json({ note });
+    })
+  );
+
+  app.get(
+    "/api/cad/radio-log",
+    requireAuth,
+    requireDepartment,
+    asyncHandler(async (req, res) => {
+      const prisma = getPrisma();
+      const user = authed(req);
+      const departmentIds = (user.memberships || []).map((membership: any) => membership.departmentId);
+      const radioLogs = await prisma.radioLog.findMany({
+        where: departmentIds.length ? { OR: [{ departmentId: { in: departmentIds } }, { departmentId: null }] } : {},
+        include: {
+          user: { select: { id: true, name: true, role: true } },
+          unit: { select: { id: true, unitNumber: true, status: true } },
+          cadCall: { select: { id: true, callNumber: true, type: true } }
+        },
+        orderBy: { createdAt: "desc" },
+        take: 200
+      });
+      res.json({ radioLogs });
+    })
+  );
+
+  app.post(
+    "/api/cad/radio-log",
+    requireAuth,
+    requireDepartment,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(
+        z.object({
+          message: text(700),
+          channel: optionalText(50),
+          code: optionalText(40),
+          cadCallId: optionalText(80),
+          unitId: optionalText(80),
+          departmentId: optionalText(80)
+        }),
+        req,
+        res
+      );
+      if (!body) return;
+
+      const prisma = getPrisma();
+      const user = authed(req);
+      const departmentId = body.departmentId || user.memberships?.[0]?.departmentId;
+      const radioLog = await prisma.radioLog.create({
+        data: {
+          departmentId,
+          cadCallId: body.cadCallId,
+          unitId: body.unitId,
+          userId: user.id,
+          channel: body.channel || "dispatch",
+          code: body.code,
+          message: body.message
+        },
+        include: {
+          user: { select: { id: true, name: true, role: true } },
+          unit: { select: { id: true, unitNumber: true, status: true } },
+          cadCall: { select: { id: true, callNumber: true, type: true } }
+        }
+      });
+
+      await auditAction(prisma, req, {
+        actorId: user.id,
+        action: "cad.radio-log.create",
+        entity: "RadioLog",
+        entityId: radioLog.id
+      });
+
+      io.to("department-users").emit("radio:log", radioLog);
+      res.status(201).json({ radioLog });
+    })
+  );
+
+  app.post(
+    "/api/cad/shift/start",
+    requireAuth,
+    requireDepartment,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(z.object({ departmentId: optionalText(80), unitId: optionalText(80), notes: optionalText(500) }), req, res);
+      if (!body) return;
+
+      const prisma = getPrisma();
+      const user = authed(req);
+      const existing = await prisma.shiftLog.findFirst({
+        where: { userId: user.id, clockOutAt: null },
+        include: { department: true, unit: true },
+        orderBy: { clockInAt: "desc" }
+      });
+      if (existing) {
+        res.json({ shift: existing, alreadyActive: true });
+        return;
+      }
+
+      const shift = await prisma.shiftLog.create({
+        data: {
+          userId: user.id,
+          departmentId: body.departmentId || user.memberships?.[0]?.departmentId,
+          unitId: body.unitId,
+          notes: body.notes
+        },
+        include: { department: true, unit: true }
+      });
+
+      await auditAction(prisma, req, {
+        actorId: user.id,
+        action: "cad.shift.start",
+        entity: "ShiftLog",
+        entityId: shift.id
+      });
+
+      res.status(201).json({ shift });
+    })
+  );
+
+  app.post(
+    "/api/cad/shift/end",
+    requireAuth,
+    requireDepartment,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(z.object({ notes: optionalText(700) }), req, res);
+      if (!body) return;
+
+      const prisma = getPrisma();
+      const user = authed(req);
+      const existing = await prisma.shiftLog.findFirst({
+        where: { userId: user.id, clockOutAt: null },
+        orderBy: { clockInAt: "desc" }
+      });
+      if (!existing) {
+        res.status(404).json({ error: "No active shift log found." });
+        return;
+      }
+
+      const shift = await prisma.shiftLog.update({
+        where: { id: existing.id },
+        data: {
+          clockOutAt: new Date(),
+          status: "off_duty",
+          notes: body.notes || existing.notes
+        },
+        include: { department: true, unit: true }
+      });
+
+      await auditAction(prisma, req, {
+        actorId: user.id,
+        action: "cad.shift.end",
+        entity: "ShiftLog",
+        entityId: shift.id
+      });
+
+      res.json({ shift });
     })
   );
 
@@ -829,7 +1663,9 @@ export function registerApi(app: Express, io: SocketIOServer) {
 
       const prisma = getPrisma();
       const user = authed(req);
-      const bolo = await prisma.bolo.create({ data: { ...body, createdById: user.id } });
+      const bolo = await prisma.bolo.create({
+        data: { ...body, boloNumber: makeCallNumber("FC-BOLO"), createdById: user.id }
+      });
       await auditAction(prisma, req, { actorId: user.id, action: "records.bolo.create", entity: "Bolo", entityId: bolo.id });
       io.to("department-users").emit("records:bolo", bolo);
       res.status(201).json({ bolo });
@@ -857,6 +1693,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
       const user = authed(req);
       const warrant = await prisma.warrant.create({
         data: {
+          warrantNumber: makeCallNumber("FC-WAR"),
           subjectName: body.subjectName,
           charges: body.charges,
           issuingCourt: body.issuingCourt || "FairCroft Municipal Court",
@@ -895,7 +1732,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
       const prisma = getPrisma();
       const user = authed(req);
       const citation = await prisma.citation.create({
-        data: { ...body, officerId: user.id }
+        data: { ...body, citationNumber: makeCallNumber("FC-CIT"), officerId: user.id }
       });
       await auditAction(prisma, req, {
         actorId: user.id,
@@ -943,7 +1780,8 @@ export function registerApi(app: Express, io: SocketIOServer) {
             subjectName: cleanText(req.body.subjectName, 140) || "Unknown Subject",
             charges: cleanText(req.body.charges, 1000) || "Pending review",
             narrative: body.narrative,
-            bookingNumber: makeCallNumber("FC-BOOK")
+            bookingNumber: makeCallNumber("FC-BOOK"),
+            reportNumber: makeCallNumber("FC-AR")
           }
         });
       } else if (reportType === "fire") {
@@ -951,6 +1789,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
           data: {
             cadCallId: body.cadCallId,
             authorId: user.id,
+            reportNumber: makeCallNumber("FC-FR"),
             incidentType: cleanText(req.body.incidentType, 120) || "Fire Service Call",
             cause: cleanText(req.body.cause, 160) || undefined,
             actions: cleanText(req.body.actions, 1000) || body.narrative,
@@ -962,6 +1801,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
           data: {
             cadCallId: body.cadCallId,
             authorId: user.id,
+            reportNumber: makeCallNumber("FC-EMS"),
             patientName: cleanText(req.body.patientName, 140) || "Roleplay Patient",
             patientAge: req.body.patientAge ? Number(req.body.patientAge) : undefined,
             chiefComplaint: cleanText(req.body.chiefComplaint, 500) || "Roleplay only",
@@ -992,9 +1832,10 @@ export function registerApi(app: Express, io: SocketIOServer) {
     requireAdmin,
     asyncHandler(async (_req, res) => {
       const prisma = getPrisma();
-      const [users, pendingApplications, departments, activeCalls, auditLogs] = await Promise.all([
+      const [users, pendingApplications, pendingGovernmentApplications, departments, activeCalls, auditLogs] = await Promise.all([
         prisma.user.count(),
         prisma.departmentApplication.count({ where: { status: "pending" } }),
+        prisma.governmentApplication.count({ where: { status: "pending" } }),
         prisma.department.count(),
         prisma.cadCall.count({ where: { status: { in: ["active", "assigned", "on_scene"] as any } } }),
         prisma.auditLog.findMany({
@@ -1003,7 +1844,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
           take: 20
         })
       ]);
-      res.json({ metrics: { users, pendingApplications, departments, activeCalls }, auditLogs });
+      res.json({ metrics: { users, pendingApplications, pendingGovernmentApplications, departments, activeCalls }, auditLogs });
     })
   );
 
@@ -1035,9 +1876,13 @@ export function registerApi(app: Express, io: SocketIOServer) {
           decision: z.enum(["approved", "denied"]),
           rankId: optionalText(80),
           role: z
-            .enum(["police", "sheriff", "fire", "ems", "dispatcher", "department_supervisor"])
+            .enum(["government_employee", "police", "sheriff", "fire", "ems", "dispatcher", "department_supervisor"])
             .optional(),
           badgeNumber: optionalText(40),
+          jobTitle: optionalText(120),
+          division: optionalText(120),
+          station: optionalText(120),
+          callSign: optionalText(40),
           reason: optionalText(500)
         }),
         req,
@@ -1049,7 +1894,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
       const admin = authed(req);
       const application = await prisma.departmentApplication.findUnique({
         where: { id: req.params.id },
-        include: { department: true, user: true }
+        include: { department: true, user: { select: { id: true, name: true, email: true, role: true } } }
       });
       if (!application || application.status !== "pending") {
         res.status(404).json({ error: "Pending application not found." });
@@ -1066,7 +1911,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
             reviewedAt: new Date(),
             reviewedById: admin.id
           },
-          include: { department: true, user: true }
+          include: { department: true, user: { select: { id: true, name: true, email: true, role: true } } }
         });
 
         if (body.decision === "approved") {
@@ -1082,12 +1927,20 @@ export function registerApi(app: Express, io: SocketIOServer) {
               departmentId: application.departmentId,
               rankId: body.rankId,
               role,
+              jobTitle: body.jobTitle,
+              division: body.division,
+              station: body.station,
+              callSign: body.callSign,
               badgeNumber: body.badgeNumber,
               active: true
             },
             update: {
               rankId: body.rankId,
               role,
+              jobTitle: body.jobTitle,
+              division: body.division,
+              station: body.station,
+              callSign: body.callSign,
               badgeNumber: body.badgeNumber,
               active: true
             }
@@ -1134,7 +1987,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
         action: `admin.application.${body.decision}`,
         entity: "DepartmentApplication",
         entityId: application.id,
-        metadata: { role, rankId: body.rankId }
+        metadata: { role, rankId: body.rankId, jobTitle: body.jobTitle, callSign: body.callSign }
       });
 
       io.to(`user:${application.userId}`).emit("notification", {
@@ -1169,8 +2022,10 @@ export function registerApi(app: Express, io: SocketIOServer) {
         z.object({
           role: z
             .enum([
+              "unverified_civ",
               "civilian",
               "pending_department",
+              "government_employee",
               "police",
               "sheriff",
               "fire",
@@ -1216,6 +2071,119 @@ export function registerApi(app: Express, io: SocketIOServer) {
     })
   );
 
+  app.post(
+    "/api/admin/users/:id/jobs",
+    requireAuth,
+    requireAdmin,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(
+        z.object({
+          departmentId: text(80),
+          role: z.enum(["government_employee", "police", "sheriff", "fire", "ems", "dispatcher", "department_supervisor"]),
+          rankId: optionalText(80),
+          jobTitle: text(120),
+          division: optionalText(120),
+          station: optionalText(120),
+          callSign: optionalText(40),
+          badgeNumber: optionalText(40),
+          active: z.boolean().optional().default(true)
+        }),
+        req,
+        res
+      );
+      if (!body) return;
+
+      const prisma = getPrisma();
+      const admin = authed(req);
+      const [target, department] = await Promise.all([
+        prisma.user.findUnique({ where: { id: req.params.id } }),
+        prisma.department.findUnique({ where: { id: body.departmentId } })
+      ]);
+
+      if (!target) {
+        res.status(404).json({ error: "User not found." });
+        return;
+      }
+
+      if (!department) {
+        res.status(404).json({ error: "Department not found." });
+        return;
+      }
+
+      const membership = await prisma.$transaction(async (tx) => {
+        const saved = await tx.departmentMembership.upsert({
+          where: {
+            userId_departmentId: {
+              userId: target.id,
+              departmentId: department.id
+            }
+          },
+          create: {
+            userId: target.id,
+            departmentId: department.id,
+            rankId: body.rankId,
+            role: body.role,
+            jobTitle: body.jobTitle,
+            division: body.division,
+            station: body.station,
+            callSign: body.callSign,
+            badgeNumber: body.badgeNumber,
+            active: body.active
+          },
+          update: {
+            rankId: body.rankId,
+            role: body.role,
+            jobTitle: body.jobTitle,
+            division: body.division,
+            station: body.station,
+            callSign: body.callSign,
+            badgeNumber: body.badgeNumber,
+            active: body.active
+          },
+          include: { department: true, rank: true }
+        });
+
+        await tx.user.update({
+          where: { id: target.id },
+          data: { role: body.active ? body.role : target.role }
+        });
+
+        await tx.notification.create({
+          data: {
+            userId: target.id,
+            title: body.active ? "Government Job Assigned" : "Government Job Updated",
+            body: `${body.jobTitle} ${body.active ? "enabled" : "updated"} for ${department.name}. Your OS apps will update on next login.`,
+            type: "job_assignment",
+            payload: { departmentId: department.id, membershipId: saved.id, role: body.role } as Prisma.InputJsonValue
+          }
+        });
+
+        return saved;
+      });
+
+      await auditAction(prisma, req, {
+        actorId: admin.id,
+        action: "admin.user.job.assign",
+        entity: "DepartmentMembership",
+        entityId: membership.id,
+        metadata: {
+          targetUserId: target.id,
+          departmentId: department.id,
+          role: body.role,
+          jobTitle: body.jobTitle,
+          callSign: body.callSign
+        }
+      });
+
+      io.to(`user:${target.id}`).emit("notification", {
+        title: "Job assignment updated",
+        body: `${body.jobTitle} at ${department.name} is now ${body.active ? "enabled" : "updated"}.`
+      });
+
+      res.status(201).json({ membership });
+    })
+  );
+
   app.get(
     "/api/admin/departments",
     requireAuth,
@@ -1223,7 +2191,10 @@ export function registerApi(app: Express, io: SocketIOServer) {
     asyncHandler(async (_req, res) => {
       const prisma = getPrisma();
       const departments = await prisma.department.findMany({
-        include: { ranks: { orderBy: { level: "asc" } }, memberships: { include: { user: true, rank: true } } },
+        include: {
+          ranks: { orderBy: { level: "asc" } },
+          memberships: { include: { user: { select: { id: true, name: true, email: true, role: true } }, rank: true } }
+        },
         orderBy: { name: "asc" }
       });
       res.json({ departments });
@@ -1239,7 +2210,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
         z.object({
           name: text(140),
           code: text(20),
-          type: z.enum(["police", "sheriff", "fire", "ems", "dispatch"]),
+          type: z.enum(["government", "police", "sheriff", "fire", "ems", "dispatch"]),
           description: optionalText(500)
         }),
         req,
@@ -1385,8 +2356,11 @@ export function registerApi(app: Express, io: SocketIOServer) {
     requireAdmin,
     asyncHandler(async (_req, res) => {
       const prisma = getPrisma();
-      const settings = await prisma.serverSetting.findMany({ orderBy: { key: "asc" } });
-      res.json({ settings });
+      const [settings, configurations] = await Promise.all([
+        prisma.systemSetting.findMany({ orderBy: { key: "asc" } }),
+        prisma.serverConfiguration.findMany({ orderBy: { key: "asc" } })
+      ]);
+      res.json({ settings, configurations });
     })
   );
 
@@ -1400,15 +2374,15 @@ export function registerApi(app: Express, io: SocketIOServer) {
 
       const prisma = getPrisma();
       const admin = authed(req);
-      const setting = await prisma.serverSetting.upsert({
+      const setting = await prisma.systemSetting.upsert({
         where: { key: body.key },
-        create: { key: body.key, value: body.value },
-        update: { value: body.value }
+        create: { key: body.key, value: body.value, updatedById: admin.id },
+        update: { value: body.value, updatedById: admin.id }
       });
       await auditAction(prisma, req, {
         actorId: admin.id,
         action: "admin.setting.update",
-        entity: "ServerSetting",
+        entity: "SystemSetting",
         entityId: setting.id,
         metadata: { key: setting.key }
       });

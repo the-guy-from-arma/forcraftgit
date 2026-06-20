@@ -17,7 +17,7 @@ export function AccessPanel({
   if (loading) {
     return (
       <main className="center-screen">
-        <div className="glass-panel">Authenticating FairCroft CoreOne session…</div>
+        <div className="glass-panel">Authenticating FairCroft CoreOne session...</div>
       </main>
     );
   }

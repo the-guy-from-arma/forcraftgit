@@ -8,7 +8,7 @@ import { apiFetch, logout } from "@/lib/api-client";
 import { roleLabel } from "@/lib/roles";
 import { useAuth } from "./useAuth";
 
-const tabs = ["Overview", "Applications", "Users", "Departments", "Permissions", "Civilian Records", "Audit Logs", "Settings"] as const;
+const tabs = ["Overview", "Applications", "Users", "Jobs", "Departments", "Permissions", "Civilian Records", "Audit Logs", "Settings"] as const;
 
 export function AdminPortal() {
   const { user, loading, error, allowed } = useAuth("admin");
@@ -71,6 +71,23 @@ export function AdminPortal() {
       name: String(form.get("name")),
       phone: String(form.get("phone"))
     }, "User updated.");
+  }
+
+  async function assignJob(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await submit(`/api/admin/users/${String(form.get("userId"))}/jobs`, "POST", {
+      departmentId: String(form.get("departmentId")),
+      role: String(form.get("role")),
+      rankId: String(form.get("rankId") || ""),
+      jobTitle: String(form.get("jobTitle")),
+      division: String(form.get("division") || ""),
+      station: String(form.get("station") || ""),
+      callSign: String(form.get("callSign") || ""),
+      badgeNumber: String(form.get("badgeNumber") || ""),
+      active: form.get("active") === "on"
+    }, "Job assigned and OS apps updated.");
+    event.currentTarget.reset();
   }
 
   async function createDepartment(event: FormEvent<HTMLFormElement>) {
@@ -151,7 +168,7 @@ export function AdminPortal() {
   if (!overview) {
     return (
       <main className="admin-shell center-screen">
-        <div className="glass-panel">Loading FairCroft administrative console…</div>
+        <div className="glass-panel">Loading FairCroft administrative console...</div>
       </main>
     );
   }
@@ -162,7 +179,7 @@ export function AdminPortal() {
         <aside className="admin-nav">
           <div className="admin-emblem">FC</div>
           <h1>CoreOne Admin</h1>
-          <p>{user?.name} · {roleLabel(user?.role)}</p>
+          <p>{user?.name} / {roleLabel(user?.role)}</p>
           {tabs.map((tab) => (
             <button key={tab} className={activeTab === tab ? "active" : ""} onClick={() => setActiveTab(tab)}>
               {tab}
@@ -170,6 +187,7 @@ export function AdminPortal() {
           ))}
           <div className="admin-links">
             <Link href="/civilian">PDA</Link>
+            <Link href="/government">Government OS</Link>
             <Link href="/mdt">MDT</Link>
             <Link href="/dispatch">Dispatch</Link>
             <button
@@ -203,6 +221,7 @@ export function AdminPortal() {
             settings={settings}
             decideApplication={decideApplication}
             updateUser={updateUser}
+            assignJob={assignJob}
             createDepartment={createDepartment}
             createRank={createRank}
             updateCivilianRecord={updateCivilianRecord}
@@ -227,6 +246,7 @@ function AdminTab(props: any) {
     settings,
     decideApplication,
     updateUser,
+    assignJob,
     createDepartment,
     createRank,
     updateCivilianRecord,
@@ -274,6 +294,7 @@ function AdminTab(props: any) {
               >
                 <select name="role" defaultValue={application.desiredRole || ""}>
                   <option value="">Department default</option>
+                  <option value="government_employee">Government Employee</option>
                   <option value="police">Police</option>
                   <option value="sheriff">Sheriff</option>
                   <option value="fire">Fire</option>
@@ -290,6 +311,10 @@ function AdminTab(props: any) {
                   ))}
                 </select>
                 <input name="badgeNumber" placeholder="Badge / radio ID" />
+                <input name="jobTitle" placeholder="Job title" />
+                <input name="division" placeholder="Division / bureau" />
+                <input name="station" placeholder="Station / office" />
+                <input name="callSign" placeholder="Callsign" />
                 <input name="reason" placeholder="Decision note" />
                 <button type="button" className="button primary" onClick={(event) => decideApplication(application.id, "approved", event.currentTarget.form)}>
                   Approve
@@ -314,7 +339,20 @@ function AdminTab(props: any) {
             <input name="name" defaultValue={user.name} />
             <input name="phone" defaultValue={user.phone || ""} />
             <select name="role" defaultValue={user.role}>
-              {["civilian", "pending_department", "police", "sheriff", "fire", "ems", "dispatcher", "department_supervisor", "site_admin", "owner"].map((role) => (
+              {[
+                "unverified_civ",
+                "civilian",
+                "pending_department",
+                "government_employee",
+                "police",
+                "sheriff",
+                "fire",
+                "ems",
+                "dispatcher",
+                "department_supervisor",
+                "site_admin",
+                "owner"
+              ].map((role) => (
                 <option value={role} key={role}>
                   {roleLabel(role)}
                 </option>
@@ -330,6 +368,90 @@ function AdminTab(props: any) {
     );
   }
 
+  if (tab === "Jobs") {
+    return (
+      <div className="split-admin">
+        <form className="admin-panel stack-form" onSubmit={assignJob}>
+          <h3>Assign Job / Enable OS Apps</h3>
+          <select name="userId" required defaultValue="">
+            <option value="" disabled>
+              Select civilian / employee
+            </option>
+            {users.map((user: any) => (
+              <option key={user.id} value={user.id}>
+                {user.name} / {user.email}
+              </option>
+            ))}
+          </select>
+          <select name="departmentId" required defaultValue="">
+            <option value="" disabled>
+              Department / agency
+            </option>
+            {departments.map((department: any) => (
+              <option key={department.id} value={department.id}>
+                {department.name}
+              </option>
+            ))}
+          </select>
+          <select name="role" defaultValue="police">
+            <option value="government_employee">Government Employee</option>
+            <option value="police">Police</option>
+            <option value="sheriff">Sheriff</option>
+            <option value="fire">Fire</option>
+            <option value="ems">EMS</option>
+            <option value="dispatcher">Dispatcher</option>
+            <option value="department_supervisor">Department Supervisor</option>
+          </select>
+          <select name="rankId" defaultValue="">
+            <option value="">No rank</option>
+            {departments.flatMap((department: any) =>
+              department.ranks?.map((rank: any) => (
+                <option key={rank.id} value={rank.id}>
+                  {department.code} / {rank.name}
+                </option>
+              ))
+            )}
+          </select>
+          <input name="jobTitle" placeholder="Patrol Officer, Dispatcher, DMV Clerk..." required />
+          <div className="two-col">
+            <input name="division" placeholder="Division / bureau" />
+            <input name="station" placeholder="Station / office" />
+          </div>
+          <div className="two-col">
+            <input name="callSign" placeholder="Callsign / unit ID" />
+            <input name="badgeNumber" placeholder="Badge / employee ID" />
+          </div>
+          <label className="checkline">
+            <input name="active" type="checkbox" defaultChecked /> Active / unlock app access
+          </label>
+          <button className="button primary">Assign Job</button>
+        </form>
+
+        <div className="admin-list">
+          {users.flatMap((user: any) =>
+            user.memberships?.map((membership: any) => (
+              <article className="admin-panel" key={membership.id}>
+                <div className="card-heading">
+                  <div>
+                    <h3>{user.name}</h3>
+                    <p>{membership.department?.name}</p>
+                  </div>
+                  <span className={`status-pill ${membership.active ? "approved" : "denied"}`}>
+                    {membership.active ? "active" : "inactive"}
+                  </span>
+                </div>
+                <p>{membership.jobTitle || roleLabel(membership.role)}</p>
+                <small>
+                  {membership.rank?.name || "No rank"} / {membership.callSign || "No callsign"} / {membership.station || "No station"}
+                </small>
+              </article>
+            ))
+          )}
+        </div>
+      </div>
+    );
+  }
+
   if (tab === "Departments") {
     return (
       <div className="split-admin">
@@ -337,7 +459,8 @@ function AdminTab(props: any) {
           <h3>Create Department</h3>
           <input name="name" placeholder="Department name" required />
           <input name="code" placeholder="Code" required />
-          <select name="type" defaultValue="police">
+          <select name="type" defaultValue="government">
+            <option value="government">Government / DMV</option>
             <option value="police">Police</option>
             <option value="sheriff">Sheriff</option>
             <option value="fire">Fire</option>
@@ -351,9 +474,9 @@ function AdminTab(props: any) {
           {departments.map((department: any) => (
             <article className="admin-panel" key={department.id}>
               <h3>{department.name}</h3>
-              <p>{department.code} · {department.type}</p>
+              <p>{department.code} / {department.type}</p>
               <small>{department.description}</small>
-              <p>{department.memberships?.length || 0} members · {department.ranks?.length || 0} ranks</p>
+              <p>{department.memberships?.length || 0} members / {department.ranks?.length || 0} ranks</p>
             </article>
           ))}
         </div>
@@ -390,7 +513,7 @@ function AdminTab(props: any) {
             department.ranks?.map((rank: any) => (
               <article className="admin-panel" key={rank.id}>
                 <h3>{rank.name}</h3>
-                <p>{department.code} · Level {rank.level}</p>
+                <p>{department.code} / Level {rank.level}</p>
                 <pre>{JSON.stringify(rank.permissions, null, 2)}</pre>
               </article>
             ))
@@ -411,7 +534,7 @@ function AdminTab(props: any) {
             </option>
             {users.map((user: any) => (
               <option key={user.id} value={user.id}>
-                {user.name} · {user.email}
+                {user.name} / {user.email}
               </option>
             ))}
           </select>
@@ -473,7 +596,7 @@ function AuditList({ logs }: { logs: any[] }) {
           <strong>{log.action}</strong>
           <p>
             {log.entity}
-            {log.entityId ? ` · ${log.entityId}` : ""} · Actor: {log.actor?.name || "system"}
+            {log.entityId ? ` / ${log.entityId}` : ""} / Actor: {log.actor?.name || "system"}
           </p>
         </article>
       ))}

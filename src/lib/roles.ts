@@ -1,4 +1,4 @@
-export const civilianOnlyRoles = new Set(["civilian", "pending_department"]);
+export const civilianOnlyRoles = new Set(["unverified_civ", "civilian", "pending_department"]);
 export const departmentRoles = new Set([
   "police",
   "sheriff",
@@ -10,6 +10,7 @@ export const departmentRoles = new Set([
   "owner"
 ]);
 export const dispatcherRoles = new Set(["dispatcher", "site_admin", "owner"]);
+export const governmentRoles = new Set(["government_employee", "dispatcher", "site_admin", "owner"]);
 export const adminRoles = new Set(["site_admin", "owner"]);
 
 export function canUseMdt(role?: string) {
@@ -18,6 +19,10 @@ export function canUseMdt(role?: string) {
 
 export function canUseDispatch(role?: string) {
   return !!role && dispatcherRoles.has(role);
+}
+
+export function canUseGovernment(role?: string) {
+  return !!role && governmentRoles.has(role);
 }
 
 export function canUseAdmin(role?: string) {

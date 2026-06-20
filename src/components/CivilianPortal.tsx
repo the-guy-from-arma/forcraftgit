@@ -1,49 +1,44 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { AccessPanel } from "./AccessPanel";
 import { FairCroftSeal } from "./FairCroftSeal";
 import { Footer } from "./Footer";
 import { apiFetch, logout } from "@/lib/api-client";
-import { canUseAdmin, canUseDispatch, canUseMdt, roleLabel } from "@/lib/roles";
+import { canUseAdmin, canUseDispatch, canUseGovernment, canUseMdt, roleLabel } from "@/lib/roles";
 import { useAuth } from "./useAuth";
 
-const apps = [
-  ["Profile", "👤"],
-  ["Driver License", "🪪"],
-  ["Vehicle Registration", "🚗"],
-  ["Firearm Permit", "◈"],
-  ["Business License", "🏢"],
-  ["Warrants", "⚖"],
-  ["Tickets/Citations", "🧾"],
-  ["911 Call", "☎"],
-  ["Emergency Contacts", "🧰"],
-  ["Civilian Records", "📁"],
-  ["Court Notices", "🏛"],
-  ["Department Applications", "⭐"]
+const civilianApps = [
+  { name: "Profile", badge: "ID", tone: "navy" },
+  { name: "Passport", badge: "PP", tone: "gold" },
+  { name: "Driver License", badge: "DL", tone: "blue" },
+  { name: "Vehicle Registration", badge: "VR", tone: "green" },
+  { name: "Firearm Permit", badge: "FP", tone: "slate" },
+  { name: "Business License", badge: "BL", tone: "gold" },
+  { name: "Warrants", badge: "WR", tone: "red" },
+  { name: "Tickets/Citations", badge: "TC", tone: "red" },
+  { name: "911 Call", badge: "911", tone: "red" },
+  { name: "Emergency Contacts", badge: "EC", tone: "green" },
+  { name: "Civilian Records", badge: "CR", tone: "slate" },
+  { name: "Court Notices", badge: "CT", tone: "gold" },
+  { name: "Department Applications", badge: "JOB", tone: "blue" },
+  { name: "My Jobs", badge: "OS", tone: "green" },
+  { name: "Government OS", badge: "GOV", tone: "navy" }
 ] as const;
+
+type CivilianAppName = (typeof civilianApps)[number]["name"];
 
 export function CivilianPortal() {
   const { user, loading, error, allowed, refresh } = useAuth("civilian");
   const [booting, setBooting] = useState(true);
-  const [activeApp, setActiveApp] = useState<(typeof apps)[number][0]>("Profile");
+  const [activeApp, setActiveApp] = useState<CivilianAppName>("Profile");
   const [overview, setOverview] = useState<any>(null);
   const [departments, setDepartments] = useState<any[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setBooting(false), 1800);
-    return () => window.clearTimeout(timer);
-  }, []);
-
-  useEffect(() => {
-    if (!allowed) return;
-    void load();
-  }, [allowed]);
-
-  async function load() {
+  const load = useCallback(async () => {
     const [overviewPayload, departmentPayload] = await Promise.all([
       apiFetch<any>("/api/civilian/overview"),
       apiFetch<{ departments: any[] }>("/api/departments")
@@ -51,58 +46,77 @@ export function CivilianPortal() {
     setOverview(overviewPayload);
     setDepartments(departmentPayload.departments);
     await refresh();
-  }
+  }, [refresh]);
 
-  async function submitApplication(event: FormEvent<HTMLFormElement>) {
+  useEffect(() => {
+    const timer = window.setTimeout(() => setBooting(false), 1750);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!allowed) return;
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [allowed, load]);
+
+  async function submitDepartmentApplication(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setNotice(null);
-    setFormError(null);
-    const form = new FormData(event.currentTarget);
-
-    try {
-      await apiFetch("/api/civilian/applications", {
-        method: "POST",
-        body: {
-          departmentId: String(form.get("departmentId")),
-          statement: String(form.get("statement")),
-          experience: String(form.get("experience"))
-        }
-      });
-      event.currentTarget.reset();
-      setNotice("Application submitted to FairCroft administration.");
-      await load();
-    } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Unable to submit application.");
-    }
+    await submitFromForm(event, "/api/civilian/applications", "Department application submitted to FairCroft administration.");
   }
 
   async function submit911(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    await submitFromForm(event, "/api/civilian/911", "911 request transmitted to FairCroft Communications Dispatch.");
+  }
+
+  async function submitProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await submit("/api/civilian/profile", "PATCH", {
+      phone: String(form.get("phone") || ""),
+      address: String(form.get("address") || ""),
+      city: String(form.get("city") || "FairCroft"),
+      state: String(form.get("state") || "FC"),
+      postalCode: String(form.get("postalCode") || ""),
+      characterPhotoUrl: String(form.get("characterPhotoUrl") || ""),
+      characterPhotoNoticeAccepted: form.get("characterPhotoNoticeAccepted") === "on",
+      notes: String(form.get("notes") || "")
+    }, "Civilian profile updated.");
+  }
+
+  async function submitGovernmentApplication(event: FormEvent<HTMLFormElement>, type: string) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await submit("/api/civilian/dmv-applications", "POST", {
+      ...Object.fromEntries(form.entries()),
+      type,
+      photoNoticeAccepted: form.get("photoNoticeAccepted") === "on"
+    }, "Application transmitted to FairCroft Government Services.");
+    event.currentTarget.reset();
+  }
+
+  async function submitFromForm(event: FormEvent<HTMLFormElement>, path: string, success: string) {
+    await submit(path, "POST", Object.fromEntries(new FormData(event.currentTarget).entries()), success);
+    event.currentTarget.reset();
+  }
+
+  async function submit(path: string, method: string, body: any, success: string) {
     setNotice(null);
     setFormError(null);
-    const form = new FormData(event.currentTarget);
-
     try {
-      await apiFetch("/api/civilian/911", {
-        method: "POST",
-        body: {
-          emergencyType: String(form.get("emergencyType")),
-          location: String(form.get("location")),
-          description: String(form.get("description")),
-          callerName: String(form.get("callerName")),
-          callbackNumber: String(form.get("callbackNumber"))
-        }
-      });
-      event.currentTarget.reset();
-      setNotice("911 request transmitted to FairCroft Communications Dispatch.");
+      await apiFetch(path, { method, body });
+      setNotice(success);
+      await load();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Unable to send 911 call.");
+      setFormError(err instanceof Error ? err.message : "FairCroft service request failed.");
     }
   }
 
   const currentUser = overview?.user || user;
-  const hasMdt = canUseMdt(currentUser?.role);
-  const appPayload = useMemo(() => overview || {}, [overview]);
+  const visibleApps = useMemo(
+    () => civilianApps.filter((app) => app.name !== "Government OS" || canUseGovernment(currentUser?.role)),
+    [currentUser?.role]
+  );
 
   if (!allowed) {
     return (
@@ -122,62 +136,92 @@ export function CivilianPortal() {
         <div className="boot-progress">
           <span />
         </div>
-        <p>Booting FairCroft Government Services PDA…</p>
+        <p>Booting FairCroft Government Services PDA...</p>
       </main>
     );
   }
 
   return (
     <>
-      <main className="pda-shell">
-        <section className="phone-frame">
+      <main className="phone-os-shell">
+        <section className="phone-frame phone-frame--home">
+          <div className="phone-notch" />
           <div className="phone-status">
             <span>FairCroft LTE</span>
             <span>{new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
           </div>
-          <div className="phone-header">
+
+          <div className="phone-home-hero">
             <FairCroftSeal compact />
             <div>
-              <p className="eyebrow">Government Services</p>
-              <h1>{currentUser?.profile?.firstName || currentUser?.name?.split(" ")[0]}'s PDA</h1>
+              <p className="eyebrow">Government Services OS</p>
+              <h1>{currentUser?.profile?.firstName || currentUser?.name?.split(" ")[0]} PDA</h1>
               <p>{roleLabel(currentUser?.role)}</p>
             </div>
           </div>
 
-          {hasMdt && (
-            <div className="approved-banner">
-              <strong>Department access approved.</strong>
-              <span> MDT modules are unlocked for this account.</span>
-              <div>
-                <Link href="/mdt">Open MDT</Link>
-                {canUseDispatch(currentUser?.role) && <Link href="/dispatch">Dispatch</Link>}
-                {canUseAdmin(currentUser?.role) && <Link href="/admin">Admin</Link>}
-              </div>
+          <div className="passport-mini">
+            <div className="mini-photo">
+              {currentUser?.profile?.characterPhotoUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={currentUser.profile.characterPhotoUrl} alt="Roleplay character" />
+              ) : (
+                <span>NO PHOTO</span>
+              )}
             </div>
+            <div>
+              <strong>{currentUser?.name}</strong>
+              <small>{currentUser?.profile?.passportNumber || "Passport not issued"}</small>
+              <small>{currentUser?.profile?.verificationStatus || "unverified"}</small>
+            </div>
+          </div>
+
+          {currentUser?.role === "unverified_civ" && (
+            <button className="os-alert-pill" onClick={() => setActiveApp("Passport")}>
+              Unverified civilian - open DMV/passport intake
+            </button>
           )}
 
-          {!hasMdt && currentUser?.role === "pending_department" && (
-            <div className="pending-banner">Department application pending. Civilian apps remain available only.</div>
-          )}
-
-          <div className="app-grid">
-            {apps.map(([name, icon]) => (
-              <button key={name} className={activeApp === name ? "app-icon active" : "app-icon"} onClick={() => setActiveApp(name)}>
-                <span>{icon}</span>
-                <small>{name}</small>
+          <div className="app-grid phone-app-grid">
+            {visibleApps.map((app) => (
+              <button
+                key={app.name}
+                className={activeApp === app.name ? "app-icon active" : "app-icon"}
+                onClick={() => setActiveApp(app.name)}
+              >
+                <span className={`app-badge app-badge--${app.tone}`}>{app.badge}</span>
+                <small>{app.name}</small>
               </button>
             ))}
           </div>
+
+          <div className="phone-dock">
+            <button onClick={() => setActiveApp("911 Call")}>911</button>
+            <button onClick={() => setActiveApp("Driver License")}>DMV</button>
+            <button onClick={() => setActiveApp("My Jobs")}>Jobs</button>
+          </div>
         </section>
 
-        <section className="pda-app-panel">
-          <div className="panel-title">
-            <div>
-              <p className="eyebrow">Civilian App</p>
-              <h2>{activeApp}</h2>
-            </div>
+        <section className="os-stage">
+          {notice && <div className="toast-card success-strip">{notice}</div>}
+          {formError && <div className="toast-card error-strip">{formError}</div>}
+          <AppWindow title={activeApp} onClose={() => setActiveApp("Profile")}>
+            <CivilianAppContent
+              activeApp={activeApp}
+              overview={overview}
+              departments={departments}
+              submitDepartmentApplication={submitDepartmentApplication}
+              submit911={submit911}
+              submitProfile={submitProfile}
+              submitGovernmentApplication={submitGovernmentApplication}
+            />
+          </AppWindow>
+          <div className="floating-actions">
+            {canUseMdt(currentUser?.role) && <Link href="/mdt">Open MDT</Link>}
+            {canUseDispatch(currentUser?.role) && <Link href="/dispatch">Dispatch</Link>}
+            {canUseGovernment(currentUser?.role) && <Link href="/government">Government OS</Link>}
+            {canUseAdmin(currentUser?.role) && <Link href="/admin">Admin</Link>}
             <button
-              className="button ghost"
               onClick={async () => {
                 await logout();
                 window.location.href = "/";
@@ -186,15 +230,6 @@ export function CivilianPortal() {
               Sign out
             </button>
           </div>
-          {notice && <div className="success-strip">{notice}</div>}
-          {formError && <div className="error-strip">{formError}</div>}
-          <CivilianAppContent
-            activeApp={activeApp}
-            overview={appPayload}
-            departments={departments}
-            submitApplication={submitApplication}
-            submit911={submit911}
-          />
         </section>
       </main>
       <Footer />
@@ -202,46 +237,275 @@ export function CivilianPortal() {
   );
 }
 
+function AppWindow({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  return (
+    <div className="app-window">
+      <div className="window-chrome">
+        <div className="window-lights">
+          <span />
+          <span />
+          <span />
+        </div>
+        <strong>{title}</strong>
+        <button onClick={onClose}>Minimize</button>
+      </div>
+      <div className="window-body">{children}</div>
+    </div>
+  );
+}
+
 function CivilianAppContent({
   activeApp,
   overview,
   departments,
-  submitApplication,
-  submit911
+  submitDepartmentApplication,
+  submit911,
+  submitProfile,
+  submitGovernmentApplication
 }: {
-  activeApp: string;
+  activeApp: CivilianAppName;
   overview: any;
   departments: any[];
-  submitApplication: (event: FormEvent<HTMLFormElement>) => void;
+  submitDepartmentApplication: (event: FormEvent<HTMLFormElement>) => void;
   submit911: (event: FormEvent<HTMLFormElement>) => void;
+  submitProfile: (event: FormEvent<HTMLFormElement>) => void;
+  submitGovernmentApplication: (event: FormEvent<HTMLFormElement>, type: string) => void;
 }) {
   const profile = overview.user?.profile;
+  const departmentChoices = departments.filter((department) =>
+    ["police", "sheriff", "fire", "ems", "dispatch"].includes(department.type)
+  );
 
   if (activeApp === "Profile") {
     return (
-      <div className="info-card-grid">
-        <InfoCard label="Legal name" value={overview.user?.name} />
-        <InfoCard label="Phone" value={overview.user?.phone || profile?.phone || "Not on file"} />
-        <InfoCard label="Address" value={[profile?.address, profile?.city, profile?.state].filter(Boolean).join(", ") || "Not on file"} />
-        <InfoCard label="Account role" value={roleLabel(overview.user?.role)} />
+      <div className="passport-layout">
+        <section className="passport-card">
+          <p className="eyebrow">FairCroft Civilian Passport</p>
+          <div className="passport-face">
+            <div className="character-photo">
+              {profile?.characterPhotoUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={profile.characterPhotoUrl} alt="Roleplay character" />
+              ) : (
+                <span>PHOTO</span>
+              )}
+            </div>
+            <div>
+              <h2>{overview.user?.name}</h2>
+              <p>{profile?.address || "No address on file"}</p>
+              <dl>
+                <div>
+                  <dt>Role</dt>
+                  <dd>{roleLabel(overview.user?.role)}</dd>
+                </div>
+                <div>
+                  <dt>Passport</dt>
+                  <dd>{profile?.passportNumber || "Not issued"}</dd>
+                </div>
+                <div>
+                  <dt>Status</dt>
+                  <dd>{profile?.verificationStatus || "unverified"}</dd>
+                </div>
+              </dl>
+            </div>
+          </div>
+          <small className="photo-rule">Photo must be of a game character photo, not a real photo.</small>
+        </section>
+
+        <form className="stack-form agency-form" onSubmit={submitProfile}>
+          <h3>Update character profile</h3>
+          <div className="two-col">
+            <label>
+              Phone
+              <input name="phone" defaultValue={overview.user?.phone || profile?.phone || ""} />
+            </label>
+            <label>
+              Character photo URL
+              <input name="characterPhotoUrl" defaultValue={profile?.characterPhotoUrl || ""} />
+            </label>
+          </div>
+          <label>
+            Street address
+            <input name="address" defaultValue={profile?.address || ""} />
+          </label>
+          <div className="three-col">
+            <label>
+              City
+              <input name="city" defaultValue={profile?.city || "FairCroft"} />
+            </label>
+            <label>
+              State
+              <input name="state" defaultValue={profile?.state || "FC"} />
+            </label>
+            <label>
+              Postal code
+              <input name="postalCode" defaultValue={profile?.postalCode || ""} />
+            </label>
+          </div>
+          <label className="checkline fine-print">
+            <input name="characterPhotoNoticeAccepted" type="checkbox" defaultChecked={profile?.characterPhotoNoticeAccepted} /> I confirm the profile/passport photo is a game character image, not a real person.
+          </label>
+          <textarea name="notes" placeholder="Optional civilian notes" defaultValue={profile?.notes || ""} />
+          <button className="button primary">Save Profile</button>
+        </form>
+      </div>
+    );
+  }
+
+  if (activeApp === "Passport") {
+    return (
+      <div className="split-admin">
+        <form className="stack-form agency-form" onSubmit={(event) => submitGovernmentApplication(event, "passport")}>
+          <h3>Passport / Civilian ID Application</h3>
+          <p className="muted">Used for fictional FairCroft identity verification. This is not a real passport or government ID.</p>
+          <input name="legalName" defaultValue={overview.user?.name || ""} placeholder="Legal RP character name" />
+          <input name="characterPhotoUrl" defaultValue={profile?.characterPhotoUrl || ""} placeholder="Character photo URL" />
+          <textarea name="passportReason" rows={4} placeholder="Reason for passport / civilian ID request" />
+          <label className="checkline fine-print">
+            <input name="photoNoticeAccepted" type="checkbox" required /> Photo must be of Game character photo, not real photo.
+          </label>
+          <button className="button primary">Submit Passport Application</button>
+        </form>
+        <RecordList
+          records={overview.governmentApplications?.filter((app: any) => app.type === "passport")}
+          empty="No passport applications yet."
+          fields={["type", "status", "submittedAt", "decisionReason"]}
+        />
       </div>
     );
   }
 
   if (activeApp === "Driver License") {
-    return <RecordList records={overview.licenses} empty="No driver license record has been issued." fields={["number", "class", "status", "expiresAt"]} />;
+    return (
+      <div className="split-admin">
+        <form className="stack-form agency-form" onSubmit={(event) => submitGovernmentApplication(event, "driver_license")}>
+          <h3>DMV Driver License Intake</h3>
+          <input name="legalName" defaultValue={overview.user?.name || ""} />
+          <select name="licenseClass" defaultValue="D">
+            <option value="D">Class D - Standard</option>
+            <option value="M">Class M - Motorcycle</option>
+            <option value="C">Class C - Commercial RP</option>
+          </select>
+          <textarea name="notes" rows={4} placeholder="Restrictions, RP notes, or training notes" />
+          <button className="button primary">Request License Review</button>
+        </form>
+        <RecordList records={overview.licenses} empty="No driver license record has been issued." fields={["number", "class", "status", "expiresAt"]} />
+      </div>
+    );
   }
 
   if (activeApp === "Vehicle Registration") {
-    return <RecordList records={overview.vehicles} empty="No registered vehicles." fields={["plate", "year", "make", "model", "registrationStatus"]} />;
+    return (
+      <div className="split-admin">
+        <form className="stack-form agency-form" onSubmit={(event) => submitGovernmentApplication(event, "vehicle_registration")}>
+          <h3>Register Vehicle</h3>
+          <div className="two-col">
+            <input name="make" placeholder="Make" required />
+            <input name="model" placeholder="Model" required />
+          </div>
+          <div className="three-col">
+            <input name="year" type="number" min="1900" max="2100" placeholder="Year" required />
+            <input name="color" placeholder="Color" required />
+            <input name="plate" placeholder="Preferred plate" />
+          </div>
+          <input name="vin" placeholder="Optional fictional VIN" />
+          <textarea name="notes" rows={3} placeholder="Vehicle roleplay notes" />
+          <button className="button primary">Submit Registration</button>
+        </form>
+        <RecordList records={overview.vehicles} empty="No registered vehicles." fields={["plate", "year", "make", "model", "registrationStatus"]} />
+      </div>
+    );
   }
 
   if (activeApp === "Firearm Permit") {
-    return <RecordList records={overview.permits?.filter((permit: any) => permit.type.toLowerCase().includes("firearm"))} empty="No firearm permit record." fields={["number", "type", "status", "expiresAt"]} />;
+    return (
+      <PermitApp
+        type="firearm_permit"
+        title="Firearm Permit"
+        records={overview.permits?.filter((permit: any) => permit.type.toLowerCase().includes("firearm"))}
+        submitGovernmentApplication={submitGovernmentApplication}
+      />
+    );
   }
 
   if (activeApp === "Business License") {
-    return <EmptyAgency title="Business Licensing" body="No business license records are attached to this roleplay civilian account." />;
+    return (
+      <PermitApp
+        type="business_license"
+        title="Business License"
+        records={overview.permits?.filter((permit: any) => permit.type.toLowerCase().includes("business"))}
+        submitGovernmentApplication={submitGovernmentApplication}
+      />
+    );
+  }
+
+  if (activeApp === "911 Call") {
+    return (
+      <form className="stack-form agency-form emergency-form" onSubmit={submit911}>
+        <div className="warning-callout">Fictional roleplay 911. Do not use for real emergencies.</div>
+        <select name="emergencyType" required defaultValue="">
+          <option value="" disabled>Select emergency type</option>
+          <option>Police</option>
+          <option>Fire</option>
+          <option>EMS</option>
+          <option>Traffic Collision</option>
+          <option>Public Safety Hazard</option>
+        </select>
+        <input name="location" placeholder="Location / landmark / scene" required />
+        <textarea name="description" rows={5} placeholder="What is happening right now?" required />
+        <div className="two-col">
+          <input name="callerName" defaultValue={overview.user?.name} required />
+          <input name="callbackNumber" defaultValue={overview.user?.phone || profile?.phone || ""} required />
+        </div>
+        <button className="button danger">Transmit 911 Call</button>
+      </form>
+    );
+  }
+
+  if (activeApp === "Department Applications") {
+    return (
+      <div className="split-admin">
+        <form className="stack-form agency-form" onSubmit={submitDepartmentApplication}>
+          <h3>Apply for Department Job</h3>
+          <select name="departmentId" required defaultValue="">
+            <option value="" disabled>Select a FairCroft department</option>
+            {departmentChoices.map((department) => (
+              <option value={department.id} key={department.id}>{department.name}</option>
+            ))}
+          </select>
+          <textarea name="statement" rows={5} required placeholder="Why do you want this LEO / Fire / EMS / Dispatch job?" />
+          <textarea name="experience" rows={4} placeholder="Relevant roleplay experience" />
+          <button className="button primary">Submit Department Application</button>
+        </form>
+        <RecordList records={overview.applications} empty="No department applications submitted yet." fields={["department.name", "status", "submittedAt", "decisionReason"]} />
+      </div>
+    );
+  }
+
+  if (activeApp === "My Jobs") {
+    return (
+      <div className="job-console">
+        <h3>Assigned Jobs / Enabled OS Apps</h3>
+        <p className="muted">Jobs are assigned by FairCroft administration. Approved jobs unlock MDT, Dispatch, or Government OS apps.</p>
+        <RecordList records={overview.jobs} empty="No department or government jobs assigned yet." fields={["department.name", "jobTitle", "rank.name", "callSign", "role"]} />
+        <div className="button-row">
+          {canUseMdt(overview.user?.role) && <Link className="button terminal" href="/mdt">Open MDT</Link>}
+          {canUseDispatch(overview.user?.role) && <Link className="button terminal" href="/dispatch">Open Dispatch</Link>}
+          {canUseGovernment(overview.user?.role) && <Link className="button primary" href="/government">Open Government OS</Link>}
+        </div>
+      </div>
+    );
+  }
+
+  if (activeApp === "Government OS") {
+    return (
+      <div className="empty-agency">
+        <span>GOV</span>
+        <h3>Government employee access enabled</h3>
+        <p>Open the FairCroft Government OS for DMV approvals, identity records, and civilian service queues.</p>
+        <Link className="button primary" href="/government">Launch Government OS</Link>
+      </div>
+    );
   }
 
   if (activeApp === "Warrants") {
@@ -250,52 +514,6 @@ function CivilianAppContent({
 
   if (activeApp === "Tickets/Citations") {
     return <RecordList records={overview.citations} empty="No citations on file." fields={["subjectName", "statute", "description", "status"]} />;
-  }
-
-  if (activeApp === "911 Call") {
-    return (
-      <form className="stack-form agency-form" onSubmit={submit911}>
-        <div className="warning-callout">
-          This is a fictional roleplay 911 system. Do not use it for real emergencies.
-        </div>
-        <label>
-          Emergency type
-          <select name="emergencyType" required defaultValue="">
-            <option value="" disabled>
-              Select emergency type
-            </option>
-            <option>Police</option>
-            <option>Fire</option>
-            <option>EMS</option>
-            <option>Traffic Collision</option>
-            <option>Public Safety Hazard</option>
-          </select>
-        </label>
-        <label>
-          Location
-          <input name="location" placeholder="Street, landmark, postal, or scene details" required />
-        </label>
-        <label>
-          Description
-          <textarea name="description" rows={5} placeholder="Describe what is happening now." required />
-        </label>
-        <div className="two-col">
-          <label>
-            Caller name
-            <input name="callerName" defaultValue={overview.user?.name} required />
-          </label>
-          <label>
-            Callback number
-            <input name="callbackNumber" defaultValue={overview.user?.phone || profile?.phone || ""} required />
-          </label>
-        </div>
-        <button className="button danger wide">Transmit 911 Call</button>
-      </form>
-    );
-  }
-
-  if (activeApp === "Emergency Contacts") {
-    return <EmptyAgency title="Emergency Contacts" body="Add trusted roleplay contacts here in a future community-specific expansion." />;
   }
 
   if (activeApp === "Civilian Records") {
@@ -308,50 +526,47 @@ function CivilianAppContent({
     );
   }
 
-  if (activeApp === "Court Notices") {
-    return <EmptyAgency title="Court Notices" body="No fictional FairCroft Municipal Court notices are pending." />;
-  }
-
-  if (activeApp === "Department Applications") {
-    return (
-      <div className="application-layout">
-        <form className="stack-form agency-form" onSubmit={submitApplication}>
-          <label>
-            Department
-            <select name="departmentId" required defaultValue="">
-              <option value="" disabled>
-                Select a FairCroft department
-              </option>
-              {departments.map((department) => (
-                <option value={department.id} key={department.id}>
-                  {department.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Why do you want to join?
-            <textarea name="statement" rows={5} required placeholder="Keep it immersive and roleplay focused." />
-          </label>
-          <label>
-            Relevant roleplay experience
-            <textarea name="experience" rows={4} placeholder="Optional" />
-          </label>
-          <button className="button primary wide">Submit Department Application</button>
-        </form>
-        <RecordList records={overview.applications} empty="No applications submitted yet." fields={["department.name", "status", "submittedAt", "decisionReason"]} />
-      </div>
-    );
-  }
-
+  if (activeApp === "Court Notices") return <EmptyAgency title="Court Notices" body="No fictional FairCroft Municipal Court notices are pending." />;
+  if (activeApp === "Emergency Contacts") return <EmptyAgency title="Emergency Contacts" body="No emergency contacts are attached to this profile yet." />;
   return null;
+}
+
+function PermitApp({
+  type,
+  title,
+  records,
+  submitGovernmentApplication
+}: {
+  type: string;
+  title: string;
+  records?: any[];
+  submitGovernmentApplication: (event: FormEvent<HTMLFormElement>, type: string) => void;
+}) {
+  return (
+    <div className="split-admin">
+      <form className="stack-form agency-form" onSubmit={(event) => submitGovernmentApplication(event, type)}>
+        <h3>{title} Application</h3>
+        {type === "business_license" ? (
+          <>
+            <input name="businessName" placeholder="Business name" required />
+            <input name="businessType" placeholder="Business type" />
+          </>
+        ) : (
+          <input name="permitType" defaultValue="Firearm Permit" />
+        )}
+        <textarea name="notes" rows={5} placeholder="Roleplay justification and notes" />
+        <button className="button primary">Submit {title}</button>
+      </form>
+      <RecordList records={records} empty={`No ${title.toLowerCase()} records issued.`} fields={["number", "type", "status", "expiresAt"]} />
+    </div>
+  );
 }
 
 function InfoCard({ label, value }: { label: string; value: any }) {
   return (
     <div className="info-card">
       <span>{label}</span>
-      <strong>{String(value || "—")}</strong>
+      <strong>{String(value || "-")}</strong>
     </div>
   );
 }
@@ -366,7 +581,7 @@ function RecordList({ records, empty, fields }: { records?: any[]; empty: string
   return (
     <div className="record-list">
       {records.map((record) => (
-        <article className="record-card" key={record.id}>
+        <article className="record-card record-card--window" key={record.id}>
           {fields.map((field) => (
             <div key={field}>
               <span>{field.split(".").at(-1)}</span>
@@ -380,7 +595,7 @@ function RecordList({ records, empty, fields }: { records?: any[]; empty: string
 }
 
 function formatValue(value: any) {
-  if (!value) return "—";
+  if (!value) return "-";
   if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value)) return new Date(value).toLocaleDateString();
   return String(value);
 }

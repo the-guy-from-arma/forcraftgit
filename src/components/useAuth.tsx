@@ -2,13 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch, getToken, setToken } from "@/lib/api-client";
-import { canUseAdmin, canUseDispatch, canUseMdt } from "@/lib/roles";
+import { canUseAdmin, canUseDispatch, canUseGovernment, canUseMdt } from "@/lib/roles";
 
-type Requirement = "any" | "civilian" | "department" | "dispatch" | "admin";
+type Requirement = "any" | "civilian" | "department" | "dispatch" | "government" | "admin";
 
 export function useAuth(requirement: Requirement = "any") {
   const [user, setUser] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => Boolean(getToken()));
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -33,7 +33,9 @@ export function useAuth(requirement: Requirement = "any") {
   }, []);
 
   useEffect(() => {
-    refresh();
+    if (!getToken()) return;
+    const timer = window.setTimeout(() => void refresh(), 0);
+    return () => window.clearTimeout(timer);
   }, [refresh]);
 
   const allowed =
@@ -41,6 +43,7 @@ export function useAuth(requirement: Requirement = "any") {
     (requirement === "civilian" && !!user) ||
     (requirement === "department" && canUseMdt(user?.role)) ||
     (requirement === "dispatch" && canUseDispatch(user?.role)) ||
+    (requirement === "government" && canUseGovernment(user?.role)) ||
     (requirement === "admin" && canUseAdmin(user?.role));
 
   return { user, setUser, loading, error, allowed, refresh };

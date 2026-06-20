@@ -4,7 +4,7 @@ import Link from "next/link";
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch, login, setToken } from "@/lib/api-client";
-import { canUseAdmin, canUseDispatch, canUseMdt, roleLabel } from "@/lib/roles";
+import { canUseAdmin, canUseDispatch, canUseGovernment, canUseMdt, roleLabel } from "@/lib/roles";
 import { FairCroftSeal } from "./FairCroftSeal";
 import { Footer } from "./Footer";
 
@@ -52,7 +52,9 @@ export function HomeExperience() {
           address: String(form.get("address")),
           city: "FairCroft",
           state: "FC",
-          postalCode: String(form.get("postalCode"))
+          postalCode: String(form.get("postalCode")),
+          characterPhotoUrl: String(form.get("characterPhotoUrl")),
+          characterPhotoNoticeAccepted: form.get("characterPhotoNoticeAccepted") === "on"
         }
       });
       setToken(payload.token);
@@ -68,6 +70,7 @@ export function HomeExperience() {
     if (canUseAdmin(user?.role)) router.push("/admin");
     else if (canUseDispatch(user?.role)) router.push("/dispatch");
     else if (canUseMdt(user?.role)) router.push("/mdt");
+    else if (canUseGovernment(user?.role)) router.push("/government");
     else router.push("/civilian");
   }
 
@@ -82,13 +85,13 @@ export function HomeExperience() {
             <p className="eyebrow">FairCroft Government Services</p>
             <h1>CoreOne Roleplay CAD/MDT</h1>
             <p className="hero-copy">
-              A fictional public-safety operating system for civilian services, department applications, command
+              A fictional public-safety operating system for civilian services, DMV records, department jobs, command
               dispatch, and live MDT workflows.
             </p>
             <div className="hero-badges">
               <span>Roleplay Safe</span>
               <span>Socket.IO Live CAD</span>
-              <span>Railway Ready</span>
+              <span>Railway / Docker Ready</span>
             </div>
           </div>
         </section>
@@ -103,29 +106,36 @@ export function HomeExperience() {
               </p>
               <div className="portal-grid">
                 <Link href="/civilian" className="portal-card">
-                  <span>📱</span>
+                  <span>PDA</span>
                   <strong>Civilian PDA</strong>
-                  <small>Government services and applications</small>
+                  <small>DMV, passport, vehicles, and applications</small>
                 </Link>
                 {canUseMdt(user.role) && (
                   <Link href="/mdt" className="portal-card">
-                    <span>▣</span>
+                    <span>MDT</span>
                     <strong>Department MDT</strong>
                     <small>Calls, units, BOLOs, reports</small>
                   </Link>
                 )}
                 {canUseDispatch(user.role) && (
                   <Link href="/dispatch" className="portal-card">
-                    <span>☎</span>
+                    <span>911</span>
                     <strong>Dispatch Center</strong>
                     <small>911 queue and assignments</small>
                   </Link>
                 )}
+                {canUseGovernment(user.role) && (
+                  <Link href="/government" className="portal-card">
+                    <span>GOV</span>
+                    <strong>Government OS</strong>
+                    <small>DMV approvals and civilian records</small>
+                  </Link>
+                )}
                 {canUseAdmin(user.role) && (
                   <Link href="/admin" className="portal-card">
-                    <span>⚙</span>
+                    <span>ADM</span>
                     <strong>Admin Console</strong>
-                    <small>Approvals, roles, audit logs</small>
+                    <small>Jobs, roles, audit logs, server control</small>
                   </Link>
                 )}
               </div>
@@ -154,11 +164,11 @@ export function HomeExperience() {
                   </label>
                   <label>
                     Password
-                    <input name="password" type="password" placeholder="••••••••" required />
+                    <input name="password" type="password" placeholder="Password" required />
                   </label>
                   {error && <p className="form-error">{error}</p>}
                   <button className="button primary wide" disabled={busy}>
-                    {busy ? "Authenticating…" : "Enter CoreOne"}
+                    {busy ? "Authenticating..." : "Enter CoreOne"}
                   </button>
                   <p className="hint">
                     Seed owner: <code>owner@faircroft.local</code> / <code>ChangeMe123!</code>
@@ -167,7 +177,7 @@ export function HomeExperience() {
               ) : (
                 <form className="stack-form" onSubmit={onRegister}>
                   <p className="eyebrow">Civilian Enrollment</p>
-                  <h2>Create a PDA account</h2>
+                  <h2>Create an unverified civilian PDA</h2>
                   <div className="two-col">
                     <label>
                       First name
@@ -204,10 +214,19 @@ export function HomeExperience() {
                     Postal code
                     <input name="postalCode" />
                   </label>
+                  <label>
+                    Character/passport photo URL
+                    <input name="characterPhotoUrl" placeholder="Game character photo URL" />
+                    <small className="fine-print">Must be of Game character photo, not real photo.</small>
+                  </label>
+                  <label className="checkline fine-print">
+                    <input name="characterPhotoNoticeAccepted" type="checkbox" /> I understand profile photos must be fictional/game-character images.
+                  </label>
                   {error && <p className="form-error">{error}</p>}
                   <button className="button primary wide" disabled={busy}>
-                    {busy ? "Creating…" : "Create Civilian Account"}
+                    {busy ? "Creating..." : "Create Unverified Civilian Account"}
                   </button>
+                  <p className="hint">After creation, open your PDA DMV/passport app to request verification, license, and vehicle records.</p>
                 </form>
               )}
             </>

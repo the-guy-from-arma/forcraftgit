@@ -6,17 +6,18 @@
   "description": "FairCroft CoreOne roleplay CAD/MDT and civilian government portal.",
   "scripts": {
     "dev": "tsx watch server.ts",
-    "build": "prisma generate && next build",
+    "build": "prisma generate && next build && tsc --project tsconfig.server.json",
     "build:server": "tsc --project tsconfig.server.json",
     "start": "node dist/server.js",
-    "lint": "eslint . --ext .ts,.tsx",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
-    "railway:release": "prisma migrate deploy || prisma db push"
+    "railway:release": "prisma migrate deploy",
+    "railway:start": "node dist/server.js"
   },
   "dependencies": {
     "@prisma/client": "6",
@@ -43,23 +44,13 @@
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "@types/sanitize-html": "latest",
-    "eslint": "latest",
+    "eslint": "^9.39.1",
     "eslint-config-next": "latest",
     "prisma": "6",
     "typescript": "latest"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@prisma/engines",
-      "@prisma/client",
-      "esbuild",
-      "prisma",
-      "sharp",
-      "unrs-resolver"
-    ]
   },
   "engines": {
     "node": ">=20.9.0"
