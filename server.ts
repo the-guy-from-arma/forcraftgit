@@ -11,7 +11,7 @@ import { registerSocketHandlers } from "./src/server/socket";
 
 const dev = process.env.NODE_ENV !== "production";
 const port = Number(process.env.PORT || 3000);
-const hostname = process.env.HOSTNAME || "0.0.0.0";
+const hostname = process.env.HOST || "0.0.0.0";
 
 const nextApp = next({ dev, hostname, port });
 const handle = nextApp.getRequestHandler();
