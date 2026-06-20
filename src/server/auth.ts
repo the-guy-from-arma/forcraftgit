@@ -4,7 +4,8 @@ import jwt from "jsonwebtoken";
 import { getPrisma } from "./db.js";
 import { canAccessAdmin, canAccessDepartment, canAccessDispatch, publicUser } from "./security.js";
 
-const defaultDevSecret = "faircroft-coreone-dev-secret-change-me";
+const DEFAULT_DEV_SECRET = "faircroft-coreone-dev-secret-change-me";
+const DEFAULT_JWT_EXPIRES = "7d";
 
 export type AuthedRequest = Request & {
   auth: {
@@ -14,20 +15,27 @@ export type AuthedRequest = Request & {
   };
 };
 
-function jwtSecret() {
-  const secret = process.env.JWT_SECRET;
+type SessionPayload = {
+  sub: string;
+  role: string;
+  jti: string;
+};
 
+function getJwtSecret(): string {
+  const secret = process.env.JWT_SECRET;
   if (!secret && process.env.NODE_ENV === "production") {
     throw new Error("JWT_SECRET is required in production.");
   }
-
-  return secret || defaultDevSecret;
+  return secret || DEFAULT_DEV_SECRET;
 }
 
-function expiresInMs() {
-  const configured = process.env.JWT_EXPIRES_IN || "7d";
-  const match = configured.match(/^(\d+)([hdm])$/);
+function getJwtExpires(): string {
+  return process.env.JWT_EXPIRES_IN || DEFAULT_JWT_EXPIRES;
+}
 
+function getTokenExpiryMs(): number {
+  const configured = getJwtExpires();
+  const match = configured.match(/^(\d+)([hdm])$/);
   if (!match) return 7 * 24 * 60 * 60 * 1000;
 
   const value = Number(match[1]);
@@ -40,7 +48,7 @@ function expiresInMs() {
 export async function issueSession(user: any, req: Request) {
   const prisma = getPrisma();
   const tokenId = crypto.randomUUID();
-  const expiresAt = new Date(Date.now() + expiresInMs());
+  const expiresAt = new Date(Date.now() + getTokenExpiryMs());
 
   await prisma.session.create({
     data: {
@@ -58,26 +66,26 @@ export async function issueSession(user: any, req: Request) {
       role: user.role,
       jti: tokenId
     },
-    jwtSecret(),
+    getJwtSecret(),
     {
-      expiresIn: (process.env.JWT_EXPIRES_IN || "7d") as unknown as jwt.SignOptions["expiresIn"]
+      expiresIn: getJwtExpires()
     }
   );
 
   return { token, expiresAt };
 }
 
-export function bearerToken(req: Request) {
-  const auth = req.headers.authorization;
-  if (!auth?.startsWith("Bearer ")) return null;
-  return auth.slice("Bearer ".length).trim();
+export function bearerToken(req: Request): string | null {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ")) return null;
+  return authHeader.slice("Bearer ".length).trim();
 }
 
 export async function resolveUserFromToken(token: string | null) {
   if (!token) return null;
 
   try {
-    const decoded = jwt.verify(token, jwtSecret()) as jwt.JwtPayload;
+    const decoded = jwt.verify(token, getJwtSecret()) as SessionPayload;
     const tokenId = String(decoded.jti || "");
     const userId = String(decoded.sub || "");
 
@@ -113,9 +121,12 @@ export async function resolveUserFromToken(token: string | null) {
   }
 }
 
+function authorizationError(res: Response, message: string) {
+  res.status(403).json({ error: message });
+}
+
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const resolved = await resolveUserFromToken(bearerToken(req));
-
   if (!resolved) {
     res.status(401).json({ error: "Authentication required." });
     return;
@@ -128,30 +139,24 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 export function requireDepartment(req: Request, res: Response, next: NextFunction) {
   const authed = req as AuthedRequest;
   if (!canAccessDepartment(authed.auth?.user?.role)) {
-    res.status(403).json({ error: "Department access required." });
-    return;
+    return authorizationError(res, "Department access required.");
   }
-
   next();
 }
 
 export function requireDispatcher(req: Request, res: Response, next: NextFunction) {
   const authed = req as AuthedRequest;
   if (!canAccessDispatch(authed.auth?.user?.role)) {
-    res.status(403).json({ error: "Dispatch access required." });
-    return;
+    return authorizationError(res, "Dispatch access required.");
   }
-
   next();
 }
 
 export function requireAdmin(req: Request, res: Response, next: NextFunction) {
   const authed = req as AuthedRequest;
   if (!canAccessAdmin(authed.auth?.user?.role)) {
-    res.status(403).json({ error: "Administrator access required." });
-    return;
+    return authorizationError(res, "Administrator access required.");
   }
-
   next();
 }
 
