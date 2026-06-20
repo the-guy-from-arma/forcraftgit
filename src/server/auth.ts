@@ -59,7 +59,9 @@ export async function issueSession(user: any, req: Request) {
       jti: tokenId
     },
     jwtSecret(),
-    { expiresIn: process.env.JWT_EXPIRES_IN || "7d" }
+    {
+      expiresIn: (process.env.JWT_EXPIRES_IN || "7d") as unknown as jwt.SignOptions["expiresIn"]
+    }
   );
 
   return { token, expiresAt };
