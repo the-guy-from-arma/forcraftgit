@@ -1,0 +1,472 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  civilian
+  pending_department
+  police
+  sheriff
+  fire
+  ems
+  dispatcher
+  department_supervisor
+  site_admin
+  owner
+}
+
+enum DepartmentType {
+  police
+  sheriff
+  fire
+  ems
+  dispatch
+}
+
+enum ApplicationStatus {
+  pending
+  approved
+  denied
+}
+
+enum UnitStatus {
+  TEN_8_AVAILABLE
+  TEN_6_BUSY
+  TEN_7_OUT_OF_SERVICE
+  TEN_23_ON_SCENE
+  TEN_97_EN_ROUTE
+  TEN_15_TRANSPORTING
+  CODE_4_CLEAR
+  PRIORITY_RESPONSE
+}
+
+enum Call911Status {
+  queued
+  accepted
+  converted
+  closed
+  cancelled
+}
+
+enum CadCallStatus {
+  pending
+  active
+  assigned
+  on_scene
+  closed
+  cancelled
+}
+
+enum PriorityLevel {
+  low
+  routine
+  priority
+  emergency
+}
+
+enum RecordStatus {
+  active
+  inactive
+  expired
+  revoked
+  closed
+  voided
+}
+
+enum ReportStatus {
+  draft
+  submitted
+  approved
+  voided
+}
+
+model User {
+  id                  String                 @id @default(cuid())
+  email               String                 @unique
+  passwordHash        String
+  name                String
+  phone               String?
+  role                UserRole               @default(civilian)
+  suspended           Boolean                @default(false)
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+  profile             CivilianProfile?
+  applications        DepartmentApplication[]
+  reviewedApplications DepartmentApplication[] @relation("ApplicationReviewer")
+  memberships         DepartmentMembership[]
+  vehicles            Vehicle[]
+  licenses            License[]
+  permits             Permit[]
+  warrantsCreated     Warrant[]              @relation("WarrantCreator")
+  citationsIssued     Citation[]             @relation("CitationOfficer")
+  reports             IncidentReport[]       @relation("IncidentAuthor")
+  arrestReports       ArrestReport[]         @relation("ArrestOfficer")
+  fireReports         FireReport[]           @relation("FireAuthor")
+  emsReports          EMSReport[]            @relation("EmsAuthor")
+  cadCallsCreated     CadCall[]              @relation("CadCallCreator")
+  cadCallsAccepted    CadCall[]              @relation("CadCallAcceptor")
+  units               CadUnit[]
+  assignmentsMade     UnitAssignment[]       @relation("AssignmentDispatcher")
+  bolosCreated        Bolo[]                 @relation("BoloCreator")
+  auditLogs           AuditLog[]             @relation("AuditActor")
+  notifications       Notification[]
+  sessions            Session[]
+  dispatchMessages    DispatchMessage[]
+}
+
+model CivilianProfile {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  firstName   String
+  lastName    String
+  dateOfBirth DateTime?
+  address     String?
+  city        String?  @default("FairCroft")
+  state       String?  @default("FC")
+  postalCode  String?
+  phone       String?
+  notes       String?
+  recordFlags String[] @default([])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Department {
+  id           String                  @id @default(cuid())
+  name         String
+  code         String                  @unique
+  type         DepartmentType
+  description  String?
+  isActive     Boolean                 @default(true)
+  createdAt    DateTime                @default(now())
+  updatedAt    DateTime                @updatedAt
+  ranks        Rank[]
+  applications DepartmentApplication[]
+  memberships  DepartmentMembership[]
+  units        CadUnit[]
+  reports      IncidentReport[]
+}
+
+model DepartmentApplication {
+  id             String            @id @default(cuid())
+  userId         String
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  departmentId   String
+  department     Department        @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  desiredRole    UserRole?
+  statement      String
+  experience     String?
+  status         ApplicationStatus @default(pending)
+  decisionReason String?
+  reviewedById   String?
+  reviewedBy     User?             @relation("ApplicationReviewer", fields: [reviewedById], references: [id])
+  submittedAt    DateTime          @default(now())
+  reviewedAt     DateTime?
+
+  @@unique([userId, departmentId, status])
+}
+
+model DepartmentMembership {
+  id           String     @id @default(cuid())
+  userId       String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  rankId       String?
+  rank         Rank?      @relation(fields: [rankId], references: [id])
+  role         UserRole
+  badgeNumber  String?
+  active       Boolean    @default(true)
+  joinedAt     DateTime   @default(now())
+
+  @@unique([userId, departmentId])
+}
+
+model Rank {
+  id            String                 @id @default(cuid())
+  departmentId  String
+  department    Department             @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  name          String
+  level         Int                    @default(1)
+  permissions   Json                   @default("{}")
+  memberships   DepartmentMembership[]
+
+  @@unique([departmentId, name])
+}
+
+model Vehicle {
+  id                 String       @id @default(cuid())
+  ownerId            String?
+  owner              User?        @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  make               String
+  model              String
+  year               Int
+  color              String
+  plate              String       @unique
+  vin                String?      @unique
+  registrationStatus RecordStatus @default(active)
+  expiresAt          DateTime?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+}
+
+model License {
+  id           String       @id @default(cuid())
+  userId       String
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  number       String       @unique
+  class        String       @default("D")
+  status       RecordStatus @default(active)
+  issuedAt     DateTime     @default(now())
+  expiresAt    DateTime?
+  restrictions String?
+}
+
+model Permit {
+  id        String       @id @default(cuid())
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  number    String       @unique
+  status    RecordStatus @default(active)
+  issuedAt  DateTime     @default(now())
+  expiresAt DateTime?
+  notes     String?
+}
+
+model Warrant {
+  id            String       @id @default(cuid())
+  subjectId     String?
+  subjectName   String
+  dateOfBirth   DateTime?
+  charges       String
+  issuingCourt  String       @default("FairCroft Municipal Court")
+  status        RecordStatus @default(active)
+  severity      PriorityLevel @default(routine)
+  issuedAt      DateTime     @default(now())
+  createdById   String?
+  createdBy     User?        @relation("WarrantCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedAt      DateTime     @updatedAt
+}
+
+model Citation {
+  id          String       @id @default(cuid())
+  userId      String?
+  user        User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  subjectName String
+  officerId   String?
+  officer     User?        @relation("CitationOfficer", fields: [officerId], references: [id], onDelete: SetNull)
+  statute     String
+  description String
+  fineCents   Int          @default(0)
+  status      RecordStatus @default(active)
+  issuedAt    DateTime     @default(now())
+  location    String?
+}
+
+model IncidentReport {
+  id           String       @id @default(cuid())
+  cadCallId    String?
+  cadCall      CadCall?     @relation(fields: [cadCallId], references: [id], onDelete: SetNull)
+  authorId     String
+  author       User         @relation("IncidentAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  departmentId String?
+  department   Department?  @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  reportNumber String       @unique
+  title        String
+  narrative    String
+  status       ReportStatus @default(submitted)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+}
+
+model ArrestReport {
+  id                 String       @id @default(cuid())
+  cadCallId          String?
+  cadCall            CadCall?     @relation(fields: [cadCallId], references: [id], onDelete: SetNull)
+  arrestingOfficerId String
+  arrestingOfficer   User         @relation("ArrestOfficer", fields: [arrestingOfficerId], references: [id], onDelete: Cascade)
+  subjectName         String
+  charges             String
+  narrative           String
+  bookingNumber       String       @unique
+  status              ReportStatus @default(submitted)
+  createdAt           DateTime     @default(now())
+}
+
+model FireReport {
+  id           String       @id @default(cuid())
+  cadCallId    String?
+  cadCall      CadCall?     @relation(fields: [cadCallId], references: [id], onDelete: SetNull)
+  authorId     String
+  author       User         @relation("FireAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  incidentType String
+  cause        String?
+  actions      String
+  narrative    String
+  status       ReportStatus @default(submitted)
+  createdAt    DateTime     @default(now())
+}
+
+model EMSReport {
+  id             String       @id @default(cuid())
+  cadCallId      String?
+  cadCall        CadCall?     @relation(fields: [cadCallId], references: [id], onDelete: SetNull)
+  authorId       String
+  author         User         @relation("EmsAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  patientName    String
+  patientAge     Int?
+  chiefComplaint String
+  careProvided   String
+  disposition    String
+  roleplayOnly   Boolean      @default(true)
+  status         ReportStatus @default(submitted)
+  createdAt      DateTime     @default(now())
+}
+
+model Call911 {
+  id             String        @id @default(cuid())
+  callerId       String?
+  caller         User?         @relation(fields: [callerId], references: [id], onDelete: SetNull)
+  emergencyType  String
+  location       String
+  description    String
+  callerName     String
+  callbackNumber String
+  status         Call911Status @default(queued)
+  priority       PriorityLevel @default(emergency)
+  acceptedById   String?
+  acceptedAt     DateTime?
+  createdAt      DateTime      @default(now())
+  cadCall        CadCall?
+}
+
+model CadCall {
+  id          String           @id @default(cuid())
+  call911Id   String?          @unique
+  call911     Call911?         @relation(fields: [call911Id], references: [id], onDelete: SetNull)
+  callNumber  String           @unique
+  type        String
+  location    String
+  description String
+  priority    PriorityLevel    @default(routine)
+  status      CadCallStatus    @default(active)
+  createdById String?
+  createdBy   User?            @relation("CadCallCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  acceptedById String?
+  acceptedBy  User?            @relation("CadCallAcceptor", fields: [acceptedById], references: [id], onDelete: SetNull)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  closedAt    DateTime?
+  assignments UnitAssignment[]
+  incidentReports IncidentReport[]
+  arrestReports   ArrestReport[]
+  fireReports     FireReport[]
+  emsReports      EMSReport[]
+}
+
+model CadUnit {
+  id              String           @id @default(cuid())
+  departmentId    String
+  department      Department       @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  userId          String?
+  user            User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  unitNumber      String           @unique
+  status          UnitStatus       @default(TEN_8_AVAILABLE)
+  currentLocation String?
+  isPrimary       Boolean          @default(false)
+  active          Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  assignments     UnitAssignment[]
+}
+
+model UnitAssignment {
+  id           String    @id @default(cuid())
+  cadCallId    String
+  cadCall      CadCall   @relation(fields: [cadCallId], references: [id], onDelete: Cascade)
+  cadUnitId    String
+  cadUnit      CadUnit   @relation(fields: [cadUnitId], references: [id], onDelete: Cascade)
+  assignedById String?
+  assignedBy   User?     @relation("AssignmentDispatcher", fields: [assignedById], references: [id], onDelete: SetNull)
+  status       String    @default("assigned")
+  assignedAt   DateTime  @default(now())
+  clearedAt    DateTime?
+
+  @@unique([cadCallId, cadUnitId])
+}
+
+model Bolo {
+  id                 String       @id @default(cuid())
+  title              String
+  description        String
+  plate              String?
+  personName         String?
+  vehicleDescription String?
+  status             RecordStatus @default(active)
+  createdById        String?
+  createdBy          User?        @relation("BoloCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  expiresAt          DateTime?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+}
+
+model DispatchMessage {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel   String   @default("dispatch")
+  body      String
+  createdAt DateTime @default(now())
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  actor     User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  action    String
+  entity    String
+  entityId  String?
+  metadata  Json     @default("{}")
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  body      String
+  type      String   @default("system")
+  read      Boolean  @default(false)
+  payload   Json     @default("{}")
+  createdAt DateTime @default(now())
+}
+
+model Session {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenId    String    @unique
+  userAgent  String?
+  ipAddress  String?
+  createdAt  DateTime  @default(now())
+  lastSeenAt DateTime?
+  expiresAt  DateTime
+  revokedAt  DateTime?
+}
+
+model ServerSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json     @default("{}")
+  updatedAt DateTime @updatedAt
+}

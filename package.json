@@ -1,0 +1,65 @@
+{
+  "name": "faircroft-coreone",
+  "version": "1.0.0",
+  "private": true,
+  "description": "FairCroft CoreOne roleplay CAD/MDT and civilian government portal.",
+  "scripts": {
+    "dev": "tsx watch server.ts",
+    "build": "prisma generate && next build",
+    "start": "tsx server.ts",
+    "lint": "eslint . --ext .ts,.tsx",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:push": "prisma db push",
+    "db:seed": "tsx prisma/seed.ts",
+    "railway:release": "prisma migrate deploy || prisma db push"
+  },
+  "dependencies": {
+    "@prisma/client": "6",
+    "bcryptjs": "latest",
+    "cors": "latest",
+    "dotenv": "latest",
+    "express": "^4.19.2",
+    "helmet": "latest",
+    "jsonwebtoken": "latest",
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "sanitize-html": "latest",
+    "socket.io": "latest",
+    "socket.io-client": "latest",
+    "tsx": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@types/cors": "latest",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "latest",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@types/sanitize-html": "latest",
+    "eslint": "latest",
+    "eslint-config-next": "latest",
+    "prisma": "6",
+    "typescript": "latest"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/engines",
+      "@prisma/client",
+      "esbuild",
+      "prisma",
+      "sharp",
+      "unrs-resolver"
+    ]
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  }
+}
