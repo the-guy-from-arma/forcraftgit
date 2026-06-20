@@ -1,1 +1,1 @@
-web: npm run railway:release && npm run start
+web: pnpm run start
