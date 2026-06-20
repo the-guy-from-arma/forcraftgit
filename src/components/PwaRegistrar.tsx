@@ -50,8 +50,8 @@ export function PwaRegistrar() {
   if (showIosHint && !installPrompt) {
     return (
       <div className="pwa-ios-hint" role="status">
-        <strong>Install CoreOne on iPhone</strong>
-        <span>Open Share, then choose Add to Home Screen for the full PDA app feel.</span>
+        <strong>Add CoreOne website to iPhone</strong>
+        <span>In Safari, open Share, then choose Add to Home Screen. This stays a website PWA.</span>
         <button onClick={() => setDismissed(true)}>Got it</button>
       </div>
     );
@@ -68,7 +68,7 @@ export function PwaRegistrar() {
         setInstallPrompt(null);
       }}
     >
-      Install CoreOne
+      Add Website
     </button>
   );
 }
