@@ -9,14 +9,19 @@ type InstallPromptEvent = Event & {
 
 export function PwaRegistrar() {
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
+  const [showIosHint, setShowIosHint] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
     if ("serviceWorker" in navigator) {
-      window.addEventListener("load", () => {
+      const registerServiceWorker = () => {
         void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch((error) => {
           console.warn("[pwa] service worker registration failed", error);
         });
-      });
+      };
+
+      if (document.readyState === "complete") registerServiceWorker();
+      else window.addEventListener("load", registerServiceWorker, { once: true });
     }
 
     const onBeforeInstallPrompt = (event: Event) => {
@@ -24,13 +29,33 @@ export function PwaRegistrar() {
       setInstallPrompt(event as InstallPromptEvent);
     };
 
+    const isIos = /iphone|ipad|ipod/i.test(window.navigator.userAgent);
+    const isStandalone =
+      window.matchMedia("(display-mode: standalone)").matches || Boolean((window.navigator as any).standalone);
+    setShowIosHint(isIos && !isStandalone);
+
     window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt);
-    window.addEventListener("appinstalled", () => setInstallPrompt(null));
+    window.addEventListener("appinstalled", () => {
+      setInstallPrompt(null);
+      setShowIosHint(false);
+    });
 
     return () => {
       window.removeEventListener("beforeinstallprompt", onBeforeInstallPrompt);
     };
   }, []);
+
+  if (dismissed) return null;
+
+  if (showIosHint && !installPrompt) {
+    return (
+      <div className="pwa-ios-hint" role="status">
+        <strong>Install CoreOne on iPhone</strong>
+        <span>Open Share, then choose Add to Home Screen for the full PDA app feel.</span>
+        <button onClick={() => setDismissed(true)}>Got it</button>
+      </div>
+    );
+  }
 
   if (!installPrompt) return null;
 

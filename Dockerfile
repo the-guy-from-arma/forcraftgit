@@ -9,6 +9,8 @@ RUN corepack enable && corepack prepare pnpm@10.17.1 --activate
 
 FROM base AS deps
 
+# Host node_modules are excluded by .dockerignore/.railwayignore.
+# Dependencies are installed inside Docker so Railway builds remain clean and reproducible.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY prisma ./prisma
 RUN pnpm install --frozen-lockfile

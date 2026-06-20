@@ -1,0 +1,16 @@
+node_modules
+.pnpm-store
+.next
+dist
+build
+coverage
+*.tsbuildinfo
+*.log
+.env
+.env*.local
+.git
+.agents
+.vscode
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
