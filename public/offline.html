@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#07111f" />
+    <title>FairCroft CoreOne Offline</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #07111f;
+        color: #f5f7fb;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        padding: 2rem;
+        background:
+          radial-gradient(circle at top left, rgba(94, 168, 255, 0.25), transparent 28rem),
+          radial-gradient(circle at bottom right, rgba(242, 196, 109, 0.18), transparent 24rem),
+          #07111f;
+      }
+
+      main {
+        width: min(520px, 100%);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 1.5rem;
+        padding: 1.5rem;
+        background: rgba(255, 255, 255, 0.08);
+        box-shadow: 0 28px 80px rgba(0, 0, 0, 0.35);
+      }
+
+      span {
+        display: inline-grid;
+        place-items: center;
+        width: 58px;
+        aspect-ratio: 1;
+        border-radius: 1rem;
+        color: #07111f;
+        background: #f2c46d;
+        font-weight: 900;
+      }
+
+      h1 {
+        margin: 1rem 0 0.5rem;
+        letter-spacing: -0.04em;
+      }
+
+      p {
+        color: #cbd5e1;
+        line-height: 1.6;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <span>FC</span>
+      <h1>CoreOne is offline</h1>
+      <p>
+        FairCroft CoreOne needs a network connection for live CAD, 911, DMV, and PostgreSQL records. Reconnect and reopen
+        the app to continue roleplay operations.
+      </p>
+    </main>
+  </body>
+</html>
