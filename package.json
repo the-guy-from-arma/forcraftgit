@@ -29,6 +29,7 @@
     "helmet": "latest",
     "jsonwebtoken": "latest",
     "next": "latest",
+    "prisma": "6",
     "react": "latest",
     "react-dom": "latest",
     "sanitize-html": "latest",
@@ -47,7 +48,6 @@
     "@types/sanitize-html": "latest",
     "eslint": "^9.39.1",
     "eslint-config-next": "latest",
-    "prisma": "6",
     "typescript": "latest"
   },
   "prisma": {

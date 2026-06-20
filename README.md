@@ -52,6 +52,8 @@ The Dockerfile pins `pnpm@10.17.1` so Railway/Corepack does not download a pnpm 
 
 Railway build logs may mention `/app/node_modules` because dependencies exist inside the Docker image. The repository and Docker build context still exclude host `node_modules` through `.dockerignore` and `.railwayignore`.
 
+The final Railway image prunes dev dependencies after building and removes the Next build cache, which keeps the website image smaller for deploy downloads.
+
 Run everything in Docker:
 
 ```bash
