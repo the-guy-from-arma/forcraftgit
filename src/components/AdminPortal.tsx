@@ -266,7 +266,12 @@ function AdminTab(props: any) {
             <p>{application.statement}</p>
             {application.experience && <small>Experience: {application.experience}</small>}
             {application.status === "pending" && (
-              <form className="inline-admin-form" ref={(node) => (application.form = node || undefined)}>
+              <form
+                className="inline-admin-form"
+                ref={(node) => {
+                  application.form = node ?? undefined;
+                }}
+              >
                 <select name="role" defaultValue={application.desiredRole || ""}>
                   <option value="">Department default</option>
                   <option value="police">Police</option>
