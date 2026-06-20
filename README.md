@@ -1,38 +1,60 @@
-# FairCroft CoreOne
+# FairCroft CoreOne Python PWA
 
-A roleplay CAD/MDT web platform with a civilian portal and department MDT for law enforcement, fire, EMS, and dispatch.
+FairCroft CoreOne is a fictional roleplay CAD/MDT and civilian-government portal. This deployment path is Python-only: no Node build, no `node_modules`, no npm/pnpm install step.
 
-## Features
-- JWT authentication with bcrypt password hashing
-- Role-based access control
-- Civilian PDA-style portal
-- Department MDT with live dispatch
-- Postgres database on Railway
-- Docker and Railway deployment ready
+## What is included
 
-## Setup
-1. Copy `.env.example` to `.env`
-2. Set `DATABASE_URL` to your PostgreSQL connection
-3. Set `JWT_SECRET` to a long random value
-4. Install dependencies:
-   - `pnpm install`
-5. Run migrations and seed:
-   - `pnpm run db:migrate`
-   - `pnpm run db:seed`
-6. Start locally:
-   - `pnpm run dev`
+- Installable PWA served from `static/`
+- Civilian PDA with profile, records, department applications, and roleplay 911 submission
+- Dispatch console with 911 queue, CAD conversion, unit assignment, and unit board
+- Department MDT with active calls, unit status, BOLOs, warrants, citation writer, reports, search, chat/radio log, shift clock, and roster
+- Admin console with overview metrics, application decisions, users, departments, ranks/permissions, civilian notes, audit logs, and settings
+- Dependency-free Python backend using `http.server` and SQLite
+- Role-based bearer-token sessions
 
-## Railway
-Railway uses `Dockerfile`.
+## Local run
 
-- `railway.json` is configured for Docker deployment
-- `DATABASE_URL` is provided by Railway PostgreSQL
-- `PORT` is automatically set by Railway
+```bash
+python app.py
+```
 
-## Healthcheck
-- `GET /api/health`
+Then open:
+
+```text
+http://localhost:3000
+```
+
+Seed owner:
+
+```text
+owner@faircroft.local / ChangeMe123!
+```
+
+## Environment
+
+Copy `.env.example` if you want local variables.
+
+- `PORT` defaults to `3000`
+- `HOST` defaults to `0.0.0.0`
+- `DATABASE_PATH` defaults to `./faircroft.sqlite3`, or `/data/faircroft.sqlite3` when `/data` exists
+- `SESSION_EXPIRES_IN` defaults to `7d`
+- `OWNER_EMAIL`, `OWNER_PASSWORD`, and `OWNER_NAME` control the seeded owner
+
+## Railway / Docker
+
+Railway uses the `Dockerfile`, which is now:
+
+- `python:3.12-slim`
+- copies only `app.py` and `static/`
+- starts with `python app.py`
+
+Healthcheck:
+
+```text
+GET /api/health
+```
 
 ## Notes
-- Roleplay only; no real CJIS/NCIC claims
-- Protect admin and department routes
-- Sanitize all user input
+
+- This is for fictional roleplay only. It is not a real public-safety, medical, CJIS, NCIC, or emergency system.
+- SQLite is built in. For persistent Railway data, attach a volume and set `DATABASE_PATH` to a path inside that volume.

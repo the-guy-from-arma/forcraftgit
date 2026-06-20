@@ -1,28 +1,48 @@
-Docker build and run (local)
+# Python-only Docker deployment
 
-# Build the Docker image
+This project now deploys as a Python PWA. Docker does not install Node, npm, pnpm, or `node_modules`.
+
+## Build locally
+
 ```bash
-docker build -t faircroft-coreone:local .
+docker build -t faircroft-coreone-python:local .
 ```
 
-# Run the container (exposes port 3000)
+## Run locally
+
 ```bash
 docker run --rm -it -p 3000:3000 \
-  -e DATABASE_URL="your_database_url" \
-  -e JWT_SECRET="your_jwt_secret" \
-  faircroft-coreone:local
+  -e OWNER_EMAIL="owner@faircroft.local" \
+  -e OWNER_PASSWORD="ChangeMe123!" \
+  faircroft-coreone-python:local
 ```
 
-Notes:
-- The image runs `pnpm run railway:release && pnpm run start` which will attempt migrations; ensure `DATABASE_URL` and secrets are set when running locally.
-- To build faster, you can use a local pnpm store by adjusting the Dockerfile caching lines.
+Open:
 
-Railway
+```text
+http://localhost:3000
+```
 
-- With the provided `Dockerfile` and updated `railway.json` Railway will detect the Docker builder and use the Dockerfile to build the image.
-- Push your repo to your Git remote and trigger a Railway deploy via the Railway UI or connect GitHub.
+## Railway
 
-Troubleshooting
+`railway.json` uses the Dockerfile builder and starts:
 
-- If you see native build failures for `sharp` or `prisma` during `pnpm install`, ensure the Docker image has the required system libraries (the Dockerfile installs `libvips` and build-essential). If further native deps fail, add the specific system packages to the Dockerfile.
-- Keep secrets out of the Dockerfile; pass them via Railway environment variables or `docker run -e`.
+```bash
+python app.py
+```
+
+The healthcheck is:
+
+```text
+/api/health
+```
+
+## Persistence
+
+By default the app uses SQLite at `./faircroft.sqlite3`. On Railway, attach a persistent volume and set:
+
+```text
+DATABASE_PATH=/data/faircroft.sqlite3
+```
+
+Without a volume, Railway may reset SQLite data when the container is replaced.

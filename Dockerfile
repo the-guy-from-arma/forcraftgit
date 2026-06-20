@@ -1,41 +1,13 @@
-# Build stage
-FROM node:24-bullseye-slim AS builder
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends build-essential python3 ca-certificates libvips libvips-dev git curl && \
-    rm -rf /var/lib/apt/lists/*
-
-RUN corepack enable && corepack prepare pnpm@9.x --activate
-
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN pnpm install --frozen-lockfile --store=./.pnpm-store
-
-COPY . .
-RUN pnpm run db:generate || true
-RUN pnpm run build
-RUN pnpm run build:server
-
-# Runtime stage
-FROM node:24-bullseye-slim AS runner
-
-WORKDIR /app
-
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates curl && \
-    rm -rf /var/lib/apt/lists/*
-
-RUN corepack enable && corepack prepare pnpm@9.x --activate
-
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN pnpm install --frozen-lockfile --prod --store=./.pnpm-store
-
-COPY --from=builder /app/.next .next
-COPY --from=builder /app/next.config.mjs next.config.mjs
-COPY --from=builder /app/dist dist
-COPY --from=builder /app/prisma prisma
+COPY app.py ./app.py
+COPY static ./static
 
 EXPOSE 3000
 
-CMD ["node", "dist/server.js"]
+CMD ["python", "app.py"]

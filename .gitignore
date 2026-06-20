@@ -24,6 +24,14 @@ coverage
 
 # Database
 prisma/dev.db
+faircroft.sqlite3
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Python
+__pycache__/
+*.py[cod]
 
 # IDE
 .agents
