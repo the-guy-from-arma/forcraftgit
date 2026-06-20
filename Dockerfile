@@ -31,7 +31,6 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile --prod --store=./.pnpm-store
 
 COPY --from=builder /app/.next .next
-COPY --from=builder /app/public public
 COPY --from=builder /app/next.config.mjs next.config.mjs
 COPY --from=builder /app/server.ts server.ts
 COPY --from=builder /app/src src
