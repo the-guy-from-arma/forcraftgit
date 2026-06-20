@@ -11,7 +11,7 @@ export function setToken(token: string | null) {
   else window.localStorage.removeItem("faircroft_token");
 }
 
-export async function apiFetch<T>(path: string, init: RequestInit & { body?: unknown } = {}) {
+export async function apiFetch<T>(path: string, init: Omit<RequestInit, "body"> & { body?: unknown } = {}) {
   const token = getToken();
   const headers = new Headers(init.headers);
 

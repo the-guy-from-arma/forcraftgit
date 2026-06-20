@@ -47,7 +47,7 @@ export function AdminPortal() {
   async function decideApplication(id: string, decision: "approved" | "denied", form?: HTMLFormElement | null) {
     setNotice(null);
     setFormError(null);
-    const data = form ? Object.fromEntries(new FormData(form).entries()) : {};
+    const data = form ? (Object.fromEntries(new FormData(form).entries()) as Record<string, string>) : {};
 
     try {
       await apiFetch(`/api/admin/applications/${id}/decision`, {
