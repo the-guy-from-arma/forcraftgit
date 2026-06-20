@@ -1,4 +1,5 @@
 export type ApiError = Error & { status?: number; issues?: unknown };
+export type ApiFetchInit = Omit<RequestInit, "body"> & { body?: unknown };
 
 export function getToken() {
   if (typeof window === "undefined") return null;
@@ -11,7 +12,7 @@ export function setToken(token: string | null) {
   else window.localStorage.removeItem("faircroft_token");
 }
 
-export async function apiFetch<T>(path: string, init: Omit<RequestInit, "body"> & { body?: unknown } = {}) {
+export async function apiFetch<T>(path: string, init: ApiFetchInit = {}) {
   const token = getToken();
   const headers = new Headers(init.headers);
 
