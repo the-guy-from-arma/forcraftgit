@@ -4,7 +4,6 @@ import { createServer } from "node:http";
 import cors from "cors";
 import express from "express";
 import helmet from "helmet";
-import next from "next";
 import { Server as SocketIOServer } from "socket.io";
 import { registerApi } from "./src/server/routes.js";
 import { registerSocketHandlers } from "./src/server/socket.js";
@@ -13,7 +12,8 @@ const dev = process.env.NODE_ENV !== "production";
 const port = Number(process.env.PORT || 3000);
 const hostname = process.env.HOST || "0.0.0.0";
 
-const nextApp = next({ dev, hostname, port });
+const nextImport = (await import("next")) as any;
+const nextApp = nextImport.default ? nextImport.default({ dev, hostname, port }) : nextImport({ dev, hostname, port });
 const handle = nextApp.getRequestHandler();
 
 const allowedOrigins = process.env.CORS_ORIGIN
