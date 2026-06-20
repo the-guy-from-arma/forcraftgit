@@ -1,35 +1,42 @@
-# Use Node 24 slim as base
-FROM node:24-bullseye-slim
+# Build stage
+FROM node:24-bullseye-slim AS builder
 
-# Set working directory
 WORKDIR /app
 
-# Install system dependencies required for native modules (sharp, prisma, etc.)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends build-essential python3 ca-certificates libvips libvips-dev git curl && \
     rm -rf /var/lib/apt/lists/*
 
-# Enable corepack and prepare pnpm
 RUN corepack enable && corepack prepare pnpm@9.x --activate
 
-# Copy lockfile and package manifests first for efficient caching
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-
-# Install dependencies (development dependencies needed for build)
 RUN pnpm install --frozen-lockfile --store=./.pnpm-store
 
-# Copy the rest of the application
 COPY . .
-
-# Generate Prisma client (if configured) and build app
 RUN pnpm run db:generate || true
 RUN pnpm run build
 
-# Remove dev dependencies for production image
-RUN pnpm prune --prod
+# Runtime stage
+FROM node:24-bullseye-slim AS runner
 
-# Expose application port (Next default + Express)
+WORKDIR /app
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates curl && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN corepack enable && corepack prepare pnpm@9.x --activate
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile --prod --store=./.pnpm-store
+
+COPY --from=builder /app/.next .next
+COPY --from=builder /app/public public
+COPY --from=builder /app/next.config.mjs next.config.mjs
+COPY --from=builder /app/server.ts server.ts
+COPY --from=builder /app/src src
+COPY --from=builder /app/prisma prisma
+
 EXPOSE 3000
 
-# Start the app (railway release step is run before start if present)
-CMD ["sh", "-lc", "pnpm run railway:release && pnpm run start"]
+CMD ["pnpm", "run", "start"]
