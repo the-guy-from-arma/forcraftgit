@@ -175,12 +175,10 @@ FairCroft CoreOne is a website PWA. It is not a native iOS app and is not packag
 - iPhone Apple web app metadata
 - Apple touch icon at `/icons/apple-touch-icon.png`
 - PNG and SVG app icons in `public/icons`
-- service worker at `/sw.js`
-- offline fallback page at `/offline.html`
 - add-to-home-screen prompt hook for browsers that support `beforeinstallprompt`
 - iPhone website-PWA hint for Safari: Share -> Add to Home Screen
 
-The app still requires network access for live CAD, 911, DMV approvals, auth, and PostgreSQL-backed records.
+The website intentionally does not use offline-first service-worker caching for app screens, because CoreOne requires network access for live CAD, 911, DMV approvals, auth, and PostgreSQL-backed records. If Safari cached an older build, clear Safari website data or reload after the new deploy.
 
 Approved department users get the dark CAD/MDT:
 
