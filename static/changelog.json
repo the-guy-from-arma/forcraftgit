@@ -10,6 +10,7 @@
         "Civilian registration with required Arma ID, generated six-digit CIV number, verification flow, and owner/admin account management.",
         "Read-only Changelog app loaded from the GitHub-managed repository file.",
         "DMV app with driver license applications, vehicle registration, plate/VIN records, insurance status, and DMV profile display.",
+        "Automatic DMV VIN generation when civilians register vehicles.",
         "Messages app unlocked for verified users.",
         "Admin dashboard with compact account list, account popup, role assignment, verification controls, Arma ID visibility, job settings, market caps, and owner/admin password reset.",
         "MDT/CAD app for owner and assigned LEO/CID roles with NCIC/DMV search, invalid-return notice popup, citation writer, criminal charge writer, panic button, and active alert watch list.",
@@ -20,6 +21,10 @@
         "Civilian Contracts app with anonymous open contract board, accept flow, owner read-only monitoring, and required in-game proof clip URL submission."
       ],
       "changed": [
+        "Contracts app now uses a dark web-style phone interface with first-open instructions.",
+        "Contract posting now targets RP character names only and no longer accepts email lookup.",
+        "Contracts now include target type, last-known area, briefing, and completion requirement details.",
+        "Only pure civilian accounts can post or accept contracts; owner remains monitor-only.",
         "Home screen no longer shows pending income or tracked server minutes.",
         "Jobs, Bank, Cash App, and Properties remain locked/coming soon while Messages is available.",
         "Admin access no longer automatically grants MDT, CID, LEO, or judge access.",

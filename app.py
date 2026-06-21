@@ -206,6 +206,15 @@ def generate_civ_number(db: Database) -> str:
     raise RuntimeError("Unable to generate unique civilian ID")
 
 
+def generate_vehicle_vin(db: Database) -> str:
+    alphabet = "ABCDEFGHJKLMNPRSTUVWXYZ0123456789"
+    for _ in range(50):
+        vin = "".join(secrets.choice(alphabet) for _ in range(17))
+        if not one(db, "SELECT id FROM dmv_vehicles WHERE vin = ?", (vin,)):
+            return vin
+    raise RuntimeError("Unable to generate unique vehicle VIN")
+
+
 def generate_record_number(db: Database, table: str, column: str, prefix: str) -> str:
     allowed = {
         ("cid_investigations", "case_number"),
@@ -405,7 +414,10 @@ def ensure_schema() -> None:
                 target_id INTEGER NOT NULL,
                 accepted_by INTEGER,
                 price NUMERIC(12,2) NOT NULL,
+                target_context TEXT NOT NULL DEFAULT '',
+                last_known TEXT NOT NULL DEFAULT '',
                 details TEXT NOT NULL,
+                requirements TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'open',
                 clip_url TEXT,
                 proof_note TEXT NOT NULL DEFAULT '',
@@ -516,6 +528,9 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS judge_id INTEGER")
     db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS final_result TEXT NOT NULL DEFAULT ''")
     db.execute("UPDATE citations SET final_result = status WHERE final_result = '' AND status NOT IN ('issued','contested','reviewed','reduced')")
+    db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS target_context TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS last_known TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS requirements TEXT NOT NULL DEFAULT ''")
 
 
 def seed_owner(db: Database) -> None:
@@ -723,8 +738,7 @@ def contracts_required(user: DbRow | None) -> str | None:
         return None
     if not bool(user["verified"]):
         return "Civilian verification required"
-    staff_roles = {"admin", "leo", "cid", "judge", "ems", "dispatcher", "sheriff", "police", "state_police"}
-    if set(roles_for(user)).intersection(staff_roles):
+    if set(roles_for(user)) != {"civ"}:
         return "Civilian contract access required"
     return None
 
@@ -1420,7 +1434,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403 if user else 401, err)
             return
         payload = self.read_json()
-        missing = require_fields(payload, "vehicle_year", "vehicle_make", "vehicle_model", "vehicle_color", "plate", "vin", "insurance_status")
+        missing = require_fields(payload, "vehicle_year", "vehicle_make", "vehicle_model", "vehicle_color", "plate", "insurance_status")
         if missing:
             self.error(400, missing)
             return
@@ -1432,7 +1446,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not one(db, "SELECT id FROM dmv_records WHERE user_id = ?", (user["id"],)):
             create_default_dmv(db, user["id"])
         plate = str(payload["plate"]).strip().upper()[:12]
-        vin = str(payload["vin"]).strip().upper()[:32]
+        vin = generate_vehicle_vin(db)
         ts = now_iso()
         created = db.execute(
             """
@@ -1470,8 +1484,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 user["id"],
             ),
         )
-        add_message(db, user["id"], "Vehicle registered", f"{year} {payload['vehicle_make']} {payload['vehicle_model']} was registered with plate {plate}.")
-        self.send_json(201, {"ok": True, "vehicle_id": int(created["id"])})
+        add_message(db, user["id"], "Vehicle registered", f"{year} {payload['vehicle_make']} {payload['vehicle_model']} was registered with plate {plate} and VIN {vin}.")
+        self.send_json(201, {"ok": True, "vehicle_id": int(created["id"]), "vin": vin})
 
     def api_messages(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -1539,7 +1553,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "accepter_name": row.get("accepter_name") if accepter_visible else ("Accepted" if row.get("accepted_by") else None),
             "accepter_civ_number": row.get("accepter_civ_number") if accepter_visible else None,
             "price": round(float(row["price"] or 0), 2),
+            "target_context": row.get("target_context") or "",
+            "last_known": row.get("last_known") or "",
             "details": row["details"],
+            "requirements": row.get("requirements") or "",
             "status": status,
             "clip_url": row.get("clip_url") if proof_visible else None,
             "proof_note": row.get("proof_note") if proof_visible else "",
@@ -1610,7 +1627,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403, "Owner contract view is read-only")
             return
         payload = self.read_json()
-        missing = require_fields(payload, "target", "price", "details")
+        missing = require_fields(payload, "target_name", "price", "details")
         if missing:
             self.error(400, missing)
             return
@@ -1618,17 +1635,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if price <= 0:
             self.error(400, "Price must be positive")
             return
-        target_text = str(payload["target"]).strip()
+        target_text = str(payload["target_name"]).strip()
         target_key = target_text.lower()
         target = one(
             db,
             """
             SELECT * FROM users
-            WHERE civ_number = ? OR lower(email) = ? OR lower(name) LIKE ?
-            ORDER BY CASE WHEN civ_number = ? THEN 0 WHEN lower(email) = ? THEN 1 ELSE 2 END, id
+            WHERE lower(name) = ? OR lower(name) LIKE ?
+            ORDER BY CASE WHEN lower(name) = ? THEN 0 ELSE 1 END, id
             LIMIT 1
             """,
-            (target_text, target_key, f"%{target_key}%", target_text, target_key),
+            (target_key, f"%{target_key}%", target_key),
         )
         if not target:
             self.error(404, "Target player not found")
@@ -1643,8 +1660,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         created = db.execute(
             """
             INSERT INTO rp_contracts
-            (contract_number, poster_id, target_id, price, details, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'open', ?, ?)
+            (contract_number, poster_id, target_id, price, target_context, last_known, details, requirements, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
             RETURNING id
             """,
             (
@@ -1652,7 +1669,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 user["id"],
                 target["id"],
                 price,
+                str(payload.get("target_context") or "").strip()[:160],
+                str(payload.get("last_known") or "").strip()[:180],
                 str(payload["details"]).strip()[:900],
+                str(payload.get("requirements") or "").strip()[:700],
                 ts,
                 ts,
             ),

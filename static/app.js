@@ -15,6 +15,7 @@ const state = {
   mdtNotice: null,
   courtTab: "mine",
   contractsTab: "open",
+  contractsInfoOpen: false,
   contractProofId: null,
   adminTab: "users",
   adminAccountId: null,
@@ -447,7 +448,7 @@ function renderDmvVehicles(vehicles, record) {
           <label>Color<input name="vehicle_color" value="${escapeHtml(record.vehicle_color === "Gray" ? "" : record.vehicle_color)}" required /></label>
           <label>Insurance<select name="insurance_status" required><option>Active</option><option>Pending Verification</option><option>Expired</option></select></label>
         </div>
-        <label>VIN<input name="vin" maxlength="32" required /></label>
+        <p class="muted small">VIN will be generated automatically by DMV records.</p>
         <button class="primary" type="submit">Register vehicle</button>
       </form>
       <div class="list">
@@ -746,14 +747,16 @@ function renderContracts() {
   const rows = data[state.contractsTab] || [];
   const allRows = [...(data.open || []), ...(data.posted || []), ...(data.accepted || []), ...(data.all || [])];
   const proofContract = state.contractProofId ? allRows.find((item) => String(item.id) === String(state.contractProofId)) : null;
+  const showInfo = state.contractsInfoOpen || !localStorage.getItem("rp_contracts_intro_seen");
   return `
     <div class="stack contracts-app">
       <div class="contract-hero">
         <div>
-          <p class="eyebrow">${ownerView ? "Owner view" : "Civilian board"}</p>
+          <p class="eyebrow">${ownerView ? "Owner monitor" : "Dark board"}</p>
           <h3>Contracts</h3>
+          <p>${ownerView ? "Read-only oversight feed" : "Anonymous RP work orders"}</p>
         </div>
-        <span class="pill ${ownerView ? "amber" : "red"}">${ownerView ? "monitor" : "anonymous"}</span>
+        <button class="ghost" type="button" data-contract-info>How it works</button>
       </div>
       <div class="court-tabs">
         ${tabs.map(([id, label]) => `<button class="${state.contractsTab === id ? "active" : ""}" data-contract-tab="${id}">${label}</button>`).join("")}
@@ -761,15 +764,21 @@ function renderContracts() {
       ${ownerView ? "" : `
         <form id="contractForm" class="contract-compose form-grid">
           <div class="grid-2">
-            <label>Target CIV or email<input name="target" required /></label>
+            <label>Target name<input name="target_name" placeholder="Exact RP character name" required /></label>
             <label>Price<input name="price" type="number" min="1" step="0.01" required /></label>
           </div>
-          <label>Contract details<textarea name="details" maxlength="900" required></textarea></label>
+          <div class="grid-2">
+            <label>Target type<input name="target_context" maxlength="160" placeholder="LEO, politician, gang member, civilian" /></label>
+            <label>Last known area<input name="last_known" maxlength="180" placeholder="City, postal, patrol zone, venue" /></label>
+          </div>
+          <label>Contract briefing<textarea name="details" maxlength="900" placeholder="What the contractor needs to know in RP" required></textarea></label>
+          <label>Completion requirements<textarea name="requirements" maxlength="700" placeholder="Required clip angle, scene proof, or RP condition"></textarea></label>
           <button class="primary" type="submit">Post contract</button>
         </form>
       `}
       ${renderContractList(rows, ownerView)}
       ${proofContract ? renderContractProofModal(proofContract) : ""}
+      ${showInfo ? renderContractsInfoModal(ownerView) : ""}
     </div>
   `;
 }
@@ -794,12 +803,18 @@ function renderContractCard(item, ownerView) {
         <span class="pill ${statusClass}">${escapeHtml(item.status)}</span>
       </div>
       <div class="contract-meta">
-        <div><span>Target</span><strong>CIV ${escapeHtml(item.target_civ_number || "unknown")}</strong></div>
+        <div><span>Target</span><strong>${escapeHtml(item.target_name)}</strong></div>
         <div><span>Price</span><strong>${money(item.price)}</strong></div>
+        <div><span>Type</span><strong>${escapeHtml(item.target_context || "Unlisted")}</strong></div>
+        <div><span>Last seen</span><strong>${escapeHtml(item.last_known || "Unknown")}</strong></div>
         <div><span>Posted by</span><strong>${escapeHtml(item.poster_name)}</strong></div>
         <div><span>Accepted by</span><strong>${escapeHtml(item.accepter_name || "Open")}</strong></div>
       </div>
-      <p>${escapeHtml(item.details)}</p>
+      <div class="contract-brief">
+        <span>Briefing</span>
+        <p>${escapeHtml(item.details)}</p>
+      </div>
+      ${item.requirements ? `<div class="contract-brief"><span>Completion requirements</span><p>${escapeHtml(item.requirements)}</p></div>` : ""}
       ${item.clip_url ? `<a class="clip-link" href="${escapeHtml(item.clip_url)}" target="_blank" rel="noopener">View proof clip</a>` : ""}
       ${item.proof_note ? `<p class="muted small">${escapeHtml(item.proof_note)}</p>` : ""}
       <div class="row">
@@ -811,6 +826,26 @@ function renderContractCard(item, ownerView) {
         </div>
       </div>
     </article>
+  `;
+}
+
+function renderContractsInfoModal(ownerView) {
+  return `
+    <div class="modal-backdrop contract-info-backdrop" data-close-contract-info>
+      <section class="mdt-modal contract-info-modal" role="dialog" aria-modal="true">
+        <header class="row">
+          <div><p class="eyebrow">Contracts protocol</p><h2>How contracts work</h2></div>
+          <button class="icon-action" type="button" data-close-contract-info aria-label="Close">x</button>
+        </header>
+        <div class="contract-protocol">
+          <p>Contracts are in-game roleplay work orders. They can target any RP character name in the server, including LEOs, politicians, or civilians.</p>
+          <p>Only verified civilian accounts can post or accept contracts. Owners can monitor the board but cannot accept or edit from this app.</p>
+          <p>The poster stays anonymous on open contracts. Once a civilian accepts, the accepted contractor can see the poster and must submit an in-game clip URL as proof.</p>
+          <p>No email lookup is used here. Use the target's RP character name.</p>
+        </div>
+        <button class="primary" type="button" data-close-contract-info>${ownerView ? "Enter monitor" : "Enter board"}</button>
+      </section>
+    </div>
   `;
 }
 
@@ -836,6 +871,16 @@ function bindContracts() {
   $$("[data-contract-tab]").forEach((button) => button.addEventListener("click", () => {
     state.contractsTab = button.dataset.contractTab;
     state.contractProofId = null;
+    render();
+  }));
+  $("[data-contract-info]")?.addEventListener("click", () => {
+    state.contractsInfoOpen = true;
+    render();
+  });
+  $$("[data-close-contract-info]").forEach((button) => button.addEventListener("click", (event) => {
+    if (event.currentTarget.classList?.contains("modal-backdrop") && event.target !== event.currentTarget) return;
+    localStorage.setItem("rp_contracts_intro_seen", "1");
+    state.contractsInfoOpen = false;
     render();
   }));
   $("#contractForm")?.addEventListener("submit", async (event) => {
