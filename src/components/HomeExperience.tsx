@@ -7,6 +7,7 @@ import { apiFetch, login, setToken } from "@/lib/api-client";
 import { canUseAdmin, canUseDispatch, canUseGovernment, canUseMdt, roleLabel } from "@/lib/roles";
 import { FairCroftSeal } from "./FairCroftSeal";
 import { Footer } from "./Footer";
+import { PhotoDropzone } from "./PhotoDropzone";
 
 type Mode = "login" | "register";
 
@@ -217,11 +218,7 @@ export function HomeExperience({ initialMode = "login" }: { initialMode?: Mode }
                     Postal code
                     <input name="postalCode" />
                   </label>
-                  <label>
-                    Character/passport photo URL
-                    <input name="characterPhotoUrl" placeholder="Game character photo URL" />
-                    <small className="fine-print">Must be of Game character photo, not real photo.</small>
-                  </label>
+                  <PhotoDropzone name="characterPhotoUrl" label="Character / passport photo" />
                   <label className="checkline fine-print">
                     <input name="characterPhotoNoticeAccepted" type="checkbox" /> I understand profile photos must be fictional/game-character images.
                   </label>

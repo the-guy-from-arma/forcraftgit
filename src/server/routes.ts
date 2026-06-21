@@ -36,6 +36,7 @@ const optionalText = (max = 1000) =>
     .optional()
     .nullable()
     .transform((value) => (value ? cleanText(value, max) : undefined));
+const optionalPhotoData = () => optionalText(450_000);
 
 const asyncHandler =
   (handler: Handler) =>
@@ -195,7 +196,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
           city: optionalText(80),
           state: optionalText(12),
           postalCode: optionalText(20),
-          characterPhotoUrl: optionalText(500),
+          characterPhotoUrl: optionalPhotoData(),
           characterPhotoNoticeAccepted: z.boolean().optional().default(false)
         }),
         req,
@@ -390,7 +391,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
           city: optionalText(80),
           state: optionalText(12),
           postalCode: optionalText(20),
-          characterPhotoUrl: optionalText(500),
+          characterPhotoUrl: optionalPhotoData(),
           characterPhotoNoticeAccepted: z.boolean().optional(),
           notes: optionalText(500)
         }),
@@ -439,7 +440,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
           city: optionalText(80),
           state: optionalText(12),
           postalCode: optionalText(20),
-          characterPhotoUrl: optionalText(500),
+          characterPhotoUrl: optionalPhotoData(),
           photoNoticeAccepted: z.boolean().optional().default(false),
           licenseClass: optionalText(20),
           passportReason: optionalText(400),
@@ -663,7 +664,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
               where: { userId: application.userId },
               data: {
                 verificationStatus: "verified",
-                characterPhotoUrl: cleanText(payload.characterPhotoUrl, 500) || application.user.profile?.characterPhotoUrl,
+                characterPhotoUrl: cleanText(payload.characterPhotoUrl, 450_000) || application.user.profile?.characterPhotoUrl,
                 characterPhotoNoticeAccepted: Boolean(payload.photoNoticeAccepted)
               }
             });
@@ -674,7 +675,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
                 passportNumber: makeCallNumber("FC-PASS"),
                 passportStatus: "active",
                 verificationStatus: "verified",
-                characterPhotoUrl: cleanText(payload.characterPhotoUrl, 500) || application.user.profile?.characterPhotoUrl,
+                characterPhotoUrl: cleanText(payload.characterPhotoUrl, 450_000) || application.user.profile?.characterPhotoUrl,
                 characterPhotoNoticeAccepted: true
               }
             });

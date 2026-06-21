@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import bcrypt from "bcryptjs";
 import { getPrisma } from "./db.js";
 
 const REQUIRED_TABLES = [
@@ -215,6 +216,128 @@ export async function ensureCoreDefaults() {
   });
 }
 
+function ownerBootstrapConfig() {
+  const email = (process.env.OWNER_EMAIL || "owner@faircroft.local").trim().toLowerCase();
+  const password = process.env.OWNER_PASSWORD || (process.env.NODE_ENV === "production" ? "" : "ChangeMe123!");
+  const name = process.env.OWNER_NAME || "FairCroft Owner";
+
+  return { email, password, name };
+}
+
+function splitOwnerName(name: string) {
+  const parts = name.trim().split(/\s+/);
+  return {
+    firstName: parts[0] || "FairCroft",
+    lastName: parts.slice(1).join(" ") || "Owner"
+  };
+}
+
+async function ensureOwnerAccount() {
+  const prisma = getPrisma();
+  const owner = ownerBootstrapConfig();
+
+  if (!owner.password) {
+    const existingOwner = await prisma.user.findFirst({ where: { role: "owner" } });
+    if (!existingOwner) {
+      console.warn("[database] OWNER_PASSWORD is not set; owner bootstrap skipped because no safe password is available.");
+    }
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash(owner.password, 12);
+  const profileName = splitOwnerName(owner.name);
+
+  const user = await prisma.user.upsert({
+    where: { email: owner.email },
+    update: {
+      name: owner.name,
+      role: "owner",
+      passwordHash,
+      suspended: false
+    },
+    create: {
+      email: owner.email,
+      name: owner.name,
+      role: "owner",
+      passwordHash,
+      suspended: false
+    }
+  });
+
+  await prisma.civilianProfile.upsert({
+    where: { userId: user.id },
+    update: {
+      firstName: profileName.firstName,
+      lastName: profileName.lastName,
+      city: "FairCroft",
+      state: "FC",
+      verificationStatus: "verified"
+    },
+    create: {
+      userId: user.id,
+      firstName: profileName.firstName,
+      lastName: profileName.lastName,
+      city: "FairCroft",
+      state: "FC",
+      verificationStatus: "verified"
+    }
+  });
+
+  const dispatchDepartment = await prisma.department.findUnique({ where: { code: "FCCD" } });
+  if (dispatchDepartment) {
+    const rank = await prisma.rank.findFirst({
+      where: { departmentId: dispatchDepartment.id },
+      orderBy: { level: "desc" }
+    });
+
+    await prisma.departmentMembership.upsert({
+      where: {
+        userId_departmentId: {
+          userId: user.id,
+          departmentId: dispatchDepartment.id
+        }
+      },
+      update: {
+        role: "owner",
+        rankId: rank?.id,
+        active: true,
+        jobTitle: "Owner / System Oversight",
+        division: "Executive",
+        station: "CoreOne",
+        callSign: "OWNER"
+      },
+      create: {
+        userId: user.id,
+        departmentId: dispatchDepartment.id,
+        role: "owner",
+        rankId: rank?.id,
+        active: true,
+        badgeNumber: "FC-000",
+        jobTitle: "Owner / System Oversight",
+        division: "Executive",
+        station: "CoreOne",
+        callSign: "OWNER"
+      }
+    });
+  }
+
+  await prisma.auditLog.create({
+    data: {
+      actorId: user.id,
+      action: "system.owner.bootstrap",
+      entity: "User",
+      entityId: user.id,
+      metadata: {
+        email: owner.email,
+        source: "startup_environment",
+        passwordUpdatedFromEnvironment: true
+      }
+    }
+  });
+
+  console.log(`[database] Owner account ready for ${owner.email}.`);
+}
+
 export async function initializeDatabase() {
   assertPostgresConfigured();
   maybeRunMigrations();
@@ -226,6 +349,7 @@ export async function initializeDatabase() {
   }
 
   await ensureCoreDefaults();
+  await ensureOwnerAccount();
   const verifiedTables = "verifiedTables" in health ? health.verifiedTables : 0;
   console.log(`[database] PostgreSQL ready. Verified ${verifiedTables} required tables in ${health.latencyMs}ms.`);
 }

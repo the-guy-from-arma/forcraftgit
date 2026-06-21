@@ -5,6 +5,7 @@ import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from 
 import { AccessPanel } from "./AccessPanel";
 import { FairCroftSeal } from "./FairCroftSeal";
 import { Footer } from "./Footer";
+import { PhotoDropzone } from "./PhotoDropzone";
 import { apiFetch, logout } from "@/lib/api-client";
 import { canUseAdmin, canUseDispatch, canUseGovernment, canUseMdt, roleLabel } from "@/lib/roles";
 import { useAuth } from "./useAuth";
@@ -475,10 +476,7 @@ function CivilianAppContent({
               Phone
               <input name="phone" defaultValue={overview.user?.phone || profile?.phone || ""} />
             </label>
-            <label>
-              Character photo URL
-              <input name="characterPhotoUrl" defaultValue={profile?.characterPhotoUrl || ""} />
-            </label>
+            <PhotoDropzone name="characterPhotoUrl" defaultValue={profile?.characterPhotoUrl} label="Character photo" />
           </div>
           <label>
             Street address
@@ -515,7 +513,7 @@ function CivilianAppContent({
           <h3>Passport / Civilian ID Application</h3>
           <p className="muted">Used for fictional FairCroft identity verification. This is not a real passport or government ID.</p>
           <input name="legalName" defaultValue={overview.user?.name || ""} placeholder="Legal RP character name" />
-          <input name="characterPhotoUrl" defaultValue={profile?.characterPhotoUrl || ""} placeholder="Character photo URL" />
+          <PhotoDropzone name="characterPhotoUrl" defaultValue={profile?.characterPhotoUrl} label="Passport character photo" />
           <textarea name="passportReason" rows={4} placeholder="Reason for passport / civilian ID request" />
           <label className="checkline fine-print">
             <input name="photoNoticeAccepted" type="checkbox" required /> Photo must be of Game character photo, not real photo.

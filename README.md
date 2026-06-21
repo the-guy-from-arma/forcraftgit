@@ -85,19 +85,15 @@ To remove the local Docker Postgres volume and reset data:
 docker compose down -v
 ```
 
-## Demo accounts seeded
+## Owner login
 
-- Owner: `owner@faircroft.local / ChangeMe123!`
-- Admin: `admin@faircroft.local / Password123!`
-- DMV Clerk: `dmv@faircroft.local / Password123!`
-- Dispatch: `dispatcher@faircroft.local / Password123!`
-- Police: `police@faircroft.local / Password123!`
-- Sheriff: `sheriff@faircroft.local / Password123!`
-- Fire: `fire@faircroft.local / Password123!`
-- EMS: `ems@faircroft.local / Password123!`
-- Civilian: `civilian@faircroft.local / Password123!`
+The owner account is bootstrapped on startup from environment variables:
 
-Change these immediately for any shared roleplay server.
+- `OWNER_EMAIL`
+- `OWNER_PASSWORD`
+- `OWNER_NAME`
+
+If `OWNER_PASSWORD` changes in Railway, redeploy/restart and CoreOne will update the owner password in PostgreSQL. Demo seed passwords are intentionally not shown in the app UI.
 
 ## Railway deployment
 
@@ -107,6 +103,9 @@ Change these immediately for any shared roleplay server.
    - `DATABASE_URL`
    - `JWT_SECRET`
    - `SECRET_KEY`
+   - `OWNER_EMAIL`
+   - `OWNER_PASSWORD`
+   - `OWNER_NAME`
    - `NODE_ENV=production`
    - `PORT` is managed by Railway.
    - Optional first deploy: `SEED_ON_START=true`

@@ -1,3 +1,5 @@
+import { FairCroftSeal } from "@/components/FairCroftSeal";
+
 export default function HomePage() {
   return (
     <main
@@ -9,20 +11,25 @@ export default function HomePage() {
         padding: "24px",
         color: "#f7fbff",
         background:
-          "radial-gradient(circle at 20% 10%, rgba(94,168,255,.35), transparent 32rem), radial-gradient(circle at 80% 90%, rgba(242,196,109,.25), transparent 30rem), linear-gradient(135deg, #07111f, #0b1424 45%, #03060c)",
+          "linear-gradient(rgba(101,245,209,.025) 1px, transparent 1px), linear-gradient(90deg, rgba(101,245,209,.025) 1px, transparent 1px), radial-gradient(circle at 20% 10%, rgba(94,168,255,.22), transparent 32rem), radial-gradient(circle at 80% 90%, rgba(242,196,109,.14), transparent 30rem), linear-gradient(135deg, #02060d, #07111f 45%, #010409)",
+        backgroundSize: "38px 38px, 38px 38px, auto, auto, auto",
         fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif"
       }}
     >
       <section
         style={{
           width: "min(760px, 100%)",
-          border: "1px solid rgba(255,255,255,.16)",
-          borderRadius: "32px",
+          border: "1px solid rgba(154,172,194,.22)",
+          borderTop: "2px solid rgba(215,180,106,.48)",
+          borderRadius: "14px",
           padding: "clamp(24px, 6vw, 44px)",
-          background: "rgba(255,255,255,.08)",
-          boxShadow: "0 24px 80px rgba(0,0,0,.36)"
+          background: "linear-gradient(180deg, rgba(255,255,255,.055), transparent 44%), rgba(5,11,20,.88)",
+          boxShadow: "0 24px 90px rgba(0,0,0,.5)"
         }}
       >
+        <div style={{ marginBottom: "22px" }}>
+          <FairCroftSeal />
+        </div>
         <p
           style={{
             margin: "0 0 12px",
@@ -45,11 +52,13 @@ export default function HomePage() {
           <a
             href="/login"
             style={{
-              borderRadius: "999px",
+              border: "1px solid rgba(215,180,106,.42)",
+              borderRadius: "8px",
               padding: "13px 18px",
               color: "#06101d",
-              background: "#f2c46d",
+              background: "linear-gradient(180deg, #f1d08a, #b7832c)",
               fontWeight: 900,
+              letterSpacing: ".04em",
               textDecoration: "none"
             }}
           >
@@ -58,43 +67,17 @@ export default function HomePage() {
           <a
             href="/register"
             style={{
-              borderRadius: "999px",
-              padding: "13px 18px",
-              color: "#06101d",
-              background: "#9ef7da",
-              fontWeight: 900,
-              textDecoration: "none"
-            }}
-          >
-            Register
-          </a>
-          <a
-            href="/civilian"
-            style={{
-              border: "1px solid rgba(255,255,255,.2)",
-              borderRadius: "999px",
-              padding: "13px 18px",
-              color: "#f7fbff",
-              background: "rgba(255,255,255,.08)",
-              fontWeight: 900,
-              textDecoration: "none"
-            }}
-          >
-            Civilian PDA
-          </a>
-          <a
-            href="/__coreone/preflight"
-            style={{
-              border: "1px solid rgba(255,255,255,.2)",
-              borderRadius: "999px",
+              border: "1px solid rgba(101,245,209,.38)",
+              borderRadius: "8px",
               padding: "13px 18px",
               color: "#9ef7da",
               background: "rgba(101,245,209,.08)",
               fontWeight: 900,
+              letterSpacing: ".04em",
               textDecoration: "none"
             }}
           >
-            Preflight Test
+            Register
           </a>
         </div>
         <p style={{ margin: "24px 0 0", color: "#9aa7b7", fontSize: "13px" }}>

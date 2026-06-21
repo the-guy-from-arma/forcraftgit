@@ -678,15 +678,8 @@ async function main() {
   });
 
   console.log("FairCroft CoreOne PostgreSQL seed complete.");
-  console.log(`Owner: ${ownerEmail} / ${ownerPassword}`);
-  console.log(`Admin: admin@faircroft.local / ${demoPassword}`);
-  console.log(`DMV Clerk: dmv@faircroft.local / ${demoPassword}`);
-  console.log(`Dispatcher: dispatcher@faircroft.local / ${demoPassword}`);
-  console.log(`Police: police@faircroft.local / ${demoPassword}`);
-  console.log(`Sheriff: sheriff@faircroft.local / ${demoPassword}`);
-  console.log(`Fire: fire@faircroft.local / ${demoPassword}`);
-  console.log(`EMS: ems@faircroft.local / ${demoPassword}`);
-  console.log(`Civilian: civilian@faircroft.local / ${demoPassword}`);
+  console.log(`Owner account ready for ${ownerEmail}.`);
+  console.log("Demo accounts seeded. Passwords are intentionally not printed; use configured environment values or reset through the database/admin workflow.");
 }
 
 main()
