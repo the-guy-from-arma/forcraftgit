@@ -2401,6 +2401,329 @@ select option {
   }
 }
 
+/* CoreOne Tactical Interface Refresh
+   Hard-edged, dark government/CAD visual layer. Kept at the end so it overrides the earlier soft prototype styles. */
+:root {
+  --core-bg: #03070d;
+  --core-surface: #08111d;
+  --core-surface-2: #0d1826;
+  --core-surface-3: #111f31;
+  --core-line: rgba(154, 172, 194, 0.22);
+  --core-line-hot: rgba(101, 245, 209, 0.38);
+  --core-gold: #d7b46a;
+  --core-cyan: #65f5d1;
+  --core-blue: #5d8dff;
+  --core-red: #ff4f5e;
+}
+
+body {
+  background:
+    linear-gradient(rgba(101, 245, 209, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(101, 245, 209, 0.018) 1px, transparent 1px),
+    radial-gradient(circle at 18% 0%, rgba(93, 141, 255, 0.13), transparent 24rem),
+    radial-gradient(circle at 100% 18%, rgba(215, 180, 106, 0.08), transparent 22rem),
+    var(--core-bg) !important;
+  background-size: 42px 42px, 42px 42px, auto, auto, auto;
+}
+
+.glass-panel,
+.auth-card,
+.hero-panel,
+.pda-app-panel,
+.dispatch-card,
+.admin-panel,
+.terminal-card,
+.app-window,
+.government-window,
+.mdt-command-window {
+  border-color: var(--core-line) !important;
+  border-radius: 14px !important;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), transparent 42%),
+    linear-gradient(135deg, rgba(13, 24, 38, 0.96), rgba(5, 10, 18, 0.96)) !important;
+  box-shadow: 0 24px 90px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.055) !important;
+  backdrop-filter: blur(18px);
+}
+
+.home-shell {
+  grid-template-columns: minmax(0, 0.95fr) minmax(380px, 560px);
+  background:
+    radial-gradient(circle at 20% 18%, rgba(101, 245, 209, 0.09), transparent 24rem),
+    radial-gradient(circle at 84% 14%, rgba(215, 180, 106, 0.08), transparent 24rem);
+}
+
+.hero-panel {
+  min-height: 560px;
+  border-left: 3px solid rgba(101, 245, 209, 0.42);
+}
+
+.hero-panel::before {
+  border-radius: 10px;
+  border-color: rgba(101, 245, 209, 0.16);
+}
+
+.hero-panel h1,
+.dispatch-header h1,
+.mdt-brand strong {
+  letter-spacing: -0.055em;
+}
+
+.auth-card {
+  position: relative;
+  border-top: 2px solid rgba(215, 180, 106, 0.48) !important;
+  padding: 1.15rem;
+}
+
+.auth-card::before {
+  content: "SECURE ACCESS NODE";
+  position: absolute;
+  top: -0.72rem;
+  left: 1rem;
+  padding: 0 0.45rem;
+  color: var(--core-gold);
+  background: var(--core-bg);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+}
+
+.auth-toggle {
+  gap: 0.35rem;
+  border: 1px solid var(--core-line);
+  border-radius: 10px;
+  padding: 0.35rem;
+  background: #050b14;
+}
+
+.auth-toggle a,
+.auth-toggle button {
+  display: grid;
+  place-items: center;
+  min-height: 46px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: rgba(245, 247, 251, 0.78);
+  background: transparent;
+  text-decoration: none;
+  font-weight: 850;
+}
+
+.auth-toggle a:hover,
+.auth-toggle button:hover {
+  border-color: rgba(101, 245, 209, 0.25);
+  color: white;
+}
+
+.auth-toggle .active {
+  border-color: rgba(215, 180, 106, 0.28) !important;
+  color: #fff6df !important;
+  background:
+    linear-gradient(180deg, rgba(215, 180, 106, 0.16), rgba(215, 180, 106, 0.06)),
+    #101827 !important;
+}
+
+.eyebrow,
+.stack-form label,
+.terminal-form label {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.11em;
+}
+
+.stack-form input,
+.stack-form textarea,
+.stack-form select,
+.terminal-form input,
+.terminal-form textarea,
+.terminal-form select,
+.dark-form input,
+.dark-form textarea,
+.dark-form select {
+  border: 1px solid rgba(154, 172, 194, 0.24);
+  border-radius: 8px;
+  color: #f8fbff;
+  background: #050b14;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.stack-form input:focus,
+.stack-form textarea:focus,
+.stack-form select:focus,
+.terminal-form input:focus,
+.terminal-form textarea:focus,
+.terminal-form select:focus {
+  outline: 2px solid rgba(101, 245, 209, 0.26);
+  border-color: var(--core-line-hot);
+}
+
+.button,
+.floating-actions a,
+.floating-actions button,
+.phone-dock button,
+.window-chrome button {
+  border-radius: 8px !important;
+  font-family: var(--font-mono);
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.button.primary {
+  border-color: rgba(215, 180, 106, 0.42) !important;
+  color: #060a10 !important;
+  background: linear-gradient(180deg, #f1d08a, #b7832c) !important;
+  box-shadow: 0 16px 36px rgba(215, 180, 106, 0.16);
+}
+
+.button.terminal {
+  border-color: rgba(101, 245, 209, 0.42) !important;
+  color: var(--core-cyan) !important;
+  background: linear-gradient(180deg, rgba(101, 245, 209, 0.13), rgba(101, 245, 209, 0.035)) !important;
+}
+
+.button.danger {
+  border-color: rgba(255, 79, 94, 0.38) !important;
+  background: linear-gradient(180deg, #a91425, #4d0710) !important;
+}
+
+.hint {
+  color: rgba(245, 247, 251, 0.58);
+}
+
+.phone-os-shell {
+  background:
+    linear-gradient(rgba(101, 245, 209, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(101, 245, 209, 0.025) 1px, transparent 1px),
+    radial-gradient(circle at 14% 10%, rgba(93, 141, 255, 0.14), transparent 28rem),
+    radial-gradient(circle at 90% 18%, rgba(215, 180, 106, 0.09), transparent 24rem),
+    #02060d;
+  background-size: 38px 38px, 38px 38px, auto, auto, auto;
+}
+
+.phone-frame {
+  border-width: 8px;
+  border-color: #02050b;
+  border-radius: 34px;
+  background:
+    radial-gradient(circle at 50% -10%, rgba(93, 141, 255, 0.22), transparent 17rem),
+    linear-gradient(180deg, #172336, #07101d 44%, #030811);
+}
+
+.phone-frame--home {
+  min-height: 820px;
+  box-shadow: 0 36px 100px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(101, 245, 209, 0.12);
+}
+
+.phone-notch {
+  border-radius: 0 0 16px 16px;
+  background: #010409;
+}
+
+.phone-status,
+.passport-mini,
+.os-command-ribbon {
+  font-family: var(--font-mono);
+}
+
+.passport-mini,
+.os-command-ribbon,
+.phone-dock {
+  border-radius: 12px;
+  background: rgba(2, 7, 14, 0.62);
+  border-color: rgba(154, 172, 194, 0.2);
+}
+
+.app-icon {
+  min-height: 92px;
+  border: 1px solid rgba(154, 172, 194, 0.15);
+  border-radius: 12px;
+  background: rgba(3, 8, 15, 0.58);
+}
+
+.app-icon span {
+  border-radius: 10px;
+}
+
+.app-icon.active {
+  outline: 0;
+  border-color: rgba(215, 180, 106, 0.5);
+  background: rgba(215, 180, 106, 0.1);
+}
+
+.app-badge--cyan {
+  background: linear-gradient(145deg, #65f5d1, #0e5d52) !important;
+  color: #06100e !important;
+}
+
+.app-window,
+.government-window,
+.mdt-command-window {
+  border-top: 2px solid rgba(101, 245, 209, 0.36) !important;
+}
+
+.government-window {
+  border-top-color: rgba(215, 180, 106, 0.46) !important;
+}
+
+.window-chrome,
+.dispatch-header,
+.mdt-command-topbar,
+.government-topbar {
+  border-color: rgba(154, 172, 194, 0.16);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018));
+}
+
+.window-lights span {
+  border-radius: 3px;
+}
+
+.dispatch-card,
+.metric-card,
+.terminal-table,
+.unit-tile,
+.gov-case-file,
+.record-card,
+.info-card {
+  border-radius: 10px !important;
+  border-color: rgba(154, 172, 194, 0.18) !important;
+  background: rgba(5, 11, 20, 0.72) !important;
+}
+
+.dispatch-shell,
+.mdt-shell {
+  background:
+    linear-gradient(rgba(101, 245, 209, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(101, 245, 209, 0.035) 1px, transparent 1px),
+    radial-gradient(circle at top right, rgba(101, 245, 209, 0.12), transparent 30rem),
+    #010606;
+  background-size: 28px 28px, 28px 28px, auto, auto;
+}
+
+.mdt-module-dock button,
+.gov-app-dock button {
+  border-radius: 8px;
+}
+
+.mdt-module-dock button.active,
+.gov-app-dock button.active {
+  color: #020807;
+}
+
+.dmv-counter,
+.intake-hero,
+.premium-card,
+.status-steps button,
+.service-tile-grid button,
+.bank-ledger article {
+  border-radius: 10px;
+}
+
+.mdt-app-launcher span {
+  color: #020807;
+  background: var(--core-cyan);
+}
+
 @media (max-width: 560px) {
   .home-shell {
     padding: 1rem;

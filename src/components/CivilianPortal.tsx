@@ -27,6 +27,7 @@ const civilianApps = [
   { name: "Court Notices", badge: "CT", tone: "gold" },
   { name: "Department Applications", badge: "JOB", tone: "blue" },
   { name: "My Jobs", badge: "OS", tone: "green" },
+  { name: "MDT Terminal", badge: "MDT", tone: "cyan" },
   { name: "Government OS", badge: "GOV", tone: "navy" }
 ] as const;
 
@@ -123,7 +124,12 @@ export function CivilianPortal() {
 
   const currentUser = overview?.user || user;
   const visibleApps = useMemo(
-    () => civilianApps.filter((app) => app.name !== "Government OS" || canUseGovernment(currentUser?.role)),
+    () =>
+      civilianApps.filter((app) => {
+        if (app.name === "Government OS") return canUseGovernment(currentUser?.role);
+        if (app.name === "MDT Terminal") return canUseMdt(currentUser?.role);
+        return true;
+      }),
     [currentUser?.role]
   );
 
@@ -647,6 +653,17 @@ function CivilianAppContent({
           {canUseDispatch(overview.user?.role) && <Link className="button terminal" href="/dispatch">Open Dispatch</Link>}
           {canUseGovernment(overview.user?.role) && <Link className="button primary" href="/government">Open Government OS</Link>}
         </div>
+      </div>
+    );
+  }
+
+  if (activeApp === "MDT Terminal") {
+    return (
+      <div className="empty-agency mdt-app-launcher">
+        <span>MDT</span>
+        <h3>Department MDT access enabled</h3>
+        <p>Your assigned FairCroft job unlocks the law-enforcement/fire/EMS style mounted data terminal.</p>
+        <Link className="button terminal" href="/mdt">Launch MDT</Link>
       </div>
     );
   }

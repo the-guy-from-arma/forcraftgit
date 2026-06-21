@@ -20,7 +20,7 @@ function bestPortalForRole(role?: string) {
 
 export function HomeExperience({ initialMode = "login" }: { initialMode?: Mode } = {}) {
   const router = useRouter();
-  const [mode, setMode] = useState<Mode>(initialMode);
+  const mode = initialMode;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [user, setUser] = useState<any>(null);
@@ -152,12 +152,12 @@ export function HomeExperience({ initialMode = "login" }: { initialMode?: Mode }
           ) : (
             <>
               <div className="auth-toggle">
-                <button type="button" className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>
+                <Link href="/login" className={mode === "login" ? "active" : ""}>
                   Login
-                </button>
-                <button type="button" className={mode === "register" ? "active" : ""} onClick={() => setMode("register")}>
+                </Link>
+                <Link href="/register" className={mode === "register" ? "active" : ""}>
                   Register
-                </button>
+                </Link>
               </div>
 
               {mode === "login" ? (
@@ -166,7 +166,7 @@ export function HomeExperience({ initialMode = "login" }: { initialMode?: Mode }
                   <h2>Sign in to CoreOne</h2>
                   <label>
                     Email
-                    <input name="email" type="email" placeholder="owner@faircroft.local" required />
+                    <input name="email" type="email" placeholder="name@example.com" required />
                   </label>
                   <label>
                     Password
@@ -176,9 +176,6 @@ export function HomeExperience({ initialMode = "login" }: { initialMode?: Mode }
                   <button type="submit" className="button primary wide" disabled={busy}>
                     {busy ? "Authenticating..." : "Enter CoreOne"}
                   </button>
-                  <p className="hint">
-                    Seed owner: <code>owner@faircroft.local</code> / <code>ChangeMe123!</code>
-                  </p>
                 </form>
               ) : (
                 <form className="stack-form" onSubmit={onRegister}>
