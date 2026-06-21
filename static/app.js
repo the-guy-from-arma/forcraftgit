@@ -275,14 +275,16 @@ async function loadAppData(id) {
   const loaders = {
     dmv: () => api("/api/dmv/me"),
     jobs: () => api("/api/jobs"),
-    court: async () => ({
-      mine: await api("/api/court/my-cases"),
-      judge: can("judge") || can("admin") || can("owner") ? await api("/api/court/cases") : null,
-    }),
+    court: async () => ({ mine: await api("/api/court/my-cases") }),
     properties: () => api("/api/properties"),
     bank: () => api("/api/bank"),
     messages: () => api("/api/messages"),
-    mdt: async () => ({ charges: await api("/api/mdt/charges"), alerts: await api("/api/mdt/alerts"), search: state.cache.mdt?.search || [] }),
+    mdt: async () => ({
+      charges: await api("/api/mdt/charges"),
+      alerts: await api("/api/mdt/alerts"),
+      cid: canAny("cid", "owner", "admin") ? await api("/api/cid/overview") : null,
+      search: state.cache.mdt?.search || []
+    }),
     admin: async () => ({ overview: await api("/api/admin/overview"), users: await api("/api/admin/users"), jobs: await api("/api/admin/jobs") }),
   };
   if (loaders[id]) {
@@ -320,6 +322,10 @@ function bindPanel() {
 
 function can(role) {
   return state.session?.user?.roles?.includes(role);
+}
+
+function canAny(...roles) {
+  return roles.some((role) => can(role));
 }
 
 function renderDmv() {
@@ -682,7 +688,7 @@ function bindMessages() {
   });
 }
 
-function renderCourt() {
+function renderCourtLegacy() {
   const isJudge = can("judge") || can("owner") || can("admin");
   const mine = state.cache.court?.mine?.cases || [];
   const judgeCases = state.cache.court?.judge?.cases || [];
@@ -698,7 +704,7 @@ function renderCourt() {
   `;
 }
 
-function renderMyCases(cases) {
+function renderMyCasesLegacy(cases) {
   return `
     <div class="list">
       ${cases.map((item) => `
@@ -716,7 +722,7 @@ function renderMyCases(cases) {
   `;
 }
 
-function renderJudgeCases(cases) {
+function renderJudgeCasesLegacy(cases) {
   return `
     <div class="list">
       ${cases.map((item) => `
@@ -741,6 +747,83 @@ function renderJudgeCases(cases) {
 
 function renderCourtRules() {
   return `<div class="card"><h3>Citation workflow</h3><p class="muted">Officers issue citations from the MDT. Civilians can pay or contest them here. Judges see issued and contested cases, then review, reduce, dismiss, or mark paid.</p></div>`;
+}
+
+function renderCourt() {
+  const data = state.cache.court?.mine || {};
+  const isOfficer = canAny("leo", "cid", "owner", "admin");
+  const isJudge = canAny("judge", "owner", "admin");
+  const tabs = [
+    ["defendant-active", "Active"],
+    ["defendant-previous", "Previous"],
+    ...(isOfficer ? [["officer-active", "Officer Active"], ["officer-previous", "Officer Previous"]] : []),
+    ...(isJudge ? [["judge-active", "Judge Docket"], ["judge-previous", "Judge Previous"]] : []),
+  ];
+  if (!tabs.some(([id]) => id === state.courtTab)) state.courtTab = "defendant-active";
+  const tabData = {
+    "defendant-active": data.defendant?.active || [],
+    "defendant-previous": data.defendant?.previous || [],
+    "officer-active": data.officer?.active || [],
+    "officer-previous": data.officer?.previous || [],
+    "judge-active": data.judge?.active || [],
+    "judge-previous": data.judge?.previous || [],
+  };
+  const previous = state.courtTab.includes("previous");
+  const judgeTab = state.courtTab.startsWith("judge");
+  const defendantTab = state.courtTab.startsWith("defendant");
+  return `
+    <div class="stack">
+      <div class="court-tabs">
+        ${tabs.map(([id, label]) => `<button class="${state.courtTab === id ? "active" : ""}" data-court-tab="${id}">${label}</button>`).join("")}
+      </div>
+      ${judgeTab ? renderJudgeCases(tabData[state.courtTab], previous) : renderCaseList(tabData[state.courtTab], { previous, defendant: defendantTab })}
+    </div>
+  `;
+}
+
+function renderCaseList(cases, options = {}) {
+  const previous = Boolean(options.previous);
+  const defendant = Boolean(options.defendant);
+  return `
+    <div class="list">
+      ${cases.map((item) => `
+        <article class="case-card">
+          <div class="row"><h3>${escapeHtml(item.charge_code)} - ${escapeHtml(item.charge_title)}</h3><span class="pill ${["paid", "dismissed", "closed"].includes(item.status) ? "green" : item.status === "contested" ? "amber" : "red"}">${escapeHtml(item.status)}</span></div>
+          <p class="muted small">Defendant ${escapeHtml(item.civ_name || "You")} - Officer ${escapeHtml(item.officer_name)} - Judge ${escapeHtml(item.judge_name || "Pending assignment")} - ${money(item.fine_amount)}</p>
+          <p class="muted small">${escapeHtml(item.location)} - Court ${escapeHtml(item.court_date || "Pending")}</p>
+          <p>${escapeHtml(item.narrative)}</p>
+          ${previous ? `<div class="metric"><span>Final result</span><strong>${escapeHtml(item.final_result || item.judgment_notes || item.status)}</strong></div>` : ""}
+          ${defendant && !previous ? `<div class="row">
+            <button class="secondary" data-contest-case="${item.id}" ${["paid", "dismissed", "contested", "closed"].includes(item.status) ? "disabled" : ""}>Contest</button>
+            <button class="primary" data-pay-case="${item.id}" ${["paid", "dismissed", "closed"].includes(item.status) ? "disabled" : ""}>Pay fine</button>
+          </div>` : ""}
+        </article>
+      `).join("") || `<div class="empty">No cases at this time</div>`}
+    </div>
+  `;
+}
+
+function renderJudgeCases(cases, previous = false) {
+  return `
+    <div class="list">
+      ${cases.map((item) => `
+        <article class="case-card">
+          <div class="row"><h3>#${item.id} ${escapeHtml(item.charge_code)}</h3><span class="pill ${["paid", "dismissed", "closed"].includes(item.status) ? "green" : item.status === "contested" ? "amber" : "red"}">${escapeHtml(item.status)}</span></div>
+          <p class="muted small">Defendant ${escapeHtml(item.civ_name)} - ${escapeHtml(item.civ_email)} - Officer ${escapeHtml(item.officer_name)} - Presiding ${escapeHtml(item.judge_name || "Unassigned")}</p>
+          <p><strong>${escapeHtml(item.charge_title)}</strong> - ${money(item.fine_amount)}</p>
+          <p>${escapeHtml(item.narrative)}</p>
+          ${previous ? `<div class="metric"><span>Final result</span><strong>${escapeHtml(item.final_result || item.judgment_notes || item.status)}</strong></div>` : `<form class="form-grid judge-form" data-case-id="${item.id}">
+            <div class="grid-2">
+              <label>Status<select name="status"><option>reviewed</option><option>reduced</option><option>dismissed</option><option>paid</option><option>contested</option><option>closed</option></select></label>
+              <label>Fine<input name="fine_amount" type="number" step="0.01" value="${escapeHtml(item.fine_amount)}" /></label>
+            </div>
+            <label>Judgment notes<input name="judgment_notes" value="${escapeHtml(item.judgment_notes || "")}" /></label>
+            <button class="primary" type="submit">Update case</button>
+          </form>`}
+        </article>
+      `).join("") || `<div class="empty">No cases at this time</div>`}
+    </div>
+  `;
 }
 
 function bindCourt() {
@@ -899,12 +982,22 @@ function bindMdtLegacy() {
 function renderMdtWorkspace() {
   const charges = state.cache.mdt?.charges || {};
   const alerts = state.cache.mdt?.alerts?.alerts || [];
+  const cid = state.cache.mdt?.cid;
+  const cidEnabled = canAny("cid", "owner", "admin");
+  const navItems = [
+    ["search", "NCIC / DMV"],
+    ["ticket", "Issue"],
+    ["citations", "Citations"],
+    ["criminal", "Criminal"],
+    ["panic", "Panic"],
+    ...(cidEnabled ? [["cid-investigations", "Investigations"], ["cid-warrants", "Warrants"], ["cid-ia", "Internal Affairs"]] : [])
+  ];
   return `
     <section class="mdt-workspace">
       <header class="mdt-topbar">
         <div>
-          <p class="eyebrow">${escapeHtml(state.session.user.primary_agency || "Law Enforcement")}</p>
-          <h1>Mobile Data Terminal</h1>
+          <p class="eyebrow">${escapeHtml(state.session.user.primary_agency || (cidEnabled ? "CID Command" : "Law Enforcement"))}</p>
+          <h1>${cidEnabled ? "Investigative MDT" : "Mobile Data Terminal"}</h1>
         </div>
         <div class="mdt-top-actions">
           <button class="ghost" data-refresh-mdt>Refresh</button>
@@ -913,18 +1006,12 @@ function renderMdtWorkspace() {
       </header>
       <div class="mdt-stat-strip">
         <div class="metric"><span>Citations</span><strong>${(charges.citations || []).length}</strong></div>
-        <div class="metric"><span>Criminal Codes</span><strong>${(charges.criminal_charges || []).length}</strong></div>
-        <div class="metric"><span>Active Alerts</span><strong>${alerts.filter((alert) => alert.status === "active").length}</strong></div>
+        <div class="metric"><span>${cidEnabled ? "Open CID" : "Criminal Codes"}</span><strong>${cidEnabled ? (cid?.stats?.open_investigations || 0) : (charges.criminal_charges || []).length}</strong></div>
+        <div class="metric"><span>${cidEnabled ? "Active Warrants" : "Active Alerts"}</span><strong>${cidEnabled ? (cid?.stats?.active_warrants || 0) : alerts.filter((alert) => alert.status === "active").length}</strong></div>
       </div>
       <div class="mdt-layout">
         <aside class="mdt-nav">
-          ${[
-            ["search", "NCIC / DMV"],
-            ["ticket", "Issue"],
-            ["citations", "Citations"],
-            ["criminal", "Criminal"],
-            ["panic", "Panic"]
-          ].map(([id, label]) => `<button class="${state.mdtTab === id ? "active" : ""}" data-mdt-tab="${id}">${label}</button>`).join("")}
+          ${navItems.map(([id, label]) => `<button class="${state.mdtTab === id ? "active" : ""}" data-mdt-tab="${id}">${label}</button>`).join("")}
         </aside>
         <main class="mdt-main">${renderMdtContent()}</main>
         <aside class="mdt-side">${renderMdtSide()}</aside>
@@ -953,6 +1040,9 @@ function renderMdt() {
 }
 
 function renderMdtContent() {
+  if (state.mdtTab === "cid-investigations") return renderCidInvestigations();
+  if (state.mdtTab === "cid-warrants") return renderCidWarrants();
+  if (state.mdtTab === "cid-ia") return renderCidInternalAffairs();
   if (state.mdtTab === "ticket") return renderTicketWriter();
   if (state.mdtTab === "citations") return renderCodeSection("citation");
   if (state.mdtTab === "criminal") return renderCodeSection("criminal");
@@ -963,7 +1053,18 @@ function renderMdtContent() {
 function renderMdtSide() {
   const alerts = state.cache.mdt?.alerts?.alerts || [];
   const issued = state.cache.mdt?.search?.flatMap((person) => person.open_cases || []) || [];
+  const cid = state.cache.mdt?.cid;
   return `
+    ${cid ? `
+      <div class="mdt-side-panel">
+        <h3>CID Tracker</h3>
+        <div class="list compact-list">
+          <div class="row"><span>Open cases</span><strong>${cid.stats.open_investigations}</strong></div>
+          <div class="row"><span>Active warrants</span><strong>${cid.stats.active_warrants}</strong></div>
+          <div class="row"><span>IA open</span><strong>${cid.stats.ia_open}</strong></div>
+        </div>
+      </div>
+    ` : ""}
     <div class="mdt-side-panel">
       <h3>Watch</h3>
       <div class="list compact-list">
@@ -1121,6 +1222,150 @@ function renderMdtNoticeModal() {
   `;
 }
 
+function renderCidInvestigations() {
+  const cid = state.cache.mdt?.cid;
+  const cases = cid?.investigations || [];
+  const notes = cid?.notes || [];
+  return `
+    <div class="cid-tools">
+      <form id="cidInvestigationForm" class="mdt-form">
+        <div class="mdt-section-head">
+          <div><p class="eyebrow">CID case tracking</p><h2>Open Investigation</h2></div>
+          <span class="pill green">${cases.length} tracked</span>
+        </div>
+        <div class="grid-2">
+          <label>Title<input name="title" required /></label>
+          <label>Case type<select name="case_type"><option>Surveillance</option><option>Narcotics</option><option>Organized Crime</option><option>Financial Crimes</option><option>Major Crimes</option><option>Intelligence</option></select></label>
+        </div>
+        <div class="grid-2">
+          <label>Priority<select name="priority"><option>standard</option><option>elevated</option><option>critical</option></select></label>
+          <label>Target CIV ID<input name="target_civ_id" type="number" placeholder="Optional database ID" /></label>
+        </div>
+        <div class="grid-2">
+          <label>Target name<input name="target_name" /></label>
+          <label>Location / area<input name="location" /></label>
+        </div>
+        <label>Investigation summary<textarea name="summary" required></textarea></label>
+        <button class="primary" type="submit">Create CID case</button>
+      </form>
+      <div class="mdt-code-grid">
+        ${cases.map((item) => `
+          <article class="cid-card">
+            <div class="row"><div><h3>${escapeHtml(item.case_number)} - ${escapeHtml(item.title)}</h3><p class="muted small">${escapeHtml(item.case_type)} - Lead ${escapeHtml(item.lead_name)} - ${escapeHtml(item.location || "No area")}</p></div><span class="pill ${item.priority === "critical" ? "red" : item.priority === "elevated" ? "amber" : "green"}">${escapeHtml(item.priority)}</span></div>
+            <p>${escapeHtml(item.summary)}</p>
+            <div class="grid-2">
+              <form class="cid-case-update form-grid" data-case-id="${item.id}">
+                <label>Status<select name="status"><option>open</option><option>active</option><option>pending warrant</option><option>surveillance</option><option>closed</option><option>archived</option></select></label>
+                <label>Priority<select name="priority"><option>standard</option><option>elevated</option><option>critical</option></select></label>
+                <button class="secondary" type="submit">Update case</button>
+              </form>
+              <form class="cid-note-form form-grid" data-case-id="${item.id}">
+                <label>Note type<select name="note_type"><option>case note</option><option>surveillance log</option><option>evidence</option><option>interview</option><option>operation update</option></select></label>
+                <label>Note<textarea name="body" required></textarea></label>
+                <button class="secondary" type="submit">Add note</button>
+              </form>
+            </div>
+          </article>
+        `).join("") || `<div class="empty">No CID investigations yet</div>`}
+      </div>
+      <div class="mdt-side-panel">
+        <h3>Recent CID Notes</h3>
+        <div class="list">
+          ${notes.map((note) => `<div class="message-card"><div class="row"><strong>${escapeHtml(note.case_number)}</strong><span class="pill">${escapeHtml(note.note_type)}</span></div><p class="muted small">${escapeHtml(note.author_name)} - ${new Date(note.created_at).toLocaleString()}</p><p>${escapeHtml(note.body)}</p></div>`).join("") || `<p class="muted small">No notes logged</p>`}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderCidWarrants() {
+  const cid = state.cache.mdt?.cid;
+  const warrants = cid?.warrants || [];
+  const cases = cid?.investigations || [];
+  return `
+    <div class="cid-tools">
+      <form id="cidWarrantForm" class="mdt-form">
+        <div class="mdt-section-head">
+          <div><p class="eyebrow">Warrant operations</p><h2>Track Warrant</h2></div>
+          <span class="pill red">${warrants.filter((item) => item.status === "active").length} active</span>
+        </div>
+        <div class="grid-2">
+          <label>Subject name<input name="subject_name" required /></label>
+          <label>Subject CIV ID<input name="subject_civ_id" type="number" placeholder="Optional database ID" /></label>
+        </div>
+        <div class="grid-2">
+          <label>Warrant type<select name="warrant_type"><option>Arrest Warrant</option><option>Search Warrant</option><option>Bench Warrant</option><option>BOLO / Locate</option><option>High Risk Operation</option></select></label>
+          <label>Priority<select name="priority"><option>standard</option><option>elevated</option><option>critical</option></select></label>
+        </div>
+        <div class="grid-2">
+          <label>Linked case<select name="investigation_id"><option value="">None</option>${cases.map((item) => `<option value="${item.id}">${escapeHtml(item.case_number)} - ${escapeHtml(item.title)}</option>`).join("")}</select></label>
+          <label>Expires<input name="expires_at" type="date" /></label>
+        </div>
+        <label>Authorized by<input name="authorized_by" placeholder="Judge / command approval" /></label>
+        <label>Probable cause<textarea name="probable_cause" required></textarea></label>
+        <label>Operation plan<textarea name="operation_plan"></textarea></label>
+        <button class="primary" type="submit">Create warrant record</button>
+      </form>
+      <div class="mdt-code-grid">
+        ${warrants.map((item) => `
+          <article class="cid-card">
+            <div class="row"><div><h3>${escapeHtml(item.warrant_number)} - ${escapeHtml(item.subject_name)}</h3><p class="muted small">${escapeHtml(item.warrant_type)} - ${escapeHtml(item.case_number || "No linked case")}</p></div><span class="pill ${item.status === "active" ? "red" : item.status === "served" ? "green" : "amber"}">${escapeHtml(item.status)}</span></div>
+            <p><strong>PC:</strong> ${escapeHtml(item.probable_cause)}</p>
+            <p class="muted small">${escapeHtml(item.operation_plan || "No operation plan logged")}</p>
+            <form class="cid-warrant-update form-grid" data-warrant-id="${item.id}">
+              <div class="grid-2">
+                <label>Status<select name="status"><option>active</option><option>pending</option><option>served</option><option>recalled</option><option>expired</option></select></label>
+                <label>Priority<select name="priority"><option>standard</option><option>elevated</option><option>critical</option></select></label>
+              </div>
+              <button class="secondary" type="submit">Update warrant</button>
+            </form>
+          </article>
+        `).join("") || `<div class="empty">No warrants tracked</div>`}
+      </div>
+    </div>
+  `;
+}
+
+function renderCidInternalAffairs() {
+  const cid = state.cache.mdt?.cid;
+  const ia = cid?.ia_cases || [];
+  return `
+    <div class="cid-tools">
+      <form id="cidIaForm" class="mdt-form">
+        <div class="mdt-section-head">
+          <div><p class="eyebrow">Internal affairs</p><h2>Open IA Intake</h2></div>
+          <span class="pill amber">${ia.length} records</span>
+        </div>
+        <div class="grid-2">
+          <label>Subject officer name<input name="subject_name" required /></label>
+          <label>Subject officer user ID<input name="subject_officer_id" type="number" placeholder="Optional database ID" /></label>
+        </div>
+        <div class="grid-2">
+          <label>Allegation type<select name="allegation_type"><option>Policy Violation</option><option>Use of Force Review</option><option>Corruption / Misconduct</option><option>Evidence Handling</option><option>Complaint Intake</option></select></label>
+          <label>Priority<select name="priority"><option>standard</option><option>elevated</option><option>critical</option></select></label>
+        </div>
+        <label>Summary<textarea name="summary" required></textarea></label>
+        <button class="primary" type="submit">Create IA record</button>
+      </form>
+      <div class="mdt-code-grid">
+        ${ia.map((item) => `
+          <article class="cid-card">
+            <div class="row"><div><h3>${escapeHtml(item.ia_number)} - ${escapeHtml(item.subject_name)}</h3><p class="muted small">${escapeHtml(item.allegation_type)} - assigned ${escapeHtml(item.assigned_name)}</p></div><span class="pill ${item.priority === "critical" ? "red" : item.priority === "elevated" ? "amber" : "green"}">${escapeHtml(item.status)}</span></div>
+            <p>${escapeHtml(item.summary)}</p>
+            <form class="cid-ia-update form-grid" data-ia-id="${item.id}">
+              <div class="grid-2">
+                <label>Status<select name="status"><option>intake</option><option>active</option><option>command review</option><option>sustained</option><option>unfounded</option><option>closed</option></select></label>
+                <label>Priority<select name="priority"><option>standard</option><option>elevated</option><option>critical</option></select></label>
+              </div>
+              <button class="secondary" type="submit">Update IA</button>
+            </form>
+          </article>
+        `).join("") || `<div class="empty">No internal affairs records</div>`}
+      </div>
+    </div>
+  `;
+}
+
 function renderPanic() {
   const alerts = state.cache.mdt?.alerts?.alerts || [];
   return `
@@ -1203,6 +1448,83 @@ function bindMdt() {
       toast(error.message);
     }
   });
+  $("#cidInvestigationForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const result = await api("/api/cid/investigations", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast(`CID case opened ${result.case_number}`);
+      await loadAppData("mdt");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $$(".cid-case-update").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api(`/api/cid/investigations/${form.dataset.caseId}`, { method: "PATCH", body: Object.fromEntries(new FormData(form).entries()) });
+      toast("CID case updated");
+      await loadAppData("mdt");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+  $$(".cid-note-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api(`/api/cid/investigations/${form.dataset.caseId}/notes`, { method: "POST", body: Object.fromEntries(new FormData(form).entries()) });
+      toast("CID note logged");
+      await loadAppData("mdt");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+  $("#cidWarrantForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const result = await api("/api/cid/warrants", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast(`Warrant tracked ${result.warrant_number}`);
+      await loadAppData("mdt");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $$(".cid-warrant-update").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api(`/api/cid/warrants/${form.dataset.warrantId}`, { method: "PATCH", body: Object.fromEntries(new FormData(form).entries()) });
+      toast("Warrant updated");
+      await loadAppData("mdt");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+  $("#cidIaForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const result = await api("/api/cid/internal-affairs", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast(`IA record opened ${result.ia_number}`);
+      await loadAppData("mdt");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $$(".cid-ia-update").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api(`/api/cid/internal-affairs/${form.dataset.iaId}`, { method: "PATCH", body: Object.fromEntries(new FormData(form).entries()) });
+      toast("IA record updated");
+      await loadAppData("mdt");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
 }
 
 function renderAdmin() {

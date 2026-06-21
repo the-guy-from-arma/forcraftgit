@@ -206,6 +206,21 @@ def generate_civ_number(db: Database) -> str:
     raise RuntimeError("Unable to generate unique civilian ID")
 
 
+def generate_record_number(db: Database, table: str, column: str, prefix: str) -> str:
+    allowed = {
+        ("cid_investigations", "case_number"),
+        ("cid_warrants", "warrant_number"),
+        ("cid_internal_affairs", "ia_number"),
+    }
+    if (table, column) not in allowed:
+        raise ValueError("Invalid record number target")
+    for _ in range(50):
+        number = f"{prefix}-{secrets.randbelow(900000) + 100000}"
+        if not one(db, f"SELECT id FROM {table} WHERE {column} = ?", (number,)):
+            return number
+    raise RuntimeError("Unable to generate unique record number")
+
+
 def ensure_schema() -> None:
     with conn() as db:
         db.executescript(
@@ -336,6 +351,7 @@ def ensure_schema() -> None:
                 id SERIAL PRIMARY KEY,
                 civ_id INTEGER NOT NULL,
                 officer_id INTEGER NOT NULL,
+                judge_id INTEGER,
                 charge_id INTEGER NOT NULL,
                 charge_code TEXT NOT NULL,
                 charge_title TEXT NOT NULL,
@@ -348,10 +364,12 @@ def ensure_schema() -> None:
                 status TEXT NOT NULL DEFAULT 'issued',
                 court_date TEXT,
                 judgment_notes TEXT,
+                final_result TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (civ_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (officer_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (judge_id) REFERENCES users(id) ON DELETE SET NULL,
                 FOREIGN KEY (charge_id) REFERENCES charge_catalog(id) ON DELETE RESTRICT
             );
 
@@ -389,6 +407,74 @@ def ensure_schema() -> None:
                 resolved_at TEXT,
                 FOREIGN KEY (officer_id) REFERENCES users(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS cid_investigations (
+                id SERIAL PRIMARY KEY,
+                case_number TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL,
+                case_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                priority TEXT NOT NULL DEFAULT 'standard',
+                lead_id INTEGER NOT NULL,
+                target_civ_id INTEGER,
+                target_name TEXT NOT NULL DEFAULT '',
+                summary TEXT NOT NULL,
+                location TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (lead_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (target_civ_id) REFERENCES users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS cid_investigation_notes (
+                id SERIAL PRIMARY KEY,
+                investigation_id INTEGER NOT NULL,
+                author_id INTEGER NOT NULL,
+                note_type TEXT NOT NULL DEFAULT 'case note',
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (investigation_id) REFERENCES cid_investigations(id) ON DELETE CASCADE,
+                FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS cid_warrants (
+                id SERIAL PRIMARY KEY,
+                warrant_number TEXT NOT NULL UNIQUE,
+                investigation_id INTEGER,
+                subject_civ_id INTEGER,
+                subject_name TEXT NOT NULL,
+                warrant_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                priority TEXT NOT NULL DEFAULT 'standard',
+                probable_cause TEXT NOT NULL,
+                operation_plan TEXT NOT NULL DEFAULT '',
+                authorized_by TEXT NOT NULL DEFAULT '',
+                created_by INTEGER NOT NULL,
+                issued_at TEXT NOT NULL,
+                expires_at TEXT,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (investigation_id) REFERENCES cid_investigations(id) ON DELETE SET NULL,
+                FOREIGN KEY (subject_civ_id) REFERENCES users(id) ON DELETE SET NULL,
+                FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS cid_internal_affairs (
+                id SERIAL PRIMARY KEY,
+                ia_number TEXT NOT NULL UNIQUE,
+                subject_officer_id INTEGER,
+                subject_name TEXT NOT NULL,
+                allegation_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'intake',
+                priority TEXT NOT NULL DEFAULT 'standard',
+                summary TEXT NOT NULL,
+                assigned_to INTEGER NOT NULL,
+                created_by INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (subject_officer_id) REFERENCES users(id) ON DELETE SET NULL,
+                FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+            );
             """
         )
         ensure_migrations(db)
@@ -406,6 +492,9 @@ def ensure_migrations(db: Database) -> None:
         db.execute("UPDATE users SET civ_number = ? WHERE id = ?", (generate_civ_number(db), user["id"]))
     db.execute("ALTER TABLE charge_catalog ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'criminal'")
     db.execute("UPDATE charge_catalog SET kind = 'citation' WHERE code LIKE ?", ("TRF-%",))
+    db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS judge_id INTEGER")
+    db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS final_result TEXT NOT NULL DEFAULT ''")
+    db.execute("UPDATE citations SET final_result = status WHERE final_result = '' AND status NOT IN ('issued','contested','reviewed','reduced')")
 
 
 def seed_owner(db: Database) -> None:
@@ -551,8 +640,16 @@ def verified_required(user: DbRow | None) -> str | None:
 def leo_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
-    if not has_any(user, "leo", "owner", "admin"):
+    if not has_any(user, "leo", "cid", "owner", "admin"):
         return "Law enforcement access required"
+    return None
+
+
+def cid_required(user: DbRow | None) -> str | None:
+    if not user:
+        return "Authentication required"
+    if not has_any(user, "cid", "owner", "admin"):
+        return "CID access required"
     return None
 
 
@@ -575,13 +672,13 @@ def app_catalog(user: DbRow | None) -> list[dict[str, Any]]:
         ("properties", "PROPERTIES", "home", False, True),
         ("cash", "CASH APP", "send", False, True),
         ("bank", "BANK", "bank", False, True),
-        ("messages", "Messages", "message", False, True),
+        ("messages", "Messages", "message", verified, False),
     ]
     apps = [
         {"id": key, "label": label, "icon": icon, "enabled": enabled, "coming_soon": coming_soon, "hidden": False}
         for key, label, icon, enabled, coming_soon in base
     ]
-    if has_any(user, "leo", "owner", "admin"):
+    if has_any(user, "leo", "cid", "owner", "admin"):
         apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "hidden": False})
     if has_any(user, "owner", "admin"):
         apps.append({"id": "admin", "label": "Admin", "icon": "settings", "enabled": True, "hidden": False})
@@ -606,6 +703,40 @@ def add_transaction(
     db.execute(
         "INSERT INTO transactions (user_id, type, amount, description, counterparty_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
         (user_id, kind, amount, description, counterparty_id, now_iso()),
+    )
+
+
+ACTIVE_CASE_STATUSES = ("issued", "contested", "reviewed", "reduced")
+CLOSED_CASE_STATUSES = ("paid", "dismissed", "closed")
+
+
+def case_status_clause(active: bool) -> str:
+    if active:
+        return "c.status IN ('issued','contested','reviewed','reduced')"
+    return "c.status NOT IN ('issued','contested','reviewed','reduced')"
+
+
+def final_result_for(status: str, notes: str | None = None, fine_amount: float | None = None) -> str:
+    clean = status.strip().title()
+    if status == "paid" and fine_amount is not None:
+        clean = f"Paid - fine satisfied at ${fine_amount:,.2f}"
+    elif status == "dismissed":
+        clean = "Dismissed by court"
+    elif status == "reduced" and fine_amount is not None:
+        clean = f"Reduced - fine set to ${fine_amount:,.2f}"
+    if notes:
+        clean = f"{clean}: {notes}"
+    return clean
+
+
+def pick_presiding_judge(db: Database) -> DbRow | None:
+    judge = one(db, "SELECT id, name FROM users WHERE roles LIKE ? ORDER BY id LIMIT 1", ("%judge%",))
+    if judge:
+        return judge
+    return one(
+        db,
+        "SELECT id, name FROM users WHERE roles LIKE ? OR roles LIKE ? ORDER BY id LIMIT 1",
+        ("%owner%", "%admin%"),
     )
 
 
@@ -846,6 +977,22 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_panic(db, user)
                 elif path == "/api/mdt/alerts" and method == "GET":
                     self.api_alerts(db, user)
+                elif path == "/api/cid/overview" and method == "GET":
+                    self.api_cid_overview(db, user)
+                elif path == "/api/cid/investigations" and method == "POST":
+                    self.api_cid_create_investigation(db, user)
+                elif path.startswith("/api/cid/investigations/") and path.endswith("/notes") and method == "POST":
+                    self.api_cid_add_note(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/cid/investigations/") and method == "PATCH":
+                    self.api_cid_update_investigation(db, user, self.path_int(path, 3))
+                elif path == "/api/cid/warrants" and method == "POST":
+                    self.api_cid_create_warrant(db, user)
+                elif path.startswith("/api/cid/warrants/") and method == "PATCH":
+                    self.api_cid_update_warrant(db, user, self.path_int(path, 3))
+                elif path == "/api/cid/internal-affairs" and method == "POST":
+                    self.api_cid_create_ia(db, user)
+                elif path.startswith("/api/cid/internal-affairs/") and method == "PATCH":
+                    self.api_cid_update_ia(db, user, self.path_int(path, 3))
                 elif path == "/api/admin/overview" and method == "GET":
                     self.api_admin_overview(db, user)
                 elif path == "/api/admin/users" and method == "GET":
@@ -1285,18 +1432,60 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err)
             return
-        rows = all_rows(
-            db,
-            """
-            SELECT c.*, officer.name AS officer_name
+        base_select = """
+            SELECT c.*, civ.name AS civ_name, civ.email AS civ_email,
+                   officer.name AS officer_name, judge.name AS judge_name
             FROM citations c
+            JOIN users civ ON civ.id = c.civ_id
             JOIN users officer ON officer.id = c.officer_id
-            WHERE c.civ_id = ?
-            ORDER BY c.created_at DESC
-            """,
+            LEFT JOIN users judge ON judge.id = c.judge_id
+        """
+
+        defendant_active = all_rows(
+            db,
+            f"{base_select} WHERE c.civ_id = ? AND {case_status_clause(True)} ORDER BY c.created_at DESC",
             (user["id"],),
         )
-        self.send_json(200, {"cases": [dict(row) for row in rows]})
+        defendant_previous = all_rows(
+            db,
+            f"{base_select} WHERE c.civ_id = ? AND {case_status_clause(False)} ORDER BY c.updated_at DESC",
+            (user["id"],),
+        )
+        officer_active: list[DbRow] = []
+        officer_previous: list[DbRow] = []
+        if has_any(user, "leo", "cid", "owner", "admin"):
+            officer_active = all_rows(
+                db,
+                f"{base_select} WHERE c.officer_id = ? AND {case_status_clause(True)} ORDER BY c.created_at DESC",
+                (user["id"],),
+            )
+            officer_previous = all_rows(
+                db,
+                f"{base_select} WHERE c.officer_id = ? AND {case_status_clause(False)} ORDER BY c.updated_at DESC",
+                (user["id"],),
+            )
+        judge_active = None
+        judge_previous = None
+        if has_any(user, "judge", "owner", "admin"):
+            judge_active = all_rows(
+                db,
+                f"{base_select} WHERE (c.judge_id = ? OR c.judge_id IS NULL) AND {case_status_clause(True)} ORDER BY CASE c.status WHEN 'contested' THEN 0 WHEN 'issued' THEN 1 ELSE 2 END, c.created_at DESC",
+                (user["id"],),
+            )
+            judge_previous = all_rows(
+                db,
+                f"{base_select} WHERE (c.judge_id = ? OR c.judge_id IS NULL) AND {case_status_clause(False)} ORDER BY c.updated_at DESC",
+                (user["id"],),
+            )
+        self.send_json(
+            200,
+            {
+                "cases": [dict(row) for row in defendant_active],
+                "defendant": {"active": defendant_active, "previous": defendant_previous},
+                "officer": {"active": officer_active, "previous": officer_previous},
+                "judge": {"active": judge_active, "previous": judge_previous} if judge_active is not None else None,
+            },
+        )
 
     def api_pay_case(self, db: Database, user: DbRow | None, case_id: int) -> None:
         err = verified_required(user)
@@ -1315,7 +1504,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(409, "Insufficient bank balance")
             return
         db.execute("UPDATE users SET bank_balance = bank_balance - ? WHERE id = ?", (amount, user["id"]))
-        db.execute("UPDATE citations SET status = 'paid', updated_at = ? WHERE id = ?", (now_iso(), case_id))
+        db.execute(
+            "UPDATE citations SET status = 'paid', final_result = ?, updated_at = ? WHERE id = ?",
+            (final_result_for("paid", case.get("judgment_notes"), amount), now_iso(), case_id),
+        )
         add_transaction(db, user["id"], "fine_payment", -amount, f"Paid citation {case['charge_code']} - {case['charge_title']}")
         self.send_json(200, {"ok": True})
 
@@ -1343,17 +1535,24 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err)
             return
-        rows = all_rows(
-            db,
-            """
-            SELECT c.*, civ.name AS civ_name, civ.email AS civ_email, officer.name AS officer_name
+        base_query = """
+            SELECT c.*, civ.name AS civ_name, civ.email AS civ_email, officer.name AS officer_name, judge.name AS judge_name
             FROM citations c
             JOIN users civ ON civ.id = c.civ_id
             JOIN users officer ON officer.id = c.officer_id
-            ORDER BY CASE c.status WHEN 'contested' THEN 0 WHEN 'issued' THEN 1 ELSE 2 END, c.created_at DESC
-            LIMIT 100
-            """
-        )
+            LEFT JOIN users judge ON judge.id = c.judge_id
+        """
+        if has_any(user, "owner", "admin"):
+            rows = all_rows(
+                db,
+                f"{base_query} ORDER BY CASE c.status WHEN 'contested' THEN 0 WHEN 'issued' THEN 1 ELSE 2 END, c.created_at DESC LIMIT 100",
+            )
+        else:
+            rows = all_rows(
+                db,
+                f"{base_query} WHERE c.judge_id = ? OR c.judge_id IS NULL ORDER BY CASE c.status WHEN 'contested' THEN 0 WHEN 'issued' THEN 1 ELSE 2 END, c.created_at DESC LIMIT 100",
+                (user["id"],),
+            )
         self.send_json(200, {"cases": [dict(row) for row in rows]})
 
     def api_update_case(self, db: Database, user: DbRow | None, case_id: int) -> None:
@@ -1363,24 +1562,26 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         payload = self.read_json()
         status = str(payload.get("status") or "").strip().lower()
-        if status not in ("issued", "reviewed", "reduced", "dismissed", "paid", "contested"):
+        if status not in ("issued", "reviewed", "reduced", "dismissed", "paid", "contested", "closed"):
             self.error(400, "Invalid case status")
             return
         amount = payload.get("fine_amount")
         notes = str(payload.get("judgment_notes") or "")[:600]
+        final_result = final_result_for(status, notes, float(amount)) if status in CLOSED_CASE_STATUSES and amount is not None else final_result_for(status, notes)
         if amount is not None:
             db.execute(
-                "UPDATE citations SET status = ?, fine_amount = ?, judgment_notes = ?, updated_at = ? WHERE id = ?",
-                (status, float(amount), notes, now_iso(), case_id),
+                "UPDATE citations SET status = ?, fine_amount = ?, judgment_notes = ?, judge_id = ?, final_result = ?, updated_at = ? WHERE id = ?",
+                (status, float(amount), notes, user["id"], final_result if status in CLOSED_CASE_STATUSES else "", now_iso(), case_id),
             )
         else:
             db.execute(
-                "UPDATE citations SET status = ?, judgment_notes = ?, updated_at = ? WHERE id = ?",
-                (status, notes, now_iso(), case_id),
+                "UPDATE citations SET status = ?, judgment_notes = ?, judge_id = ?, final_result = ?, updated_at = ? WHERE id = ?",
+                (status, notes, user["id"], final_result if status in CLOSED_CASE_STATUSES else "", now_iso(), case_id),
             )
         case = one(db, "SELECT * FROM citations WHERE id = ?", (case_id,))
         if case:
             add_message(db, case["civ_id"], "Court case updated", f"Your case {case['charge_code']} is now marked {status}.", user["id"])
+            add_message(db, case["officer_id"], "Officer case updated", f"Case #{case_id} for {case['charge_code']} is now marked {status}.", user["id"])
         self.send_json(200, {"ok": True})
 
     def api_mdt_search(self, db: Database, user: DbRow | None, query: dict[str, list[str]]) -> None:
@@ -1465,17 +1666,19 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         default_court_date = (utcnow() + dt.timedelta(days=3)).date().isoformat()
         court_date = str(payload.get("court_date") or "").strip() or default_court_date
+        presiding_judge = pick_presiding_judge(db)
         ts = now_iso()
         cur = db.execute(
             """
             INSERT INTO citations
-            (civ_id, officer_id, charge_id, charge_code, charge_title, category, fine_amount, points, severity, location, narrative, court_date, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (civ_id, officer_id, judge_id, charge_id, charge_code, charge_title, category, fine_amount, points, severity, location, narrative, court_date, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING id
             """,
             (
                 civ["id"],
                 user["id"],
+                presiding_judge["id"] if presiding_judge else None,
                 charge["id"],
                 charge["code"],
                 charge["title"],
@@ -1499,14 +1702,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             f"{user['name']} issued {charge['title']} for ${float(charge['fine_amount']):,.2f}. Open COURT to pay or contest.",
             user["id"],
         )
-        judges = all_rows(
-            db,
-            "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ? OR roles LIKE ?",
-            ("%judge%", "%owner%", "%admin%"),
-        )
-        for judge in judges:
-            add_message(db, judge["id"], "Citation awaiting court review", f"Citation #{citation_id} was issued to {civ['name']} by {user['name']}.", user["id"])
-        self.send_json(201, {"ok": True, "citation_id": citation_id, "court_date": court_date})
+        add_message(db, user["id"], "Officer case filed", f"Case #{citation_id} was filed against {civ['name']} and is now in your COURT officer docket.", user["id"])
+        if presiding_judge:
+            add_message(
+                db,
+                presiding_judge["id"],
+                "Presiding case assigned",
+                f"Case #{citation_id} was assigned to you. Defendant: {civ['name']}. Officer: {user['name']}.",
+                user["id"],
+            )
+        self.send_json(201, {"ok": True, "citation_id": citation_id, "court_date": court_date, "judge_id": presiding_judge["id"] if presiding_judge else None})
 
     def api_panic(self, db: Database, user: DbRow | None) -> None:
         err = leo_required(user)
@@ -1547,6 +1752,231 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             """
         )
         self.send_json(200, {"alerts": [dict(row) for row in rows]})
+
+    def api_cid_overview(self, db: Database, user: DbRow | None) -> None:
+        err = cid_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        investigations = all_rows(
+            db,
+            """
+            SELECT i.*, lead.name AS lead_name, target.name AS target_civ_name
+            FROM cid_investigations i
+            JOIN users lead ON lead.id = i.lead_id
+            LEFT JOIN users target ON target.id = i.target_civ_id
+            ORDER BY CASE i.status WHEN 'open' THEN 0 WHEN 'active' THEN 1 ELSE 2 END, i.updated_at DESC
+            LIMIT 80
+            """
+        )
+        warrants = all_rows(
+            db,
+            """
+            SELECT w.*, creator.name AS creator_name, target.name AS subject_civ_name, i.case_number
+            FROM cid_warrants w
+            JOIN users creator ON creator.id = w.created_by
+            LEFT JOIN users target ON target.id = w.subject_civ_id
+            LEFT JOIN cid_investigations i ON i.id = w.investigation_id
+            ORDER BY CASE w.status WHEN 'active' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, w.updated_at DESC
+            LIMIT 80
+            """
+        )
+        ia_cases = all_rows(
+            db,
+            """
+            SELECT ia.*, assigned.name AS assigned_name, subject.name AS subject_officer_name
+            FROM cid_internal_affairs ia
+            JOIN users assigned ON assigned.id = ia.assigned_to
+            LEFT JOIN users subject ON subject.id = ia.subject_officer_id
+            ORDER BY CASE ia.status WHEN 'intake' THEN 0 WHEN 'active' THEN 1 ELSE 2 END, ia.updated_at DESC
+            LIMIT 80
+            """
+        )
+        notes = all_rows(
+            db,
+            """
+            SELECT n.*, i.case_number, author.name AS author_name
+            FROM cid_investigation_notes n
+            JOIN cid_investigations i ON i.id = n.investigation_id
+            JOIN users author ON author.id = n.author_id
+            ORDER BY n.created_at DESC
+            LIMIT 30
+            """
+        )
+        stats = {
+            "open_investigations": one(db, "SELECT COUNT(*) AS count FROM cid_investigations WHERE status NOT IN ('closed','archived')")["count"],
+            "active_warrants": one(db, "SELECT COUNT(*) AS count FROM cid_warrants WHERE status = 'active'")["count"],
+            "ia_open": one(db, "SELECT COUNT(*) AS count FROM cid_internal_affairs WHERE status NOT IN ('closed','sustained','unfounded')")["count"],
+        }
+        self.send_json(200, {"stats": stats, "investigations": investigations, "warrants": warrants, "ia_cases": ia_cases, "notes": notes})
+
+    def api_cid_create_investigation(self, db: Database, user: DbRow | None) -> None:
+        err = cid_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        missing = require_fields(payload, "title", "case_type", "summary")
+        if missing:
+            self.error(400, missing)
+            return
+        ts = now_iso()
+        target_civ_id = int(payload["target_civ_id"]) if str(payload.get("target_civ_id") or "").strip() else None
+        created = db.execute(
+            """
+            INSERT INTO cid_investigations
+            (case_number, title, case_type, status, priority, lead_id, target_civ_id, target_name, summary, location, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id, case_number
+            """,
+            (
+                generate_record_number(db, "cid_investigations", "case_number", "CID"),
+                str(payload["title"]).strip()[:140],
+                str(payload["case_type"]).strip()[:60],
+                str(payload.get("status") or "open").strip()[:30],
+                str(payload.get("priority") or "standard").strip()[:30],
+                user["id"],
+                target_civ_id,
+                str(payload.get("target_name") or "").strip()[:120],
+                str(payload["summary"]).strip()[:1400],
+                str(payload.get("location") or "").strip()[:140],
+                ts,
+                ts,
+            ),
+        ).fetchone()
+        self.send_json(201, {"ok": True, "id": int(created["id"]), "case_number": created["case_number"]})
+
+    def api_cid_update_investigation(self, db: Database, user: DbRow | None, investigation_id: int) -> None:
+        err = cid_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        status = str(payload.get("status") or "open").strip()[:30]
+        priority = str(payload.get("priority") or "standard").strip()[:30]
+        db.execute(
+            "UPDATE cid_investigations SET status = ?, priority = ?, updated_at = ? WHERE id = ?",
+            (status, priority, now_iso(), investigation_id),
+        )
+        self.send_json(200, {"ok": True})
+
+    def api_cid_add_note(self, db: Database, user: DbRow | None, investigation_id: int) -> None:
+        err = cid_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        missing = require_fields(payload, "body")
+        if missing:
+            self.error(400, missing)
+            return
+        if not one(db, "SELECT id FROM cid_investigations WHERE id = ?", (investigation_id,)):
+            self.error(404, "Investigation not found")
+            return
+        db.execute(
+            "INSERT INTO cid_investigation_notes (investigation_id, author_id, note_type, body, created_at) VALUES (?, ?, ?, ?, ?)",
+            (investigation_id, user["id"], str(payload.get("note_type") or "case note").strip()[:50], str(payload["body"]).strip()[:1800], now_iso()),
+        )
+        db.execute("UPDATE cid_investigations SET updated_at = ? WHERE id = ?", (now_iso(), investigation_id))
+        self.send_json(201, {"ok": True})
+
+    def api_cid_create_warrant(self, db: Database, user: DbRow | None) -> None:
+        err = cid_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        missing = require_fields(payload, "subject_name", "warrant_type", "probable_cause")
+        if missing:
+            self.error(400, missing)
+            return
+        investigation_id = int(payload["investigation_id"]) if str(payload.get("investigation_id") or "").strip() else None
+        subject_civ_id = int(payload["subject_civ_id"]) if str(payload.get("subject_civ_id") or "").strip() else None
+        ts = now_iso()
+        created = db.execute(
+            """
+            INSERT INTO cid_warrants
+            (warrant_number, investigation_id, subject_civ_id, subject_name, warrant_type, status, priority, probable_cause, operation_plan, authorized_by, created_by, issued_at, expires_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id, warrant_number
+            """,
+            (
+                generate_record_number(db, "cid_warrants", "warrant_number", "WAR"),
+                investigation_id,
+                subject_civ_id,
+                str(payload["subject_name"]).strip()[:120],
+                str(payload["warrant_type"]).strip()[:70],
+                str(payload.get("status") or "active").strip()[:30],
+                str(payload.get("priority") or "standard").strip()[:30],
+                str(payload["probable_cause"]).strip()[:1600],
+                str(payload.get("operation_plan") or "").strip()[:1600],
+                str(payload.get("authorized_by") or "").strip()[:120],
+                user["id"],
+                ts,
+                str(payload.get("expires_at") or "").strip()[:20] or None,
+                ts,
+            ),
+        ).fetchone()
+        self.send_json(201, {"ok": True, "id": int(created["id"]), "warrant_number": created["warrant_number"]})
+
+    def api_cid_update_warrant(self, db: Database, user: DbRow | None, warrant_id: int) -> None:
+        err = cid_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        db.execute(
+            "UPDATE cid_warrants SET status = ?, priority = ?, updated_at = ? WHERE id = ?",
+            (str(payload.get("status") or "active").strip()[:30], str(payload.get("priority") or "standard").strip()[:30], now_iso(), warrant_id),
+        )
+        self.send_json(200, {"ok": True})
+
+    def api_cid_create_ia(self, db: Database, user: DbRow | None) -> None:
+        err = cid_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        missing = require_fields(payload, "subject_name", "allegation_type", "summary")
+        if missing:
+            self.error(400, missing)
+            return
+        subject_officer_id = int(payload["subject_officer_id"]) if str(payload.get("subject_officer_id") or "").strip() else None
+        ts = now_iso()
+        created = db.execute(
+            """
+            INSERT INTO cid_internal_affairs
+            (ia_number, subject_officer_id, subject_name, allegation_type, status, priority, summary, assigned_to, created_by, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id, ia_number
+            """,
+            (
+                generate_record_number(db, "cid_internal_affairs", "ia_number", "IA"),
+                subject_officer_id,
+                str(payload["subject_name"]).strip()[:120],
+                str(payload["allegation_type"]).strip()[:90],
+                str(payload.get("status") or "intake").strip()[:30],
+                str(payload.get("priority") or "standard").strip()[:30],
+                str(payload["summary"]).strip()[:1600],
+                user["id"],
+                user["id"],
+                ts,
+                ts,
+            ),
+        ).fetchone()
+        self.send_json(201, {"ok": True, "id": int(created["id"]), "ia_number": created["ia_number"]})
+
+    def api_cid_update_ia(self, db: Database, user: DbRow | None, ia_id: int) -> None:
+        err = cid_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        db.execute(
+            "UPDATE cid_internal_affairs SET status = ?, priority = ?, updated_at = ? WHERE id = ?",
+            (str(payload.get("status") or "active").strip()[:30], str(payload.get("priority") or "standard").strip()[:30], now_iso(), ia_id),
+        )
+        self.send_json(200, {"ok": True})
 
     def api_admin_overview(self, db: Database, user: DbRow | None) -> None:
         err = admin_required(user)

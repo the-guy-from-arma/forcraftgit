@@ -798,6 +798,33 @@ textarea:focus {
   background: rgba(255, 255, 255, 0.04);
 }
 
+.court-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.court-tabs button {
+  flex: 0 0 auto;
+  min-height: 36px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.court-tabs button.active {
+  background: var(--ink);
+  color: #111518;
+}
+
 .mdt-shell {
   display: grid;
   gap: 10px;
@@ -1033,6 +1060,26 @@ textarea:focus {
 .mdt-code-card {
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.045);
+}
+
+.cid-tools {
+  display: grid;
+  gap: 12px;
+}
+
+.cid-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(92, 156, 255, 0.18);
+  border-radius: 6px;
+  background:
+    linear-gradient(180deg, rgba(20, 27, 34, 0.9), rgba(13, 17, 19, 0.92)),
+    repeating-linear-gradient(90deg, rgba(92, 156, 255, 0.035) 0 1px, transparent 1px 54px);
+  padding: 14px;
+}
+
+.cid-card h3 {
+  margin: 0;
 }
 
 .modal-backdrop {
