@@ -27,6 +27,8 @@ SESSION_DAYS = 7
 OWNER_EMAIL = os.environ.get("OWNER_EMAIL", "owner@rp.local").strip().lower()
 OWNER_PASSWORD = os.environ.get("OWNER_PASSWORD", "owner1234")
 OWNER_NAME = os.environ.get("OWNER_NAME", "Server Owner")
+ARMA_BRIDGE_API_KEY = os.environ.get("ARMA_BRIDGE_API_KEY", "").strip()
+ARMA_LINK_CODE_TTL_MINUTES = int(os.environ.get("ARMA_LINK_CODE_TTL_MINUTES", "30"))
 
 
 def now_iso() -> str:
@@ -44,6 +46,20 @@ def parse_iso(value: str | None) -> dt.datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=dt.timezone.utc)
     return parsed
+
+
+def parse_bridge_datetime(value: str | None) -> dt.datetime:
+    if not value:
+        return utcnow()
+    clean = str(value).strip().replace("Z", "+00:00")
+    try:
+        return parse_iso(clean)
+    except ValueError:
+        try:
+            parsed = dt.datetime.strptime(clean[:19], "%Y-%m-%d %H:%M:%S")
+            return parsed.replace(tzinfo=dt.timezone.utc)
+        except ValueError:
+            return utcnow()
 
 
 def utcnow() -> dt.datetime:
@@ -221,6 +237,8 @@ def generate_record_number(db: Database, table: str, column: str, prefix: str) -
         ("cid_warrants", "warrant_number"),
         ("cid_internal_affairs", "ia_number"),
         ("rp_contracts", "contract_number"),
+        ("business_applications", "application_number"),
+        ("businesses", "license_number"),
     }
     if (table, column) not in allowed:
         raise ValueError("Invalid record number target")
@@ -229,6 +247,34 @@ def generate_record_number(db: Database, table: str, column: str, prefix: str) -
         if not one(db, f"SELECT id FROM {table} WHERE {column} = ?", (number,)):
             return number
     raise RuntimeError("Unable to generate unique record number")
+
+
+BUSINESS_APPLICATION_STATUSES = ("submitted", "under_review", "interview_requested", "approved", "denied")
+BUSINESS_LICENSE_STATUSES = ("active", "suspended", "revoked", "expired")
+BUSINESS_LICENSE_CATEGORIES = ("basic", "commercial", "restricted", "government_contract")
+BUSINESS_MAX_ACTIVE_PER_OWNER = 2
+
+
+def business_staff_required(user: DbRow | None) -> str | None:
+    if not user:
+        return "Authentication required"
+    if not has_any(user, "owner", "business_registrar", "city_hall", "economy_manager"):
+        return "Business registry access required"
+    return None
+
+
+def is_business_staff(user: DbRow | None) -> bool:
+    return bool(user and business_staff_required(user) is None)
+
+
+def business_tax_default(category: str, startup_budget: float) -> float:
+    base = {
+        "basic": 250,
+        "commercial": 750,
+        "restricted": 1500,
+        "government_contract": 0,
+    }.get(category, 250)
+    return round(max(base, min(startup_budget * 0.015, 5000)), 2)
 
 
 def ensure_schema() -> None:
@@ -258,6 +304,64 @@ def ensure_schema() -> None:
                 last_seen TEXT,
                 PRIMARY KEY (user_id, day),
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS arma_account_links (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL UNIQUE,
+                server_id TEXT NOT NULL,
+                identity_id TEXT NOT NULL UNIQUE,
+                uid TEXT NOT NULL DEFAULT '',
+                rpl_identity TEXT NOT NULL DEFAULT '',
+                platform TEXT NOT NULL DEFAULT '',
+                player_name TEXT NOT NULL DEFAULT '',
+                linked_at TEXT NOT NULL,
+                last_seen_at TEXT,
+                last_sync_at TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS arma_link_codes (
+                id SERIAL PRIMARY KEY,
+                code TEXT NOT NULL,
+                request_id TEXT NOT NULL DEFAULT '',
+                server_id TEXT NOT NULL,
+                identity_id TEXT NOT NULL,
+                uid TEXT NOT NULL DEFAULT '',
+                rpl_identity TEXT NOT NULL DEFAULT '',
+                platform TEXT NOT NULL DEFAULT '',
+                player_name TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                claimed_by INTEGER,
+                claimed_at TEXT,
+                raw_payload TEXT NOT NULL DEFAULT '',
+                UNIQUE (server_id, code),
+                FOREIGN KEY (claimed_by) REFERENCES users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS arma_activity_logs (
+                id SERIAL PRIMARY KEY,
+                event_id TEXT NOT NULL UNIQUE,
+                user_id INTEGER,
+                server_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                action TEXT NOT NULL DEFAULT '',
+                source_system TEXT NOT NULL DEFAULT '',
+                reason TEXT NOT NULL DEFAULT '',
+                amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+                currency TEXT NOT NULL DEFAULT '',
+                balance_after NUMERIC(12,2) NOT NULL DEFAULT 0,
+                identity_id TEXT NOT NULL DEFAULT '',
+                uid TEXT NOT NULL DEFAULT '',
+                rpl_identity TEXT NOT NULL DEFAULT '',
+                platform TEXT NOT NULL DEFAULT '',
+                player_name TEXT NOT NULL DEFAULT '',
+                raw_payload TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                received_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS jobs (
@@ -407,6 +511,92 @@ def ensure_schema() -> None:
                 FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS business_applications (
+                id SERIAL PRIMARY KEY,
+                application_number TEXT NOT NULL UNIQUE,
+                applicant_id INTEGER NOT NULL,
+                business_name TEXT NOT NULL,
+                business_type TEXT NOT NULL,
+                owner_name TEXT NOT NULL,
+                location TEXT NOT NULL,
+                description TEXT NOT NULL,
+                startup_budget NUMERIC(12,2) NOT NULL DEFAULT 0,
+                planned_employees INTEGER NOT NULL DEFAULT 1,
+                funding_source TEXT NOT NULL DEFAULT '',
+                license_category TEXT NOT NULL DEFAULT 'basic',
+                status TEXT NOT NULL DEFAULT 'submitted',
+                reviewer_id INTEGER,
+                reviewer_notes TEXT NOT NULL DEFAULT '',
+                interview_notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                decided_at TEXT,
+                FOREIGN KEY (applicant_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (reviewer_id) REFERENCES users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS businesses (
+                id SERIAL PRIMARY KEY,
+                license_number TEXT NOT NULL UNIQUE,
+                application_id INTEGER UNIQUE,
+                owner_id INTEGER NOT NULL,
+                business_name TEXT NOT NULL,
+                business_type TEXT NOT NULL,
+                location TEXT NOT NULL,
+                description TEXT NOT NULL,
+                license_category TEXT NOT NULL DEFAULT 'basic',
+                status TEXT NOT NULL DEFAULT 'active',
+                startup_budget NUMERIC(12,2) NOT NULL DEFAULT 0,
+                planned_employees INTEGER NOT NULL DEFAULT 1,
+                weekly_tax NUMERIC(12,2) NOT NULL DEFAULT 0,
+                activity_requirement_minutes INTEGER NOT NULL DEFAULT 120,
+                reputation_score INTEGER NOT NULL DEFAULT 50,
+                insurance_required INTEGER NOT NULL DEFAULT 0,
+                compliance_notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                expires_at TEXT,
+                FOREIGN KEY (application_id) REFERENCES business_applications(id) ON DELETE SET NULL,
+                FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS business_reviews (
+                id SERIAL PRIMARY KEY,
+                application_id INTEGER NOT NULL,
+                reviewer_id INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (application_id) REFERENCES business_applications(id) ON DELETE CASCADE,
+                FOREIGN KEY (reviewer_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS business_inspections (
+                id SERIAL PRIMARY KEY,
+                business_id INTEGER NOT NULL,
+                inspector_id INTEGER NOT NULL,
+                inspection_type TEXT NOT NULL,
+                result TEXT NOT NULL,
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (business_id) REFERENCES businesses(id) ON DELETE CASCADE,
+                FOREIGN KEY (inspector_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS business_violations (
+                id SERIAL PRIMARY KEY,
+                business_id INTEGER NOT NULL,
+                issued_by INTEGER NOT NULL,
+                severity TEXT NOT NULL,
+                violation TEXT NOT NULL,
+                penalty TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'open',
+                created_at TEXT NOT NULL,
+                resolved_at TEXT,
+                FOREIGN KEY (business_id) REFERENCES businesses(id) ON DELETE CASCADE,
+                FOREIGN KEY (issued_by) REFERENCES users(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS rp_contracts (
                 id SERIAL PRIMARY KEY,
                 contract_number TEXT NOT NULL UNIQUE,
@@ -531,6 +721,9 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS target_context TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS last_known TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS requirements TEXT NOT NULL DEFAULT ''")
+    db.execute("CREATE INDEX IF NOT EXISTS arma_link_codes_code_idx ON arma_link_codes (code)")
+    db.execute("CREATE INDEX IF NOT EXISTS arma_link_codes_status_idx ON arma_link_codes (status)")
+    db.execute("CREATE INDEX IF NOT EXISTS arma_activity_logs_user_idx ON arma_activity_logs (user_id)")
 
 
 def seed_owner(db: Database) -> None:
@@ -772,10 +965,13 @@ def app_catalog(user: DbRow | None) -> list[dict[str, Any]]:
         return []
     verified = bool(user["verified"]) or has_any(user, "owner", "admin")
     contracts_enabled = contracts_required(user) is None
+    business_enabled = verified or is_business_staff(user)
     base = [
+        ("profile", "Profile", "user", True, False),
         ("dmv", "DMV", "id-card", verified, False),
         ("jobs", "JOB", "briefcase", False, True),
         ("court", "COURT", "gavel", verified, False),
+        ("business", "Business", "store", business_enabled, False),
         ("properties", "PROPERTIES", "home", False, True),
         ("cash", "CASH APP", "send", False, True),
         ("bank", "BANK", "bank", False, True),
@@ -918,7 +1114,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin", "*"))
         self.send_header("Access-Control-Allow-Credentials", "true")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
         self.end_headers()
 
@@ -974,6 +1170,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not user_id:
             return None
         return one(db, "SELECT * FROM users WHERE id = ?", (user_id,))
+
+    def bridge_error(self) -> str | None:
+        if not ARMA_BRIDGE_API_KEY:
+            return "ARMA_BRIDGE_API_KEY is not configured on Railway"
+        supplied = self.headers.get("X-API-Key", "").strip()
+        auth = self.headers.get("Authorization", "").strip()
+        if auth.lower().startswith("bearer "):
+            supplied = auth[7:].strip()
+        if not supplied or not hmac.compare_digest(supplied, ARMA_BRIDGE_API_KEY):
+            return "Invalid Arma bridge API key"
+        return None
 
     def session_header(self, user_id: int) -> str:
         secure = "; Secure" if os.environ.get("COOKIE_SECURE", "0").lower() in ("1", "true", "yes") else ""
@@ -1043,6 +1250,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_changelog(user)
                 elif path == "/api/presence" and method == "POST":
                     self.api_presence(db, user)
+                elif path == "/api/profile" and method == "GET":
+                    self.api_profile(db, user)
+                elif path == "/api/profile/link-arma" and method == "POST":
+                    self.api_claim_arma_link(db, user)
+                elif path == "/api/arma/link-requests" and method == "POST":
+                    self.api_arma_link_requests(db)
+                elif path == "/api/arma/snapshot" and method == "GET":
+                    self.api_arma_snapshot(db)
+                elif path == "/api/arma/events" and method == "POST":
+                    self.api_arma_events(db)
                 elif path == "/api/jobs" and method == "GET":
                     self.api_jobs(db, user)
                 elif path.startswith("/api/jobs/") and path.endswith("/apply") and method == "POST":
@@ -1073,6 +1290,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_accept_contract(db, user, self.path_int(path, 2))
                 elif path.startswith("/api/contracts/") and path.endswith("/proof") and method == "POST":
                     self.api_submit_contract_proof(db, user, self.path_int(path, 2))
+                elif path == "/api/business" and method == "GET":
+                    self.api_business(db, user)
+                elif path == "/api/business/applications" and method == "POST":
+                    self.api_create_business_application(db, user)
+                elif path.startswith("/api/business/applications/") and method == "PATCH":
+                    self.api_review_business_application(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/business/licenses/") and path.endswith("/inspections") and method == "POST":
+                    self.api_create_business_inspection(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/business/licenses/") and path.endswith("/violations") and method == "POST":
+                    self.api_create_business_violation(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/business/licenses/") and method == "PATCH":
+                    self.api_update_business_license(db, user, self.path_int(path, 3))
                 elif path == "/api/properties" and method == "GET":
                     self.api_properties(db, user)
                 elif path.startswith("/api/properties/") and path.endswith("/buy") and method == "POST":
@@ -1241,6 +1470,345 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 (user["id"], day, increment, ts),
             )
         self.send_json(200, {"ok": True, "presence_seconds_today": presence_seconds(db, user["id"])})
+
+    def api_profile(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        link = one(db, "SELECT * FROM arma_account_links WHERE user_id = ?", (user["id"],))
+        activity = all_rows(
+            db,
+            """
+            SELECT * FROM arma_activity_logs
+            WHERE user_id = ?
+            ORDER BY received_at DESC
+            LIMIT 20
+            """,
+            (user["id"],),
+        )
+        pending_codes = all_rows(
+            db,
+            """
+            SELECT code, server_id, player_name, platform, created_at, expires_at
+            FROM arma_link_codes
+            WHERE claimed_by = ? AND status = 'claimed'
+            ORDER BY claimed_at DESC
+            LIMIT 3
+            """,
+            (user["id"],),
+        )
+        self.send_json(
+            200,
+            {
+                "user": {**public_user(user), "registered_arma_id": user.get("arma_id") or ""},
+                "arma_link": dict(link) if link else None,
+                "recent_activity": [dict(row) for row in activity],
+                "claimed_codes": [dict(row) for row in pending_codes],
+            },
+        )
+
+    def api_claim_arma_link(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        payload = self.read_json()
+        missing = require_fields(payload, "code")
+        if missing:
+            self.error(400, missing)
+            return
+        code = str(payload["code"]).strip().upper()
+        request = one(
+            db,
+            """
+            SELECT * FROM arma_link_codes
+            WHERE UPPER(code) = UPPER(?) AND status = 'pending'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (code,),
+        )
+        if not request:
+            self.error(404, "Link code not found or already claimed")
+            return
+        if parse_iso(request["expires_at"]) < utcnow():
+            db.execute("UPDATE arma_link_codes SET status = 'expired' WHERE id = ?", (request["id"],))
+            self.error(410, "Link code expired. Generate a fresh code in-game.")
+            return
+        identity_id = str(request["identity_id"] or "").strip()
+        if not identity_id:
+            self.error(409, "Link code is missing Arma identity data")
+            return
+        other = one(db, "SELECT * FROM arma_account_links WHERE identity_id = ? AND user_id <> ?", (identity_id, user["id"]))
+        if other:
+            self.error(409, "That Arma account is already linked to another PWA profile")
+            return
+        ts = now_iso()
+        db.execute(
+            """
+            INSERT INTO arma_account_links
+            (user_id, server_id, identity_id, uid, rpl_identity, platform, player_name, linked_at, last_seen_at, last_sync_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (user_id) DO UPDATE SET
+                server_id = excluded.server_id,
+                identity_id = excluded.identity_id,
+                uid = excluded.uid,
+                rpl_identity = excluded.rpl_identity,
+                platform = excluded.platform,
+                player_name = excluded.player_name,
+                last_seen_at = excluded.last_seen_at,
+                last_sync_at = excluded.last_sync_at
+            """,
+            (
+                user["id"],
+                request["server_id"],
+                identity_id,
+                request.get("uid") or "",
+                request.get("rpl_identity") or "",
+                request.get("platform") or "",
+                request.get("player_name") or "",
+                ts,
+                request["created_at"],
+                ts,
+            ),
+        )
+        db.execute("UPDATE users SET arma_id = ? WHERE id = ?", (identity_id, user["id"]))
+        db.execute("UPDATE arma_link_codes SET status = 'claimed', claimed_by = ?, claimed_at = ? WHERE id = ?", (user["id"], ts, request["id"]))
+        add_message(db, user["id"], "Arma account linked", f"Linked Arma player {request.get('player_name') or identity_id} from {request['server_id']}.")
+        self.send_json(200, {"ok": True})
+
+    def bridge_payload_data(self, payload: dict[str, Any]) -> dict[str, Any]:
+        data = payload.get("Data")
+        return data if isinstance(data, dict) else payload
+
+    def bridge_value(self, source: dict[str, Any], *keys: str, default: Any = "") -> Any:
+        for key in keys:
+            value = source.get(key)
+            if value not in (None, ""):
+                return value
+        return default
+
+    def api_arma_link_requests(self, db: Database) -> None:
+        err = self.bridge_error()
+        if err:
+            self.error(403, err)
+            return
+        payload = self.read_json()
+        data = self.bridge_payload_data(payload)
+        requests = data.get("Requests")
+        if not isinstance(requests, list):
+            requests = [data] if data.get("LinkCode") else []
+        accepted: list[str] = []
+        for request in requests:
+            if not isinstance(request, dict):
+                continue
+            code = str(request.get("LinkCode") or "").strip().upper()
+            identity_id = str(request.get("IdentityId") or request.get("Uid") or "").strip()
+            rpl_identity = str(self.bridge_value(request, "RplIdentityValue", "RplIdentity"))[:160]
+            if not code or not identity_id:
+                continue
+            server_id = str(request.get("ServerId") or data.get("ServerId") or "default").strip() or "default"
+            existing = one(db, "SELECT * FROM arma_link_codes WHERE server_id = ? AND UPPER(code) = UPPER(?)", (server_id, code))
+            if existing and existing["status"] == "claimed":
+                accepted.append(code)
+                continue
+            created_at_dt = parse_bridge_datetime(str(request.get("CreatedAtUtc") or ""))
+            created_at = created_at_dt.isoformat()
+            expires_at = (created_at_dt + dt.timedelta(minutes=max(5, ARMA_LINK_CODE_TTL_MINUTES))).isoformat()
+            raw_payload = json.dumps(request, separators=(",", ":"), default=str)[:4000]
+            if existing:
+                db.execute(
+                    """
+                    UPDATE arma_link_codes
+                    SET request_id = ?, identity_id = ?, uid = ?, rpl_identity = ?, platform = ?, player_name = ?,
+                        status = 'pending', created_at = ?, expires_at = ?, raw_payload = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        str(request.get("RequestId") or "")[:120],
+                        identity_id,
+                        str(request.get("Uid") or "")[:160],
+                        rpl_identity,
+                        str(request.get("Platform") or "")[:60],
+                        str(request.get("PlayerName") or "")[:120],
+                        created_at,
+                        expires_at,
+                        raw_payload,
+                        existing["id"],
+                    ),
+                )
+            else:
+                db.execute(
+                    """
+                    INSERT INTO arma_link_codes
+                    (code, request_id, server_id, identity_id, uid, rpl_identity, platform, player_name, status, created_at, expires_at, raw_payload)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+                    """,
+                    (
+                        code,
+                        str(request.get("RequestId") or "")[:120],
+                        server_id,
+                        identity_id,
+                        str(request.get("Uid") or "")[:160],
+                        rpl_identity,
+                        str(request.get("Platform") or "")[:60],
+                        str(request.get("PlayerName") or "")[:120],
+                        created_at,
+                        expires_at,
+                        raw_payload,
+                    ),
+                )
+            accepted.append(code)
+        self.send_json(200, {"ok": True, "accepted": accepted, "count": len(accepted)})
+
+    def api_arma_snapshot(self, db: Database) -> None:
+        err = self.bridge_error()
+        if err:
+            self.error(403, err)
+            return
+        rows = all_rows(
+            db,
+            """
+            SELECT l.*, u.id AS website_user_id, u.name AS website_username, u.civ_number, u.verified, u.roles,
+                   u.primary_agency, u.cash_balance, u.bank_balance
+            FROM arma_account_links l
+            JOIN users u ON u.id = l.user_id
+            ORDER BY l.linked_at DESC
+            """,
+        )
+        players = []
+        ts = now_iso()
+        for row in rows:
+            user_roles = roles_for(row)
+            metadata = [
+                {"Key": "civ_number", "Value": row.get("civ_number") or ""},
+                {"Key": "primary_agency", "Value": row.get("primary_agency") or ""},
+            ]
+            players.append(
+                {
+                    "IdentityId": row["identity_id"],
+                    "Uid": row.get("uid") or row["identity_id"],
+                    "RplIdentityValue": row.get("rpl_identity") or "",
+                    "Platform": row.get("platform") or "",
+                    "Name": row.get("player_name") or row["website_username"],
+                    "DiscordId": "",
+                    "WebsiteUserId": str(row["website_user_id"]),
+                    "WebsiteUsername": row["website_username"],
+                    "SteamId": "",
+                    "XboxId": "",
+                    "Linked": 1,
+                    "Whitelisted": 1 if bool(row["verified"]) or "owner" in user_roles or "admin" in user_roles else 0,
+                    "Banned": 0,
+                    "KickReason": "",
+                    "Cash": int(float(row["cash_balance"] or 0)),
+                    "Bank": int(float(row["bank_balance"] or 0)),
+                    "RoleIds": user_roles,
+                    "PermissionIds": [],
+                    "Metadata": metadata,
+                }
+            )
+        db.execute("UPDATE arma_account_links SET last_sync_at = ? WHERE id IN (SELECT id FROM arma_account_links)", (ts,))
+        self.send_json(
+            200,
+            {
+                "Data": {
+                    "SchemaVersion": 1,
+                    "FileName": "TBS RP Linking Server Snapshot",
+                    "Description": "Written by the Railway PWA API for TBS RP LINKING SYSTEM.",
+                    "ServerId": rows[0]["server_id"] if rows else "default",
+                    "SnapshotRevision": int(utcnow().timestamp()),
+                    "UpdatedAtUtc": ts,
+                    "Players": players,
+                }
+            },
+        )
+
+    def find_arma_link_for_event(self, db: Database, event: dict[str, Any]) -> DbRow | None:
+        identity_id = str(event.get("IdentityId") or "").strip()
+        uid = str(event.get("Uid") or "").strip()
+        rpl_identity = str(self.bridge_value(event, "RplIdentityValue", "RplIdentity")).strip()
+        return one(
+            db,
+            """
+            SELECT * FROM arma_account_links
+            WHERE (? <> '' AND identity_id = ?)
+               OR (? <> '' AND uid = ?)
+               OR (? <> '' AND rpl_identity = ?)
+            ORDER BY linked_at DESC
+            LIMIT 1
+            """,
+            (identity_id, identity_id, uid, uid, rpl_identity, rpl_identity),
+        )
+
+    def api_arma_events(self, db: Database) -> None:
+        err = self.bridge_error()
+        if err:
+            self.error(403, err)
+            return
+        payload = self.read_json()
+        data = self.bridge_payload_data(payload)
+        events = data.get("PendingEvents") or data.get("Events")
+        if not isinstance(events, list):
+            events = [data] if self.bridge_value(data, "EventTypeName", "EventType") else []
+        accepted: list[str] = []
+        skipped: list[str] = []
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            event_id = str(event.get("EventId") or "").strip()
+            if not event_id:
+                sequence = self.bridge_value(event, "EventSequence", "Sequence", default=secrets.token_hex(4))
+                event_id = f"{event.get('ServerId') or data.get('ServerId') or 'default'}-{sequence}"
+            if one(db, "SELECT id FROM arma_activity_logs WHERE event_id = ?", (event_id,)):
+                skipped.append(event_id)
+                continue
+            link = self.find_arma_link_for_event(db, event)
+            user_id = link["user_id"] if link else None
+            amount = round(float(event.get("Amount") or 0), 2)
+            currency = str(event.get("Currency") or "").strip().lower()
+            event_type = str(self.bridge_value(event, "EventTypeName", "EventType", default="player.action")).strip()[:80]
+            action = str(event.get("Action") or "").strip()[:80]
+            reason = str(event.get("Reason") or "").strip()[:240]
+            source_system = str(event.get("SourceSystem") or "TBS_RP_LINKING_SYSTEM").strip()[:120]
+            created_at = parse_bridge_datetime(str(event.get("CreatedAtUtc") or "")).isoformat()
+            received_at = now_iso()
+            db.execute(
+                """
+                INSERT INTO arma_activity_logs
+                (event_id, user_id, server_id, event_type, action, source_system, reason, amount, currency, balance_after,
+                 identity_id, uid, rpl_identity, platform, player_name, raw_payload, created_at, received_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    user_id,
+                    str(event.get("ServerId") or data.get("ServerId") or "default")[:80],
+                    event_type,
+                    action,
+                    source_system,
+                    reason,
+                    amount,
+                    currency,
+                    round(float(event.get("BalanceAfter") or 0), 2),
+                    str(event.get("IdentityId") or "")[:160],
+                    str(event.get("Uid") or "")[:160],
+                    str(self.bridge_value(event, "RplIdentityValue", "RplIdentity"))[:160],
+                    str(event.get("Platform") or "")[:60],
+                    str(event.get("PlayerName") or "")[:120],
+                    json.dumps(event, separators=(",", ":"), default=str)[:4000],
+                    created_at,
+                    received_at,
+                ),
+            )
+            if user_id and event_type.startswith("money.") and amount:
+                if currency == "bank":
+                    db.execute("UPDATE users SET bank_balance = bank_balance + ? WHERE id = ?", (amount, user_id))
+                else:
+                    db.execute("UPDATE users SET cash_balance = cash_balance + ? WHERE id = ?", (amount, user_id))
+                add_transaction(db, user_id, f"arma_{action or 'money'}", amount, reason or source_system)
+            if link:
+                db.execute("UPDATE arma_account_links SET last_seen_at = ?, last_sync_at = ? WHERE id = ?", (created_at, received_at, link["id"]))
+            accepted.append(event_id)
+        self.send_json(200, {"ok": True, "accepted_event_ids": accepted, "skipped_event_ids": skipped})
 
     def api_jobs(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -1741,6 +2309,457 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         add_message(db, contract["poster_id"], "Contract proof submitted", f"Proof clip was submitted for contract {contract['contract_number']}.", user["id"])
         self.send_json(200, {"ok": True})
+
+    def business_application_select_sql(self) -> str:
+        return """
+            SELECT a.*,
+                   applicant.name AS applicant_name, applicant.email AS applicant_email, applicant.civ_number AS applicant_civ_number,
+                   reviewer.name AS reviewer_name
+            FROM business_applications a
+            JOIN users applicant ON applicant.id = a.applicant_id
+            LEFT JOIN users reviewer ON reviewer.id = a.reviewer_id
+        """
+
+    def business_license_select_sql(self) -> str:
+        return """
+            SELECT b.*,
+                   owner.name AS owner_name, owner.email AS owner_email, owner.civ_number AS owner_civ_number,
+                   app.application_number,
+                   (SELECT COUNT(*) FROM business_violations v WHERE v.business_id = b.id AND v.status = 'open') AS open_violations,
+                   (SELECT COUNT(*) FROM business_inspections i WHERE i.business_id = b.id) AS inspection_count
+            FROM businesses b
+            JOIN users owner ON owner.id = b.owner_id
+            LEFT JOIN business_applications app ON app.id = b.application_id
+        """
+
+    def business_application_payload(self, row: DbRow) -> dict[str, Any]:
+        return {
+            **dict(row),
+            "startup_budget": round(float(row["startup_budget"] or 0), 2),
+            "planned_employees": int(row["planned_employees"] or 0),
+        }
+
+    def business_license_payload(self, row: DbRow) -> dict[str, Any]:
+        return {
+            **dict(row),
+            "startup_budget": round(float(row["startup_budget"] or 0), 2),
+            "weekly_tax": round(float(row["weekly_tax"] or 0), 2),
+            "planned_employees": int(row["planned_employees"] or 0),
+            "activity_requirement_minutes": int(row["activity_requirement_minutes"] or 0),
+            "reputation_score": int(row["reputation_score"] or 0),
+            "insurance_required": bool(row["insurance_required"]),
+            "open_violations": int(row.get("open_violations") or 0),
+            "inspection_count": int(row.get("inspection_count") or 0),
+        }
+
+    def business_staff_rows(self, db: Database) -> list[DbRow]:
+        return all_rows(
+            db,
+            """
+            SELECT id FROM users
+            WHERE roles LIKE ? OR roles LIKE ? OR roles LIKE ? OR roles LIKE ?
+            """,
+            ("%owner%", "%business_registrar%", "%city_hall%", "%economy_manager%"),
+        )
+
+    def api_business(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        staff_view = is_business_staff(user)
+        if not bool(user["verified"]) and not has_any(user, "owner", "admin") and not staff_view:
+            self.error(403, "Civilian verification required")
+            return
+
+        app_sql = self.business_application_select_sql()
+        license_sql = self.business_license_select_sql()
+        my_applications = all_rows(db, f"{app_sql} WHERE a.applicant_id = ? ORDER BY a.created_at DESC", (user["id"],))
+        my_businesses = all_rows(db, f"{license_sql} WHERE b.owner_id = ? ORDER BY b.updated_at DESC", (user["id"],))
+        inspections = all_rows(
+            db,
+            """
+            SELECT i.*, b.license_number, b.business_name, inspector.name AS inspector_name
+            FROM business_inspections i
+            JOIN businesses b ON b.id = i.business_id
+            JOIN users inspector ON inspector.id = i.inspector_id
+            WHERE b.owner_id = ?
+            ORDER BY i.created_at DESC
+            LIMIT 40
+            """,
+            (user["id"],),
+        )
+        violations = all_rows(
+            db,
+            """
+            SELECT v.*, b.license_number, b.business_name, issuer.name AS issuer_name
+            FROM business_violations v
+            JOIN businesses b ON b.id = v.business_id
+            JOIN users issuer ON issuer.id = v.issued_by
+            WHERE b.owner_id = ?
+            ORDER BY v.created_at DESC
+            LIMIT 40
+            """,
+            (user["id"],),
+        )
+
+        payload: dict[str, Any] = {
+            "staff_view": staff_view,
+            "categories": list(BUSINESS_LICENSE_CATEGORIES),
+            "application_statuses": list(BUSINESS_APPLICATION_STATUSES),
+            "license_statuses": list(BUSINESS_LICENSE_STATUSES),
+            "max_active_per_owner": BUSINESS_MAX_ACTIVE_PER_OWNER,
+            "applications": [self.business_application_payload(row) for row in my_applications],
+            "businesses": [self.business_license_payload(row) for row in my_businesses],
+            "inspections": [dict(row) for row in inspections],
+            "violations": [dict(row) for row in violations],
+        }
+
+        if staff_view:
+            review_queue = all_rows(
+                db,
+                f"""
+                {app_sql}
+                WHERE a.status IN ('submitted','under_review','interview_requested')
+                ORDER BY CASE a.status WHEN 'submitted' THEN 0 WHEN 'under_review' THEN 1 ELSE 2 END, a.created_at ASC
+                LIMIT 120
+                """,
+            )
+            all_businesses = all_rows(
+                db,
+                f"{license_sql} ORDER BY CASE b.status WHEN 'active' THEN 0 WHEN 'suspended' THEN 1 WHEN 'revoked' THEN 2 ELSE 3 END, b.updated_at DESC LIMIT 160",
+            )
+            recent_reviews = all_rows(
+                db,
+                """
+                SELECT r.*, a.application_number, a.business_name, reviewer.name AS reviewer_name
+                FROM business_reviews r
+                JOIN business_applications a ON a.id = r.application_id
+                JOIN users reviewer ON reviewer.id = r.reviewer_id
+                ORDER BY r.created_at DESC
+                LIMIT 40
+                """,
+            )
+            staff_inspections = all_rows(
+                db,
+                """
+                SELECT i.*, b.license_number, b.business_name, inspector.name AS inspector_name
+                FROM business_inspections i
+                JOIN businesses b ON b.id = i.business_id
+                JOIN users inspector ON inspector.id = i.inspector_id
+                ORDER BY i.created_at DESC
+                LIMIT 50
+                """,
+            )
+            staff_violations = all_rows(
+                db,
+                """
+                SELECT v.*, b.license_number, b.business_name, issuer.name AS issuer_name
+                FROM business_violations v
+                JOIN businesses b ON b.id = v.business_id
+                JOIN users issuer ON issuer.id = v.issued_by
+                ORDER BY v.created_at DESC
+                LIMIT 50
+                """,
+            )
+            stats = {
+                "pending": one(db, "SELECT COUNT(*) AS count FROM business_applications WHERE status IN ('submitted','under_review','interview_requested')")["count"],
+                "active": one(db, "SELECT COUNT(*) AS count FROM businesses WHERE status = 'active'")["count"],
+                "suspended": one(db, "SELECT COUNT(*) AS count FROM businesses WHERE status = 'suspended'")["count"],
+                "restricted": one(db, "SELECT COUNT(*) AS count FROM businesses WHERE license_category = 'restricted'")["count"],
+            }
+            payload.update(
+                {
+                    "review_queue": [self.business_application_payload(row) for row in review_queue],
+                    "all_businesses": [self.business_license_payload(row) for row in all_businesses],
+                    "recent_reviews": [dict(row) for row in recent_reviews],
+                    "staff_inspections": [dict(row) for row in staff_inspections],
+                    "staff_violations": [dict(row) for row in staff_violations],
+                    "stats": stats,
+                }
+            )
+
+        self.send_json(200, payload)
+
+    def api_create_business_application(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        if not bool(user["verified"]) and not has_any(user, "owner", "admin") and not is_business_staff(user):
+            self.error(403, "Civilian verification required")
+            return
+        payload = self.read_json()
+        missing = require_fields(payload, "business_name", "business_type", "owner_name", "location", "description", "startup_budget", "planned_employees", "funding_source", "license_category")
+        if missing:
+            self.error(400, missing)
+            return
+        category = str(payload["license_category"]).strip().lower()
+        if category not in BUSINESS_LICENSE_CATEGORIES:
+            self.error(400, "Invalid license category")
+            return
+        startup_budget = round(float(payload["startup_budget"]), 2)
+        planned_employees = int(payload["planned_employees"])
+        if startup_budget < 0:
+            self.error(400, "Startup budget cannot be negative")
+            return
+        if planned_employees < 1 or planned_employees > 250:
+            self.error(400, "Planned employee count must be between 1 and 250")
+            return
+        active_count = one(
+            db,
+            "SELECT COUNT(*) AS count FROM businesses WHERE owner_id = ? AND status IN ('active','suspended')",
+            (user["id"],),
+        )
+        pending_count = one(
+            db,
+            "SELECT COUNT(*) AS count FROM business_applications WHERE applicant_id = ? AND status IN ('submitted','under_review','interview_requested')",
+            (user["id"],),
+        )
+        if int(active_count["count"]) + int(pending_count["count"]) >= BUSINESS_MAX_ACTIVE_PER_OWNER:
+            self.error(409, f"Ownership limit reached. Max active or pending businesses: {BUSINESS_MAX_ACTIVE_PER_OWNER}")
+            return
+        ts = now_iso()
+        created = db.execute(
+            """
+            INSERT INTO business_applications
+            (application_number, applicant_id, business_name, business_type, owner_name, location, description, startup_budget, planned_employees, funding_source, license_category, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', ?, ?)
+            RETURNING id, application_number
+            """,
+            (
+                generate_record_number(db, "business_applications", "application_number", "BIZ"),
+                user["id"],
+                str(payload["business_name"]).strip()[:120],
+                str(payload["business_type"]).strip()[:80],
+                str(payload["owner_name"]).strip()[:120],
+                str(payload["location"]).strip()[:160],
+                str(payload["description"]).strip()[:1200],
+                startup_budget,
+                planned_employees,
+                str(payload["funding_source"]).strip()[:700],
+                category,
+                ts,
+                ts,
+            ),
+        ).fetchone()
+        add_message(db, user["id"], "Business application submitted", f"Application {created['application_number']} is pending Business Registry review.")
+        for staff in self.business_staff_rows(db):
+            if staff["id"] != user["id"]:
+                add_message(db, staff["id"], "Business application pending", f"{user['name']} submitted {payload['business_name']} for review.", user["id"])
+        self.send_json(201, {"ok": True, "application_id": int(created["id"]), "application_number": created["application_number"]})
+
+    def api_review_business_application(self, db: Database, user: DbRow | None, application_id: int) -> None:
+        err = business_staff_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        application = one(db, "SELECT * FROM business_applications WHERE id = ?", (application_id,))
+        if not application:
+            self.error(404, "Business application not found")
+            return
+        payload = self.read_json()
+        status = str(payload.get("status") or payload.get("action") or application["status"]).strip().lower()
+        if status not in BUSINESS_APPLICATION_STATUSES:
+            self.error(400, "Invalid application status")
+            return
+        category = str(payload.get("license_category") or application["license_category"]).strip().lower()
+        if category not in BUSINESS_LICENSE_CATEGORIES:
+            self.error(400, "Invalid license category")
+            return
+        reviewer_notes = str(payload.get("reviewer_notes") or application.get("reviewer_notes") or "").strip()[:1200]
+        interview_notes = str(payload.get("interview_notes") or application.get("interview_notes") or "").strip()[:1000]
+        if status == "approved" and not one(db, "SELECT id FROM businesses WHERE application_id = ?", (application_id,)):
+            active_count = one(
+                db,
+                "SELECT COUNT(*) AS count FROM businesses WHERE owner_id = ? AND status IN ('active','suspended')",
+                (application["applicant_id"],),
+            )
+            if int(active_count["count"]) >= BUSINESS_MAX_ACTIVE_PER_OWNER:
+                self.error(409, f"Ownership limit reached. Max active or suspended businesses: {BUSINESS_MAX_ACTIVE_PER_OWNER}")
+                return
+        ts = now_iso()
+        decided_at = ts if status in ("approved", "denied") else application.get("decided_at")
+        db.execute(
+            """
+            UPDATE business_applications
+            SET status = ?, reviewer_id = ?, reviewer_notes = ?, interview_notes = ?, license_category = ?, updated_at = ?, decided_at = ?
+            WHERE id = ?
+            """,
+            (status, user["id"], reviewer_notes, interview_notes, category, ts, decided_at, application_id),
+        )
+        db.execute(
+            "INSERT INTO business_reviews (application_id, reviewer_id, action, notes, created_at) VALUES (?, ?, ?, ?, ?)",
+            (application_id, user["id"], status, reviewer_notes or interview_notes, ts),
+        )
+
+        if status == "approved":
+            existing = one(db, "SELECT id FROM businesses WHERE application_id = ?", (application_id,))
+            if not existing:
+                weekly_tax = round(float(payload.get("weekly_tax") or business_tax_default(category, float(application["startup_budget"] or 0))), 2)
+                activity_requirement = int(payload.get("activity_requirement_minutes") or 120)
+                expires_at = (utcnow() + dt.timedelta(days=365)).date().isoformat()
+                created_license = db.execute(
+                    """
+                    INSERT INTO businesses
+                    (license_number, application_id, owner_id, business_name, business_type, location, description, license_category, status, startup_budget, planned_employees, weekly_tax, activity_requirement_minutes, reputation_score, insurance_required, compliance_notes, created_at, updated_at, expires_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, 50, ?, ?, ?, ?, ?)
+                    RETURNING license_number
+                    """,
+                    (
+                        generate_record_number(db, "businesses", "license_number", "BUS"),
+                        application_id,
+                        application["applicant_id"],
+                        application["business_name"],
+                        application["business_type"],
+                        application["location"],
+                        application["description"],
+                        category,
+                        float(application["startup_budget"] or 0),
+                        int(application["planned_employees"] or 1),
+                        weekly_tax,
+                        max(0, activity_requirement),
+                        1 if category == "restricted" else 0,
+                        reviewer_notes,
+                        ts,
+                        ts,
+                        expires_at,
+                    ),
+                ).fetchone()
+                applicant = one(db, "SELECT * FROM users WHERE id = ?", (application["applicant_id"],))
+                if applicant:
+                    updated_roles = sorted(set([*roles_for(applicant), "business_owner"]))
+                    db.execute("UPDATE users SET roles = ? WHERE id = ?", (json.dumps(updated_roles), applicant["id"]))
+                    add_message(
+                        db,
+                        applicant["id"],
+                        "Business license approved",
+                        f"{application['business_name']} was approved. License {created_license['license_number']} is active.",
+                        user["id"],
+                    )
+        elif status == "denied":
+            add_message(db, application["applicant_id"], "Business application denied", reviewer_notes or "Your business application was denied by the registry.", user["id"])
+        elif status == "interview_requested":
+            add_message(db, application["applicant_id"], "Business interview requested", interview_notes or "Business Registry requested an interview before final approval.", user["id"])
+        else:
+            add_message(db, application["applicant_id"], "Business application under review", reviewer_notes or "Business Registry is reviewing your application.", user["id"])
+
+        self.send_json(200, {"ok": True})
+
+    def api_update_business_license(self, db: Database, user: DbRow | None, business_id: int) -> None:
+        err = business_staff_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        business = one(db, "SELECT * FROM businesses WHERE id = ?", (business_id,))
+        if not business:
+            self.error(404, "Business license not found")
+            return
+        payload = self.read_json()
+        status = str(payload.get("status") or business["status"]).strip().lower()
+        if status not in BUSINESS_LICENSE_STATUSES:
+            self.error(400, "Invalid license status")
+            return
+        category = str(payload.get("license_category") or business["license_category"]).strip().lower()
+        if category not in BUSINESS_LICENSE_CATEGORIES:
+            self.error(400, "Invalid license category")
+            return
+        weekly_tax_raw = payload.get("weekly_tax", business["weekly_tax"])
+        activity_raw = payload.get("activity_requirement_minutes", business["activity_requirement_minutes"])
+        reputation_raw = payload.get("reputation_score", business["reputation_score"])
+        insurance_raw = payload.get("insurance_required", bool(business["insurance_required"]))
+        weekly_tax = round(float(weekly_tax_raw if weekly_tax_raw not in (None, "") else business["weekly_tax"]), 2)
+        activity_requirement = int(activity_raw if activity_raw not in (None, "") else business["activity_requirement_minutes"])
+        reputation = max(0, min(100, int(reputation_raw if reputation_raw not in (None, "") else business["reputation_score"])))
+        if weekly_tax < 0 or activity_requirement < 0:
+            self.error(400, "Tax and activity requirements cannot be negative")
+            return
+        notes = str(payload.get("compliance_notes") or business.get("compliance_notes") or "").strip()[:1200]
+        db.execute(
+            """
+            UPDATE businesses
+            SET status = ?, license_category = ?, weekly_tax = ?, activity_requirement_minutes = ?, reputation_score = ?, insurance_required = ?, compliance_notes = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                status,
+                category,
+                weekly_tax,
+                activity_requirement,
+                reputation,
+                1 if bool(insurance_raw) else 0,
+                notes,
+                now_iso(),
+                business_id,
+            ),
+        )
+        add_message(db, business["owner_id"], "Business license updated", f"{business['business_name']} license status is now {status}.", user["id"])
+        self.send_json(200, {"ok": True})
+
+    def api_create_business_inspection(self, db: Database, user: DbRow | None, business_id: int) -> None:
+        err = business_staff_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        business = one(db, "SELECT * FROM businesses WHERE id = ?", (business_id,))
+        if not business:
+            self.error(404, "Business license not found")
+            return
+        payload = self.read_json()
+        missing = require_fields(payload, "inspection_type", "result", "notes")
+        if missing:
+            self.error(400, missing)
+            return
+        db.execute(
+            """
+            INSERT INTO business_inspections (business_id, inspector_id, inspection_type, result, notes, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                business_id,
+                user["id"],
+                str(payload["inspection_type"]).strip()[:80],
+                str(payload["result"]).strip()[:80],
+                str(payload["notes"]).strip()[:1000],
+                now_iso(),
+            ),
+        )
+        add_message(db, business["owner_id"], "Business inspection logged", f"Inspection added for {business['business_name']}. Result: {payload['result']}.", user["id"])
+        self.send_json(201, {"ok": True})
+
+    def api_create_business_violation(self, db: Database, user: DbRow | None, business_id: int) -> None:
+        err = business_staff_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        business = one(db, "SELECT * FROM businesses WHERE id = ?", (business_id,))
+        if not business:
+            self.error(404, "Business license not found")
+            return
+        payload = self.read_json()
+        missing = require_fields(payload, "severity", "violation")
+        if missing:
+            self.error(400, missing)
+            return
+        db.execute(
+            """
+            INSERT INTO business_violations (business_id, issued_by, severity, violation, penalty, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                business_id,
+                user["id"],
+                str(payload["severity"]).strip()[:40],
+                str(payload["violation"]).strip()[:1000],
+                str(payload.get("penalty") or "").strip()[:500],
+                str(payload.get("status") or "open").strip()[:40],
+                now_iso(),
+            ),
+        )
+        add_message(db, business["owner_id"], "Business violation issued", f"A {payload['severity']} violation was issued for {business['business_name']}.", user["id"])
+        self.send_json(201, {"ok": True})
 
     def api_properties(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)

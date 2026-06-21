@@ -2,6 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
+const initialLinkCode = new URLSearchParams(window.location.search).get("code") || "";
 
 const state = {
   authMode: "login",
@@ -19,6 +20,8 @@ const state = {
   contractsTab: "open",
   contractsInfoOpen: false,
   contractProofId: null,
+  businessTab: "apply",
+  profileLinkCode: initialLinkCode,
   adminTab: "users",
   adminAccountId: null,
   cache: {},
@@ -31,6 +34,8 @@ const iconSvg = {
   home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/></svg>',
   send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>',
   bank: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m3 10 9-6 9 6Z"/><path d="M5 10v9M9 10v9M15 10v9M19 10v9M3 19h18"/></svg>',
+  store: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 10h16l-1-5H5Z"/><path d="M5 10v10h14V10"/><path d="M8 20v-6h8v6"/><path d="M4 10c0 2 3 2 4 0 1 2 5 2 6 0 1 2 4 2 6 0"/></svg>',
+  user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/><path d="M16 11l2 2 4-5"/></svg>',
   message: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/></svg>',
   shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="M9 12l2 2 4-5"/></svg>',
   target: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
@@ -42,12 +47,14 @@ const iconSvg = {
 };
 
 const tileColors = {
+  profile: "linear-gradient(145deg, #7ee7ff, #276a88)",
   dmv: "linear-gradient(145deg, #4ecdc4, #1b6d69)",
   jobs: "linear-gradient(145deg, #f7b733, #704811)",
   court: "linear-gradient(145deg, #b78cff, #4f3175)",
   properties: "linear-gradient(145deg, #28d17c, #17623d)",
   cash: "linear-gradient(145deg, #f15f79, #7a1e31)",
   bank: "linear-gradient(145deg, #5c9cff, #21497e)",
+  business: "linear-gradient(145deg, #58e6a5, #2457a8)",
   messages: "linear-gradient(145deg, #ffffff, #6d7779)",
   contracts: "linear-gradient(145deg, #ff5d7d, #4120a4)",
   changelog: "linear-gradient(145deg, #7ee7ff, #3158e8)",
@@ -95,6 +102,11 @@ async function api(path, options = {}) {
 
 async function loadSession() {
   state.session = await api("/api/session");
+  if (state.session?.user && state.profileLinkCode && !state.activeApp) {
+    state.activeApp = "profile";
+    await loadAppData("profile");
+    window.history.replaceState({}, "", "/");
+  }
   render();
 }
 
@@ -242,12 +254,14 @@ function bindHome() {
 
 function renderPanel(id) {
   const titles = {
+    profile: "Profile",
     dmv: "DMV",
     jobs: "Jobs",
     court: "Court",
     properties: "Properties",
     cash: "Cash App",
     bank: "Bank",
+    business: "Business",
     messages: "Messages",
     contracts: "Contracts",
     changelog: "Changelog",
@@ -255,12 +269,14 @@ function renderPanel(id) {
     admin: "Admin",
   };
   const body = {
+    profile: renderProfile,
     dmv: renderDmv,
     jobs: renderJobs,
     court: renderCourt,
     properties: renderProperties,
     cash: renderCash,
     bank: renderBank,
+    business: renderBusiness,
     messages: renderMessages,
     contracts: renderContracts,
     changelog: renderChangelog,
@@ -282,11 +298,13 @@ function renderPanel(id) {
 
 async function loadAppData(id) {
   const loaders = {
+    profile: () => api("/api/profile"),
     dmv: () => api("/api/dmv/me"),
     jobs: () => api("/api/jobs"),
     court: async () => ({ mine: await api("/api/court/my-cases") }),
     properties: () => api("/api/properties"),
     bank: () => api("/api/bank"),
+    business: () => api("/api/business"),
     messages: () => api("/api/messages"),
     contracts: () => api("/api/contracts"),
     changelog: () => api("/api/changelog"),
@@ -318,12 +336,14 @@ function bindPanel() {
   });
 
   const binders = {
+    profile: bindProfile,
     dmv: bindDmv,
     jobs: bindJobs,
     court: bindCourt,
     properties: bindProperties,
     cash: bindCash,
     bank: bindBank,
+    business: bindBusiness,
     messages: bindMessages,
     contracts: bindContracts,
     mdt: bindMdt,
@@ -338,6 +358,85 @@ function can(role) {
 
 function canAny(...roles) {
   return roles.some((role) => can(role));
+}
+
+function renderProfile() {
+  const data = state.cache.profile || {};
+  const user = data.user || state.session.user;
+  const link = data.arma_link;
+  const activity = data.recent_activity || [];
+  return `
+    <div class="stack profile-app">
+      <div class="profile-hero">
+        <div>
+          <p class="eyebrow">Player profile</p>
+          <h3>${escapeHtml(user.name)}</h3>
+          <p>CIV ${escapeHtml(user.civ_number || "pending")} · ${escapeHtml(user.verified ? "verified" : "pending verification")}</p>
+        </div>
+        <span class="pill ${link ? "green" : "amber"}">${link ? "linked" : "not linked"}</span>
+      </div>
+      <div class="profile-grid">
+        <div><span>Email</span><strong>${escapeHtml(user.email || state.session.user.email || "")}</strong></div>
+        <div><span>Registered Arma ID</span><strong>${escapeHtml(user.registered_arma_id || "Not linked")}</strong></div>
+        <div><span>Roles</span><strong>${escapeHtml((user.roles || state.session.user.roles || []).join(", "))}</strong></div>
+        <div><span>Agency</span><strong>${escapeHtml(user.primary_agency || "Civilian")}</strong></div>
+      </div>
+      <section class="profile-link-card">
+        <div class="row tight">
+          <div>
+            <p class="eyebrow">TBS RP LINKING SYSTEM</p>
+            <h3>Arma Account Link</h3>
+          </div>
+          <span class="pill ${link ? "green" : "amber"}">${link ? escapeHtml(link.server_id) : "claim code"}</span>
+        </div>
+        ${link ? `
+          <div class="profile-grid compact">
+            <div><span>Player</span><strong>${escapeHtml(link.player_name || "Unknown")}</strong></div>
+            <div><span>Identity</span><strong>${escapeHtml(link.identity_id)}</strong></div>
+            <div><span>Platform</span><strong>${escapeHtml(link.platform || "Unknown")}</strong></div>
+            <div><span>Last sync</span><strong>${link.last_sync_at ? new Date(link.last_sync_at).toLocaleString() : "Waiting"}</strong></div>
+          </div>
+        ` : `<p class="muted small">Enter the code shown in-game after the server/mod generates your account link request.</p>`}
+        <form id="profileLinkForm" class="form-grid">
+          <label>Server link code<input name="code" value="${escapeHtml(state.profileLinkCode)}" placeholder="1-483921" required /></label>
+          <button class="primary" type="submit">${link ? "Update link" : "Link Arma account"}</button>
+        </form>
+      </section>
+      <section class="profile-link-card">
+        <div class="row"><h3>Recent Server Activity</h3><span class="pill">${activity.length}</span></div>
+        <div class="list">
+          ${activity.map((item) => `
+            <article class="profile-activity">
+              <div class="row tight">
+                <div>
+                  <p class="eyebrow">${escapeHtml(item.server_id)}</p>
+                  <h3>${escapeHtml(item.event_type)}</h3>
+                </div>
+                <span class="pill ${Number(item.amount || 0) >= 0 ? "green" : "red"}">${money(item.amount || 0)}</span>
+              </div>
+              <p class="muted small">${escapeHtml(item.reason || item.source_system || "Server sync")} · ${new Date(item.received_at).toLocaleString()}</p>
+            </article>
+          `).join("") || `<div class="empty">No Arma server activity logged yet</div>`}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function bindProfile() {
+  $("#profileLinkForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
+    state.profileLinkCode = String(payload.code || "").trim();
+    try {
+      await api("/api/profile/link-arma", { method: "POST", body: payload });
+      toast("Arma account linked");
+      await loadAppData("profile");
+      await loadSession();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
 }
 
 function renderDmv() {
@@ -737,6 +836,390 @@ function renderChangeGroup(label, items = []) {
       ${items.map((item) => `<p>${escapeHtml(item)}</p>`).join("")}
     </div>
   `;
+}
+
+function humanLabel(value) {
+  return String(value || "")
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function businessStatusClass(status) {
+  if (["active", "approved"].includes(status)) return "green";
+  if (["denied", "revoked", "expired", "failed", "critical"].includes(status)) return "red";
+  return "amber";
+}
+
+function businessApplicationProgress(status) {
+  const clean = String(status || "submitted");
+  const final = clean === "approved" || clean === "denied";
+  const index = clean === "submitted" ? 0 : clean === "under_review" ? 1 : clean === "interview_requested" ? 2 : final ? 3 : 0;
+  const percent = [12, 42, 72, 100][index];
+  return { index, percent, final, denied: clean === "denied", approved: clean === "approved" };
+}
+
+function renderBusinessApplicationTracker(item) {
+  const progress = businessApplicationProgress(item.status);
+  const decisionLabel = progress.approved ? "Approved" : progress.denied ? "Denied" : "Decision";
+  const steps = [
+    ["Submitted", 0],
+    ["Review", 1],
+    ["Interview", 2],
+    [decisionLabel, 3],
+  ];
+  return `
+    <div class="business-tracker ${progress.approved ? "approved" : ""} ${progress.denied ? "denied" : ""}">
+      <div class="business-track-top">
+        <span>Approval progress</span>
+        <strong>${humanLabel(item.status)}</strong>
+      </div>
+      <div class="business-track-bar"><span style="width:${progress.percent}%"></span></div>
+      <div class="business-track-steps">
+        ${steps.map(([label, index]) => {
+          const stepClass = index < progress.index || (progress.final && index <= progress.index) ? "complete" : index === progress.index ? "active" : "pending";
+          return `<div class="business-track-step ${stepClass} ${progress.denied && index === 3 ? "denied" : ""}"><i></i><span>${escapeHtml(label)}</span></div>`;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function businessCategoryOptions(categories = [], selected = "basic") {
+  const rows = categories.length ? categories : ["basic", "commercial", "restricted", "government_contract"];
+  return rows.map((category) => `<option value="${escapeHtml(category)}" ${category === selected ? "selected" : ""}>${humanLabel(category)}</option>`).join("");
+}
+
+function businessStatusOptions(statuses = [], selected = "active") {
+  const rows = statuses.length ? statuses : ["active", "suspended", "revoked", "expired"];
+  return rows.map((status) => `<option value="${escapeHtml(status)}" ${status === selected ? "selected" : ""}>${humanLabel(status)}</option>`).join("");
+}
+
+function renderBusiness() {
+  const data = state.cache.business || {};
+  const staff = Boolean(data.staff_view);
+  const tabs = [
+    ["apply", "Apply"],
+    ["licenses", "Licenses"],
+    ...(staff ? [["review", "Review"], ["market", "Registry"]] : []),
+  ];
+  if (!tabs.some(([id]) => id === state.businessTab)) state.businessTab = "apply";
+  const stats = staff ? data.stats || {} : {};
+  return `
+    <div class="stack business-app">
+      <div class="business-hero">
+        <div>
+          <p class="eyebrow">${staff ? "City Hall registry" : "Civilian filing"}</p>
+          <h3>Business Registry</h3>
+          <p>${staff ? "Review, license, inspect, and enforce RP business operations." : "Apply for a legal RP business license and track your approvals."}</p>
+        </div>
+        <span class="pill ${staff ? "green" : "amber"}">${staff ? "staff access" : `${data.max_active_per_owner || 2} max`}</span>
+      </div>
+      ${staff ? `
+        <div class="grid-2">
+          <div class="metric"><span>Pending</span><strong>${stats.pending || 0}</strong></div>
+          <div class="metric"><span>Active</span><strong>${stats.active || 0}</strong></div>
+          <div class="metric"><span>Suspended</span><strong>${stats.suspended || 0}</strong></div>
+          <div class="metric"><span>Restricted</span><strong>${stats.restricted || 0}</strong></div>
+        </div>
+      ` : ""}
+      <div class="court-tabs">
+        ${tabs.map(([id, label]) => `<button class="${state.businessTab === id ? "active" : ""}" data-business-tab="${id}">${label}</button>`).join("")}
+      </div>
+      ${state.businessTab === "review" ? renderBusinessReview(data) : state.businessTab === "market" ? renderBusinessRegistry(data) : state.businessTab === "licenses" ? renderBusinessLicenses(data) : renderBusinessApply(data)}
+    </div>
+  `;
+}
+
+function renderBusinessApply(data) {
+  const activeApplications = (data.applications || []).filter((item) => !["approved", "denied"].includes(item.status)).slice(0, 2);
+  return `
+    <div class="stack">
+      ${activeApplications.length ? `
+        <div class="business-section">
+          <div class="row"><h3>Current Filing Progress</h3><span class="pill amber">${activeApplications.length} active</span></div>
+          ${activeApplications.map((item) => `
+            <div class="business-current">
+              <div class="row tight">
+                <div><p class="eyebrow">${escapeHtml(item.application_number)}</p><strong>${escapeHtml(item.business_name)}</strong></div>
+                <span class="pill ${businessStatusClass(item.status)}">${humanLabel(item.status)}</span>
+              </div>
+              ${renderBusinessApplicationTracker(item)}
+            </div>
+          `).join("")}
+        </div>
+      ` : ""}
+      <form id="businessApplicationForm" class="business-form form-grid">
+        <div>
+          <p class="eyebrow">New filing</p>
+          <h3>Business Application</h3>
+          <p class="muted small">Applications are reviewed for realism, funding, roleplay intent, rule compliance, and economy balance before a license is issued.</p>
+        </div>
+        <label>Business name<input name="business_name" maxlength="120" required /></label>
+        <div class="grid-2">
+          <label>Business type<select name="business_type" required>
+            <option>Retail Shop</option>
+            <option>Service Company</option>
+            <option>Logistics</option>
+            <option>Security Firm</option>
+            <option>Restaurant / Bar</option>
+            <option>Banking / Finance</option>
+            <option>Armored Transport</option>
+            <option>Government Contractor</option>
+            <option>Other</option>
+          </select></label>
+          <label>License category<select name="license_category" required>${businessCategoryOptions(data.categories, "basic")}</select></label>
+        </div>
+        <label>Owner information<input name="owner_name" value="${escapeHtml(state.session.user.name)}" maxlength="120" required /></label>
+        <label>Business location<input name="location" maxlength="160" placeholder="Street, postal, district, or property" required /></label>
+        <div class="grid-2">
+          <label>Startup budget<input name="startup_budget" type="number" min="0" step="0.01" required /></label>
+          <label>Planned employees<input name="planned_employees" type="number" min="1" max="250" value="1" required /></label>
+        </div>
+        <label>Funding source<textarea name="funding_source" maxlength="700" placeholder="Explain where the startup money comes from in RP." required></textarea></label>
+        <label>Detailed business description<textarea name="description" maxlength="1200" placeholder="Services, operating plan, RP purpose, expected customers, and any restricted activity." required></textarea></label>
+        <button class="primary" type="submit">Submit to registry</button>
+      </form>
+    </div>
+  `;
+}
+
+function renderBusinessLicenses(data) {
+  const businesses = data.businesses || [];
+  const applications = data.applications || [];
+  return `
+    <div class="stack">
+      <div class="list">
+        ${businesses.map((item) => renderBusinessLicenseCard(item, false, data)).join("") || `<div class="empty">No approved business licenses yet</div>`}
+      </div>
+      <div class="business-section">
+        <div class="row"><h3>Application History</h3><span class="pill">${applications.length}</span></div>
+        <div class="list">
+          ${applications.map((item) => renderBusinessApplicationCard(item, false, data)).join("") || `<div class="empty">No business applications submitted</div>`}
+        </div>
+      </div>
+      ${renderBusinessLedger("Recent Inspections", data.inspections || [], "inspection")}
+      ${renderBusinessLedger("Violations", data.violations || [], "violation")}
+    </div>
+  `;
+}
+
+function renderBusinessReview(data) {
+  const queue = data.review_queue || [];
+  return `
+    <div class="list">
+      ${queue.map((item) => renderBusinessApplicationCard(item, true, data)).join("") || `<div class="empty">No applications are waiting on review</div>`}
+    </div>
+  `;
+}
+
+function renderBusinessRegistry(data) {
+  const businesses = data.all_businesses || [];
+  return `
+    <div class="stack">
+      <div class="list">
+        ${businesses.map((item) => renderBusinessLicenseCard(item, true, data)).join("") || `<div class="empty">No business licenses issued yet</div>`}
+      </div>
+      ${renderBusinessLedger("Recent Inspections", data.staff_inspections || [], "inspection")}
+      ${renderBusinessLedger("Recent Violations", data.staff_violations || [], "violation")}
+    </div>
+  `;
+}
+
+function renderBusinessApplicationCard(item, review, data) {
+  return `
+    <article class="business-card">
+      <div class="row tight">
+        <div>
+          <p class="eyebrow">${escapeHtml(item.application_number)}</p>
+          <h3>${escapeHtml(item.business_name)}</h3>
+          <p class="muted small">${escapeHtml(item.applicant_name || item.owner_name)} · ${humanLabel(item.license_category)} · ${escapeHtml(item.location)}</p>
+        </div>
+        <span class="pill ${businessStatusClass(item.status)}">${humanLabel(item.status)}</span>
+      </div>
+      ${renderBusinessApplicationTracker(item)}
+      <div class="business-meta">
+        <div><span>Type</span><strong>${escapeHtml(item.business_type)}</strong></div>
+        <div><span>Budget</span><strong>${money(item.startup_budget)}</strong></div>
+        <div><span>Employees</span><strong>${item.planned_employees}</strong></div>
+        <div><span>Reviewer</span><strong>${escapeHtml(item.reviewer_name || "Unassigned")}</strong></div>
+      </div>
+      <div class="business-brief"><span>Plan</span><p>${escapeHtml(item.description)}</p></div>
+      <div class="business-brief"><span>Funding</span><p>${escapeHtml(item.funding_source)}</p></div>
+      ${item.reviewer_notes ? `<p class="muted small">Review notes: ${escapeHtml(item.reviewer_notes)}</p>` : ""}
+      ${item.interview_notes ? `<p class="muted small">Interview: ${escapeHtml(item.interview_notes)}</p>` : ""}
+      ${review ? `
+        <form class="business-review-form form-grid" data-application-id="${item.id}">
+          <div class="grid-2">
+            <label>Decision<select name="status">
+              <option value="under_review" ${item.status === "under_review" ? "selected" : ""}>Under Review</option>
+              <option value="interview_requested" ${item.status === "interview_requested" ? "selected" : ""}>Interview Requested</option>
+              <option value="approved">Approve and Issue License</option>
+              <option value="denied">Deny</option>
+            </select></label>
+            <label>License category<select name="license_category">${businessCategoryOptions(data.categories, item.license_category)}</select></label>
+          </div>
+          <div class="grid-2">
+            <label>Weekly tax<input name="weekly_tax" type="number" min="0" step="0.01" placeholder="Auto if blank" /></label>
+            <label>Activity minutes/week<input name="activity_requirement_minutes" type="number" min="0" value="120" /></label>
+          </div>
+          <label>Review notes<textarea name="reviewer_notes" maxlength="1200">${escapeHtml(item.reviewer_notes || "")}</textarea></label>
+          <label>Interview notes<textarea name="interview_notes" maxlength="1000">${escapeHtml(item.interview_notes || "")}</textarea></label>
+          <button class="primary" type="submit">Save decision</button>
+        </form>
+      ` : ""}
+    </article>
+  `;
+}
+
+function renderBusinessLicenseCard(item, manage, data) {
+  return `
+    <article class="business-card license-card">
+      <div class="row tight">
+        <div>
+          <p class="eyebrow">${escapeHtml(item.license_number)}</p>
+          <h3>${escapeHtml(item.business_name)}</h3>
+          <p class="muted small">${escapeHtml(item.owner_name || "Owner")} · ${humanLabel(item.license_category)} · ${escapeHtml(item.location)}</p>
+        </div>
+        <span class="pill ${businessStatusClass(item.status)}">${humanLabel(item.status)}</span>
+      </div>
+      <div class="business-meta">
+        <div><span>Tax/week</span><strong>${money(item.weekly_tax)}</strong></div>
+        <div><span>Activity</span><strong>${item.activity_requirement_minutes}m</strong></div>
+        <div><span>Reputation</span><strong>${item.reputation_score}</strong></div>
+        <div><span>Violations</span><strong>${item.open_violations}</strong></div>
+      </div>
+      <div class="business-brief"><span>Operations</span><p>${escapeHtml(item.description)}</p></div>
+      ${item.compliance_notes ? `<p class="muted small">Compliance: ${escapeHtml(item.compliance_notes)}</p>` : ""}
+      ${manage ? `
+        <form class="business-license-form form-grid" data-business-id="${item.id}">
+          <div class="grid-2">
+            <label>Status<select name="status">${businessStatusOptions(data.license_statuses, item.status)}</select></label>
+            <label>Category<select name="license_category">${businessCategoryOptions(data.categories, item.license_category)}</select></label>
+          </div>
+          <div class="grid-2">
+            <label>Weekly tax<input name="weekly_tax" type="number" min="0" step="0.01" value="${escapeHtml(item.weekly_tax)}" /></label>
+            <label>Activity minutes/week<input name="activity_requirement_minutes" type="number" min="0" value="${escapeHtml(item.activity_requirement_minutes)}" /></label>
+          </div>
+          <div class="grid-2">
+            <label>Reputation<input name="reputation_score" type="number" min="0" max="100" value="${escapeHtml(item.reputation_score)}" /></label>
+            <label class="check-row"><input type="checkbox" name="insurance_required" ${item.insurance_required ? "checked" : ""} /> Insurance required</label>
+          </div>
+          <label>Compliance notes<textarea name="compliance_notes" maxlength="1200">${escapeHtml(item.compliance_notes || "")}</textarea></label>
+          <button class="primary" type="submit">Update license</button>
+        </form>
+        <form class="business-inspection-form form-grid mini-registry-form" data-business-id="${item.id}">
+          <div class="row"><h3>Inspection</h3><span class="pill">${item.inspection_count}</span></div>
+          <div class="grid-2">
+            <label>Type<input name="inspection_type" placeholder="Audit / Site visit / Insurance" required /></label>
+            <label>Result<select name="result"><option>passed</option><option>warning</option><option>failed</option><option>follow-up required</option></select></label>
+          </div>
+          <label>Notes<textarea name="notes" maxlength="1000" required></textarea></label>
+          <button class="secondary" type="submit">Log inspection</button>
+        </form>
+        <form class="business-violation-form form-grid mini-registry-form" data-business-id="${item.id}">
+          <div class="row"><h3>Violation</h3><span class="pill red">${item.open_violations}</span></div>
+          <div class="grid-2">
+            <label>Severity<select name="severity"><option>minor</option><option>major</option><option>critical</option></select></label>
+            <label>Penalty<input name="penalty" placeholder="Fine, suspension, warning" /></label>
+          </div>
+          <label>Violation<textarea name="violation" maxlength="1000" required></textarea></label>
+          <button class="danger" type="submit">Issue violation</button>
+        </form>
+      ` : ""}
+    </article>
+  `;
+}
+
+function renderBusinessLedger(title, rows, type) {
+  if (!rows.length) return "";
+  return `
+    <div class="business-section">
+      <div class="row"><h3>${escapeHtml(title)}</h3><span class="pill">${rows.length}</span></div>
+      <div class="list">
+        ${rows.map((row) => `
+          <article class="business-ledger">
+            <div class="row tight">
+              <div>
+                <p class="eyebrow">${escapeHtml(row.license_number || "")}</p>
+                <h3>${escapeHtml(row.business_name || "Business")}</h3>
+              </div>
+              <span class="pill ${type === "violation" ? businessStatusClass(row.status) : businessStatusClass(row.result)}">${escapeHtml(type === "violation" ? row.severity : row.result)}</span>
+            </div>
+            <p>${escapeHtml(type === "violation" ? row.violation : row.notes)}</p>
+            ${type === "violation" && row.penalty ? `<p class="muted small">Penalty: ${escapeHtml(row.penalty)}</p>` : ""}
+            <p class="muted small">${escapeHtml(type === "violation" ? row.issuer_name : row.inspector_name)} · ${new Date(row.created_at).toLocaleString()}</p>
+          </article>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function bindBusiness() {
+  $$("[data-business-tab]").forEach((button) => button.addEventListener("click", () => {
+    state.businessTab = button.dataset.businessTab;
+    render();
+  }));
+  $("#businessApplicationForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api("/api/business/applications", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast("Business application submitted");
+      event.currentTarget.reset();
+      state.businessTab = "licenses";
+      await loadAppData("business");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $$(".business-review-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api(`/api/business/applications/${form.dataset.applicationId}`, { method: "PATCH", body: Object.fromEntries(new FormData(form).entries()) });
+      toast("Application decision saved");
+      await loadAppData("business");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+  $$(".business-license-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const formData = new FormData(form);
+    const payload = Object.fromEntries(formData.entries());
+    payload.insurance_required = formData.get("insurance_required") === "on";
+    try {
+      await api(`/api/business/licenses/${form.dataset.businessId}`, { method: "PATCH", body: payload });
+      toast("Business license updated");
+      await loadAppData("business");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+  $$(".business-inspection-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api(`/api/business/licenses/${form.dataset.businessId}/inspections`, { method: "POST", body: Object.fromEntries(new FormData(form).entries()) });
+      toast("Inspection logged");
+      await loadAppData("business");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+  $$(".business-violation-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api(`/api/business/licenses/${form.dataset.businessId}/violations`, { method: "POST", body: Object.fromEntries(new FormData(form).entries()) });
+      toast("Violation issued");
+      await loadAppData("business");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
 }
 
 function renderContracts() {
@@ -1846,7 +2329,7 @@ function renderAdmin() {
   `;
 }
 
-const roleOptions = ["civ", "owner", "admin", "leo", "judge", "ems", "dispatcher", "sheriff", "police", "state_police", "cid"];
+const roleOptions = ["civ", "owner", "admin", "leo", "judge", "ems", "dispatcher", "sheriff", "police", "state_police", "cid", "business_owner", "business_registrar", "city_hall", "economy_manager"];
 
 function renderAdminUsers(users) {
   if (!users.length) return `<div class="empty">No accounts yet</div>`;

@@ -18,7 +18,10 @@
         "Separate MDT citation and criminal charge catalogs, including New York Penal Law criminal charge entries.",
         "Court system with active/previous case tabs, defendant case view, officer case tracking, judge docket, final result display, and auto-generated court dates.",
         "CID investigative MDT tools with investigation tracking, case notes, warrant operations, and internal affairs records.",
-        "Civilian Contracts app with anonymous open contract board, accept flow, owner read-only monitoring, and required in-game proof clip URL submission."
+        "Civilian Contracts app with anonymous open contract board, accept flow, owner read-only monitoring, and required in-game proof clip URL submission.",
+        "Business Registry app with civilian business applications, registrar review workflow, license issuance, staff inspections, violations, suspensions, revocations, weekly tax settings, reputation scores, and dedicated City Hall/economy roles.",
+        "Profile app with TBS RP LINKING SYSTEM account-code claiming, Arma identity status, server sync details, and recent in-game activity logs.",
+        "Railway bridge API endpoints for TBS RP LINKING SYSTEM link requests, server snapshots, and Arma activity or money events."
       ],
       "changed": [
         "Contracts app now uses a dark web-style phone interface with first-open instructions.",
@@ -28,6 +31,10 @@
         "Home screen no longer shows pending income or tracked server minutes.",
         "Jobs, Bank, Cash App, and Properties remain locked/coming soon while Messages is available.",
         "Admin access no longer automatically grants MDT, CID, LEO, or judge access.",
+        "Admin account role assignment now includes business_owner, business_registrar, city_hall, and economy_manager roles for business registry access.",
+        "Business applications now show a dynamic approval progress tracker from submitted to review, interview, and final decision.",
+        "The Arma account link flow now starts in-game: the TBS RP LINKING SYSTEM mod generates the code and the PWA profile claims it.",
+        "Arma bridge API compatibility now matches the TBS RP LINKING SYSTEM compile-safe JSON fields used by the updated mod.",
         "Court tabs only appear when the user has the matching role or owner override.",
         "MDT opens as a full law enforcement dashboard instead of staying confined to the phone panel.",
         "Mobile MDT now uses animated Menu and Watch slide-out drawers so officers can navigate without the tabs crushing the screen.",

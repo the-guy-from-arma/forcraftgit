@@ -41,3 +41,5 @@ Useful environment variables:
 - `OWNER_PASSWORD`: owner bootstrap password.
 - `OWNER_NAME`: owner display name.
 - `COOKIE_SECURE=1`: use once deployed behind HTTPS.
+- `ARMA_BRIDGE_API_KEY`: shared secret used by the external `TBS RP LINKING SYSTEM` bridge when posting link requests/events and pulling snapshots.
+- `ARMA_LINK_CODE_TTL_MINUTES`: optional expiration window for in-game link codes, default `30`.
