@@ -1147,10 +1147,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if length <= 0:
             return {}
         raw = self.rfile.read(length)
+        text = raw.decode("utf-8", errors="replace").strip()
         try:
-            payload = json.loads(raw.decode("utf-8"))
+            payload = json.loads(text)
         except json.JSONDecodeError:
-            return {}
+            form_payload = parse_qs(text)
+            if form_payload:
+                return {key: values[-1] for key, values in form_payload.items() if values}
+            return {"code": text} if text else {}
         return payload if isinstance(payload, dict) else {}
 
     def cookie_token(self) -> str | None:
@@ -1512,11 +1516,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(401, "Authentication required")
             return
         payload = self.read_json()
-        missing = require_fields(payload, "code")
-        if missing:
-            self.error(400, missing)
+        query = parse_qs(urlparse(self.path).query)
+        code_value = (
+            payload.get("code")
+            or payload.get("LinkCode")
+            or payload.get("linkCode")
+            or payload.get("link_code")
+            or (query.get("code") or [""])[0]
+        )
+        if not str(code_value or "").strip():
+            self.error(400, "No link code was sent. Type the in-game code shown by TBS RP LINKING SYSTEM, for example 1-145595.")
             return
-        code = str(payload["code"]).strip().upper()
+        code = str(code_value).strip().upper()
         request = one(
             db,
             """
