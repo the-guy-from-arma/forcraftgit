@@ -10,9 +10,17 @@ import { Footer } from "./Footer";
 
 type Mode = "login" | "register";
 
-export function HomeExperience() {
+function bestPortalForRole(role?: string) {
+  if (canUseAdmin(role)) return "/admin";
+  if (canUseDispatch(role)) return "/dispatch";
+  if (canUseMdt(role)) return "/mdt";
+  if (canUseGovernment(role)) return "/government";
+  return "/civilian";
+}
+
+export function HomeExperience({ initialMode = "login" }: { initialMode?: Mode } = {}) {
   const router = useRouter();
-  const [mode, setMode] = useState<Mode>("login");
+  const [mode, setMode] = useState<Mode>(initialMode);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [user, setUser] = useState<any>(null);
@@ -26,6 +34,7 @@ export function HomeExperience() {
     try {
       const payload = await login(String(form.get("email")), String(form.get("password")));
       setUser(payload.user);
+      router.push(bestPortalForRole(payload.user?.role));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to log in.");
     } finally {
@@ -59,6 +68,7 @@ export function HomeExperience() {
       });
       setToken(payload.token);
       setUser(payload.user);
+      router.push("/civilian");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to register.");
     } finally {
@@ -67,11 +77,7 @@ export function HomeExperience() {
   }
 
   function continueToBestPortal() {
-    if (canUseAdmin(user?.role)) router.push("/admin");
-    else if (canUseDispatch(user?.role)) router.push("/dispatch");
-    else if (canUseMdt(user?.role)) router.push("/mdt");
-    else if (canUseGovernment(user?.role)) router.push("/government");
-    else router.push("/civilian");
+    router.push(bestPortalForRole(user?.role));
   }
 
   return (
@@ -139,17 +145,17 @@ export function HomeExperience() {
                   </Link>
                 )}
               </div>
-              <button className="button primary wide" onClick={continueToBestPortal}>
+              <button type="button" className="button primary wide" onClick={continueToBestPortal}>
                 Continue
               </button>
             </div>
           ) : (
             <>
               <div className="auth-toggle">
-                <button className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>
+                <button type="button" className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>
                   Login
                 </button>
-                <button className={mode === "register" ? "active" : ""} onClick={() => setMode("register")}>
+                <button type="button" className={mode === "register" ? "active" : ""} onClick={() => setMode("register")}>
                   Register
                 </button>
               </div>
@@ -167,7 +173,7 @@ export function HomeExperience() {
                     <input name="password" type="password" placeholder="Password" required />
                   </label>
                   {error && <p className="form-error">{error}</p>}
-                  <button className="button primary wide" disabled={busy}>
+                  <button type="submit" className="button primary wide" disabled={busy}>
                     {busy ? "Authenticating..." : "Enter CoreOne"}
                   </button>
                   <p className="hint">
@@ -223,7 +229,7 @@ export function HomeExperience() {
                     <input name="characterPhotoNoticeAccepted" type="checkbox" /> I understand profile photos must be fictional/game-character images.
                   </label>
                   {error && <p className="form-error">{error}</p>}
-                  <button className="button primary wide" disabled={busy}>
+                  <button type="submit" className="button primary wide" disabled={busy}>
                     {busy ? "Creating..." : "Create Unverified Civilian Account"}
                   </button>
                   <p className="hint">After creation, open your PDA DMV/passport app to request verification, license, and vehicle records.</p>

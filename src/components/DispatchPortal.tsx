@@ -40,9 +40,10 @@ export function DispatchPortal() {
       setQueue((current) => [call, ...current.filter((item) => item.id !== call.id)]);
       setAlert(`INCOMING 911: ${call.emergencyType} - ${call.location}`);
     });
-    socket.on("911:accepted", ({ callId, cadCall }) => {
+    socket.on("911:accepted", ({ callId, cadCall, autoRouted }) => {
       setQueue((current) => current.filter((item) => item.id !== callId));
       setDashboard((current: any) => current && { ...current, calls: [cadCall, ...(current.calls || [])] });
+      if (autoRouted) setAlert(`911 auto-routed to first available on-shift unit: ${cadCall?.callNumber}`);
     });
     socket.on("cad:call-created", (call) => {
       setDashboard((current: any) => current && { ...current, calls: [call, ...(current.calls || [])] });

@@ -10,6 +10,10 @@ import { canUseAdmin, canUseDispatch, canUseGovernment, canUseMdt, roleLabel } f
 import { useAuth } from "./useAuth";
 
 const civilianApps = [
+  { name: "Account Creation", badge: "AC", tone: "gold" },
+  { name: "DMV Services", badge: "DMV", tone: "blue" },
+  { name: "Bank System", badge: "BANK", tone: "green" },
+  { name: "911 Call", badge: "911", tone: "red" },
   { name: "Profile", badge: "ID", tone: "navy" },
   { name: "Passport", badge: "PP", tone: "gold" },
   { name: "Driver License", badge: "DL", tone: "blue" },
@@ -18,7 +22,6 @@ const civilianApps = [
   { name: "Business License", badge: "BL", tone: "gold" },
   { name: "Warrants", badge: "WR", tone: "red" },
   { name: "Tickets/Citations", badge: "TC", tone: "red" },
-  { name: "911 Call", badge: "911", tone: "red" },
   { name: "Emergency Contacts", badge: "EC", tone: "green" },
   { name: "Civilian Records", badge: "CR", tone: "slate" },
   { name: "Court Notices", badge: "CT", tone: "gold" },
@@ -32,7 +35,7 @@ type CivilianAppName = (typeof civilianApps)[number]["name"];
 export function CivilianPortal() {
   const { user, loading, error, allowed, refresh } = useAuth("civilian");
   const [booting, setBooting] = useState(true);
-  const [activeApp, setActiveApp] = useState<CivilianAppName>("Profile");
+  const [activeApp, setActiveApp] = useState<CivilianAppName>("Account Creation");
   const [overview, setOverview] = useState<any>(null);
   const [departments, setDepartments] = useState<any[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
@@ -162,6 +165,8 @@ export function CivilianPortal() {
       <main className="phone-os-shell">
         <section className="phone-frame phone-frame--home">
           <div className="phone-notch" />
+          <div className="phone-wallpaper-orb orb-a" />
+          <div className="phone-wallpaper-orb orb-b" />
           <div className="phone-status">
             <span>FairCroft LTE</span>
             <span>{new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
@@ -193,10 +198,16 @@ export function CivilianPortal() {
           </div>
 
           {currentUser?.role === "unverified_civ" && (
-            <button className="os-alert-pill" onClick={() => setActiveApp("Passport")}>
-              Unverified civilian - open DMV/passport intake
+            <button className="os-alert-pill" onClick={() => setActiveApp("Account Creation")}>
+              Unverified civilian - finish account creation and DMV/passport intake
             </button>
           )}
+
+          <div className="os-command-ribbon">
+            <span>OS APPS ENABLED</span>
+            <strong>{visibleApps.length}</strong>
+            <small>{overview?.jobs?.length || 0} jobs assigned</small>
+          </div>
 
           <div className="app-grid phone-app-grid">
             {visibleApps.map((app) => (
@@ -213,7 +224,7 @@ export function CivilianPortal() {
 
           <div className="phone-dock">
             <button onClick={() => setActiveApp("911 Call")}>911</button>
-            <button onClick={() => setActiveApp("Driver License")}>DMV</button>
+            <button onClick={() => setActiveApp("DMV Services")}>DMV</button>
             <button onClick={() => setActiveApp("My Jobs")}>Jobs</button>
           </div>
         </section>
@@ -230,6 +241,7 @@ export function CivilianPortal() {
               submit911={submit911}
               submitProfile={submitProfile}
               submitGovernmentApplication={submitGovernmentApplication}
+              openApp={setActiveApp}
             />
           </AppWindow>
           <div className="floating-actions">
@@ -277,7 +289,8 @@ function CivilianAppContent({
   submitDepartmentApplication,
   submit911,
   submitProfile,
-  submitGovernmentApplication
+  submitGovernmentApplication,
+  openApp
 }: {
   activeApp: CivilianAppName;
   overview: any;
@@ -286,11 +299,132 @@ function CivilianAppContent({
   submit911: (event: FormEvent<HTMLFormElement>) => void;
   submitProfile: (event: FormEvent<HTMLFormElement>) => void;
   submitGovernmentApplication: (event: FormEvent<HTMLFormElement>, type: string) => void;
+  openApp: (app: CivilianAppName) => void;
 }) {
   const profile = overview.user?.profile;
   const departmentChoices = departments.filter((department) =>
     ["police", "sheriff", "fire", "ems", "dispatch"].includes(department.type)
   );
+
+  if (activeApp === "Account Creation") {
+    return (
+      <div className="os-intake">
+        <section className="intake-hero">
+          <span className="hero-glyph">FC</span>
+          <div>
+            <p className="eyebrow">Civilian OS Enrollment</p>
+            <h2>Finish your FairCroft identity setup</h2>
+            <p>
+              Unverified accounts can still use the phone OS, submit DMV/passport intake, register vehicles, request jobs,
+              and place roleplay 911 calls. Government staff approve records before they become searchable in MDT.
+            </p>
+          </div>
+        </section>
+        <div className="status-steps">
+          <button className={profile?.characterPhotoUrl ? "complete" : ""} onClick={() => openApp("Profile")}>
+            <span>01</span>
+            Add character photo
+            <small>Game character only, never a real photo</small>
+          </button>
+          <button className={profile?.verificationStatus === "verified" ? "complete" : ""} onClick={() => openApp("Passport")}>
+            <span>02</span>
+            Request passport / civilian ID
+            <small>Needed for verified civilian status</small>
+          </button>
+          <button onClick={() => openApp("DMV Services")}>
+            <span>03</span>
+            Open DMV Services
+            <small>License, vehicle, permits, business license</small>
+          </button>
+          <button onClick={() => openApp("Department Applications")}>
+            <span>04</span>
+            Apply for a job
+            <small>LEO, Sheriff, Fire, EMS, Dispatch</small>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (activeApp === "DMV Services") {
+    return (
+      <div className="dmv-hub">
+        <section className="dmv-counter">
+          <p className="eyebrow">FairCroft DMV / Government Services</p>
+          <h2>Public service counter</h2>
+          <p>
+            Submit fictional roleplay applications. Approved records persist in PostgreSQL and become visible to authorized
+            government/MDT searches.
+          </p>
+        </section>
+        <div className="service-tile-grid">
+          <button onClick={() => openApp("Passport")}>
+            <span>PP</span>
+            Passport / Civilian ID
+            <small>{profile?.passportNumber || "Not issued"}</small>
+          </button>
+          <button onClick={() => openApp("Driver License")}>
+            <span>DL</span>
+            Driver License
+            <small>{overview.licenses?.length || 0} records</small>
+          </button>
+          <button onClick={() => openApp("Vehicle Registration")}>
+            <span>VR</span>
+            Vehicle Registration
+            <small>{overview.vehicles?.length || 0} vehicles</small>
+          </button>
+          <button onClick={() => openApp("Firearm Permit")}>
+            <span>FP</span>
+            Firearm Permit
+            <small>{overview.permits?.filter((permit: any) => permit.type.toLowerCase().includes("firearm")).length || 0} records</small>
+          </button>
+          <button onClick={() => openApp("Business License")}>
+            <span>BL</span>
+            Business License
+            <small>Roleplay commerce</small>
+          </button>
+        </div>
+        <RecordList records={overview.governmentApplications} empty="No DMV or government-service applications submitted yet." fields={["type", "status", "submittedAt", "decisionReason"]} />
+      </div>
+    );
+  }
+
+  if (activeApp === "Bank System") {
+    return (
+      <div className="bank-system">
+        <section className="bank-card premium-card">
+          <p className="eyebrow">FairCroft First Bank</p>
+          <h2>Roleplay banking profile</h2>
+          <p>Fictional economy surface for roleplay only. No real money, payments, or financial integrations.</p>
+          <div className="bank-balance">
+            <span>Account status</span>
+            <strong>{profile?.verificationStatus === "verified" ? "Eligible" : "Identity review required"}</strong>
+          </div>
+        </section>
+        <div className="bank-ledger">
+          <article>
+            <span>Checking</span>
+            <strong>Pending issuance</strong>
+            <small>Requires verified civilian ID.</small>
+          </article>
+          <article>
+            <span>Business account</span>
+            <strong>{overview.permits?.some((permit: any) => permit.type.toLowerCase().includes("business")) ? "Eligible" : "Needs business license"}</strong>
+            <small>Apply through DMV Services.</small>
+          </article>
+          <article>
+            <span>RP safety</span>
+            <strong>No real transactions</strong>
+            <small>For in-server storytelling only.</small>
+          </article>
+        </div>
+        <div className="button-row">
+          <button className="button primary" onClick={() => openApp("Passport")}>Verify Identity</button>
+          <button className="button ghost" onClick={() => openApp("Business License")}>Business License</button>
+        </div>
+      </div>
+    );
+  }
 
   if (activeApp === "Profile") {
     return (
@@ -459,6 +593,10 @@ function CivilianAppContent({
     return (
       <form className="stack-form agency-form emergency-form" onSubmit={submit911}>
         <div className="warning-callout">Fictional roleplay 911. Do not use for real emergencies.</div>
+        <p className="fine-print">
+          Submissions transmit live to FairCroft Communications. If no dispatcher is clocked in, CoreOne attempts to
+          auto-route the CAD incident to the first available on-shift police or sheriff unit.
+        </p>
         <select name="emergencyType" required defaultValue="">
           <option value="" disabled>Select emergency type</option>
           <option>Police</option>

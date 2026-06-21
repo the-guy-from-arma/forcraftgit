@@ -1,16 +1,19 @@
 export type ApiError = Error & { status?: number; issues?: unknown };
 export type ApiFetchInit = Omit<RequestInit, "body"> & { body?: unknown };
 
+let memoryToken: string | null = null;
+
 export function getToken() {
   if (typeof window === "undefined") return null;
   try {
-    return window.localStorage.getItem("faircroft_token");
+    return window.localStorage.getItem("faircroft_token") || memoryToken;
   } catch {
-    return null;
+    return memoryToken;
   }
 }
 
 export function setToken(token: string | null) {
+  memoryToken = token;
   if (typeof window === "undefined") return;
   try {
     if (token) window.localStorage.setItem("faircroft_token", token);

@@ -128,6 +128,9 @@ const governmentApplicationLabels: Record<(typeof governmentApplicationTypes)[nu
   business_license: "Business License"
 };
 
+const activeDispatcherRoles = ["dispatcher", "site_admin", "owner"] as const;
+const officerFallbackRoles = ["police", "sheriff", "department_supervisor", "site_admin", "owner"] as const;
+
 function recordPayload(value: Prisma.JsonValue | null | undefined): Record<string, any> {
   if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, any>;
   return {};
@@ -933,8 +936,162 @@ export function registerApi(app: Express, io: SocketIOServer) {
         metadata: { emergencyType: call.emergencyType, location: call.location }
       });
 
+      const activeDispatcherShift = await prisma.shiftLog.findFirst({
+        where: {
+          clockOutAt: null,
+          user: { is: { role: { in: activeDispatcherRoles as any } } }
+        },
+        include: { user: { select: { id: true, name: true, role: true } } },
+        orderBy: { clockInAt: "asc" }
+      });
+
+      if (!activeDispatcherShift) {
+        const officerShift = await prisma.shiftLog.findFirst({
+          where: {
+            clockOutAt: null,
+            unitId: { not: null },
+            user: { is: { role: { in: officerFallbackRoles as any } } },
+            unit: {
+              is: {
+                active: true,
+                status: "TEN_8_AVAILABLE",
+                department: { is: { type: { in: ["police", "sheriff"] as any } } }
+              }
+            }
+          },
+          include: {
+            department: true,
+            user: { select: { id: true, name: true, role: true } },
+            unit: {
+              include: {
+                department: true,
+                user: { select: { id: true, name: true, role: true } }
+              }
+            }
+          },
+          orderBy: { clockInAt: "asc" }
+        });
+
+        if (officerShift?.unit) {
+          const routed = await prisma.$transaction(async (tx) => {
+            const updated911 = await tx.call911.update({
+              where: { id: call.id },
+              data: {
+                status: "accepted",
+                acceptedById: officerShift.userId,
+                acceptedAt: new Date()
+              }
+            });
+
+            const cadCall = await tx.cadCall.create({
+              data: {
+                call911Id: updated911.id,
+                departmentId: officerShift.unit!.departmentId,
+                callNumber: makeCallNumber("FC-CAD"),
+                type: updated911.emergencyType,
+                location: updated911.location,
+                description: updated911.description,
+                priority: updated911.priority,
+                status: "assigned",
+                acceptedById: officerShift.userId,
+                createdById: officerShift.userId,
+                statusHistory: {
+                  create: {
+                    toStatus: "assigned",
+                    actorId: officerShift.userId,
+                    note: `Auto-routed from ${updated911.callNumber}; no dispatcher was clocked in.`
+                  }
+                },
+                dispatchLogs: {
+                  create: {
+                    call911Id: updated911.id,
+                    dispatcherId: null,
+                    action: "dispatch.911.auto_route",
+                    message: `${updated911.callNumber} auto-routed to ${officerShift.unit?.unitNumber}; no dispatcher was clocked in.`
+                  }
+                },
+                notes: {
+                  create: {
+                    authorId: officerShift.userId,
+                    body: `Originating 911 caller: ${updated911.callerName} (${updated911.callbackNumber}). Auto-routed because no dispatcher was clocked in.`,
+                    isSystem: true
+                  }
+                }
+              }
+            });
+
+            const assignment = await tx.unitAssignment.create({
+              data: {
+                cadCallId: cadCall.id,
+                cadUnitId: officerShift.unit!.id,
+                departmentId: officerShift.unit!.departmentId,
+                assignedById: null,
+                status: "auto_routed"
+              },
+              include: {
+                cadCall: true,
+                cadUnit: { include: { department: true, user: { select: { id: true, name: true, role: true } } } }
+              }
+            });
+
+            await tx.cadUnit.update({
+              where: { id: officerShift.unit!.id },
+              data: { status: "TEN_97_EN_ROUTE" }
+            });
+
+            await tx.call911.update({
+              where: { id: updated911.id },
+              data: { status: "converted" }
+            });
+
+            const finalCadCall = await tx.cadCall.findUnique({
+              where: { id: cadCall.id },
+              include: cadCallInclude
+            });
+            if (!finalCadCall) throw new Error("Auto-routed CAD call could not be reloaded.");
+
+            return { cadCall: finalCadCall, assignment };
+          });
+
+          if (officerShift.unit.user?.id && routed.cadCall) {
+            const notification = await prisma.notification.create({
+              data: {
+                userId: officerShift.unit.user.id,
+                title: "Auto-Routed 911 CAD Assignment",
+                body: `${routed.cadCall.callNumber}: ${routed.cadCall.type} at ${routed.cadCall.location}. No dispatcher was clocked in.`,
+                type: "cad_assignment",
+                payload: { cadCallId: routed.cadCall.id, assignmentId: routed.assignment.id, autoRouted: true } as Prisma.InputJsonValue
+              }
+            });
+            io.to(`user:${officerShift.unit.user.id}`).emit("notification", notification);
+          }
+
+          await auditAction(prisma, req, {
+            actorId: null,
+            action: "dispatch.911.auto_route",
+            entity: "CadCall",
+            entityId: routed.cadCall.id,
+            metadata: {
+              source911: call.id,
+              unitId: officerShift.unit.id,
+              unitNumber: officerShift.unit.unitNumber,
+              reason: "no_dispatcher_clocked_in"
+            }
+          });
+
+          io.to("dispatchers").emit("911:accepted", { callId: call.id, cadCall: routed.cadCall, autoRouted: true });
+          io.to("department-users").emit("cad:call-created", routed.cadCall);
+          io.to("department-users").emit("cad:unit-assigned", routed.assignment);
+          res.status(201).json({ call, cadCall: routed.cadCall, assignment: routed.assignment, routing: "auto_routed_officer" });
+          return;
+        }
+      }
+
       io.to("dispatchers").emit("911:incoming", call);
-      res.status(201).json({ call });
+      res.status(201).json({
+        call,
+        routing: activeDispatcherShift ? "dispatcher_queue" : "queued_no_dispatcher_or_available_officer"
+      });
     })
   );
 

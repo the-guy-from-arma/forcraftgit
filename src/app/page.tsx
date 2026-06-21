@@ -1,5 +1,3 @@
-import Link from "next/link";
-
 export default function HomePage() {
   return (
     <main
@@ -44,7 +42,7 @@ export default function HomePage() {
           Fictional roleplay civilian PDA, government services, CAD/MDT, and dispatch command platform.
         </p>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "12px" }}>
-          <Link
+          <a
             href="/login"
             style={{
               borderRadius: "999px",
@@ -55,9 +53,22 @@ export default function HomePage() {
               textDecoration: "none"
             }}
           >
-            Login / Register
-          </Link>
-          <Link
+            Login
+          </a>
+          <a
+            href="/register"
+            style={{
+              borderRadius: "999px",
+              padding: "13px 18px",
+              color: "#06101d",
+              background: "#9ef7da",
+              fontWeight: 900,
+              textDecoration: "none"
+            }}
+          >
+            Register
+          </a>
+          <a
             href="/civilian"
             style={{
               border: "1px solid rgba(255,255,255,.2)",
@@ -70,8 +81,8 @@ export default function HomePage() {
             }}
           >
             Civilian PDA
-          </Link>
-          <Link
+          </a>
+          <a
             href="/__coreone/preflight"
             style={{
               border: "1px solid rgba(255,255,255,.2)",
@@ -84,7 +95,7 @@ export default function HomePage() {
             }}
           >
             Preflight Test
-          </Link>
+          </a>
         </div>
         <p style={{ margin: "24px 0 0", color: "#9aa7b7", fontSize: "13px" }}>
           Roleplay only. No real government, CJIS, NCIC, DMV, EMS, or law-enforcement database integration.
