@@ -1,0 +1,44 @@
+{
+  "version": "0.0.1",
+  "entries": [
+    {
+      "date": "2026-06-21",
+      "version": "0.0.1",
+      "title": "Initial Roleplay PWA System",
+      "added": [
+        "Mobile PWA phone dashboard with app-style icons, locked/unlocked app states, dock shortcuts, and smoother mobile OS visual styling.",
+        "Civilian registration with required Arma ID, generated six-digit CIV number, verification flow, and owner/admin account management.",
+        "Read-only Changelog app loaded from the GitHub-managed repository file.",
+        "DMV app with driver license applications, vehicle registration, plate/VIN records, insurance status, and DMV profile display.",
+        "Messages app unlocked for verified users.",
+        "Admin dashboard with compact account list, account popup, role assignment, verification controls, Arma ID visibility, job settings, market caps, and owner/admin password reset.",
+        "MDT/CAD app for owner and assigned LEO/CID roles with NCIC/DMV search, invalid-return notice popup, citation writer, criminal charge writer, panic button, and active alert watch list.",
+        "Owner-only panic alert clearing from the MDT panic screen.",
+        "Separate MDT citation and criminal charge catalogs, including New York Penal Law criminal charge entries.",
+        "Court system with active/previous case tabs, defendant case view, officer case tracking, judge docket, final result display, and auto-generated court dates.",
+        "CID investigative MDT tools with investigation tracking, case notes, warrant operations, and internal affairs records.",
+        "Civilian Contracts app with anonymous open contract board, accept flow, owner read-only monitoring, and required in-game proof clip URL submission."
+      ],
+      "changed": [
+        "Home screen no longer shows pending income or tracked server minutes.",
+        "Jobs, Bank, Cash App, and Properties remain locked/coming soon while Messages is available.",
+        "Admin access no longer automatically grants MDT, CID, LEO, or judge access.",
+        "Court tabs only appear when the user has the matching role or owner override.",
+        "MDT opens as a full law enforcement dashboard instead of staying confined to the phone panel.",
+        "Phone icons, dock, and home layout were restyled to feel more like an iPhone/Android app launcher."
+      ],
+      "fixed": [
+        "Fixed PostgreSQL LIKE migration crash by parameterizing the traffic citation pattern.",
+        "Fixed low-contrast MDT charge dropdown styling.",
+        "Fixed NCIC/DMV search empty results by showing an official invalid-return notice with a reference number.",
+        "Fixed admin user page overload by moving account details and actions into a popup.",
+        "Fixed role leakage where admin accounts were being treated like owner accounts for MDT/CID/LEO/judge access.",
+        "Fixed panic alert workflow so owners can clear active panic hits."
+      ],
+      "removed": [
+        "Removed the unlocked-home income summary card from the main screen.",
+        "Removed owner/admin edit or delete controls from the Changelog app; changelog content is developer-managed through the repository."
+      ]
+    }
+  ]
+}

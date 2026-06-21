@@ -211,6 +211,7 @@ def generate_record_number(db: Database, table: str, column: str, prefix: str) -
         ("cid_investigations", "case_number"),
         ("cid_warrants", "warrant_number"),
         ("cid_internal_affairs", "ia_number"),
+        ("rp_contracts", "contract_number"),
     }
     if (table, column) not in allowed:
         raise ValueError("Invalid record number target")
@@ -395,6 +396,26 @@ def ensure_schema() -> None:
                 owner_id INTEGER,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS rp_contracts (
+                id SERIAL PRIMARY KEY,
+                contract_number TEXT NOT NULL UNIQUE,
+                poster_id INTEGER NOT NULL,
+                target_id INTEGER NOT NULL,
+                accepted_by INTEGER,
+                price NUMERIC(12,2) NOT NULL,
+                details TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                clip_url TEXT,
+                proof_note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                accepted_at TEXT,
+                submitted_at TEXT,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (poster_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (target_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (accepted_by) REFERENCES users(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS panic_alerts (
@@ -679,6 +700,14 @@ def admin_required(user: DbRow | None) -> str | None:
     return None
 
 
+def owner_required(user: DbRow | None) -> str | None:
+    if not user:
+        return "Authentication required"
+    if not has_any(user, "owner"):
+        return "Owner access required"
+    return None
+
+
 def verified_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
@@ -687,10 +716,23 @@ def verified_required(user: DbRow | None) -> str | None:
     return None
 
 
+def contracts_required(user: DbRow | None) -> str | None:
+    if not user:
+        return "Authentication required"
+    if has_any(user, "owner"):
+        return None
+    if not bool(user["verified"]):
+        return "Civilian verification required"
+    staff_roles = {"admin", "leo", "cid", "judge", "ems", "dispatcher", "sheriff", "police", "state_police"}
+    if set(roles_for(user)).intersection(staff_roles):
+        return "Civilian contract access required"
+    return None
+
+
 def leo_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
-    if not has_any(user, "leo", "cid", "owner", "admin"):
+    if not has_any(user, "leo", "cid", "owner"):
         return "Law enforcement access required"
     return None
 
@@ -698,7 +740,7 @@ def leo_required(user: DbRow | None) -> str | None:
 def cid_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
-    if not has_any(user, "cid", "owner", "admin"):
+    if not has_any(user, "cid", "owner"):
         return "CID access required"
     return None
 
@@ -706,7 +748,7 @@ def cid_required(user: DbRow | None) -> str | None:
 def judge_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
-    if not has_any(user, "judge", "owner", "admin"):
+    if not has_any(user, "judge", "owner"):
         return "Court access required"
     return None
 
@@ -715,6 +757,7 @@ def app_catalog(user: DbRow | None) -> list[dict[str, Any]]:
     if not user:
         return []
     verified = bool(user["verified"]) or has_any(user, "owner", "admin")
+    contracts_enabled = contracts_required(user) is None
     base = [
         ("dmv", "DMV", "id-card", verified, False),
         ("jobs", "JOB", "briefcase", False, True),
@@ -723,12 +766,15 @@ def app_catalog(user: DbRow | None) -> list[dict[str, Any]]:
         ("cash", "CASH APP", "send", False, True),
         ("bank", "BANK", "bank", False, True),
         ("messages", "Messages", "message", verified, False),
+        ("changelog", "Changelog", "scroll", True, False),
     ]
     apps = [
         {"id": key, "label": label, "icon": icon, "enabled": enabled, "coming_soon": coming_soon, "hidden": False}
         for key, label, icon, enabled, coming_soon in base
     ]
-    if has_any(user, "leo", "cid", "owner", "admin"):
+    if contracts_enabled:
+        apps.append({"id": "contracts", "label": "Contracts", "icon": "target", "enabled": True, "coming_soon": False, "hidden": False})
+    if has_any(user, "leo", "cid", "owner"):
         apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "hidden": False})
     if has_any(user, "owner", "admin"):
         apps.append({"id": "admin", "label": "Admin", "icon": "settings", "enabled": True, "hidden": False})
@@ -785,8 +831,8 @@ def pick_presiding_judge(db: Database) -> DbRow | None:
         return judge
     return one(
         db,
-        "SELECT id, name FROM users WHERE roles LIKE ? OR roles LIKE ? ORDER BY id LIMIT 1",
-        ("%owner%", "%admin%"),
+        "SELECT id, name FROM users WHERE roles LIKE ? ORDER BY id LIMIT 1",
+        ("%owner%",),
     )
 
 
@@ -979,6 +1025,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.send_json(200, {"ok": True}, {"Set-Cookie": self.clear_session_header()})
                 elif path == "/api/session" and method == "GET":
                     self.api_session(db, user)
+                elif path == "/api/changelog" and method == "GET":
+                    self.api_changelog(user)
                 elif path == "/api/presence" and method == "POST":
                     self.api_presence(db, user)
                 elif path == "/api/jobs" and method == "GET":
@@ -1003,6 +1051,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_messages(db, user)
                 elif path == "/api/messages" and method == "POST":
                     self.api_send_message(db, user)
+                elif path == "/api/contracts" and method == "GET":
+                    self.api_contracts(db, user)
+                elif path == "/api/contracts" and method == "POST":
+                    self.api_create_contract(db, user)
+                elif path.startswith("/api/contracts/") and path.endswith("/accept") and method == "POST":
+                    self.api_accept_contract(db, user, self.path_int(path, 2))
+                elif path.startswith("/api/contracts/") and path.endswith("/proof") and method == "POST":
+                    self.api_submit_contract_proof(db, user, self.path_int(path, 2))
                 elif path == "/api/properties" and method == "GET":
                     self.api_properties(db, user)
                 elif path.startswith("/api/properties/") and path.endswith("/buy") and method == "POST":
@@ -1027,6 +1083,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_panic(db, user)
                 elif path == "/api/mdt/alerts" and method == "GET":
                     self.api_alerts(db, user)
+                elif path.startswith("/api/mdt/alerts/") and method == "PATCH":
+                    self.api_clear_alert(db, user, self.path_int(path, 3))
                 elif path == "/api/cid/overview" and method == "GET":
                     self.api_cid_overview(db, user)
                 elif path == "/api/cid/investigations" and method == "POST":
@@ -1135,6 +1193,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "income": income_snapshot(db, user),
             },
         )
+
+    def api_changelog(self, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        path = STATIC_ROOT / "changelog.json"
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = {"version": "unavailable", "entries": []}
+        self.send_json(200, payload)
 
     def api_presence(self, db: Database, user: DbRow | None) -> None:
         if not user:
@@ -1441,6 +1510,218 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         add_message(db, recipient["id"], str(payload["subject"])[:80], str(payload["body"])[:800], user["id"])
         self.send_json(201, {"ok": True})
 
+    def contract_select_sql(self) -> str:
+        return """
+            SELECT c.*,
+                   poster.name AS poster_name, poster.civ_number AS poster_civ_number,
+                   target.name AS target_name, target.civ_number AS target_civ_number,
+                   accepter.name AS accepter_name, accepter.civ_number AS accepter_civ_number
+            FROM rp_contracts c
+            JOIN users poster ON poster.id = c.poster_id
+            JOIN users target ON target.id = c.target_id
+            LEFT JOIN users accepter ON accepter.id = c.accepted_by
+        """
+
+    def contract_payload(self, row: DbRow, user: DbRow) -> dict[str, Any]:
+        owner_view = has_any(user, "owner")
+        involved = row["poster_id"] == user["id"] or row.get("accepted_by") == user["id"]
+        poster_visible = owner_view or involved
+        accepter_visible = owner_view or involved
+        proof_visible = owner_view or involved
+        status = str(row["status"])
+        return {
+            "id": row["id"],
+            "contract_number": row["contract_number"],
+            "target_name": row["target_name"],
+            "target_civ_number": row["target_civ_number"],
+            "poster_name": row["poster_name"] if poster_visible else "Anonymous",
+            "poster_civ_number": row["poster_civ_number"] if poster_visible else None,
+            "accepter_name": row.get("accepter_name") if accepter_visible else ("Accepted" if row.get("accepted_by") else None),
+            "accepter_civ_number": row.get("accepter_civ_number") if accepter_visible else None,
+            "price": round(float(row["price"] or 0), 2),
+            "details": row["details"],
+            "status": status,
+            "clip_url": row.get("clip_url") if proof_visible else None,
+            "proof_note": row.get("proof_note") if proof_visible else "",
+            "created_at": row["created_at"],
+            "accepted_at": row.get("accepted_at"),
+            "submitted_at": row.get("submitted_at"),
+            "updated_at": row["updated_at"],
+            "can_accept": not owner_view and status == "open" and row["poster_id"] != user["id"] and row["target_id"] != user["id"],
+            "can_submit_proof": not owner_view and row.get("accepted_by") == user["id"] and status in ("accepted", "submitted"),
+        }
+
+    def api_contracts(self, db: Database, user: DbRow | None) -> None:
+        err = contracts_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        base = self.contract_select_sql()
+        if has_any(user, "owner"):
+            all_contracts = all_rows(
+                db,
+                f"{base} ORDER BY CASE c.status WHEN 'open' THEN 0 WHEN 'accepted' THEN 1 WHEN 'submitted' THEN 2 ELSE 3 END, c.created_at DESC LIMIT 150",
+            )
+            self.send_json(
+                200,
+                {
+                    "owner_view": True,
+                    "open": [self.contract_payload(row, user) for row in all_contracts if row["status"] == "open"],
+                    "posted": [],
+                    "accepted": [],
+                    "all": [self.contract_payload(row, user) for row in all_contracts],
+                },
+            )
+            return
+        open_rows = all_rows(
+            db,
+            f"{base} WHERE c.status = 'open' AND c.poster_id <> ? AND c.target_id <> ? ORDER BY c.created_at DESC LIMIT 60",
+            (user["id"], user["id"]),
+        )
+        posted_rows = all_rows(
+            db,
+            f"{base} WHERE c.poster_id = ? ORDER BY c.created_at DESC LIMIT 60",
+            (user["id"],),
+        )
+        accepted_rows = all_rows(
+            db,
+            f"{base} WHERE c.accepted_by = ? ORDER BY CASE c.status WHEN 'accepted' THEN 0 WHEN 'submitted' THEN 1 ELSE 2 END, c.updated_at DESC LIMIT 60",
+            (user["id"],),
+        )
+        self.send_json(
+            200,
+            {
+                "owner_view": False,
+                "open": [self.contract_payload(row, user) for row in open_rows],
+                "posted": [self.contract_payload(row, user) for row in posted_rows],
+                "accepted": [self.contract_payload(row, user) for row in accepted_rows],
+                "all": [],
+            },
+        )
+
+    def api_create_contract(self, db: Database, user: DbRow | None) -> None:
+        err = contracts_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        if has_any(user, "owner"):
+            self.error(403, "Owner contract view is read-only")
+            return
+        payload = self.read_json()
+        missing = require_fields(payload, "target", "price", "details")
+        if missing:
+            self.error(400, missing)
+            return
+        price = round(float(payload["price"]), 2)
+        if price <= 0:
+            self.error(400, "Price must be positive")
+            return
+        target_text = str(payload["target"]).strip()
+        target_key = target_text.lower()
+        target = one(
+            db,
+            """
+            SELECT * FROM users
+            WHERE civ_number = ? OR lower(email) = ? OR lower(name) LIKE ?
+            ORDER BY CASE WHEN civ_number = ? THEN 0 WHEN lower(email) = ? THEN 1 ELSE 2 END, id
+            LIMIT 1
+            """,
+            (target_text, target_key, f"%{target_key}%", target_text, target_key),
+        )
+        if not target:
+            self.error(404, "Target player not found")
+            return
+        if target["id"] == user["id"]:
+            self.error(400, "Cannot create a contract on yourself")
+            return
+        if not bool(target["verified"]) and not has_any(target, "owner", "admin"):
+            self.error(409, "Target player is not verified")
+            return
+        ts = now_iso()
+        created = db.execute(
+            """
+            INSERT INTO rp_contracts
+            (contract_number, poster_id, target_id, price, details, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'open', ?, ?)
+            RETURNING id
+            """,
+            (
+                generate_record_number(db, "rp_contracts", "contract_number", "CON"),
+                user["id"],
+                target["id"],
+                price,
+                str(payload["details"]).strip()[:900],
+                ts,
+                ts,
+            ),
+        ).fetchone()
+        self.send_json(201, {"ok": True, "contract_id": int(created["id"])})
+
+    def api_accept_contract(self, db: Database, user: DbRow | None, contract_id: int) -> None:
+        err = contracts_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        if has_any(user, "owner"):
+            self.error(403, "Owner contract view is read-only")
+            return
+        contract = one(db, "SELECT * FROM rp_contracts WHERE id = ?", (contract_id,))
+        if not contract:
+            self.error(404, "Contract not found")
+            return
+        if contract["status"] != "open":
+            self.error(409, "Contract is not open")
+            return
+        if contract["poster_id"] == user["id"] or contract["target_id"] == user["id"]:
+            self.error(400, "You cannot accept this contract")
+            return
+        ts = now_iso()
+        db.execute(
+            "UPDATE rp_contracts SET accepted_by = ?, status = 'accepted', accepted_at = ?, updated_at = ? WHERE id = ?",
+            (user["id"], ts, ts, contract_id),
+        )
+        add_message(db, contract["poster_id"], "Contract accepted", f"{user['name']} accepted contract {contract['contract_number']}.", user["id"])
+        self.send_json(200, {"ok": True, "contract_id": contract_id})
+
+    def api_submit_contract_proof(self, db: Database, user: DbRow | None, contract_id: int) -> None:
+        err = contracts_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        if has_any(user, "owner"):
+            self.error(403, "Owner contract view is read-only")
+            return
+        contract = one(db, "SELECT * FROM rp_contracts WHERE id = ?", (contract_id,))
+        if not contract:
+            self.error(404, "Contract not found")
+            return
+        if contract.get("accepted_by") != user["id"]:
+            self.error(403, "Only the accepted contractor can submit proof")
+            return
+        if contract["status"] not in ("accepted", "submitted"):
+            self.error(409, "Contract is not accepting proof")
+            return
+        payload = self.read_json()
+        missing = require_fields(payload, "clip_url")
+        if missing:
+            self.error(400, missing)
+            return
+        clip_url = str(payload["clip_url"]).strip()[:500]
+        if not (clip_url.startswith("http://") or clip_url.startswith("https://")):
+            self.error(400, "Clip URL must start with http:// or https://")
+            return
+        ts = now_iso()
+        db.execute(
+            "UPDATE rp_contracts SET clip_url = ?, proof_note = ?, status = 'submitted', submitted_at = ?, updated_at = ? WHERE id = ?",
+            (clip_url, str(payload.get("proof_note") or "").strip()[:600], ts, ts, contract_id),
+        )
+        add_message(db, contract["poster_id"], "Contract proof submitted", f"Proof clip was submitted for contract {contract['contract_number']}.", user["id"])
+        self.send_json(200, {"ok": True})
+
     def api_properties(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
         if err:
@@ -1503,7 +1784,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         officer_active: list[DbRow] = []
         officer_previous: list[DbRow] = []
-        if has_any(user, "leo", "cid", "owner", "admin"):
+        if has_any(user, "leo", "cid", "owner"):
             officer_active = all_rows(
                 db,
                 f"{base_select} WHERE c.officer_id = ? AND {case_status_clause(True)} ORDER BY c.created_at DESC",
@@ -1516,7 +1797,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             )
         judge_active = None
         judge_previous = None
-        if has_any(user, "judge", "owner", "admin"):
+        if has_any(user, "judge", "owner"):
             judge_active = all_rows(
                 db,
                 f"{base_select} WHERE (c.judge_id = ? OR c.judge_id IS NULL) AND {case_status_clause(True)} ORDER BY CASE c.status WHEN 'contested' THEN 0 WHEN 'issued' THEN 1 ELSE 2 END, c.created_at DESC",
@@ -1573,8 +1854,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("UPDATE citations SET status = 'contested', updated_at = ? WHERE id = ?", (now_iso(), case_id))
         judges = all_rows(
             db,
-            "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ? OR roles LIKE ?",
-            ("%judge%", "%owner%", "%admin%"),
+            "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ?",
+            ("%judge%", "%owner%"),
         )
         for judge in judges:
             add_message(db, judge["id"], "Citation contested", f"{user['name']} contested {case['charge_code']} - {case['charge_title']}.", user["id"])
@@ -1592,7 +1873,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             JOIN users officer ON officer.id = c.officer_id
             LEFT JOIN users judge ON judge.id = c.judge_id
         """
-        if has_any(user, "owner", "admin"):
+        if has_any(user, "owner"):
             rows = all_rows(
                 db,
                 f"{base_query} ORDER BY CASE c.status WHEN 'contested' THEN 0 WHEN 'issued' THEN 1 ELSE 2 END, c.created_at DESC LIMIT 100",
@@ -1779,7 +2060,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         recipients = all_rows(
             db,
             "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ? OR roles LIKE ? OR roles LIKE ?",
-            ("%leo%", "%dispatcher%", "%owner%", "%admin%"),
+            ("%leo%", "%cid%", "%dispatcher%", "%owner%"),
         )
         for recipient in recipients:
             if recipient["id"] != user["id"]:
@@ -1797,11 +2078,27 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             SELECT p.*, u.name AS officer_name, u.primary_agency
             FROM panic_alerts p
             JOIN users u ON u.id = p.officer_id
-            ORDER BY p.created_at DESC
+            ORDER BY CASE p.status WHEN 'active' THEN 0 ELSE 1 END, p.created_at DESC
             LIMIT 30
             """
         )
         self.send_json(200, {"alerts": [dict(row) for row in rows]})
+
+    def api_clear_alert(self, db: Database, user: DbRow | None, alert_id: int) -> None:
+        err = owner_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        alert = one(db, "SELECT p.*, u.name AS officer_name FROM panic_alerts p JOIN users u ON u.id = p.officer_id WHERE p.id = ?", (alert_id,))
+        if not alert:
+            self.error(404, "Panic alert not found")
+            return
+        db.execute(
+            "UPDATE panic_alerts SET status = 'cleared', resolved_at = ? WHERE id = ?",
+            (now_iso(), alert_id),
+        )
+        add_message(db, alert["officer_id"], "Panic alert cleared", f"{user['name']} cleared your panic activation at {alert['location']}.", user["id"])
+        self.send_json(200, {"ok": True})
 
     def api_cid_overview(self, db: Database, user: DbRow | None) -> None:
         err = cid_required(user)
@@ -2079,12 +2376,22 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if "owner" in roles_for(target) and not has_any(user, "owner"):
             self.error(403, "Only owners can edit another owner")
             return
+        next_password = str(payload.get("password") or "").strip()
+        if next_password:
+            if len(next_password) < 6:
+                self.error(400, "Password must be at least 6 characters")
+                return
+            if "owner" in roles_for(target) and not has_any(user, "owner"):
+                self.error(403, "Only owners can reset another owner's password")
+                return
         verified = 1 if bool(payload.get("verified", target["verified"])) else 0
         agency = str(payload.get("primary_agency") or target["primary_agency"] or "").strip()[:80] or None
         db.execute(
             "UPDATE users SET verified = ?, roles = ?, primary_agency = ? WHERE id = ?",
             (verified, json.dumps(cleaned), agency, target_id),
         )
+        if next_password:
+            db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(next_password), target_id))
         dmv = one(db, "SELECT id FROM dmv_records WHERE user_id = ?", (target_id,))
         if not dmv:
             create_default_dmv(db, target_id)
@@ -2093,7 +2400,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "UPDATE dmv_records SET license_status = 'Valid', registration_status = 'Active', insurance_status = 'Active', updated_at = ? WHERE user_id = ?",
                 (now_iso(), target_id),
             )
-        add_message(db, target_id, "Account updated", "An owner/admin updated your verification or role permissions.", user["id"])
+        add_message(db, target_id, "Account updated", "An owner/admin updated your account settings.", user["id"])
         self.send_json(200, {"ok": True})
 
     def api_admin_jobs(self, db: Database, user: DbRow | None) -> None:

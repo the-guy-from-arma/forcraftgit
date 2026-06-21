@@ -115,8 +115,8 @@ textarea:disabled {
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 34px;
   background:
-    linear-gradient(165deg, rgba(42, 50, 49, 0.92), rgba(14, 18, 21, 0.98) 45%, rgba(18, 19, 17, 0.98)),
-    linear-gradient(35deg, rgba(40, 209, 124, 0.08), rgba(247, 183, 51, 0.06));
+    linear-gradient(160deg, rgba(31, 38, 42, 0.94), rgba(10, 13, 15, 0.98) 44%, rgba(24, 18, 29, 0.98)),
+    linear-gradient(35deg, rgba(40, 209, 124, 0.08), rgba(255, 93, 125, 0.07), rgba(92, 156, 255, 0.08));
   box-shadow: var(--shadow);
 }
 
@@ -469,8 +469,8 @@ textarea:focus {
 .app-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 18px 12px;
-  padding: 8px 0 18px;
+  gap: 22px 13px;
+  padding: 16px 0 18px;
 }
 
 .app-icon {
@@ -502,16 +502,31 @@ textarea:focus {
 }
 
 .icon-tile {
-  width: 62px;
-  height: 62px;
+  width: 64px;
+  height: 64px;
   display: grid;
   place-items: center;
   position: relative;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 17px;
+  border: 0;
+  border-radius: 22px;
   background: var(--tile, linear-gradient(145deg, #25302d, #14191d));
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+  box-shadow:
+    0 16px 34px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.26),
+    inset 0 -16px 26px rgba(0, 0, 0, 0.14);
+  transform: translateZ(0);
+}
+
+.icon-tile::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.24), transparent 44%),
+    linear-gradient(35deg, transparent 0 58%, rgba(255, 255, 255, 0.13));
+  pointer-events: none;
 }
 
 .icon-tile::after {
@@ -532,10 +547,13 @@ textarea:focus {
 .icon-tile svg {
   width: 28px;
   height: 28px;
+  position: relative;
+  z-index: 1;
   stroke-width: 2.2;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.24));
 }
 
-.app-icon span {
+.app-icon > span:not(.icon-tile) {
   width: 100%;
   min-height: 28px;
   color: rgba(255, 255, 255, 0.86);
@@ -671,6 +689,11 @@ textarea:focus {
   gap: 10px;
 }
 
+.row.tight {
+  align-items: flex-start;
+  gap: 8px;
+}
+
 .grid-2 {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -761,6 +784,7 @@ textarea:focus {
 .message-card,
 .property-card,
 .user-card,
+.contract-card,
 .charge-card {
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -771,6 +795,264 @@ textarea:focus {
 .job-card {
   display: grid;
   gap: 10px;
+}
+
+.admin-account-list {
+  gap: 7px;
+}
+
+.compact-user-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+}
+
+.account-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.account-main h3,
+.account-main p {
+  margin: 0;
+}
+
+.account-main > div {
+  min-width: 0;
+}
+
+.account-main h3 {
+  font-size: 15px;
+}
+
+.account-avatar {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(92, 156, 255, 0.22);
+  border-radius: 12px;
+  background:
+    linear-gradient(145deg, rgba(92, 156, 255, 0.2), rgba(40, 209, 124, 0.11)),
+    rgba(255, 255, 255, 0.06);
+  color: var(--ink);
+  font-weight: 950;
+}
+
+.compact-action {
+  min-height: 36px;
+  flex: 0 0 auto;
+  padding: 0 12px;
+}
+
+.admin-account-modal {
+  width: min(720px, 100%);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  border-color: rgba(92, 156, 255, 0.22);
+}
+
+.admin-account-scroll {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  gap: 10px;
+  padding-right: 2px;
+}
+
+.account-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.account-summary div,
+.account-section {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.045);
+  padding: 10px;
+}
+
+.account-summary span {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.account-summary strong {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.account-section h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.contracts-app {
+  gap: 10px;
+}
+
+.changelog-app {
+  gap: 10px;
+}
+
+.changelog-head {
+  min-height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(126, 231, 255, 0.24);
+  border-radius: 18px;
+  padding: 14px;
+  background:
+    linear-gradient(135deg, rgba(126, 231, 255, 0.16), rgba(49, 88, 232, 0.12)),
+    rgba(255, 255, 255, 0.055);
+}
+
+.changelog-head h3 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.changelog-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(126, 231, 255, 0.16);
+  border-radius: var(--radius);
+  padding: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.035)),
+    rgba(16, 20, 23, 0.78);
+}
+
+.changelog-card h3 {
+  margin: 0;
+}
+
+.change-group {
+  display: grid;
+  gap: 6px;
+}
+
+.change-group span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.change-group p {
+  margin: 0;
+  border-radius: 10px;
+  padding: 8px 9px;
+  background: rgba(255, 255, 255, 0.055);
+  font-size: 13px;
+}
+
+.contract-hero {
+  min-height: 86px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid rgba(255, 93, 125, 0.24);
+  border-radius: 18px;
+  padding: 14px;
+  background:
+    linear-gradient(135deg, rgba(255, 93, 125, 0.18), rgba(92, 156, 255, 0.1)),
+    rgba(255, 255, 255, 0.055);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.24);
+}
+
+.contract-hero h3 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.contract-compose {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.contract-list {
+  gap: 10px;
+}
+
+.contract-card {
+  display: grid;
+  gap: 10px;
+  border-color: rgba(255, 93, 125, 0.16);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.035)),
+    rgba(16, 20, 23, 0.78);
+}
+
+.contract-card h3,
+.contract-card p {
+  margin-bottom: 0;
+}
+
+.contract-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.contract-meta div {
+  min-width: 0;
+  border-radius: 10px;
+  padding: 9px;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.contract-meta span {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.contract-meta strong {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.contract-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.clip-link {
+  justify-self: start;
+  border: 1px solid rgba(92, 156, 255, 0.24);
+  border-radius: 999px;
+  padding: 7px 10px;
+  color: #cfe0ff;
+  background: rgba(92, 156, 255, 0.11);
+  font-size: 12px;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.contract-proof-modal {
+  width: min(560px, 100%);
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .progress {

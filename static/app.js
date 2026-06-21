@@ -14,7 +14,10 @@ const state = {
   mdtSelectedCiv: "",
   mdtNotice: null,
   courtTab: "mine",
+  contractsTab: "open",
+  contractProofId: null,
   adminTab: "users",
+  adminAccountId: null,
   cache: {},
 };
 
@@ -27,6 +30,8 @@ const iconSvg = {
   bank: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m3 10 9-6 9 6Z"/><path d="M5 10v9M9 10v9M15 10v9M19 10v9M3 19h18"/></svg>',
   message: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/></svg>',
   shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="M9 12l2 2 4-5"/></svg>',
+  target: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
+  scroll: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 21h9a3 3 0 0 0 3-3V5a2 2 0 0 0-2-2H7a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3h1Z"/><path d="M8 21a3 3 0 0 1-3-3V7h13"/><path d="M9 11h6M9 15h5"/></svg>',
   settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V22a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 18l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1A2 2 0 1 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m15 18-6-6 6-6"/></svg>',
@@ -41,6 +46,8 @@ const tileColors = {
   cash: "linear-gradient(145deg, #f15f79, #7a1e31)",
   bank: "linear-gradient(145deg, #5c9cff, #21497e)",
   messages: "linear-gradient(145deg, #ffffff, #6d7779)",
+  contracts: "linear-gradient(145deg, #ff5d7d, #4120a4)",
+  changelog: "linear-gradient(145deg, #7ee7ff, #3158e8)",
   mdt: "linear-gradient(145deg, #28343c, #050709)",
   admin: "linear-gradient(145deg, #ffcf5a, #6c5010)",
 };
@@ -175,7 +182,7 @@ function bindAuth() {
 }
 
 function renderHome() {
-  const { user, apps, unread_messages: unread, income } = state.session;
+  const { user, apps, unread_messages: unread } = state.session;
   const locked = !user.verified && !user.roles.includes("owner") && !user.roles.includes("admin");
   return `
     <section class="home-stack">
@@ -192,12 +199,7 @@ function renderHome() {
           ${iconSvg.lock}
           <div><strong>Apps locked</strong><p>An owner/admin must verify your civilian profile before the system opens.</p></div>
         </div>
-      ` : `
-        <div class="home-alert">
-          ${iconSvg.bank}
-          <div><strong>${money(income?.pending_income || 0)} pending</strong><p>${minutes(income?.presence_seconds_today)} server minutes tracked today.</p></div>
-        </div>
-      `}
+      ` : ""}
       <div class="app-grid">
         ${apps.map((item, index) => `
           <button class="app-icon ${item.enabled ? "" : "locked"} ${item.coming_soon ? "coming-soon" : ""}" style="--i:${index}" data-open-app="${item.id}" ${item.enabled ? "" : "disabled"}>
@@ -210,9 +212,9 @@ function renderHome() {
         `).join("")}
       </div>
       <nav class="dock">
-        ${["bank", "messages", "jobs", "court"].map((id) => {
+        ${["messages", "contracts", "dmv", "court"].map((id) => {
           const item = apps.find((appItem) => appItem.id === id);
-          return `<button data-open-app="${id}" ${item?.enabled ? "" : "disabled"} aria-label="${id}">${iconSvg[item?.icon || "settings"]}</button>`;
+          return item ? `<button data-open-app="${id}" ${item.enabled ? "" : "disabled"} aria-label="${id}">${iconSvg[item.icon || "settings"]}</button>` : "";
         }).join("")}
       </nav>
     </section>
@@ -244,6 +246,8 @@ function renderPanel(id) {
     cash: "Cash App",
     bank: "Bank",
     messages: "Messages",
+    contracts: "Contracts",
+    changelog: "Changelog",
     mdt: "MDT CAD",
     admin: "Admin",
   };
@@ -255,6 +259,8 @@ function renderPanel(id) {
     cash: renderCash,
     bank: renderBank,
     messages: renderMessages,
+    contracts: renderContracts,
+    changelog: renderChangelog,
     mdt: renderMdt,
     admin: renderAdmin,
   }[id]?.() || `<div class="empty">Module unavailable</div>`;
@@ -279,10 +285,12 @@ async function loadAppData(id) {
     properties: () => api("/api/properties"),
     bank: () => api("/api/bank"),
     messages: () => api("/api/messages"),
+    contracts: () => api("/api/contracts"),
+    changelog: () => api("/api/changelog"),
     mdt: async () => ({
       charges: await api("/api/mdt/charges"),
       alerts: await api("/api/mdt/alerts"),
-      cid: canAny("cid", "owner", "admin") ? await api("/api/cid/overview") : null,
+      cid: canAny("cid", "owner") ? await api("/api/cid/overview") : null,
       search: state.cache.mdt?.search || []
     }),
     admin: async () => ({ overview: await api("/api/admin/overview"), users: await api("/api/admin/users"), jobs: await api("/api/admin/jobs") }),
@@ -314,6 +322,7 @@ function bindPanel() {
     cash: bindCash,
     bank: bindBank,
     messages: bindMessages,
+    contracts: bindContracts,
     mdt: bindMdt,
     admin: bindAdmin,
   };
@@ -688,8 +697,199 @@ function bindMessages() {
   });
 }
 
+function renderChangelog() {
+  const data = state.cache.changelog || {};
+  const entries = data.entries || [];
+  return `
+    <div class="stack changelog-app">
+      <div class="changelog-head">
+        <div>
+          <p class="eyebrow">Release notes</p>
+          <h3>Changelog</h3>
+        </div>
+        <span class="pill">${escapeHtml(data.version || "live")}</span>
+      </div>
+      <div class="list">
+        ${entries.map((entry) => `
+          <article class="changelog-card">
+            <div class="row">
+              <div><p class="eyebrow">${escapeHtml(entry.date)}</p><h3>${escapeHtml(entry.title)}</h3></div>
+            </div>
+            ${renderChangeGroup("Added", entry.added)}
+            ${renderChangeGroup("Changed", entry.changed)}
+            ${renderChangeGroup("Fixed", entry.fixed)}
+            ${renderChangeGroup("Removed", entry.removed)}
+          </article>
+        `).join("") || `<div class="empty">No changelog entries loaded</div>`}
+      </div>
+    </div>
+  `;
+}
+
+function renderChangeGroup(label, items = []) {
+  if (!items?.length) return "";
+  return `
+    <div class="change-group">
+      <span>${escapeHtml(label)}</span>
+      ${items.map((item) => `<p>${escapeHtml(item)}</p>`).join("")}
+    </div>
+  `;
+}
+
+function renderContracts() {
+  const data = state.cache.contracts || {};
+  const ownerView = Boolean(data.owner_view);
+  const tabs = ownerView
+    ? [["all", "All"], ["open", "Open"]]
+    : [["open", "Open"], ["posted", "Posted"], ["accepted", "Accepted"]];
+  if (!tabs.some(([id]) => id === state.contractsTab)) state.contractsTab = ownerView ? "all" : "open";
+  const rows = data[state.contractsTab] || [];
+  const allRows = [...(data.open || []), ...(data.posted || []), ...(data.accepted || []), ...(data.all || [])];
+  const proofContract = state.contractProofId ? allRows.find((item) => String(item.id) === String(state.contractProofId)) : null;
+  return `
+    <div class="stack contracts-app">
+      <div class="contract-hero">
+        <div>
+          <p class="eyebrow">${ownerView ? "Owner view" : "Civilian board"}</p>
+          <h3>Contracts</h3>
+        </div>
+        <span class="pill ${ownerView ? "amber" : "red"}">${ownerView ? "monitor" : "anonymous"}</span>
+      </div>
+      <div class="court-tabs">
+        ${tabs.map(([id, label]) => `<button class="${state.contractsTab === id ? "active" : ""}" data-contract-tab="${id}">${label}</button>`).join("")}
+      </div>
+      ${ownerView ? "" : `
+        <form id="contractForm" class="contract-compose form-grid">
+          <div class="grid-2">
+            <label>Target CIV or email<input name="target" required /></label>
+            <label>Price<input name="price" type="number" min="1" step="0.01" required /></label>
+          </div>
+          <label>Contract details<textarea name="details" maxlength="900" required></textarea></label>
+          <button class="primary" type="submit">Post contract</button>
+        </form>
+      `}
+      ${renderContractList(rows, ownerView)}
+      ${proofContract ? renderContractProofModal(proofContract) : ""}
+    </div>
+  `;
+}
+
+function renderContractList(rows, ownerView) {
+  return `
+    <div class="list contract-list">
+      ${rows.map((item) => renderContractCard(item, ownerView)).join("") || `<div class="empty">No contracts here</div>`}
+    </div>
+  `;
+}
+
+function renderContractCard(item, ownerView) {
+  const statusClass = item.status === "open" ? "red" : item.status === "accepted" ? "amber" : item.status === "submitted" ? "green" : "";
+  return `
+    <article class="contract-card">
+      <div class="row">
+        <div>
+          <p class="eyebrow">${escapeHtml(item.contract_number)}</p>
+          <h3>${escapeHtml(item.target_name)}</h3>
+        </div>
+        <span class="pill ${statusClass}">${escapeHtml(item.status)}</span>
+      </div>
+      <div class="contract-meta">
+        <div><span>Target</span><strong>CIV ${escapeHtml(item.target_civ_number || "unknown")}</strong></div>
+        <div><span>Price</span><strong>${money(item.price)}</strong></div>
+        <div><span>Posted by</span><strong>${escapeHtml(item.poster_name)}</strong></div>
+        <div><span>Accepted by</span><strong>${escapeHtml(item.accepter_name || "Open")}</strong></div>
+      </div>
+      <p>${escapeHtml(item.details)}</p>
+      ${item.clip_url ? `<a class="clip-link" href="${escapeHtml(item.clip_url)}" target="_blank" rel="noopener">View proof clip</a>` : ""}
+      ${item.proof_note ? `<p class="muted small">${escapeHtml(item.proof_note)}</p>` : ""}
+      <div class="row">
+        <p class="muted small">${new Date(item.created_at).toLocaleString()}</p>
+        <div class="contract-actions">
+          ${item.can_accept ? `<button class="secondary" type="button" data-accept-contract="${item.id}">Accept</button>` : ""}
+          ${item.can_submit_proof ? `<button class="primary" type="button" data-open-proof="${item.id}">${item.status === "submitted" ? "Update clip" : "Submit clip"}</button>` : ""}
+          ${ownerView && item.clip_url ? `<span class="pill green">proof</span>` : ""}
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function renderContractProofModal(item) {
+  return `
+    <div class="modal-backdrop" data-close-proof>
+      <section class="mdt-modal contract-proof-modal" role="dialog" aria-modal="true">
+        <header class="row">
+          <div><p class="eyebrow">${escapeHtml(item.contract_number)}</p><h2>Proof clip</h2></div>
+          <button class="icon-action" type="button" data-close-proof aria-label="Close">x</button>
+        </header>
+        <form id="contractProofForm" class="form-grid" data-contract-id="${item.id}">
+          <label>In-game clip URL<input name="clip_url" type="url" value="${escapeHtml(item.clip_url || "")}" placeholder="https://..." required /></label>
+          <label>Proof note<textarea name="proof_note" maxlength="600">${escapeHtml(item.proof_note || "")}</textarea></label>
+          <button class="primary" type="submit">Submit proof</button>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+function bindContracts() {
+  $$("[data-contract-tab]").forEach((button) => button.addEventListener("click", () => {
+    state.contractsTab = button.dataset.contractTab;
+    state.contractProofId = null;
+    render();
+  }));
+  $("#contractForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api("/api/contracts", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast("Contract posted");
+      event.currentTarget.reset();
+      await loadAppData("contracts");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $$("[data-accept-contract]").forEach((button) => button.addEventListener("click", async () => {
+    try {
+      await api(`/api/contracts/${button.dataset.acceptContract}/accept`, { method: "POST" });
+      state.contractsTab = "accepted";
+      state.contractProofId = button.dataset.acceptContract;
+      toast("Contract accepted");
+      await loadAppData("contracts");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+  $$("[data-open-proof]").forEach((button) => button.addEventListener("click", () => {
+    state.contractProofId = button.dataset.openProof;
+    render();
+  }));
+  $$("[data-close-proof]").forEach((button) => button.addEventListener("click", (event) => {
+    if (event.currentTarget.classList?.contains("modal-backdrop") && event.target !== event.currentTarget) return;
+    state.contractProofId = null;
+    render();
+  }));
+  $("#contractProofForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api(`/api/contracts/${event.currentTarget.dataset.contractId}/proof`, {
+        method: "POST",
+        body: Object.fromEntries(new FormData(event.currentTarget).entries()),
+      });
+      state.contractProofId = null;
+      toast("Proof submitted");
+      await loadAppData("contracts");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+}
+
 function renderCourtLegacy() {
-  const isJudge = can("judge") || can("owner") || can("admin");
+  const isJudge = can("judge") || can("owner");
   const mine = state.cache.court?.mine?.cases || [];
   const judgeCases = state.cache.court?.judge?.cases || [];
   return `
@@ -751,8 +951,8 @@ function renderCourtRules() {
 
 function renderCourt() {
   const data = state.cache.court?.mine || {};
-  const isOfficer = canAny("leo", "cid", "owner", "admin");
-  const isJudge = canAny("judge", "owner", "admin");
+  const isOfficer = canAny("leo", "cid", "owner");
+  const isJudge = canAny("judge", "owner");
   const tabs = [
     ["defendant-active", "Active"],
     ["defendant-previous", "Previous"],
@@ -983,7 +1183,7 @@ function renderMdtWorkspace() {
   const charges = state.cache.mdt?.charges || {};
   const alerts = state.cache.mdt?.alerts?.alerts || [];
   const cid = state.cache.mdt?.cid;
-  const cidEnabled = canAny("cid", "owner", "admin");
+  const cidEnabled = canAny("cid", "owner");
   const navItems = [
     ["search", "NCIC / DMV"],
     ["ticket", "Issue"],
@@ -1068,7 +1268,7 @@ function renderMdtSide() {
     <div class="mdt-side-panel">
       <h3>Watch</h3>
       <div class="list compact-list">
-        ${alerts.slice(0, 5).map((alert) => `<div class="row"><span>${escapeHtml(alert.officer_name)}</span><span class="pill red">${escapeHtml(alert.status)}</span></div>`).join("") || `<p class="muted small">No active panic traffic</p>`}
+        ${alerts.slice(0, 5).map((alert) => `<div class="row"><span>${escapeHtml(alert.officer_name)}</span><span class="pill ${panicStatusClass(alert.status)}">${escapeHtml(alert.status)}</span></div>`).join("") || `<p class="muted small">No active panic traffic</p>`}
       </div>
     </div>
     <div class="mdt-side-panel">
@@ -1078,6 +1278,10 @@ function renderMdtSide() {
       </div>
     </div>
   `;
+}
+
+function panicStatusClass(status) {
+  return status === "active" ? "red" : "green";
 }
 
 function renderMdtSearch() {
@@ -1368,6 +1572,7 @@ function renderCidInternalAffairs() {
 
 function renderPanic() {
   const alerts = state.cache.mdt?.alerts?.alerts || [];
+  const canClearPanic = can("owner");
   return `
     <form id="panicForm" class="mdt-form">
       <button class="panic-button pulse" type="submit">PANIC BUTTON</button>
@@ -1375,7 +1580,15 @@ function renderPanic() {
       <label>Note<input name="note" placeholder="Short emergency note" /></label>
     </form>
     <div class="list">
-      ${alerts.map((alert) => `<article class="case-card"><div class="row"><h3>${escapeHtml(alert.officer_name)}</h3><span class="pill red">${escapeHtml(alert.status)}</span></div><p>${escapeHtml(alert.location)}</p><p class="muted small">${escapeHtml(alert.note)}</p></article>`).join("") || `<div class="empty">No panic activations</div>`}
+      ${alerts.map((alert) => `
+        <article class="case-card">
+          <div class="row"><h3>${escapeHtml(alert.officer_name)}</h3><span class="pill ${panicStatusClass(alert.status)}">${escapeHtml(alert.status)}</span></div>
+          <p>${escapeHtml(alert.location)}</p>
+          <p class="muted small">${escapeHtml(alert.note)}</p>
+          <p class="muted small">Activated ${new Date(alert.created_at).toLocaleString()}${alert.resolved_at ? ` - Cleared ${new Date(alert.resolved_at).toLocaleString()}` : ""}</p>
+          ${canClearPanic && alert.status === "active" ? `<button class="secondary" type="button" data-clear-panic="${alert.id}">Clear panic</button>` : ""}
+        </article>
+      `).join("") || `<div class="empty">No panic activations</div>`}
     </div>
   `;
 }
@@ -1448,6 +1661,16 @@ function bindMdt() {
       toast(error.message);
     }
   });
+  $$("[data-clear-panic]").forEach((button) => button.addEventListener("click", async () => {
+    try {
+      await api(`/api/mdt/alerts/${button.dataset.clearPanic}`, { method: "PATCH" });
+      toast("Panic alert cleared");
+      await loadAppData("mdt");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
   $("#cidInvestigationForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
@@ -1530,6 +1753,7 @@ function bindMdt() {
 function renderAdmin() {
   const data = state.cache.admin;
   if (!data) return `<div class="empty">Admin loading</div>`;
+  const accountModal = state.adminAccountId ? renderAdminAccountModal(data.users.users.find((user) => String(user.id) === String(state.adminAccountId))) : "";
   return `
     <div class="stack">
       <div class="grid-2">
@@ -1545,27 +1769,72 @@ function renderAdmin() {
       </div>
       ${state.adminTab === "jobs" ? renderAdminJobs(data.jobs.jobs) : state.adminTab === "markets" ? renderAdminMarkets(data.jobs.markets) : renderAdminUsers(data.users.users)}
     </div>
+    ${accountModal}
   `;
 }
 
 const roleOptions = ["civ", "owner", "admin", "leo", "judge", "ems", "dispatcher", "sheriff", "police", "state_police", "cid"];
 
 function renderAdminUsers(users) {
-  return `<div class="list">${users.map((user) => `
-    <article class="user-card">
-      <form class="admin-user-form form-grid" data-user-id="${user.id}">
-        <div class="row"><h3>${escapeHtml(user.name)}</h3><span class="pill ${user.verified ? "green" : "amber"}">${user.verified ? "verified" : "pending"}</span></div>
-        <p class="muted small">#${user.id} · CIV ${escapeHtml(user.civ_number || "pending")} · ${escapeHtml(user.email)} · ${minutes(user.presence_seconds_today)}m today</p>
-        <div class="metric"><span>Arma ID</span><strong>${escapeHtml(user.arma_id || "Not provided")}</strong></div>
-        <label class="check-row"><input type="checkbox" name="verified" ${user.verified ? "checked" : ""} /> Verified civilian</label>
-        <label>Agency/division<input name="primary_agency" value="${escapeHtml(user.primary_agency || "")}" placeholder="Sheriff / Police / State Police / CID" /></label>
-        <div class="role-grid">
-          ${roleOptions.map((role) => `<label class="check-row"><input type="checkbox" name="roles" value="${role}" ${user.roles.includes(role) ? "checked" : ""} /> ${role.replace("_", " ")}</label>`).join("")}
+  if (!users.length) return `<div class="empty">No accounts yet</div>`;
+  return `<div class="list admin-account-list">${users.map((user) => `
+    <article class="user-card compact-user-card">
+      <div class="account-main">
+        <div class="account-avatar">${escapeHtml((user.name || "?").slice(0, 1).toUpperCase())}</div>
+        <div>
+          <div class="row tight"><h3>${escapeHtml(user.name)}</h3><span class="pill ${user.verified ? "green" : "amber"}">${user.verified ? "verified" : "pending"}</span></div>
+          <p class="muted small">CIV ${escapeHtml(user.civ_number || "pending")} · ${escapeHtml(user.email)}</p>
+          <p class="muted small">${minutes(user.presence_seconds_today)}m today · ${escapeHtml(user.roles.join(", "))}</p>
         </div>
-        <button class="primary" type="submit">Save user</button>
-      </form>
+      </div>
+      <button class="secondary compact-action" type="button" data-open-admin-account="${user.id}">Account</button>
     </article>
   `).join("")}</div>`;
+}
+
+function renderAdminAccountModal(user) {
+  if (!user) {
+    return "";
+  }
+  return `
+    <div class="modal-backdrop admin-account-backdrop" data-close-admin-account>
+      <section class="mdt-modal admin-account-modal" role="dialog" aria-modal="true" aria-label="Account management">
+        <header class="row">
+          <div>
+            <p class="eyebrow">Account file</p>
+            <h2>${escapeHtml(user.name)}</h2>
+          </div>
+          <button class="icon-action" type="button" data-close-admin-account aria-label="Close">${iconSvg.back}</button>
+        </header>
+        <div class="account-summary">
+          <div><span>CIV</span><strong>${escapeHtml(user.civ_number || "pending")}</strong></div>
+          <div><span>Arma ID</span><strong>${escapeHtml(user.arma_id || "Not provided")}</strong></div>
+          <div><span>Email</span><strong>${escapeHtml(user.email)}</strong></div>
+          <div><span>Today</span><strong>${minutes(user.presence_seconds_today)}m</strong></div>
+        </div>
+        <div class="admin-account-scroll">
+          <form class="admin-user-form form-grid account-section" data-user-id="${user.id}">
+            <div class="row tight"><h3>Access</h3><span class="pill ${user.verified ? "green" : "amber"}">${user.verified ? "verified" : "pending"}</span></div>
+            <label class="check-row"><input type="checkbox" name="verified" ${user.verified ? "checked" : ""} /> Verified civilian</label>
+            <label>Agency/division<input name="primary_agency" value="${escapeHtml(user.primary_agency || "")}" placeholder="Sheriff / Police / State Police / CID" /></label>
+            <div class="role-grid">
+              ${roleOptions.map((role) => `<label class="check-row"><input type="checkbox" name="roles" value="${role}" ${user.roles.includes(role) ? "checked" : ""} /> ${role.replace("_", " ")}</label>`).join("")}
+            </div>
+            <button class="primary" type="submit">Save account</button>
+          </form>
+          <form class="admin-password-form form-grid account-section" data-user-id="${user.id}">
+            <div>
+              <h3>Forgot password</h3>
+              <p class="muted small">Set a new temporary password for this account. The user can sign in with it immediately.</p>
+            </div>
+            <label>New password<input name="password" type="password" minlength="6" autocomplete="new-password" required /></label>
+            <label>Confirm password<input name="confirm_password" type="password" minlength="6" autocomplete="new-password" required /></label>
+            <button class="secondary" type="submit">Reset password</button>
+          </form>
+        </div>
+      </section>
+    </div>
+  `;
 }
 
 function renderAdminJobs(jobs) {
@@ -1604,6 +1873,16 @@ function renderAdminMarkets(markets) {
 function bindAdmin() {
   $$("[data-admin-tab]").forEach((button) => button.addEventListener("click", () => {
     state.adminTab = button.dataset.adminTab;
+    state.adminAccountId = null;
+    render();
+  }));
+  $$("[data-open-admin-account]").forEach((button) => button.addEventListener("click", () => {
+    state.adminAccountId = button.dataset.openAdminAccount;
+    render();
+  }));
+  $$("[data-close-admin-account]").forEach((button) => button.addEventListener("click", (event) => {
+    if (event.currentTarget.classList?.contains("modal-backdrop") && event.target !== event.currentTarget) return;
+    state.adminAccountId = null;
     render();
   }));
   $$(".admin-user-form").forEach((form) => form.addEventListener("submit", async (event) => {
@@ -1618,6 +1897,28 @@ function bindAdmin() {
       toast("User saved");
       await loadAppData("admin");
       await loadSession();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+  $$(".admin-password-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const formData = new FormData(form);
+    const password = String(formData.get("password") || "");
+    const confirmPassword = String(formData.get("confirm_password") || "");
+    if (password !== confirmPassword) {
+      toast("Passwords do not match");
+      return;
+    }
+    try {
+      await api(`/api/admin/users/${form.dataset.userId}`, {
+        method: "PATCH",
+        body: { password },
+      });
+      form.reset();
+      toast("Password reset");
+      await loadAppData("admin");
+      render();
     } catch (error) {
       toast(error.message);
     }
