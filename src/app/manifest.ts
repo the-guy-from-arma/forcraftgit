@@ -6,7 +6,7 @@ export default function manifest(): MetadataRoute.Manifest {
     short_name: "CoreOne",
     description: "FairCroft roleplay government PDA, CAD/MDT, dispatch, and DMV services.",
     id: "/",
-    start_url: "/civilian",
+    start_url: "/",
     scope: "/",
     display: "standalone",
     orientation: "portrait-primary",

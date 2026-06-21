@@ -47,8 +47,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body>
+    <html lang="en" style={{ background: "#07111f" }}>
+      <body style={{ margin: 0, background: "#07111f", color: "#f5f7fb" }}>
         <noscript>
           <main className="center-screen">
             <section className="glass-panel access-panel">
