@@ -1,9 +1,10 @@
+import { timingSafeEqual } from "node:crypto";
 import bcrypt from "bcryptjs";
 import type { Express, Request, Response } from "express";
 import type { Server as SocketIOServer } from "socket.io";
 import type { Prisma } from "@prisma/client";
 import { z } from "zod";
-import { checkDatabaseHealth, ensureOwnerAccount } from "./database.js";
+import { checkDatabaseHealth, ensureOwnerAccount, upsertOwnerAccount } from "./database.js";
 import { getPrisma } from "./db.js";
 import { getNodeEnv, getOwnerBootstrapConfig, maskEmail, normalizeEnvValue, readBooleanEnv, readEnvValue } from "./env.js";
 import {
@@ -34,7 +35,7 @@ const passwordText = (min = 1) =>
   z
     .string()
     .transform((value) => normalizeEnvValue(value))
-    .pipe(z.string().min(min).max(128));
+    .pipe(z.string().min(min).max(512));
 const optionalText = (max = 1000) =>
   z
     .string()
@@ -74,6 +75,12 @@ function parseBody<T>(schema: z.Schema<T>, req: Request, res: Response): T | nul
 function parseQuery(value: unknown, max = 120) {
   if (typeof value !== "string") return "";
   return cleanText(value, max);
+}
+
+function tokenMatches(submitted: string, expected: string) {
+  const submittedBuffer = Buffer.from(submitted);
+  const expectedBuffer = Buffer.from(expected);
+  return submittedBuffer.length === expectedBuffer.length && timingSafeEqual(submittedBuffer, expectedBuffer);
 }
 
 function authed(req: Request) {
@@ -306,6 +313,88 @@ export function registerApi(app: Express, io: SocketIOServer) {
 
       const session = await issueSession(user, req);
       res.status(201).json({ token: session.token, expiresAt: session.expiresAt, user: publicUser(user) });
+    })
+  );
+
+  app.post(
+    "/api/auth/owner/recovery",
+    asyncHandler(async (req, res) => {
+      const recoveryToken = readEnvValue(["OWNER_SETUP_TOKEN", "OWNER_RECOVERY_TOKEN", "COREONE_OWNER_SETUP_TOKEN"]);
+
+      if (!recoveryToken.value) {
+        res.status(404).json({ error: "Owner recovery is not enabled on this server." });
+        return;
+      }
+
+      const body = parseBody(
+        z.object({
+          setupToken: passwordText(1),
+          email: z.string().email().transform(normalizeEmail),
+          password: passwordText(10),
+          name: optionalText(120)
+        }),
+        req,
+        res
+      );
+      if (!body) return;
+
+      const prisma = getPrisma();
+      if (!tokenMatches(body.setupToken, recoveryToken.value)) {
+        console.warn("[auth] Owner recovery denied:", {
+          email: maskEmail(body.email),
+          recoveryTokenSource: recoveryToken.key || "missing"
+        });
+        await auditAction(prisma, req, {
+          actorId: null,
+          action: "auth.owner.recovery.denied",
+          entity: "User",
+          entityId: null,
+          metadata: {
+            email: body.email,
+            recoveryTokenSource: recoveryToken.key || "missing"
+          }
+        });
+        res.status(403).json({ error: "Owner recovery token is invalid." });
+        return;
+      }
+
+      await upsertOwnerAccount(
+        {
+          email: body.email,
+          password: body.password,
+          name: body.name || "FairCroft Owner"
+        },
+        "owner_recovery_endpoint"
+      );
+
+      const user = await prisma.user.findUnique({
+        where: { email: body.email },
+        include: userInclude
+      });
+
+      if (!user) {
+        res.status(500).json({ error: "Owner recovery completed but the owner account could not be loaded." });
+        return;
+      }
+
+      await auditAction(prisma, req, {
+        actorId: user.id,
+        action: "auth.owner.recovery.completed",
+        entity: "User",
+        entityId: user.id,
+        metadata: {
+          email: body.email,
+          recoveryTokenSource: recoveryToken.key || "missing"
+        }
+      });
+
+      console.warn("[auth] Owner recovery completed:", {
+        email: maskEmail(user.email),
+        recoveryTokenSource: recoveryToken.key || "missing"
+      });
+
+      const session = await issueSession(user, req);
+      res.json({ token: session.token, expiresAt: session.expiresAt, user: publicUser(user) });
     })
   );
 

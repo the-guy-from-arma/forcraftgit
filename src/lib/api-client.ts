@@ -40,7 +40,17 @@ export async function apiFetch<T>(path: string, init: ApiFetchInit = {}) {
   const payload = contentType.includes("application/json") ? await response.json() : await response.text();
 
   if (!response.ok) {
-    const error = new Error(typeof payload === "object" && payload?.error ? payload.error : "Request failed.") as ApiError;
+    const issueSummary =
+      typeof payload === "object" && Array.isArray(payload?.issues)
+        ? payload.issues
+            .map((issue: any) => {
+              const path = issue?.path ? `${issue.path}: ` : "";
+              return `${path}${issue?.message || "Invalid value"}`;
+            })
+            .join("; ")
+        : "";
+    const baseMessage = typeof payload === "object" && payload?.error ? payload.error : "Request failed.";
+    const error = new Error(issueSummary ? `${baseMessage} ${issueSummary}` : baseMessage) as ApiError;
     error.status = response.status;
     error.issues = typeof payload === "object" ? payload?.issues : undefined;
     throw error;

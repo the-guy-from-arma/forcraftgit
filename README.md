@@ -109,6 +109,16 @@ If `OWNER_PASSWORD` changes in Railway, redeploy/restart and CoreOne will update
 
 Owner login also has a safe recovery path: if the stored owner password hash is stale but the submitted login exactly matches the configured owner environment email/password, CoreOne refreshes the owner account from the environment and continues the login.
 
+Emergency owner reset:
+
+1. Set a temporary Railway variable named `OWNER_SETUP_TOKEN` to a long random value.
+2. Redeploy/restart the web service.
+3. Open `/owner-recovery`.
+4. Enter the setup token, owner email, display name, and new owner password.
+5. After you are logged in, remove `OWNER_SETUP_TOKEN` from Railway and redeploy/restart.
+
+This page is not linked from the public entrance and does nothing unless `OWNER_SETUP_TOKEN` is present.
+
 Temporary auth diagnostics:
 
 1. Set `AUTH_DIAGNOSTICS_ENABLED=true` in Railway.
@@ -128,6 +138,7 @@ Temporary auth diagnostics:
    - `OWNER_EMAIL`
    - `OWNER_PASSWORD`
    - `OWNER_NAME`
+   - Optional emergency use only: `OWNER_SETUP_TOKEN`
    - Optional debugging only: `AUTH_DIAGNOSTICS_ENABLED=false`
    - `NODE_ENV=production`
    - `PORT` is managed by Railway.

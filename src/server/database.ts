@@ -232,42 +232,32 @@ function splitOwnerName(name: string) {
   };
 }
 
-export async function ensureOwnerAccount(source = "startup_environment") {
+export async function upsertOwnerAccount(
+  owner: {
+    email: string;
+    password: string;
+    name: string;
+  },
+  source = "startup_environment"
+) {
   const prisma = getPrisma();
-  const owner = getOwnerBootstrapConfig();
-
-  console.log("[database] Owner bootstrap environment:", {
-    ownerEmail: maskEmail(owner.email),
-    emailSource: owner.emailSource,
-    passwordSource: owner.passwordSource,
-    passwordAvailable: Boolean(owner.password),
-    nameSource: owner.nameSource
-  });
-
-  if (!owner.password) {
-    const existingOwner = await prisma.user.findFirst({ where: { role: "owner" } });
-    if (!existingOwner) {
-      console.warn("[database] Owner password is not set; owner bootstrap skipped because no safe password is available.");
-    } else {
-      console.warn("[database] Owner password is not set; existing owner account was left unchanged.");
-    }
-    return;
-  }
+  const ownerEmail = owner.email.trim().toLowerCase();
+  const ownerName = owner.name.trim() || "FairCroft Owner";
 
   const passwordHash = await bcrypt.hash(owner.password, 12);
-  const profileName = splitOwnerName(owner.name);
+  const profileName = splitOwnerName(ownerName);
 
   const user = await prisma.user.upsert({
-    where: { email: owner.email },
+    where: { email: ownerEmail },
     update: {
-      name: owner.name,
+      name: ownerName,
       role: "owner",
       passwordHash,
       suspended: false
     },
     create: {
-      email: owner.email,
-      name: owner.name,
+      email: ownerEmail,
+      name: ownerName,
       role: "owner",
       passwordHash,
       suspended: false
@@ -338,14 +328,47 @@ export async function ensureOwnerAccount(source = "startup_environment") {
       entity: "User",
       entityId: user.id,
       metadata: {
-        email: owner.email,
+        email: ownerEmail,
         source,
         passwordUpdatedFromEnvironment: true
       }
     }
   });
 
-  console.log(`[database] Owner account ready for ${maskEmail(owner.email)}.`);
+  console.log(`[database] Owner account ready for ${maskEmail(ownerEmail)}.`);
+  return user;
+}
+
+export async function ensureOwnerAccount(source = "startup_environment") {
+  const prisma = getPrisma();
+  const owner = getOwnerBootstrapConfig();
+
+  console.log("[database] Owner bootstrap environment:", {
+    ownerEmail: maskEmail(owner.email),
+    emailSource: owner.emailSource,
+    passwordSource: owner.passwordSource,
+    passwordAvailable: Boolean(owner.password),
+    nameSource: owner.nameSource
+  });
+
+  if (!owner.password) {
+    const existingOwner = await prisma.user.findFirst({ where: { role: "owner" } });
+    if (!existingOwner) {
+      console.warn("[database] Owner password is not set; owner bootstrap skipped because no safe password is available.");
+    } else {
+      console.warn("[database] Owner password is not set; existing owner account was left unchanged.");
+    }
+    return null;
+  }
+
+  return upsertOwnerAccount(
+    {
+      email: owner.email,
+      password: owner.password,
+      name: owner.name
+    },
+    source
+  );
 }
 
 export async function initializeDatabase() {
