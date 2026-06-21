@@ -355,8 +355,21 @@ def ensure_schema() -> None:
 
 
 def seed_owner(db: Database) -> None:
-    existing = one(db, "SELECT id FROM users WHERE email = ?", (OWNER_EMAIL,))
+    existing = one(db, "SELECT * FROM users WHERE email = ?", (OWNER_EMAIL,))
+    owner_roles = sorted(set([*roles_for(existing), "owner", "admin", "civ"])) if existing else ["admin", "civ", "owner"]
     if existing:
+        db.execute(
+            """
+            UPDATE users
+            SET name = ?,
+                password_hash = ?,
+                verified = 1,
+                roles = ?,
+                primary_agency = COALESCE(primary_agency, 'Owner Command')
+            WHERE id = ?
+            """,
+            (OWNER_NAME, hash_password(OWNER_PASSWORD), json.dumps(owner_roles), existing["id"]),
+        )
         return
     ts = now_iso()
     db.execute(
@@ -365,7 +378,7 @@ def seed_owner(db: Database) -> None:
         (name, email, password_hash, verified, roles, primary_agency, bank_balance, cash_balance, last_income_at, created_at)
         VALUES (?, ?, ?, 1, ?, 'Owner Command', 50000, 1000, ?, ?)
         """,
-        (OWNER_NAME, OWNER_EMAIL, hash_password(OWNER_PASSWORD), json.dumps(["owner", "admin", "civ"]), ts, ts),
+        (OWNER_NAME, OWNER_EMAIL, hash_password(OWNER_PASSWORD), json.dumps(owner_roles), ts, ts),
     )
 
 

@@ -27,6 +27,8 @@ python app.py
 
 Set `OWNER_EMAIL`, `OWNER_PASSWORD`, `SECRET_KEY`, and `DATABASE_URL` before deploying.
 
+The bootstrap owner is synced from `OWNER_EMAIL` and `OWNER_PASSWORD` on startup, so changing those Railway variables and redeploying updates the owner login.
+
 ## Deploy
 
 This repo includes a `Dockerfile` and `railway.toml`. Railway can build it as a Dockerfile app. Add a Railway PostgreSQL database to the project and pass its `DATABASE_URL` to this service. The server listens on the `PORT` environment variable Railway provides.
