@@ -12,6 +12,7 @@ const state = {
   mdtCatalogOpen: false,
   mdtCatalogMode: "citation",
   mdtSelectedCiv: "",
+  mdtNotice: null,
   courtTab: "mine",
   adminTab: "users",
   cache: {},
@@ -184,7 +185,7 @@ function renderHome() {
         </div>
         <button class="icon-action" data-logout aria-label="Sign out">${iconSvg.logout}</button>
       </header>
-      <div class="user-chip"><span class="user-dot ${locked ? "" : "ok"}"></span>${locked ? "Waiting on verification" : "Verified"} · ${escapeHtml(user.roles.join(", "))}</div>
+      <div class="user-chip"><span class="user-dot ${locked ? "" : "ok"}"></span>${locked ? "Waiting on verification" : "Verified"} · CIV ${escapeHtml(user.civ_number || "pending")} · ${escapeHtml(user.roles.join(", "))}</div>
       ${locked ? `
         <div class="home-alert">
           ${iconSvg.lock}
@@ -198,10 +199,10 @@ function renderHome() {
       `}
       <div class="app-grid">
         ${apps.map((item, index) => `
-          <button class="app-icon ${item.enabled ? "" : "locked"}" style="--i:${index}" data-open-app="${item.id}" ${item.enabled ? "" : "disabled"}>
+          <button class="app-icon ${item.enabled ? "" : "locked"} ${item.coming_soon ? "coming-soon" : ""}" style="--i:${index}" data-open-app="${item.id}" ${item.enabled ? "" : "disabled"}>
             <span class="icon-tile" style="--tile:${tileColors[item.id] || tileColors.dmv}">
               ${iconSvg[item.icon] || iconSvg.settings}
-              ${item.enabled ? "" : `<span class="lock-badge">${iconSvg.lock}</span>`}
+              ${item.coming_soon ? `<span class="soon-badge">SOON</span>` : item.enabled ? "" : `<span class="lock-badge">${iconSvg.lock}</span>`}
             </span>
             <span>${escapeHtml(item.label)}${item.id === "messages" && unread ? ` (${unread})` : ""}</span>
           </button>
@@ -928,6 +929,7 @@ function renderMdtWorkspace() {
         <aside class="mdt-side">${renderMdtSide()}</aside>
       </div>
       ${state.mdtCatalogOpen ? renderMdtCatalogModal() : ""}
+      ${state.mdtNotice ? renderMdtNoticeModal() : ""}
     </section>
   `;
 }
@@ -987,7 +989,7 @@ function renderMdtSearch() {
       ${results.map((item) => `
         <article class="mdt-return">
           <div class="row">
-            <div><h3>${escapeHtml(item.name)}</h3><p class="muted small">ID #${item.id} - ${escapeHtml(item.email)}</p></div>
+            <div><h3>${escapeHtml(item.name)}</h3><p class="muted small">CIV ${escapeHtml(item.civ_number || "pending")} - DB #${item.id} - ${escapeHtml(item.email)}</p></div>
             <span class="pill ${item.verified ? "green" : "amber"}">${item.verified ? "verified" : "unverified"}</span>
           </div>
           <div class="mdt-return-grid">
@@ -1092,6 +1094,32 @@ function renderMdtCatalogModal() {
   `;
 }
 
+function renderMdtNoticeModal() {
+  const notice = state.mdtNotice || {};
+  return `
+    <div class="modal-backdrop notice-backdrop" data-close-mdt-notice>
+      <section class="mdt-modal mdt-notice" role="alertdialog" aria-modal="true">
+        <header class="row">
+          <div>
+            <p class="eyebrow">Official NCIC return notice</p>
+            <h2>Invalid or unavailable return</h2>
+          </div>
+          <button class="icon-action" data-close-mdt-notice aria-label="Close">x</button>
+        </header>
+        <div class="notice-body">
+          <p>The name or identifier searched is coming back invalid in the civilian records system.</p>
+          <p>This may be caused by misspelling, an unregistered civilian profile, restricted records, or a temporary system error.</p>
+          <div class="grid-2">
+            <div class="metric"><span>Search</span><strong>${escapeHtml(notice.query || "Unknown")}</strong></div>
+            <div class="metric"><span>Reference</span><strong>${escapeHtml(notice.reference || "N/A")}</strong></div>
+          </div>
+        </div>
+        <button class="primary" data-close-mdt-notice>Acknowledge notice</button>
+      </section>
+    </div>
+  `;
+}
+
 function renderPanic() {
   const alerts = state.cache.mdt?.alerts?.alerts || [];
   return `
@@ -1126,6 +1154,11 @@ function bindMdt() {
     state.mdtCatalogOpen = false;
     render();
   }));
+  $$("[data-close-mdt-notice]").forEach((button) => button.addEventListener("click", (event) => {
+    if (event.currentTarget.classList?.contains("modal-backdrop") && event.target !== event.currentTarget) return;
+    state.mdtNotice = null;
+    render();
+  }));
   $$("[data-use-civ]").forEach((button) => button.addEventListener("click", () => {
     state.mdtSelectedCiv = button.dataset.useCiv;
     state.mdtTab = "ticket";
@@ -1138,6 +1171,9 @@ function bindMdt() {
       const results = await api(`/api/mdt/search?q=${encodeURIComponent(q)}`);
       state.cache.mdt = state.cache.mdt || {};
       state.cache.mdt.search = results.results;
+      state.mdtNotice = results.results.length
+        ? null
+        : { query: q, reference: `NCIC-${Math.floor(100000 + Math.random() * 900000)}` };
       render();
     } catch (error) {
       toast(error.message);

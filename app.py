@@ -179,6 +179,7 @@ def has_any(user: DbRow, *roles: str) -> bool:
 def public_user(user: DbRow) -> dict[str, Any]:
     return {
         "id": user["id"],
+        "civ_number": user.get("civ_number"),
         "name": user["name"],
         "email": user["email"],
         "verified": bool(user["verified"]),
@@ -197,12 +198,21 @@ def require_fields(payload: dict[str, Any], *fields: str) -> str | None:
     return None
 
 
+def generate_civ_number(db: Database) -> str:
+    for _ in range(50):
+        number = f"{secrets.randbelow(900000) + 100000}"
+        if not one(db, "SELECT id FROM users WHERE civ_number = ?", (number,)):
+            return number
+    raise RuntimeError("Unable to generate unique civilian ID")
+
+
 def ensure_schema() -> None:
     with conn() as db:
         db.executescript(
             """
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
+                civ_number TEXT UNIQUE,
                 name TEXT NOT NULL,
                 email TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
@@ -388,6 +398,10 @@ def ensure_schema() -> None:
 
 
 def ensure_migrations(db: Database) -> None:
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS civ_number TEXT")
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_civ_number_unique ON users (civ_number)")
+    for user in all_rows(db, "SELECT id FROM users WHERE civ_number IS NULL"):
+        db.execute("UPDATE users SET civ_number = ? WHERE id = ?", (generate_civ_number(db), user["id"]))
     db.execute("ALTER TABLE charge_catalog ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'criminal'")
     db.execute("UPDATE charge_catalog SET kind = 'citation' WHERE code LIKE ?", ("TRF-%",))
 
@@ -413,10 +427,10 @@ def seed_owner(db: Database) -> None:
     db.execute(
         """
         INSERT INTO users
-        (name, email, password_hash, verified, roles, primary_agency, bank_balance, cash_balance, last_income_at, created_at)
-        VALUES (?, ?, ?, 1, ?, 'Owner Command', 50000, 1000, ?, ?)
+        (civ_number, name, email, password_hash, verified, roles, primary_agency, bank_balance, cash_balance, last_income_at, created_at)
+        VALUES (?, ?, ?, ?, 1, ?, 'Owner Command', 50000, 1000, ?, ?)
         """,
-        (OWNER_NAME, OWNER_EMAIL, hash_password(OWNER_PASSWORD), json.dumps(owner_roles), ts, ts),
+        (generate_civ_number(db), OWNER_NAME, OWNER_EMAIL, hash_password(OWNER_PASSWORD), json.dumps(owner_roles), ts, ts),
     )
 
 
@@ -553,15 +567,18 @@ def app_catalog(user: DbRow | None) -> list[dict[str, Any]]:
         return []
     verified = bool(user["verified"]) or has_any(user, "owner", "admin")
     base = [
-        ("dmv", "DMV", "id-card", verified),
-        ("jobs", "JOB", "briefcase", verified),
-        ("court", "COURT", "gavel", verified),
-        ("properties", "PROPERTIES", "home", verified),
-        ("cash", "CASH APP", "send", verified),
-        ("bank", "BANK", "bank", verified),
-        ("messages", "Messages", "message", verified),
+        ("dmv", "DMV", "id-card", verified, False),
+        ("jobs", "JOB", "briefcase", verified, False),
+        ("court", "COURT", "gavel", verified, False),
+        ("properties", "PROPERTIES", "home", False, True),
+        ("cash", "CASH APP", "send", False, True),
+        ("bank", "BANK", "bank", False, True),
+        ("messages", "Messages", "message", verified, False),
     ]
-    apps = [{"id": key, "label": label, "icon": icon, "enabled": enabled, "hidden": False} for key, label, icon, enabled in base]
+    apps = [
+        {"id": key, "label": label, "icon": icon, "enabled": enabled, "coming_soon": coming_soon, "hidden": False}
+        for key, label, icon, enabled, coming_soon in base
+    ]
     if has_any(user, "leo", "owner", "admin"):
         apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "hidden": False})
     if has_any(user, "owner", "admin"):
@@ -869,11 +886,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         ts = now_iso()
         cur = db.execute(
             """
-            INSERT INTO users (name, email, password_hash, verified, roles, bank_balance, cash_balance, last_income_at, created_at)
-            VALUES (?, ?, ?, 0, ?, 0, 250, ?, ?)
+            INSERT INTO users (civ_number, name, email, password_hash, verified, roles, bank_balance, cash_balance, last_income_at, created_at)
+            VALUES (?, ?, ?, ?, 0, ?, 0, 250, ?, ?)
             RETURNING id
             """,
-            (str(payload["name"]).strip(), email, hash_password(password), json.dumps(["civ"]), ts, ts),
+            (generate_civ_number(db), str(payload["name"]).strip(), email, hash_password(password), json.dumps(["civ"]), ts, ts),
         )
         created = cur.fetchone()
         user_id = int(created["id"])
@@ -1373,16 +1390,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         rows = all_rows(
             db,
             """
-            SELECT u.id, u.name, u.email, u.verified, u.roles, d.license_status, d.license_class, d.vehicle_make,
+            SELECT u.id, u.civ_number, u.name, u.email, u.verified, u.roles, d.license_status, d.license_class, d.vehicle_make,
                    d.vehicle_model, d.vehicle_color, d.plate, d.registration_status, d.insurance_status
             FROM users u
             LEFT JOIN dmv_records d ON d.user_id = u.id
-            WHERE u.name ILIKE ? OR u.email ILIKE ? OR d.plate ILIKE ?
+            WHERE u.name ILIKE ? OR u.email ILIKE ? OR u.civ_number ILIKE ? OR d.plate ILIKE ?
                OR EXISTS (SELECT 1 FROM dmv_vehicles v WHERE v.user_id = u.id AND v.plate ILIKE ?)
             ORDER BY u.name
             LIMIT 25
             """,
-            (like, like, like, like),
+            (like, like, like, like, like),
         )
         results = []
         for row in rows:
