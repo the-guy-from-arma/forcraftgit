@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import bcrypt from "bcryptjs";
 import { getPrisma } from "./db.js";
+import { getNodeEnv, getOwnerBootstrapConfig, maskEmail, readEnvValue } from "./env.js";
 
 const REQUIRED_TABLES = [
   "User",
@@ -76,13 +77,19 @@ const CORE_DEPARTMENTS = [
 ];
 
 function assertPostgresConfigured() {
-  const url = process.env.DATABASE_URL;
+  const databaseUrl = readEnvValue(["DATABASE_URL"]);
+  const url = databaseUrl.value;
+
   if (!url) {
     throw new Error("DATABASE_URL is required. FairCroft CoreOne only supports PostgreSQL persistence.");
   }
 
   if (!/^postgres(ql)?:\/\//i.test(url)) {
     throw new Error("DATABASE_URL must be a PostgreSQL connection string. SQLite, JSON, and file storage are not supported.");
+  }
+
+  if (process.env.DATABASE_URL !== url) {
+    process.env.DATABASE_URL = url;
   }
 }
 
@@ -143,6 +150,7 @@ export async function checkDatabaseHealth() {
 
 export async function ensureCoreDefaults() {
   const prisma = getPrisma();
+  const environment = readEnvValue(["RAILWAY_ENVIRONMENT"]).value || getNodeEnv();
 
   for (const department of CORE_DEPARTMENTS) {
     const saved = await prisma.department.upsert({
@@ -197,31 +205,23 @@ export async function ensureCoreDefaults() {
   await prisma.serverConfiguration.upsert({
     where: { key: "startup_profile" },
     update: {
-      environment: process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV || "development",
+      environment,
       value: {
-        railwayEnvironment: process.env.RAILWAY_ENVIRONMENT || null,
+        railwayEnvironment: readEnvValue(["RAILWAY_ENVIRONMENT"]).value || null,
         portManagedByEnvironment: true,
         persistence: "postgresql"
       }
     },
     create: {
       key: "startup_profile",
-      environment: process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV || "development",
+      environment,
       value: {
-        railwayEnvironment: process.env.RAILWAY_ENVIRONMENT || null,
+        railwayEnvironment: readEnvValue(["RAILWAY_ENVIRONMENT"]).value || null,
         portManagedByEnvironment: true,
         persistence: "postgresql"
       }
     }
   });
-}
-
-function ownerBootstrapConfig() {
-  const email = (process.env.OWNER_EMAIL || "owner@faircroft.local").trim().toLowerCase();
-  const password = process.env.OWNER_PASSWORD || (process.env.NODE_ENV === "production" ? "" : "ChangeMe123!");
-  const name = process.env.OWNER_NAME || "FairCroft Owner";
-
-  return { email, password, name };
 }
 
 function splitOwnerName(name: string) {
@@ -234,12 +234,22 @@ function splitOwnerName(name: string) {
 
 async function ensureOwnerAccount() {
   const prisma = getPrisma();
-  const owner = ownerBootstrapConfig();
+  const owner = getOwnerBootstrapConfig();
+
+  console.log("[database] Owner bootstrap environment:", {
+    ownerEmail: maskEmail(owner.email),
+    emailSource: owner.emailSource,
+    passwordSource: owner.passwordSource,
+    passwordAvailable: Boolean(owner.password),
+    nameSource: owner.nameSource
+  });
 
   if (!owner.password) {
     const existingOwner = await prisma.user.findFirst({ where: { role: "owner" } });
     if (!existingOwner) {
-      console.warn("[database] OWNER_PASSWORD is not set; owner bootstrap skipped because no safe password is available.");
+      console.warn("[database] Owner password is not set; owner bootstrap skipped because no safe password is available.");
+    } else {
+      console.warn("[database] Owner password is not set; existing owner account was left unchanged.");
     }
     return;
   }
@@ -335,7 +345,7 @@ async function ensureOwnerAccount() {
     }
   });
 
-  console.log(`[database] Owner account ready for ${owner.email}.`);
+  console.log(`[database] Owner account ready for ${maskEmail(owner.email)}.`);
 }
 
 export async function initializeDatabase() {

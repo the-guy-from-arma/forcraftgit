@@ -3,12 +3,14 @@ import type { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import type { SignOptions } from "jsonwebtoken";
 import { getPrisma } from "./db.js";
+import { isProductionEnv, readEnvValue } from "./env.js";
 import { auditAction, canAccessAdmin, canAccessDepartment, canAccessDispatch, canAccessGovernment, publicUser } from "./security.js";
 
 const DEFAULT_DEV_SECRET = "faircroft-coreone-dev-secret-change-me";
 type JwtExpiresIn = NonNullable<SignOptions["expiresIn"]>;
 
 const DEFAULT_JWT_EXPIRES: JwtExpiresIn = "7d";
+let warnedSecretKeyFallback = false;
 
 export type AuthedRequest = Request & {
   auth: {
@@ -25,21 +27,28 @@ type SessionPayload = {
 };
 
 function getJwtSecret(): string {
-  const secret = process.env.JWT_SECRET;
-  if (!secret && process.env.NODE_ENV === "production") {
-    throw new Error("JWT_SECRET is required in production.");
+  const secret = readEnvValue(["JWT_SECRET", "SECRET_KEY"]);
+
+  if (secret.key === "SECRET_KEY" && !warnedSecretKeyFallback) {
+    warnedSecretKeyFallback = true;
+    console.warn("[auth] Using SECRET_KEY as the JWT signing secret fallback. Prefer JWT_SECRET when possible.");
   }
-  return secret || DEFAULT_DEV_SECRET;
+
+  if (!secret.value && isProductionEnv()) {
+    throw new Error("JWT_SECRET or SECRET_KEY is required in production.");
+  }
+
+  return secret.value || DEFAULT_DEV_SECRET;
 }
 
 function getJwtExpires(): JwtExpiresIn {
-  const configured = process.env.JWT_EXPIRES_IN?.trim();
+  const configured = readEnvValue(["JWT_EXPIRES_IN"]).value;
   if (!configured) return DEFAULT_JWT_EXPIRES;
 
   if (/^\d+$/.test(configured)) return Number(configured);
   if (/^\d+(ms|s|m|h|d|w|y)$/i.test(configured)) return configured as JwtExpiresIn;
 
-  if (process.env.NODE_ENV === "production") {
+  if (isProductionEnv()) {
     throw new Error("JWT_EXPIRES_IN must be a duration like 7d, 12h, 30m, or a number of seconds.");
   }
 

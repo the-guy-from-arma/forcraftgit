@@ -93,7 +93,27 @@ The owner account is bootstrapped on startup from environment variables:
 - `OWNER_PASSWORD`
 - `OWNER_NAME`
 
+`OWNER_EMAIL`, `OWNER_PASSWORD`, `OWNER_NAME`, `JWT_SECRET`, `SECRET_KEY`, and `JWT_EXPIRES_IN` are trimmed and de-quoted at startup, which protects against accidentally pasting quoted values into Railway.
+
+Supported owner aliases are also accepted:
+
+- `OWNER_PASS`
+- `COREONE_OWNER_EMAIL`
+- `COREONE_OWNER_PASSWORD`
+- `COREONE_OWNER_NAME`
+- `FAIRCROFT_OWNER_EMAIL`
+- `FAIRCROFT_OWNER_PASSWORD`
+- `FAIRCROFT_OWNER_NAME`
+
 If `OWNER_PASSWORD` changes in Railway, redeploy/restart and CoreOne will update the owner password in PostgreSQL. Demo seed passwords are intentionally not shown in the app UI.
+
+Temporary auth diagnostics:
+
+1. Set `AUTH_DIAGNOSTICS_ENABLED=true` in Railway.
+2. Redeploy/restart the web service.
+3. Visit `/api/health/auth`.
+4. Confirm `owner.userExists=true`, `owner.passwordMatchesConfigured=true`, and `jwt.secretAvailable=true`.
+5. Set `AUTH_DIAGNOSTICS_ENABLED=false` again after debugging.
 
 ## Railway deployment
 
@@ -106,6 +126,7 @@ If `OWNER_PASSWORD` changes in Railway, redeploy/restart and CoreOne will update
    - `OWNER_EMAIL`
    - `OWNER_PASSWORD`
    - `OWNER_NAME`
+   - Optional debugging only: `AUTH_DIAGNOSTICS_ENABLED=false`
    - `NODE_ENV=production`
    - `PORT` is managed by Railway.
    - Optional first deploy: `SEED_ON_START=true`
@@ -122,6 +143,7 @@ Health endpoint:
 ```text
 GET /api/health
 GET /api/health/db
+GET /api/health/auth  # only when AUTH_DIAGNOSTICS_ENABLED=true
 ```
 
 ## Useful commands

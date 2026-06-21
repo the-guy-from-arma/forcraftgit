@@ -2,12 +2,24 @@ import "dotenv/config";
 
 import bcrypt from "bcryptjs";
 import { PrismaClient } from "@prisma/client";
+import { getNodeEnv, getOwnerBootstrapConfig, isProductionEnv, maskEmail, readEnvValue } from "../src/server/env.js";
+
+const databaseUrl = readEnvValue(["DATABASE_URL"]);
+if (databaseUrl.value && process.env.DATABASE_URL !== databaseUrl.value) {
+  process.env.DATABASE_URL = databaseUrl.value;
+}
 
 const prisma = new PrismaClient();
 
-const ownerEmail = process.env.OWNER_EMAIL || "owner@faircroft.local";
-const ownerPassword = process.env.OWNER_PASSWORD || "ChangeMe123!";
-const ownerName = process.env.OWNER_NAME || "FairCroft Owner";
+const ownerConfig = getOwnerBootstrapConfig();
+if (!ownerConfig.password && isProductionEnv()) {
+  throw new Error("OWNER_PASSWORD is required when seeding FairCroft CoreOne in production.");
+}
+
+const ownerEmail = ownerConfig.email;
+const ownerPassword = ownerConfig.password || "ChangeMe123!";
+const ownerName = ownerConfig.name;
+const seedEnvironment = readEnvValue(["RAILWAY_ENVIRONMENT"]).value || getNodeEnv();
 
 const demoPassword = "Password123!";
 
@@ -657,12 +669,12 @@ async function main() {
   await prisma.serverConfiguration.upsert({
     where: { key: "seed_profile" },
     update: {
-      environment: process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV || "development",
+      environment: seedEnvironment,
       value: { seededAt: new Date().toISOString(), sampleWarrantNumber: warrant.warrantNumber }
     },
     create: {
       key: "seed_profile",
-      environment: process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV || "development",
+      environment: seedEnvironment,
       value: { seededAt: new Date().toISOString(), sampleWarrantNumber: warrant.warrantNumber },
       updatedById: owner.id
     }
@@ -678,7 +690,7 @@ async function main() {
   });
 
   console.log("FairCroft CoreOne PostgreSQL seed complete.");
-  console.log(`Owner account ready for ${ownerEmail}.`);
+  console.log(`Owner account ready for ${maskEmail(ownerEmail)}.`);
   console.log("Demo accounts seeded. Passwords are intentionally not printed; use configured environment values or reset through the database/admin workflow.");
 }
 

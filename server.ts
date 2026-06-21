@@ -8,12 +8,15 @@ import express from "express";
 import helmet from "helmet";
 import { Server as SocketIOServer } from "socket.io";
 import { initializeDatabase, shutdownDatabase } from "./src/server/database.js";
+import { getNodeEnv, readEnvValue } from "./src/server/env.js";
 import { registerApi } from "./src/server/routes.js";
 import { registerSocketHandlers } from "./src/server/socket.js";
 
-const dev = process.env.NODE_ENV !== "production";
-const port = Number(process.env.PORT || 3000);
-const hostname = process.env.HOST || "0.0.0.0";
+const nodeEnv = getNodeEnv();
+const dev = nodeEnv !== "production";
+const configuredPort = Number(readEnvValue(["PORT"], "3000").value || 3000);
+const port = Number.isFinite(configuredPort) ? configuredPort : 3000;
+const hostname = readEnvValue(["HOST"], "0.0.0.0").value;
 const serverFile = fileURLToPath(import.meta.url);
 const projectDir = dev ? process.cwd() : path.resolve(path.dirname(serverFile), "..");
 
@@ -22,8 +25,9 @@ const nextConfig = { dev, hostname, port, dir: projectDir };
 const nextApp = nextImport.default ? nextImport.default(nextConfig) : nextImport(nextConfig);
 const handle = nextApp.getRequestHandler();
 
-const allowedOrigins = process.env.CORS_ORIGIN
-  ? process.env.CORS_ORIGIN.split(",").map((origin) => origin.trim())
+const corsOrigin = readEnvValue(["CORS_ORIGIN"]).value;
+const allowedOrigins = corsOrigin
+  ? corsOrigin.split(",").map((origin) => origin.trim())
   : undefined;
 
 process.on("uncaughtException", (error) => {
@@ -74,7 +78,7 @@ app.get("/__coreone/preflight.json", (_req, res) => {
     name: "FairCroft CoreOne",
     layer: "express",
     nextProjectDir: projectDir,
-    nodeEnv: process.env.NODE_ENV || "development",
+    nodeEnv,
     railwayEnvironment: process.env.RAILWAY_ENVIRONMENT || null,
     timestamp: new Date().toISOString()
   });

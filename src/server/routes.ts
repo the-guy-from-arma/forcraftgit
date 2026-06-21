@@ -5,6 +5,7 @@ import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { checkDatabaseHealth } from "./database.js";
 import { getPrisma } from "./db.js";
+import { getNodeEnv, getOwnerBootstrapConfig, maskEmail, readBooleanEnv, readEnvValue } from "./env.js";
 import {
   AuthedRequest,
   bearerToken,
@@ -162,6 +163,59 @@ export function registerApi(app: Express, io: SocketIOServer) {
   );
 
   app.get(
+    "/api/health/auth",
+    asyncHandler(async (_req, res) => {
+      if (!readBooleanEnv(["AUTH_DIAGNOSTICS_ENABLED"], false)) {
+        res.status(404).json({ error: "Not found." });
+        return;
+      }
+
+      const prisma = getPrisma();
+      const owner = getOwnerBootstrapConfig();
+      const jwtSecret = readEnvValue(["JWT_SECRET", "SECRET_KEY"]);
+      const user = owner.email
+        ? await prisma.user.findUnique({
+            where: { email: owner.email },
+            select: {
+              id: true,
+              email: true,
+              role: true,
+              suspended: true,
+              updatedAt: true,
+              passwordHash: true
+            }
+          })
+        : null;
+
+      const passwordMatchesConfigured = Boolean(user && owner.password && (await bcrypt.compare(owner.password, user.passwordHash)));
+
+      res.json({
+        ok: true,
+        diagnosticsEnabled: true,
+        railwayEnvironment: process.env.RAILWAY_ENVIRONMENT || null,
+        nodeEnvironment: getNodeEnv(),
+        jwt: {
+          secretAvailable: Boolean(jwtSecret.value),
+          secretSource: jwtSecret.key || "missing"
+        },
+        owner: {
+          emailMasked: maskEmail(owner.email),
+          emailSource: owner.emailSource,
+          passwordSource: owner.passwordSource,
+          passwordAvailable: Boolean(owner.password),
+          passwordConfigured: owner.passwordConfigured,
+          passwordDefaultUsed: owner.passwordDefaultUsed,
+          userExists: Boolean(user),
+          role: user?.role || null,
+          suspended: user?.suspended ?? null,
+          updatedAt: user?.updatedAt?.toISOString() || null,
+          passwordMatchesConfigured
+        }
+      });
+    })
+  );
+
+  app.get(
     "/api/system/announcements",
     requireAuth,
     asyncHandler(async (_req, res) => {
@@ -268,8 +322,16 @@ export function registerApi(app: Express, io: SocketIOServer) {
         where: { email: body.email },
         include: userInclude
       });
+      const passwordMatched = user ? await bcrypt.compare(body.password, user.passwordHash) : false;
 
-      if (!user || !(await bcrypt.compare(body.password, user.passwordHash))) {
+      if (!user || !passwordMatched) {
+        console.warn("[auth] Login failed:", {
+          email: maskEmail(body.email),
+          userFound: Boolean(user),
+          role: user?.role || null,
+          suspended: user?.suspended ?? null,
+          passwordMatched
+        });
         await auditAction(prisma, req, {
           actorId: user?.id || null,
           action: "auth.login.failed",
@@ -291,6 +353,11 @@ export function registerApi(app: Express, io: SocketIOServer) {
         res.status(403).json({ error: "This account is suspended." });
         return;
       }
+
+      console.log("[auth] Login success:", {
+        email: maskEmail(user.email),
+        role: user.role
+      });
 
       await auditAction(prisma, req, {
         actorId: user.id,
