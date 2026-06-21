@@ -278,6 +278,37 @@ def ensure_schema() -> None:
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS dmv_vehicles (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                vehicle_year INTEGER NOT NULL,
+                vehicle_make TEXT NOT NULL,
+                vehicle_model TEXT NOT NULL,
+                vehicle_color TEXT NOT NULL,
+                plate TEXT NOT NULL UNIQUE,
+                vin TEXT NOT NULL,
+                registration_status TEXT NOT NULL DEFAULT 'Active',
+                insurance_status TEXT NOT NULL DEFAULT 'Active',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS dmv_license_applications (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                application_type TEXT NOT NULL,
+                license_class TEXT NOT NULL,
+                legal_name TEXT NOT NULL,
+                date_of_birth TEXT NOT NULL,
+                notes TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'submitted',
+                reviewer_notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS charge_catalog (
                 id SERIAL PRIMARY KEY,
                 code TEXT NOT NULL UNIQUE,
@@ -286,7 +317,8 @@ def ensure_schema() -> None:
                 description TEXT NOT NULL,
                 fine_amount NUMERIC(12,2) NOT NULL,
                 points INTEGER NOT NULL DEFAULT 0,
-                severity TEXT NOT NULL DEFAULT 'Infraction'
+                severity TEXT NOT NULL DEFAULT 'Infraction',
+                kind TEXT NOT NULL DEFAULT 'criminal'
             );
 
             CREATE TABLE IF NOT EXISTS citations (
@@ -348,10 +380,16 @@ def ensure_schema() -> None:
             );
             """
         )
+        ensure_migrations(db)
         seed_owner(db)
         seed_jobs(db)
         seed_charges(db)
         seed_properties(db)
+
+
+def ensure_migrations(db: Database) -> None:
+    db.execute("ALTER TABLE charge_catalog ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'criminal'")
+    db.execute("UPDATE charge_catalog SET kind = 'citation' WHERE code LIKE 'TRF-%'")
 
 
 def seed_owner(db: Database) -> None:
@@ -413,26 +451,36 @@ def seed_jobs(db: Database) -> None:
 
 
 def seed_charges(db: Database) -> None:
-    if one(db, "SELECT id FROM charge_catalog LIMIT 1"):
-        return
     charges = [
-        ("TRF-101", "Speeding 1-15 Over", "Traffic", "Operating a vehicle above the posted speed limit by 1 to 15 mph.", 150, 2, "Infraction"),
-        ("TRF-102", "Speeding 16-30 Over", "Traffic", "Operating a vehicle above the posted speed limit by 16 to 30 mph.", 300, 4, "Misdemeanor"),
-        ("TRF-201", "Reckless Driving", "Traffic", "Driving with willful disregard for public safety.", 750, 6, "Misdemeanor"),
-        ("TRF-301", "Expired Registration", "Traffic", "Operating a motor vehicle with expired or invalid registration.", 125, 1, "Infraction"),
-        ("TRF-302", "No Proof of Insurance", "Traffic", "Failure to present valid proof of financial responsibility.", 250, 2, "Infraction"),
-        ("PEN-110", "Failure to Identify", "Public Order", "Refusing lawful identification during an investigation.", 350, 0, "Misdemeanor"),
-        ("PEN-210", "Disorderly Conduct", "Public Order", "Creating a public disturbance or hazardous condition.", 400, 0, "Misdemeanor"),
-        ("PEN-330", "Trespassing", "Property", "Knowingly entering or remaining on property without permission.", 450, 0, "Misdemeanor"),
-        ("PEN-410", "Petty Theft", "Property", "Unlawfully taking property below the felony threshold.", 600, 0, "Misdemeanor"),
-        ("PEN-520", "Assault", "Violent Crime", "Attempting or causing unlawful physical harm to another person.", 1200, 0, "Felony"),
-        ("WPN-101", "Unlawful Weapon Possession", "Weapons", "Possessing a weapon without a valid permit or exemption.", 1500, 0, "Felony"),
-        ("NAR-101", "Controlled Substance Possession", "Narcotics", "Possessing a controlled substance without authorization.", 900, 0, "Misdemeanor"),
+        ("TRF-101", "Speeding 1-15 Over", "Moving Citation", "Operating a vehicle above the posted speed limit by 1 to 15 mph.", 150, 2, "Infraction", "citation"),
+        ("TRF-102", "Speeding 16-30 Over", "Moving Citation", "Operating a vehicle above the posted speed limit by 16 to 30 mph.", 300, 4, "Citation", "citation"),
+        ("TRF-201", "Reckless Driving", "Moving Citation", "Driving with willful disregard for public safety.", 750, 6, "Major Citation", "citation"),
+        ("TRF-301", "Expired Registration", "Equipment Citation", "Operating a motor vehicle with expired or invalid registration.", 125, 1, "Infraction", "citation"),
+        ("TRF-302", "No Proof of Insurance", "Equipment Citation", "Failure to present valid proof of financial responsibility.", 250, 2, "Infraction", "citation"),
+        ("TRF-401", "Failure to Stop", "Moving Citation", "Failure to stop at a posted stop sign or steady red signal.", 180, 2, "Infraction", "citation"),
+        ("TRF-402", "Improper Lane Change", "Moving Citation", "Unsafe or unsignaled lane movement creating a traffic hazard.", 160, 2, "Infraction", "citation"),
+        ("TRF-501", "Illegal Parking", "Parking Citation", "Parking in a restricted, fire lane, or no-parking zone.", 90, 0, "Parking Citation", "citation"),
+        ("TRF-601", "Vehicle Equipment Violation", "Equipment Citation", "Operating a vehicle with unlawful lighting, tint, or unsafe equipment.", 110, 0, "Fix-It Citation", "citation"),
+        ("PEN-110", "Failure to Identify", "Public Order", "Refusing lawful identification during an investigation.", 350, 0, "Misdemeanor", "criminal"),
+        ("PEN-210", "Disorderly Conduct", "Public Order", "Creating a public disturbance or hazardous condition.", 400, 0, "Misdemeanor", "criminal"),
+        ("PEN-330", "Trespassing", "Property", "Knowingly entering or remaining on property without permission.", 450, 0, "Misdemeanor", "criminal"),
+        ("PEN-410", "Petty Theft", "Property", "Unlawfully taking property below the felony threshold.", 600, 0, "Misdemeanor", "criminal"),
+        ("PEN-520", "Assault", "Violent Crime", "Attempting or causing unlawful physical harm to another person.", 1200, 0, "Felony", "criminal"),
+        ("WPN-101", "Unlawful Weapon Possession", "Weapons", "Possessing a weapon without a valid permit or exemption.", 1500, 0, "Felony", "criminal"),
+        ("NAR-101", "Controlled Substance Possession", "Narcotics", "Possessing a controlled substance without authorization.", 900, 0, "Misdemeanor", "criminal"),
     ]
     db.executemany(
         """
-        INSERT INTO charge_catalog (code, title, category, description, fine_amount, points, severity)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO charge_catalog (code, title, category, description, fine_amount, points, severity, kind)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (code) DO UPDATE SET
+            title = excluded.title,
+            category = excluded.category,
+            description = excluded.description,
+            fine_amount = excluded.fine_amount,
+            points = excluded.points,
+            severity = excluded.severity,
+            kind = excluded.kind
         """,
         charges,
     )
@@ -747,6 +795,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dmv_me(db, user)
                 elif path == "/api/dmv/me" and method == "PATCH":
                     self.api_dmv_update(db, user)
+                elif path == "/api/dmv/license-applications" and method == "POST":
+                    self.api_dmv_apply_license(db, user)
+                elif path == "/api/dmv/vehicles" and method == "POST":
+                    self.api_dmv_register_vehicle(db, user)
                 elif path == "/api/messages" and method == "GET":
                     self.api_messages(db, user)
                 elif path == "/api/messages" and method == "POST":
@@ -1018,7 +1070,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not record:
             create_default_dmv(db, user["id"])
             record = one(db, "SELECT * FROM dmv_records WHERE user_id = ?", (user["id"],))
-        self.send_json(200, {"record": dict(record)})
+        vehicles = all_rows(db, "SELECT * FROM dmv_vehicles WHERE user_id = ? ORDER BY created_at DESC", (user["id"],))
+        applications = all_rows(
+            db,
+            "SELECT * FROM dmv_license_applications WHERE user_id = ? ORDER BY created_at DESC",
+            (user["id"],),
+        )
+        self.send_json(200, {"record": dict(record), "vehicles": vehicles, "license_applications": applications})
 
     def api_dmv_update(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -1035,6 +1093,96 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         values = list(updates.values()) + [now_iso(), user["id"]]
         db.execute(f"UPDATE dmv_records SET {keys}, registration_status = 'Active', license_status = 'Valid', updated_at = ? WHERE user_id = ?", values)
         self.send_json(200, {"ok": True})
+
+    def api_dmv_apply_license(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        missing = require_fields(payload, "application_type", "license_class", "legal_name", "date_of_birth")
+        if missing:
+            self.error(400, missing)
+            return
+        application_type = str(payload["application_type"]).strip()[:80]
+        license_class = str(payload["license_class"]).strip()[:30]
+        legal_name = str(payload["legal_name"]).strip()[:120]
+        date_of_birth = str(payload["date_of_birth"]).strip()[:20]
+        notes = str(payload.get("notes") or "").strip()[:800]
+        ts = now_iso()
+        created = db.execute(
+            """
+            INSERT INTO dmv_license_applications
+            (user_id, application_type, license_class, legal_name, date_of_birth, notes, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'submitted', ?, ?)
+            RETURNING id
+            """,
+            (user["id"], application_type, license_class, legal_name, date_of_birth, notes, ts, ts),
+        ).fetchone()
+        add_message(db, user["id"], "DMV application submitted", f"Your {application_type} application is pending DMV review.")
+        admins = all_rows(db, "SELECT id FROM users WHERE roles LIKE '%owner%' OR roles LIKE '%admin%'")
+        for admin in admins:
+            add_message(db, admin["id"], "DMV application pending", f"{user['name']} submitted a {application_type} application.", user["id"])
+        self.send_json(201, {"ok": True, "application_id": int(created["id"])})
+
+    def api_dmv_register_vehicle(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        missing = require_fields(payload, "vehicle_year", "vehicle_make", "vehicle_model", "vehicle_color", "plate", "vin", "insurance_status")
+        if missing:
+            self.error(400, missing)
+            return
+        year = int(payload["vehicle_year"])
+        current_year = utcnow().year + 1
+        if year < 1900 or year > current_year:
+            self.error(400, "Vehicle year is outside the accepted range")
+            return
+        if not one(db, "SELECT id FROM dmv_records WHERE user_id = ?", (user["id"],)):
+            create_default_dmv(db, user["id"])
+        plate = str(payload["plate"]).strip().upper()[:12]
+        vin = str(payload["vin"]).strip().upper()[:32]
+        ts = now_iso()
+        created = db.execute(
+            """
+            INSERT INTO dmv_vehicles
+            (user_id, vehicle_year, vehicle_make, vehicle_model, vehicle_color, plate, vin, registration_status, insurance_status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'Active', ?, ?, ?)
+            RETURNING id
+            """,
+            (
+                user["id"],
+                year,
+                str(payload["vehicle_make"]).strip()[:40],
+                str(payload["vehicle_model"]).strip()[:40],
+                str(payload["vehicle_color"]).strip()[:30],
+                plate,
+                vin,
+                str(payload["insurance_status"]).strip()[:30],
+                ts,
+                ts,
+            ),
+        ).fetchone()
+        db.execute(
+            """
+            UPDATE dmv_records
+            SET vehicle_make = ?, vehicle_model = ?, vehicle_color = ?, plate = ?, registration_status = 'Active', insurance_status = ?, updated_at = ?
+            WHERE user_id = ?
+            """,
+            (
+                str(payload["vehicle_make"]).strip()[:40],
+                str(payload["vehicle_model"]).strip()[:40],
+                str(payload["vehicle_color"]).strip()[:30],
+                plate,
+                str(payload["insurance_status"]).strip()[:30],
+                ts,
+                user["id"],
+            ),
+        )
+        add_message(db, user["id"], "Vehicle registered", f"{year} {payload['vehicle_make']} {payload['vehicle_model']} was registered with plate {plate}.")
+        self.send_json(201, {"ok": True, "vehicle_id": int(created["id"])})
 
     def api_messages(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -1225,11 +1373,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                    d.vehicle_model, d.vehicle_color, d.plate, d.registration_status, d.insurance_status
             FROM users u
             LEFT JOIN dmv_records d ON d.user_id = u.id
-            WHERE u.name LIKE ? OR u.email LIKE ? OR d.plate LIKE ?
+            WHERE u.name ILIKE ? OR u.email ILIKE ? OR d.plate ILIKE ?
+               OR EXISTS (SELECT 1 FROM dmv_vehicles v WHERE v.user_id = u.id AND v.plate ILIKE ?)
             ORDER BY u.name
             LIMIT 25
             """,
-            (like, like, like),
+            (like, like, like, like),
         )
         results = []
         for row in rows:
@@ -1238,9 +1387,21 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "SELECT id, charge_code, charge_title, status, fine_amount FROM citations WHERE civ_id = ? AND status IN ('issued', 'contested', 'reviewed', 'reduced') ORDER BY created_at DESC LIMIT 10",
                 (row["id"],),
             )
+            vehicles = all_rows(
+                db,
+                "SELECT vehicle_year, vehicle_make, vehicle_model, vehicle_color, plate, registration_status, insurance_status FROM dmv_vehicles WHERE user_id = ? ORDER BY created_at DESC LIMIT 6",
+                (row["id"],),
+            )
+            applications = all_rows(
+                db,
+                "SELECT application_type, license_class, status, created_at FROM dmv_license_applications WHERE user_id = ? ORDER BY created_at DESC LIMIT 4",
+                (row["id"],),
+            )
             item = dict(row)
             item["roles"] = roles_for(row)
             item["open_cases"] = [dict(w) for w in warrants]
+            item["vehicles"] = vehicles
+            item["license_applications"] = applications
             results.append(item)
         self.send_json(200, {"results": results})
 
@@ -1249,8 +1410,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err)
             return
-        rows = all_rows(db, "SELECT * FROM charge_catalog ORDER BY category, code")
-        self.send_json(200, {"charges": [dict(row) for row in rows]})
+        rows = all_rows(db, "SELECT * FROM charge_catalog ORDER BY kind DESC, category, code")
+        catalog = [dict(row) for row in rows]
+        self.send_json(
+            200,
+            {
+                "charges": catalog,
+                "citations": [row for row in catalog if row.get("kind") == "citation"],
+                "criminal_charges": [row for row in catalog if row.get("kind") == "criminal"],
+            },
+        )
 
     def api_issue_citation(self, db: Database, user: DbRow | None) -> None:
         err = leo_required(user)
@@ -1267,7 +1436,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not civ or not charge:
             self.error(404, "Civilian or charge not found")
             return
-        court_date = str(payload.get("court_date") or "").strip() or None
+        default_court_date = (utcnow() + dt.timedelta(days=3)).date().isoformat()
+        court_date = str(payload.get("court_date") or "").strip() or default_court_date
         ts = now_iso()
         cur = db.execute(
             """
@@ -1305,7 +1475,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         judges = all_rows(db, "SELECT id FROM users WHERE roles LIKE '%judge%' OR roles LIKE '%owner%' OR roles LIKE '%admin%'")
         for judge in judges:
             add_message(db, judge["id"], "Citation awaiting court review", f"Citation #{citation_id} was issued to {civ['name']} by {user['name']}.", user["id"])
-        self.send_json(201, {"ok": True, "citation_id": citation_id})
+        self.send_json(201, {"ok": True, "citation_id": citation_id, "court_date": court_date})
 
     def api_panic(self, db: Database, user: DbRow | None) -> None:
         err = leo_required(user)

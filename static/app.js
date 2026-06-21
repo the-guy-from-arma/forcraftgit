@@ -7,7 +7,11 @@ const state = {
   authMode: "login",
   session: null,
   activeApp: null,
+  dmvTab: "overview",
   mdtTab: "search",
+  mdtCatalogOpen: false,
+  mdtCatalogMode: "citation",
+  mdtSelectedCiv: "",
   courtTab: "mine",
   adminTab: "users",
   cache: {},
@@ -102,6 +106,11 @@ function render() {
   if (!state.session?.user) {
     app.innerHTML = phone(renderAuth());
     bindAuth();
+    return;
+  }
+  if (state.activeApp === "mdt") {
+    app.innerHTML = renderMdtWorkspace();
+    bindMdtWorkspace();
     return;
   }
   if (state.activeApp) {
@@ -312,8 +321,25 @@ function can(role) {
 }
 
 function renderDmv() {
-  const record = state.cache.dmv?.record;
+  const data = state.cache.dmv;
+  const record = data?.record;
   if (!record) return `<div class="empty">DMV record loading</div>`;
+  const vehicles = data.vehicles || [];
+  const applications = data.license_applications || [];
+  const activeVehicle = vehicles[0] || record;
+  return `
+    <div class="stack">
+      <div class="segmented">
+        <button class="${state.dmvTab === "overview" ? "active" : ""}" data-dmv-tab="overview">Overview</button>
+        <button class="${state.dmvTab === "license" ? "active" : ""}" data-dmv-tab="license">License</button>
+        <button class="${state.dmvTab === "vehicles" ? "active" : ""}" data-dmv-tab="vehicles">Vehicles</button>
+      </div>
+      ${state.dmvTab === "license" ? renderDmvLicense(applications) : state.dmvTab === "vehicles" ? renderDmvVehicles(vehicles, record) : renderDmvOverview(record, vehicles, applications, activeVehicle)}
+    </div>
+  `;
+}
+
+function renderDmvOverview(record, vehicles, applications, activeVehicle) {
   return `
     <div class="stack">
       <div class="record-card">
@@ -326,28 +352,124 @@ function renderDmv() {
           <div class="metric"><span>Insurance</span><strong>${escapeHtml(record.insurance_status)}</strong></div>
         </div>
       </div>
-      <form id="dmvForm" class="card form-grid">
+      <div class="grid-2">
+        <div class="metric"><span>Vehicles</span><strong>${vehicles.length}</strong></div>
+        <div class="metric"><span>Applications</span><strong>${applications.length}</strong></div>
+      </div>
+      <article class="record-card">
+        <div class="row"><h3>Primary vehicle</h3><span class="pill green">${escapeHtml(activeVehicle.registration_status || "Active")}</span></div>
+        <p class="muted small">${escapeHtml([activeVehicle.vehicle_year, activeVehicle.vehicle_color, activeVehicle.vehicle_make, activeVehicle.vehicle_model].filter(Boolean).join(" ")) || "No registered vehicle yet"}</p>
         <div class="grid-2">
-          <label>Make<input name="vehicle_make" value="${escapeHtml(record.vehicle_make)}" /></label>
-          <label>Model<input name="vehicle_model" value="${escapeHtml(record.vehicle_model)}" /></label>
+          <div class="metric"><span>Plate</span><strong>${escapeHtml(activeVehicle.plate || "None")}</strong></div>
+          <div class="metric"><span>Insurance</span><strong>${escapeHtml(activeVehicle.insurance_status || "Pending")}</strong></div>
         </div>
+      </article>
+      <div class="card">
+        <div class="row"><h3>Recent applications</h3><button class="secondary" data-dmv-tab="license">Apply</button></div>
+        <div class="list">
+          ${applications.slice(0, 3).map((item) => `
+            <div class="row"><span>${escapeHtml(item.application_type)} · ${escapeHtml(item.license_class)}</span><span class="pill ${item.status === "approved" ? "green" : "amber"}">${escapeHtml(item.status)}</span></div>
+          `).join("") || `<div class="empty">No license applications yet</div>`}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderDmvLicense(applications) {
+  return `
+    <div class="stack">
+      <form id="dmvLicenseForm" class="card form-grid">
         <div class="grid-2">
-          <label>Color<input name="vehicle_color" value="${escapeHtml(record.vehicle_color)}" /></label>
-          <label>Plate<input name="plate" value="${escapeHtml(record.plate)}" /></label>
+          <label>Application type<select name="application_type" required>
+            <option>New Driver License</option>
+            <option>License Renewal</option>
+            <option>Motorcycle Endorsement</option>
+            <option>Commercial License Permit</option>
+            <option>Replacement License</option>
+          </select></label>
+          <label>Class<select name="license_class" required>
+            <option>Class D</option>
+            <option>Class M</option>
+            <option>Class A CDL</option>
+            <option>Class B CDL</option>
+            <option>Class C CDL</option>
+          </select></label>
         </div>
-        <label>Insurance<select name="insurance_status"><option>Active</option><option>Pending</option><option>Expired</option></select></label>
-        <button class="primary" type="submit">Update DMV</button>
+        <label>Legal name<input name="legal_name" value="${escapeHtml(state.session.user.name)}" required /></label>
+        <label>Date of birth<input name="date_of_birth" type="date" required /></label>
+        <label>Notes<textarea name="notes" placeholder="Medical restrictions, endorsements, or DMV notes"></textarea></label>
+        <button class="primary" type="submit">Submit application</button>
       </form>
+      <div class="list">
+        ${applications.map((item) => `
+          <article class="message-card">
+            <div class="row"><h3>${escapeHtml(item.application_type)}</h3><span class="pill ${item.status === "approved" ? "green" : "amber"}">${escapeHtml(item.status)}</span></div>
+            <p class="muted small">${escapeHtml(item.license_class)} · filed ${new Date(item.created_at).toLocaleDateString()}</p>
+            <p>${escapeHtml(item.notes || "No additional notes")}</p>
+          </article>
+        `).join("") || `<div class="empty">No license applications filed</div>`}
+      </div>
+    </div>
+  `;
+}
+
+function renderDmvVehicles(vehicles, record) {
+  return `
+    <div class="stack">
+      <form id="dmvVehicleForm" class="card form-grid">
+        <div class="grid-2">
+          <label>Year<input name="vehicle_year" type="number" min="1900" max="2100" required /></label>
+          <label>Plate<input name="plate" value="${escapeHtml(record.plate || "")}" maxlength="12" required /></label>
+        </div>
+        <div class="grid-2">
+          <label>Make<input name="vehicle_make" value="${escapeHtml(record.vehicle_make === "Unregistered" ? "" : record.vehicle_make)}" required /></label>
+          <label>Model<input name="vehicle_model" value="${escapeHtml(record.vehicle_model === "Vehicle" ? "" : record.vehicle_model)}" required /></label>
+        </div>
+        <div class="grid-2">
+          <label>Color<input name="vehicle_color" value="${escapeHtml(record.vehicle_color === "Gray" ? "" : record.vehicle_color)}" required /></label>
+          <label>Insurance<select name="insurance_status" required><option>Active</option><option>Pending Verification</option><option>Expired</option></select></label>
+        </div>
+        <label>VIN<input name="vin" maxlength="32" required /></label>
+        <button class="primary" type="submit">Register vehicle</button>
+      </form>
+      <div class="list">
+        ${vehicles.map((vehicle) => `
+          <article class="property-card">
+            <div class="row"><h3>${escapeHtml(vehicle.vehicle_year)} ${escapeHtml(vehicle.vehicle_make)} ${escapeHtml(vehicle.vehicle_model)}</h3><span class="pill green">${escapeHtml(vehicle.registration_status)}</span></div>
+            <p class="muted small">${escapeHtml(vehicle.vehicle_color)} · plate ${escapeHtml(vehicle.plate)} · VIN ${escapeHtml(vehicle.vin)}</p>
+            <div class="grid-2">
+              <div class="metric"><span>Insurance</span><strong>${escapeHtml(vehicle.insurance_status)}</strong></div>
+              <div class="metric"><span>Registered</span><strong>${new Date(vehicle.created_at).toLocaleDateString()}</strong></div>
+            </div>
+          </article>
+        `).join("") || `<div class="empty">No registered vehicles</div>`}
+      </div>
     </div>
   `;
 }
 
 function bindDmv() {
-  $("#dmvForm")?.addEventListener("submit", async (event) => {
+  $$("[data-dmv-tab]").forEach((button) => button.addEventListener("click", () => {
+    state.dmvTab = button.dataset.dmvTab;
+    render();
+  }));
+  $("#dmvLicenseForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
-      await api("/api/dmv/me", { method: "PATCH", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
-      toast("DMV record updated");
+      await api("/api/dmv/license-applications", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast("License application submitted");
+      await loadAppData("dmv");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $("#dmvVehicleForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api("/api/dmv/vehicles", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast("Vehicle registered");
       await loadAppData("dmv");
       render();
     } catch (error) {
@@ -657,7 +779,7 @@ function bindCourt() {
   }));
 }
 
-function renderMdt() {
+function renderMdtLegacy() {
   return `
     <div class="mdt-shell">
       <div class="mdt-banner">
@@ -674,7 +796,7 @@ function renderMdt() {
   `;
 }
 
-function renderMdtSearch() {
+function renderMdtSearchLegacy() {
   const results = state.cache.mdt?.search || [];
   return `
     <form id="mdtSearch" class="card form-grid">
@@ -699,7 +821,7 @@ function renderMdtSearch() {
   `;
 }
 
-function renderTicketWriter() {
+function renderTicketWriterLegacy() {
   const charges = state.cache.mdt?.charges?.charges || [];
   return `
     <form id="ticketForm" class="card form-grid">
@@ -718,7 +840,7 @@ function renderTicketWriter() {
   `;
 }
 
-function renderPanic() {
+function renderPanicLegacy() {
   const alerts = state.cache.mdt?.alerts?.alerts || [];
   return `
     <form id="panicForm" class="card form-grid">
@@ -732,7 +854,7 @@ function renderPanic() {
   `;
 }
 
-function bindMdt() {
+function bindMdtLegacy() {
   $$("[data-mdt-tab]").forEach((button) => button.addEventListener("click", () => {
     state.mdtTab = button.dataset.mdtTab;
     render();
@@ -755,6 +877,280 @@ function bindMdt() {
       await api("/api/mdt/citations", { method: "POST", body: payload });
       toast("Citation issued");
       event.currentTarget.reset();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $("#panicForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api("/api/mdt/panic", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast("Panic alert sent");
+      await loadAppData("mdt");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+}
+
+function renderMdtWorkspace() {
+  const charges = state.cache.mdt?.charges || {};
+  const alerts = state.cache.mdt?.alerts?.alerts || [];
+  return `
+    <section class="mdt-workspace">
+      <header class="mdt-topbar">
+        <div>
+          <p class="eyebrow">${escapeHtml(state.session.user.primary_agency || "Law Enforcement")}</p>
+          <h1>Mobile Data Terminal</h1>
+        </div>
+        <div class="mdt-top-actions">
+          <button class="ghost" data-refresh-mdt>Refresh</button>
+          <button class="secondary" data-close-mdt>Exit MDT</button>
+        </div>
+      </header>
+      <div class="mdt-stat-strip">
+        <div class="metric"><span>Citations</span><strong>${(charges.citations || []).length}</strong></div>
+        <div class="metric"><span>Criminal Codes</span><strong>${(charges.criminal_charges || []).length}</strong></div>
+        <div class="metric"><span>Active Alerts</span><strong>${alerts.filter((alert) => alert.status === "active").length}</strong></div>
+      </div>
+      <div class="mdt-layout">
+        <aside class="mdt-nav">
+          ${[
+            ["search", "NCIC / DMV"],
+            ["ticket", "Issue"],
+            ["citations", "Citations"],
+            ["criminal", "Criminal"],
+            ["panic", "Panic"]
+          ].map(([id, label]) => `<button class="${state.mdtTab === id ? "active" : ""}" data-mdt-tab="${id}">${label}</button>`).join("")}
+        </aside>
+        <main class="mdt-main">${renderMdtContent()}</main>
+        <aside class="mdt-side">${renderMdtSide()}</aside>
+      </div>
+      ${state.mdtCatalogOpen ? renderMdtCatalogModal() : ""}
+    </section>
+  `;
+}
+
+function bindMdtWorkspace() {
+  $("[data-close-mdt]")?.addEventListener("click", async () => {
+    state.activeApp = null;
+    state.mdtCatalogOpen = false;
+    await loadSession();
+  });
+  $("[data-refresh-mdt]")?.addEventListener("click", async () => {
+    await loadAppData("mdt");
+    render();
+  });
+  bindMdt();
+}
+
+function renderMdt() {
+  return `<div class="mdt-shell">${renderMdtContent()}</div>`;
+}
+
+function renderMdtContent() {
+  if (state.mdtTab === "ticket") return renderTicketWriter();
+  if (state.mdtTab === "citations") return renderCodeSection("citation");
+  if (state.mdtTab === "criminal") return renderCodeSection("criminal");
+  if (state.mdtTab === "panic") return renderPanic();
+  return renderMdtSearch();
+}
+
+function renderMdtSide() {
+  const alerts = state.cache.mdt?.alerts?.alerts || [];
+  const issued = state.cache.mdt?.search?.flatMap((person) => person.open_cases || []) || [];
+  return `
+    <div class="mdt-side-panel">
+      <h3>Watch</h3>
+      <div class="list compact-list">
+        ${alerts.slice(0, 5).map((alert) => `<div class="row"><span>${escapeHtml(alert.officer_name)}</span><span class="pill red">${escapeHtml(alert.status)}</span></div>`).join("") || `<p class="muted small">No active panic traffic</p>`}
+      </div>
+    </div>
+    <div class="mdt-side-panel">
+      <h3>Open Returns</h3>
+      <div class="list compact-list">
+        ${issued.slice(0, 5).map((item) => `<div class="row"><span>${escapeHtml(item.charge_code)}</span><strong>${money(item.fine_amount)}</strong></div>`).join("") || `<p class="muted small">No NCIC open case returns</p>`}
+      </div>
+    </div>
+  `;
+}
+
+function renderMdtSearch() {
+  const results = state.cache.mdt?.search || [];
+  return `
+    <form id="mdtSearch" class="mdt-searchbar">
+      <input name="q" minlength="2" placeholder="Search name, email, or plate" required />
+      <button class="primary" type="submit">Run NCIC</button>
+    </form>
+    <div class="mdt-results">
+      ${results.map((item) => `
+        <article class="mdt-return">
+          <div class="row">
+            <div><h3>${escapeHtml(item.name)}</h3><p class="muted small">ID #${item.id} - ${escapeHtml(item.email)}</p></div>
+            <span class="pill ${item.verified ? "green" : "amber"}">${item.verified ? "verified" : "unverified"}</span>
+          </div>
+          <div class="mdt-return-grid">
+            <div class="metric"><span>License</span><strong>${escapeHtml(item.license_status || "None")}</strong></div>
+            <div class="metric"><span>Class</span><strong>${escapeHtml(item.license_class || "None")}</strong></div>
+            <div class="metric"><span>Primary Plate</span><strong>${escapeHtml(item.plate || "None")}</strong></div>
+            <div class="metric"><span>Insurance</span><strong>${escapeHtml(item.insurance_status || "None")}</strong></div>
+          </div>
+          <div class="mdt-subsection">
+            <div class="row"><h4>Registered vehicles</h4><button class="secondary" data-use-civ="${item.id}">Use for ticket</button></div>
+            ${(item.vehicles || []).map((vehicle) => `<p class="small">${escapeHtml(vehicle.vehicle_year)} ${escapeHtml(vehicle.vehicle_color)} ${escapeHtml(vehicle.vehicle_make)} ${escapeHtml(vehicle.vehicle_model)} - ${escapeHtml(vehicle.plate)} - ${escapeHtml(vehicle.registration_status)}</p>`).join("") || `<p class="muted small">No registered vehicles on file</p>`}
+          </div>
+          <div class="mdt-subsection">
+            <h4>Open court/citation returns</h4>
+            ${(item.open_cases || []).map((c) => `<div class="row"><span>${escapeHtml(c.charge_code)} ${escapeHtml(c.charge_title)}</span><strong>${money(c.fine_amount)}</strong></div>`).join("") || `<p class="muted small">No open citations</p>`}
+          </div>
+        </article>
+      `).join("") || `<div class="empty">Run a search to pull DMV and case records</div>`}
+    </div>
+  `;
+}
+
+function getMdtCatalog(kind) {
+  const data = state.cache.mdt?.charges || {};
+  if (kind === "criminal") return data.criminal_charges || [];
+  return data.citations || [];
+}
+
+function renderTicketWriter() {
+  const charges = getMdtCatalog(state.mdtCatalogMode);
+  const defaultCourt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  return `
+    <form id="ticketForm" class="mdt-form">
+      <div class="mdt-section-head">
+        <div><p class="eyebrow">Citation writer</p><h2>Issue ${state.mdtCatalogMode === "citation" ? "Citation" : "Criminal Charge"}</h2></div>
+        <button class="secondary" type="button" data-open-catalog>Browse codes</button>
+      </div>
+      <div class="segmented mdt-code-switch">
+        <button type="button" class="${state.mdtCatalogMode === "citation" ? "active" : ""}" data-catalog-mode="citation">Citations</button>
+        <button type="button" class="${state.mdtCatalogMode === "criminal" ? "active" : ""}" data-catalog-mode="criminal">Criminal</button>
+        <button type="button" data-open-catalog>Catalog</button>
+      </div>
+      <div class="grid-2">
+        <label>Civilian user ID<input name="civ_id" type="number" value="${escapeHtml(state.mdtSelectedCiv)}" required /></label>
+        <label>Court date<input name="court_date" type="date" value="${defaultCourt}" /></label>
+      </div>
+      <label>Code<select name="charge_id" required>
+        ${charges.map((charge) => `<option value="${charge.id}">${escapeHtml(charge.code)} - ${escapeHtml(charge.title)} - ${money(charge.fine_amount)}</option>`).join("")}
+      </select></label>
+      <label>Location<input name="location" placeholder="Street, postal, landmark" required /></label>
+      <label>Narrative<textarea name="narrative" required></textarea></label>
+      <button class="primary" type="submit">Submit to court queue</button>
+    </form>
+  `;
+}
+
+function renderCodeSection(kind) {
+  const rows = getMdtCatalog(kind);
+  return `
+    <div class="mdt-section-head">
+      <div><p class="eyebrow">${kind === "citation" ? "Traffic and civil" : "Criminal"} catalog</p><h2>${kind === "citation" ? "Citation Codes" : "Criminal Charges"}</h2></div>
+      <button class="secondary" data-open-catalog data-catalog-kind="${kind}">Open catalog</button>
+    </div>
+    <div class="mdt-code-grid">
+      ${rows.map((charge) => `
+        <article class="charge-card mdt-code-card">
+          <div class="row"><strong>${escapeHtml(charge.code)}</strong><span class="pill">${escapeHtml(charge.severity)}</span></div>
+          <h3>${escapeHtml(charge.title)}</h3>
+          <p class="muted small">${escapeHtml(charge.category)} - ${money(charge.fine_amount)} - ${charge.points} pts</p>
+          <p>${escapeHtml(charge.description)}</p>
+        </article>
+      `).join("") || `<div class="empty">No ${kind} codes loaded</div>`}
+    </div>
+  `;
+}
+
+function renderMdtCatalogModal() {
+  const rows = getMdtCatalog(state.mdtCatalogMode);
+  return `
+    <div class="modal-backdrop" data-close-catalog>
+      <section class="mdt-modal" role="dialog" aria-modal="true">
+        <header class="row">
+          <div><p class="eyebrow">Code catalog</p><h2>${state.mdtCatalogMode === "citation" ? "Citation Codes" : "Criminal Charges"}</h2></div>
+          <button class="icon-action" data-close-catalog aria-label="Close">x</button>
+        </header>
+        <div class="segmented">
+          <button class="${state.mdtCatalogMode === "citation" ? "active" : ""}" data-catalog-mode="citation">Citations</button>
+          <button class="${state.mdtCatalogMode === "criminal" ? "active" : ""}" data-catalog-mode="criminal">Criminal</button>
+          <button data-close-catalog>Close</button>
+        </div>
+        <div class="mdt-modal-list">
+          ${rows.map((charge) => `
+            <article class="charge-card">
+              <div class="row"><strong>${escapeHtml(charge.code)} - ${escapeHtml(charge.title)}</strong><span class="pill">${money(charge.fine_amount)}</span></div>
+              <p class="muted small">${escapeHtml(charge.category)} - ${escapeHtml(charge.severity)} - ${charge.points} pts</p>
+              <p>${escapeHtml(charge.description)}</p>
+            </article>
+          `).join("")}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderPanic() {
+  const alerts = state.cache.mdt?.alerts?.alerts || [];
+  return `
+    <form id="panicForm" class="mdt-form">
+      <button class="panic-button pulse" type="submit">PANIC BUTTON</button>
+      <label>Location<input name="location" placeholder="Nearest postal / street" /></label>
+      <label>Note<input name="note" placeholder="Short emergency note" /></label>
+    </form>
+    <div class="list">
+      ${alerts.map((alert) => `<article class="case-card"><div class="row"><h3>${escapeHtml(alert.officer_name)}</h3><span class="pill red">${escapeHtml(alert.status)}</span></div><p>${escapeHtml(alert.location)}</p><p class="muted small">${escapeHtml(alert.note)}</p></article>`).join("") || `<div class="empty">No panic activations</div>`}
+    </div>
+  `;
+}
+
+function bindMdt() {
+  $$("[data-mdt-tab]").forEach((button) => button.addEventListener("click", () => {
+    state.mdtTab = button.dataset.mdtTab;
+    state.mdtCatalogOpen = false;
+    render();
+  }));
+  $$("[data-catalog-mode]").forEach((button) => button.addEventListener("click", () => {
+    state.mdtCatalogMode = button.dataset.catalogMode;
+    render();
+  }));
+  $$("[data-open-catalog]").forEach((button) => button.addEventListener("click", () => {
+    state.mdtCatalogMode = button.dataset.catalogKind || state.mdtCatalogMode;
+    state.mdtCatalogOpen = true;
+    render();
+  }));
+  $$("[data-close-catalog]").forEach((button) => button.addEventListener("click", (event) => {
+    if (event.currentTarget.classList?.contains("modal-backdrop") && event.target !== event.currentTarget) return;
+    state.mdtCatalogOpen = false;
+    render();
+  }));
+  $$("[data-use-civ]").forEach((button) => button.addEventListener("click", () => {
+    state.mdtSelectedCiv = button.dataset.useCiv;
+    state.mdtTab = "ticket";
+    render();
+  }));
+  $("#mdtSearch")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const q = new FormData(event.currentTarget).get("q");
+    try {
+      const results = await api(`/api/mdt/search?q=${encodeURIComponent(q)}`);
+      state.cache.mdt = state.cache.mdt || {};
+      state.cache.mdt.search = results.results;
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $("#ticketForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
+      const result = await api("/api/mdt/citations", { method: "POST", body: payload });
+      toast(`Citation issued - court ${result.court_date}`);
+      event.currentTarget.reset();
+      state.mdtSelectedCiv = "";
     } catch (error) {
       toast(error.message);
     }
