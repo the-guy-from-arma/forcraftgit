@@ -1,37 +1,27 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16
     environment:
-      POSTGRES_DB: faircroft
-      POSTGRES_USER: faircroft
-      POSTGRES_PASSWORD: faircroft
+      POSTGRES_DB: roleplay
+      POSTGRES_USER: roleplay
+      POSTGRES_PASSWORD: roleplay
+    ports:
+      - "5432:5432"
     volumes:
-      - faircroft_postgres:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U faircroft -d faircroft"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
+      - pgdata:/var/lib/postgresql/data
 
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    build: .
     depends_on:
-      postgres:
-        condition: service_healthy
+      - postgres
     environment:
-      DATABASE_URL: postgresql://faircroft:faircroft@postgres:5432/faircroft?schema=public
-      PORT: "3000"
-      NODE_ENV: production
-      RAILWAY_ENVIRONMENT: local-docker
-      JWT_SECRET: local-docker-jwt-secret-change-before-sharing
-      SECRET_KEY: local-docker-secret-key-change-before-sharing
-      JWT_EXPIRES_IN: 7d
-      CORS_ORIGIN: http://localhost:3000
-      SEED_ON_START: "true"
+      DATABASE_URL: postgresql://roleplay:roleplay@postgres:5432/roleplay
+      SECRET_KEY: change-this-local-secret
+      OWNER_EMAIL: owner@rp.local
+      OWNER_PASSWORD: owner1234
+      COOKIE_SECURE: "0"
     ports:
-      - "3000:3000"
+      - "8080:8080"
 
 volumes:
-  faircroft_postgres:
+  pgdata:

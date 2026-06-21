@@ -1,0 +1,19 @@
+{
+  "name": "RP Command Roleplay System",
+  "short_name": "RP Command",
+  "description": "Mobile-first roleplay civilian, admin, MDT, court, jobs, banking, and property PWA.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0c1012",
+  "theme_color": "#101418",
+  "icons": [
+    {
+      "src": "/static/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
