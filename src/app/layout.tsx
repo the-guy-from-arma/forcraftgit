@@ -1,17 +1,6 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import { PwaRegistrar } from "@/components/PwaRegistrar";
 import "./globals.css";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"]
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"]
-});
 
 export const metadata: Metadata = {
   title: "FairCroft CoreOne",
@@ -58,8 +47,17 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
+    <html lang="en">
       <body>
+        <noscript>
+          <main className="center-screen">
+            <section className="glass-panel access-panel">
+              <p className="eyebrow">FairCroft CoreOne</p>
+              <h1>JavaScript Required</h1>
+              <p>This website PWA needs JavaScript enabled to run the civilian PDA, MDT, and dispatch consoles.</p>
+            </section>
+          </main>
+        </noscript>
         {children}
         <PwaRegistrar />
       </body>

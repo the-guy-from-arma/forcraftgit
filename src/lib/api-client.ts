@@ -3,13 +3,21 @@ export type ApiFetchInit = Omit<RequestInit, "body"> & { body?: unknown };
 
 export function getToken() {
   if (typeof window === "undefined") return null;
-  return window.localStorage.getItem("faircroft_token");
+  try {
+    return window.localStorage.getItem("faircroft_token");
+  } catch {
+    return null;
+  }
 }
 
 export function setToken(token: string | null) {
   if (typeof window === "undefined") return;
-  if (token) window.localStorage.setItem("faircroft_token", token);
-  else window.localStorage.removeItem("faircroft_token");
+  try {
+    if (token) window.localStorage.setItem("faircroft_token", token);
+    else window.localStorage.removeItem("faircroft_token");
+  } catch {
+    // Some iPhone/Safari standalone sessions can block storage. Keep the website visible.
+  }
 }
 
 export async function apiFetch<T>(path: string, init: ApiFetchInit = {}) {

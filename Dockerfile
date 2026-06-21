@@ -44,6 +44,8 @@ COPY --from=builder /app/public ./public
 COPY --from=builder /app/src ./src
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
+COPY --from=builder /app/tsconfig.json ./tsconfig.json
+COPY --from=builder /app/postcss.config.mjs ./postcss.config.mjs
 COPY entrypoint.sh startup.sh ./
 COPY scripts ./scripts
 

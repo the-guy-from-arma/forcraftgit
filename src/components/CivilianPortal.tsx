@@ -37,15 +37,21 @@ export function CivilianPortal() {
   const [departments, setDepartments] = useState<any[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [startupError, setStartupError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const [overviewPayload, departmentPayload] = await Promise.all([
-      apiFetch<any>("/api/civilian/overview"),
-      apiFetch<{ departments: any[] }>("/api/departments")
-    ]);
-    setOverview(overviewPayload);
-    setDepartments(departmentPayload.departments);
-    await refresh();
+    try {
+      const [overviewPayload, departmentPayload] = await Promise.all([
+        apiFetch<any>("/api/civilian/overview"),
+        apiFetch<{ departments: any[] }>("/api/departments")
+      ]);
+      setOverview(overviewPayload);
+      setDepartments(departmentPayload.departments);
+      setStartupError(null);
+      await refresh();
+    } catch (err) {
+      setStartupError(err instanceof Error ? err.message : "FairCroft PDA services did not respond.");
+    }
   }, [refresh]);
 
   useEffect(() => {
@@ -129,7 +135,7 @@ export function CivilianPortal() {
     );
   }
 
-  if (booting || !overview) {
+  if (booting || (!overview && !startupError)) {
     return (
       <main className="pda-boot">
         <FairCroftSeal />
@@ -138,6 +144,16 @@ export function CivilianPortal() {
         </div>
         <p>Booting FairCroft Government Services PDA...</p>
       </main>
+    );
+  }
+
+  if (startupError && !overview) {
+    return (
+      <AccessPanel
+        title="PDA service unavailable"
+        error={startupError}
+        message="FairCroft Government Services could not load your civilian PDA session."
+      />
     );
   }
 

@@ -1,6 +1,8 @@
 import "dotenv/config";
 
 import { createServer } from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import cors from "cors";
 import express from "express";
 import helmet from "helmet";
@@ -12,9 +14,12 @@ import { registerSocketHandlers } from "./src/server/socket.js";
 const dev = process.env.NODE_ENV !== "production";
 const port = Number(process.env.PORT || 3000);
 const hostname = process.env.HOST || "0.0.0.0";
+const serverFile = fileURLToPath(import.meta.url);
+const projectDir = dev ? process.cwd() : path.resolve(path.dirname(serverFile), "..");
 
 const nextImport = (await import("next")) as any;
-const nextApp = nextImport.default ? nextImport.default({ dev, hostname, port }) : nextImport({ dev, hostname, port });
+const nextConfig = { dev, hostname, port, dir: projectDir };
+const nextApp = nextImport.default ? nextImport.default(nextConfig) : nextImport(nextConfig);
 const handle = nextApp.getRequestHandler();
 
 const allowedOrigins = process.env.CORS_ORIGIN
@@ -22,6 +27,7 @@ const allowedOrigins = process.env.CORS_ORIGIN
   : undefined;
 
 await initializeDatabase();
+console.log(`[server] Preparing Next.js from ${projectDir}.`);
 await nextApp.prepare();
 
 const app = express();
