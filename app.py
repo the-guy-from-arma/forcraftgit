@@ -389,7 +389,7 @@ def ensure_schema() -> None:
 
 def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE charge_catalog ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'criminal'")
-    db.execute("UPDATE charge_catalog SET kind = 'citation' WHERE code LIKE 'TRF-%'")
+    db.execute("UPDATE charge_catalog SET kind = 'citation' WHERE code LIKE ?", ("TRF-%",))
 
 
 def seed_owner(db: Database) -> None:
@@ -1120,7 +1120,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             (user["id"], application_type, license_class, legal_name, date_of_birth, notes, ts, ts),
         ).fetchone()
         add_message(db, user["id"], "DMV application submitted", f"Your {application_type} application is pending DMV review.")
-        admins = all_rows(db, "SELECT id FROM users WHERE roles LIKE '%owner%' OR roles LIKE '%admin%'")
+        admins = all_rows(db, "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ?", ("%owner%", "%admin%"))
         for admin in admins:
             add_message(db, admin["id"], "DMV application pending", f"{user['name']} submitted a {application_type} application.", user["id"])
         self.send_json(201, {"ok": True, "application_id": int(created["id"])})
@@ -1306,7 +1306,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(404, "Case not found")
             return
         db.execute("UPDATE citations SET status = 'contested', updated_at = ? WHERE id = ?", (now_iso(), case_id))
-        judges = all_rows(db, "SELECT id FROM users WHERE roles LIKE '%judge%' OR roles LIKE '%owner%' OR roles LIKE '%admin%'")
+        judges = all_rows(
+            db,
+            "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ? OR roles LIKE ?",
+            ("%judge%", "%owner%", "%admin%"),
+        )
         for judge in judges:
             add_message(db, judge["id"], "Citation contested", f"{user['name']} contested {case['charge_code']} - {case['charge_title']}.", user["id"])
         self.send_json(200, {"ok": True})
@@ -1472,7 +1476,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             f"{user['name']} issued {charge['title']} for ${float(charge['fine_amount']):,.2f}. Open COURT to pay or contest.",
             user["id"],
         )
-        judges = all_rows(db, "SELECT id FROM users WHERE roles LIKE '%judge%' OR roles LIKE '%owner%' OR roles LIKE '%admin%'")
+        judges = all_rows(
+            db,
+            "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ? OR roles LIKE ?",
+            ("%judge%", "%owner%", "%admin%"),
+        )
         for judge in judges:
             add_message(db, judge["id"], "Citation awaiting court review", f"Citation #{citation_id} was issued to {civ['name']} by {user['name']}.", user["id"])
         self.send_json(201, {"ok": True, "citation_id": citation_id, "court_date": court_date})
@@ -1490,7 +1498,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             (user["id"], location, note, now_iso()),
         )
         created = cur.fetchone()
-        recipients = all_rows(db, "SELECT id FROM users WHERE roles LIKE '%leo%' OR roles LIKE '%dispatcher%' OR roles LIKE '%owner%' OR roles LIKE '%admin%'")
+        recipients = all_rows(
+            db,
+            "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ? OR roles LIKE ? OR roles LIKE ?",
+            ("%leo%", "%dispatcher%", "%owner%", "%admin%"),
+        )
         for recipient in recipients:
             if recipient["id"] != user["id"]:
                 add_message(db, recipient["id"], "PANIC ALERT", f"{user['name']} activated panic at {location}. {note}", user["id"])
