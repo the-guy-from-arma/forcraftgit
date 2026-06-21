@@ -1,6 +1,9 @@
 #!/bin/sh
 set -eu
 
+export NODE_ENV=production
+export NEXT_TELEMETRY_DISABLED=1
+
 if [ -z "${DATABASE_URL:-}" ]; then
   echo "[startup] DATABASE_URL is required. FairCroft CoreOne only supports PostgreSQL persistence."
   exit 1

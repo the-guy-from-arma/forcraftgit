@@ -13,12 +13,15 @@ import { registerApi } from "./src/server/routes.js";
 import { registerSocketHandlers } from "./src/server/socket.js";
 
 const nodeEnv = getNodeEnv();
-const dev = nodeEnv !== "production";
 const configuredPort = Number(readEnvValue(["PORT"], "3000").value || 3000);
 const port = Number.isFinite(configuredPort) ? configuredPort : 3000;
 const hostname = readEnvValue(["HOST"], "0.0.0.0").value;
 const serverFile = fileURLToPath(import.meta.url);
-const projectDir = dev ? process.cwd() : path.resolve(path.dirname(serverFile), "..");
+const compiledServer = serverFile.includes(`${path.sep}dist${path.sep}`);
+const railwayRuntime = Boolean(readEnvValue(["RAILWAY_ENVIRONMENT", "RAILWAY_SERVICE_ID", "RAILWAY_PROJECT_ID"]).value);
+const productionRuntime = nodeEnv === "production" || compiledServer || railwayRuntime;
+const dev = !productionRuntime;
+const projectDir = compiledServer ? path.resolve(path.dirname(serverFile), "..") : process.cwd();
 
 const nextImport = (await import("next")) as any;
 const nextConfig = { dev, hostname, port, dir: projectDir };
@@ -38,7 +41,13 @@ process.on("unhandledRejection", (reason) => {
 });
 
 await initializeDatabase();
-console.log(`[server] Preparing Next.js from ${projectDir}.`);
+console.log("[server] Preparing Next.js runtime:", {
+  projectDir,
+  nodeEnv,
+  compiledServer,
+  railwayRuntime,
+  nextDevMode: dev
+});
 await nextApp.prepare();
 
 const app = express();
@@ -79,7 +88,9 @@ app.get("/__coreone/preflight.json", (_req, res) => {
     layer: "express",
     nextProjectDir: projectDir,
     nodeEnv,
-    railwayEnvironment: process.env.RAILWAY_ENVIRONMENT || null,
+    railwayEnvironment: readEnvValue(["RAILWAY_ENVIRONMENT"]).value || null,
+    nextDevMode: dev,
+    compiledServer,
     timestamp: new Date().toISOString()
   });
 });

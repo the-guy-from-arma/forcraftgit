@@ -157,7 +157,10 @@ Health endpoint:
 GET /api/health
 GET /api/health/db
 GET /api/health/auth  # only when AUTH_DIAGNOSTICS_ENABLED=true
+GET /__coreone/preflight.json
 ```
+
+Railway should report `"nextDevMode": false` from `/__coreone/preflight.json`. If browser/network logs show `/_next/webpack-hmr` or `turbopack_browser_dev_hmr_client`, the service is running Next in development mode and must be redeployed with the Dockerfile/startup path.
 
 ## Useful commands
 
