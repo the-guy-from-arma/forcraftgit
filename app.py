@@ -215,6 +215,7 @@ def ensure_schema() -> None:
                 civ_number TEXT UNIQUE,
                 name TEXT NOT NULL,
                 email TEXT NOT NULL UNIQUE,
+                arma_id TEXT,
                 password_hash TEXT NOT NULL,
                 verified INTEGER NOT NULL DEFAULT 0,
                 roles TEXT NOT NULL DEFAULT '["civ"]',
@@ -399,6 +400,7 @@ def ensure_schema() -> None:
 
 def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS civ_number TEXT")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS arma_id TEXT")
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_civ_number_unique ON users (civ_number)")
     for user in all_rows(db, "SELECT id FROM users WHERE civ_number IS NULL"):
         db.execute("UPDATE users SET civ_number = ? WHERE id = ?", (generate_civ_number(db), user["id"]))
@@ -427,10 +429,10 @@ def seed_owner(db: Database) -> None:
     db.execute(
         """
         INSERT INTO users
-        (civ_number, name, email, password_hash, verified, roles, primary_agency, bank_balance, cash_balance, last_income_at, created_at)
-        VALUES (?, ?, ?, ?, 1, ?, 'Owner Command', 50000, 1000, ?, ?)
+        (civ_number, name, email, arma_id, password_hash, verified, roles, primary_agency, bank_balance, cash_balance, last_income_at, created_at)
+        VALUES (?, ?, ?, ?, ?, 1, ?, 'Owner Command', 50000, 1000, ?, ?)
         """,
-        (generate_civ_number(db), OWNER_NAME, OWNER_EMAIL, hash_password(OWNER_PASSWORD), json.dumps(owner_roles), ts, ts),
+        (generate_civ_number(db), OWNER_NAME, OWNER_EMAIL, os.environ.get("OWNER_ARMA_ID", "OWNER"), hash_password(OWNER_PASSWORD), json.dumps(owner_roles), ts, ts),
     )
 
 
@@ -568,12 +570,12 @@ def app_catalog(user: DbRow | None) -> list[dict[str, Any]]:
     verified = bool(user["verified"]) or has_any(user, "owner", "admin")
     base = [
         ("dmv", "DMV", "id-card", verified, False),
-        ("jobs", "JOB", "briefcase", verified, False),
+        ("jobs", "JOB", "briefcase", False, True),
         ("court", "COURT", "gavel", verified, False),
         ("properties", "PROPERTIES", "home", False, True),
         ("cash", "CASH APP", "send", False, True),
         ("bank", "BANK", "bank", False, True),
-        ("messages", "Messages", "message", verified, False),
+        ("messages", "Messages", "message", False, True),
     ]
     apps = [
         {"id": key, "label": label, "icon": icon, "enabled": enabled, "coming_soon": coming_soon, "hidden": False}
@@ -874,23 +876,27 @@ class RoleplayHandler(BaseHTTPRequestHandler):
 
     def api_register(self, db: Database) -> None:
         payload = self.read_json()
-        missing = require_fields(payload, "name", "email", "password")
+        missing = require_fields(payload, "name", "email", "arma_id", "password")
         if missing:
             self.error(400, missing)
             return
         email = str(payload["email"]).strip().lower()
+        arma_id = str(payload["arma_id"]).strip()
         password = str(payload["password"])
         if len(password) < 6:
             self.error(400, "Password must be at least 6 characters")
             return
+        if len(arma_id) < 4:
+            self.error(400, "Arma ID must be at least 4 characters")
+            return
         ts = now_iso()
         cur = db.execute(
             """
-            INSERT INTO users (civ_number, name, email, password_hash, verified, roles, bank_balance, cash_balance, last_income_at, created_at)
-            VALUES (?, ?, ?, ?, 0, ?, 0, 250, ?, ?)
+            INSERT INTO users (civ_number, name, email, arma_id, password_hash, verified, roles, bank_balance, cash_balance, last_income_at, created_at)
+            VALUES (?, ?, ?, ?, ?, 0, ?, 0, 250, ?, ?)
             RETURNING id
             """,
-            (generate_civ_number(db), str(payload["name"]).strip(), email, hash_password(password), json.dumps(["civ"]), ts, ts),
+            (generate_civ_number(db), str(payload["name"]).strip(), email, arma_id, hash_password(password), json.dumps(["civ"]), ts, ts),
         )
         created = cur.fetchone()
         user_id = int(created["id"])
@@ -1565,6 +1571,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         users = []
         for row in rows:
             item = public_user(row)
+            item["arma_id"] = row.get("arma_id")
             item["presence_seconds_today"] = presence_seconds(db, row["id"])
             users.append(item)
         self.send_json(200, {"users": users})

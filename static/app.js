@@ -141,6 +141,7 @@ function renderAuth() {
       </div>
       <form id="authForm" class="form-grid">
         ${register ? `<label>Name<input name="name" autocomplete="name" required /></label>` : ""}
+        ${register ? `<label>Arma ID<input name="arma_id" autocomplete="off" required /></label>` : ""}
         <label>Email<input name="email" type="email" autocomplete="email" required /></label>
         <label>Password<input name="password" type="password" autocomplete="${register ? "new-password" : "current-password"}" minlength="6" required /></label>
         <button class="primary" type="submit">${register ? "Create civilian" : "Unlock phone"}</button>
@@ -1232,7 +1233,8 @@ function renderAdminUsers(users) {
     <article class="user-card">
       <form class="admin-user-form form-grid" data-user-id="${user.id}">
         <div class="row"><h3>${escapeHtml(user.name)}</h3><span class="pill ${user.verified ? "green" : "amber"}">${user.verified ? "verified" : "pending"}</span></div>
-        <p class="muted small">#${user.id} · ${escapeHtml(user.email)} · ${minutes(user.presence_seconds_today)}m today</p>
+        <p class="muted small">#${user.id} · CIV ${escapeHtml(user.civ_number || "pending")} · ${escapeHtml(user.email)} · ${minutes(user.presence_seconds_today)}m today</p>
+        <div class="metric"><span>Arma ID</span><strong>${escapeHtml(user.arma_id || "Not provided")}</strong></div>
         <label class="check-row"><input type="checkbox" name="verified" ${user.verified ? "checked" : ""} /> Verified civilian</label>
         <label>Agency/division<input name="primary_agency" value="${escapeHtml(user.primary_agency || "")}" placeholder="Sheriff / Police / State Police / CID" /></label>
         <div class="role-grid">
