@@ -107,6 +107,8 @@ Supported owner aliases are also accepted:
 
 If `OWNER_PASSWORD` changes in Railway, redeploy/restart and CoreOne will update the owner password in PostgreSQL. Demo seed passwords are intentionally not shown in the app UI.
 
+Owner login also has a safe recovery path: if the stored owner password hash is stale but the submitted login exactly matches the configured owner environment email/password, CoreOne refreshes the owner account from the environment and continues the login.
+
 Temporary auth diagnostics:
 
 1. Set `AUTH_DIAGNOSTICS_ENABLED=true` in Railway.

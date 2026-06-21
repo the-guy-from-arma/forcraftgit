@@ -3,9 +3,9 @@ import type { Express, Request, Response } from "express";
 import type { Server as SocketIOServer } from "socket.io";
 import type { Prisma } from "@prisma/client";
 import { z } from "zod";
-import { checkDatabaseHealth } from "./database.js";
+import { checkDatabaseHealth, ensureOwnerAccount } from "./database.js";
 import { getPrisma } from "./db.js";
-import { getNodeEnv, getOwnerBootstrapConfig, maskEmail, readBooleanEnv, readEnvValue } from "./env.js";
+import { getNodeEnv, getOwnerBootstrapConfig, maskEmail, normalizeEnvValue, readBooleanEnv, readEnvValue } from "./env.js";
 import {
   AuthedRequest,
   bearerToken,
@@ -30,6 +30,11 @@ import {
 type Handler = (req: Request, res: Response) => Promise<void>;
 
 const text = (max = 1000) => z.string().min(1).max(max).transform((value) => cleanText(value, max));
+const passwordText = (min = 1) =>
+  z
+    .string()
+    .transform((value) => normalizeEnvValue(value))
+    .pipe(z.string().min(min).max(128));
 const optionalText = (max = 1000) =>
   z
     .string()
@@ -241,7 +246,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
       const body = parseBody(
         z.object({
           email: z.string().email().transform(normalizeEmail),
-          password: z.string().min(8).max(128),
+          password: passwordText(8),
           firstName: text(80),
           lastName: text(80),
           phone: optionalText(40),
@@ -310,7 +315,7 @@ export function registerApi(app: Express, io: SocketIOServer) {
       const body = parseBody(
         z.object({
           email: z.string().email().transform(normalizeEmail),
-          password: z.string().min(1).max(128)
+          password: passwordText(1)
         }),
         req,
         res
@@ -318,11 +323,33 @@ export function registerApi(app: Express, io: SocketIOServer) {
       if (!body) return;
 
       const prisma = getPrisma();
-      const user = await prisma.user.findUnique({
+      let user = await prisma.user.findUnique({
         where: { email: body.email },
         include: userInclude
       });
-      const passwordMatched = user ? await bcrypt.compare(body.password, user.passwordHash) : false;
+      let passwordMatched = user ? await bcrypt.compare(body.password, user.passwordHash) : false;
+
+      if (!passwordMatched) {
+        const owner = getOwnerBootstrapConfig();
+        const matchesConfiguredOwnerLogin = Boolean(
+          owner.password && body.email === owner.email && body.password === owner.password
+        );
+
+        if (matchesConfiguredOwnerLogin) {
+          console.warn("[auth] Owner login recovery triggered; refreshing owner account from configured environment.", {
+            email: maskEmail(body.email),
+            userFoundBeforeRecovery: Boolean(user),
+            passwordMatchedBeforeRecovery: passwordMatched
+          });
+
+          await ensureOwnerAccount("login_recovery");
+          user = await prisma.user.findUnique({
+            where: { email: body.email },
+            include: userInclude
+          });
+          passwordMatched = user ? await bcrypt.compare(body.password, user.passwordHash) : false;
+        }
+      }
 
       if (!user || !passwordMatched) {
         console.warn("[auth] Login failed:", {

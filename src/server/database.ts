@@ -232,7 +232,7 @@ function splitOwnerName(name: string) {
   };
 }
 
-async function ensureOwnerAccount() {
+export async function ensureOwnerAccount(source = "startup_environment") {
   const prisma = getPrisma();
   const owner = getOwnerBootstrapConfig();
 
@@ -339,7 +339,7 @@ async function ensureOwnerAccount() {
       entityId: user.id,
       metadata: {
         email: owner.email,
-        source: "startup_environment",
+        source,
         passwordUpdatedFromEnvironment: true
       }
     }
