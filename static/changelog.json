@@ -30,6 +30,7 @@
         "Admin access no longer automatically grants MDT, CID, LEO, or judge access.",
         "Court tabs only appear when the user has the matching role or owner override.",
         "MDT opens as a full law enforcement dashboard instead of staying confined to the phone panel.",
+        "Mobile MDT now uses animated Menu and Watch slide-out drawers so officers can navigate without the tabs crushing the screen.",
         "Phone icons, dock, and home layout were restyled to feel more like an iPhone/Android app launcher."
       ],
       "fixed": [
@@ -38,7 +39,8 @@
         "Fixed NCIC/DMV search empty results by showing an official invalid-return notice with a reference number.",
         "Fixed admin user page overload by moving account details and actions into a popup.",
         "Fixed role leakage where admin accounts were being treated like owner accounts for MDT/CID/LEO/judge access.",
-        "Fixed panic alert workflow so owners can clear active panic hits."
+        "Fixed panic alert workflow so owners can clear active panic hits.",
+        "Fixed mobile MDT layout collisions where navigation, watch panels, and form controls stacked into an unreadable phone view."
       ],
       "removed": [
         "Removed the unlocked-home income summary card from the main screen.",

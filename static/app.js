@@ -9,6 +9,8 @@ const state = {
   activeApp: null,
   dmvTab: "overview",
   mdtTab: "search",
+  mdtNavOpen: false,
+  mdtSideOpen: false,
   mdtCatalogOpen: false,
   mdtCatalogMode: "citation",
   mdtSelectedCiv: "",
@@ -1245,6 +1247,8 @@ function renderMdtWorkspace() {
           <h1>${cidEnabled ? "Investigative MDT" : "Mobile Data Terminal"}</h1>
         </div>
         <div class="mdt-top-actions">
+          <button class="ghost mdt-mobile-action" data-open-mdt-nav>Menu</button>
+          <button class="ghost mdt-mobile-action" data-open-mdt-side>Watch</button>
           <button class="ghost" data-refresh-mdt>Refresh</button>
           <button class="secondary" data-close-mdt>Exit MDT</button>
         </div>
@@ -1255,12 +1259,17 @@ function renderMdtWorkspace() {
         <div class="metric"><span>${cidEnabled ? "Active Warrants" : "Active Alerts"}</span><strong>${cidEnabled ? (cid?.stats?.active_warrants || 0) : alerts.filter((alert) => alert.status === "active").length}</strong></div>
       </div>
       <div class="mdt-layout">
-        <aside class="mdt-nav">
+        <aside class="mdt-nav ${state.mdtNavOpen ? "open" : ""}">
+          <div class="mdt-drawer-head"><strong>MDT Menu</strong><button class="icon-action" data-close-mdt-drawers aria-label="Close">x</button></div>
           ${navItems.map(([id, label]) => `<button class="${state.mdtTab === id ? "active" : ""}" data-mdt-tab="${id}">${label}</button>`).join("")}
         </aside>
         <main class="mdt-main">${renderMdtContent()}</main>
-        <aside class="mdt-side">${renderMdtSide()}</aside>
+        <aside class="mdt-side ${state.mdtSideOpen ? "open" : ""}">
+          <div class="mdt-drawer-head"><strong>Watch Panel</strong><button class="icon-action" data-close-mdt-drawers aria-label="Close">x</button></div>
+          ${renderMdtSide()}
+        </aside>
       </div>
+      ${(state.mdtNavOpen || state.mdtSideOpen) ? `<button class="mdt-drawer-backdrop" data-close-mdt-drawers aria-label="Close MDT drawer"></button>` : ""}
       ${state.mdtCatalogOpen ? renderMdtCatalogModal() : ""}
       ${state.mdtNotice ? renderMdtNoticeModal() : ""}
     </section>
@@ -1271,8 +1280,25 @@ function bindMdtWorkspace() {
   $("[data-close-mdt]")?.addEventListener("click", async () => {
     state.activeApp = null;
     state.mdtCatalogOpen = false;
+    state.mdtNavOpen = false;
+    state.mdtSideOpen = false;
     await loadSession();
   });
+  $("[data-open-mdt-nav]")?.addEventListener("click", () => {
+    state.mdtNavOpen = true;
+    state.mdtSideOpen = false;
+    render();
+  });
+  $("[data-open-mdt-side]")?.addEventListener("click", () => {
+    state.mdtSideOpen = true;
+    state.mdtNavOpen = false;
+    render();
+  });
+  $$("[data-close-mdt-drawers]").forEach((button) => button.addEventListener("click", () => {
+    state.mdtNavOpen = false;
+    state.mdtSideOpen = false;
+    render();
+  }));
   $("[data-refresh-mdt]")?.addEventListener("click", async () => {
     await loadAppData("mdt");
     render();
@@ -1642,6 +1668,8 @@ function bindMdt() {
   $$("[data-mdt-tab]").forEach((button) => button.addEventListener("click", () => {
     state.mdtTab = button.dataset.mdtTab;
     state.mdtCatalogOpen = false;
+    state.mdtNavOpen = false;
+    state.mdtSideOpen = false;
     render();
   }));
   $$("[data-catalog-mode]").forEach((button) => button.addEventListener("click", () => {
