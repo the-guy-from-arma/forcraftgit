@@ -16,7 +16,9 @@
         "Default auto-verification wait time starts at 120 minutes and can be adjusted by the owner.",
         "911 emergency alerting now supports Police, Fire, and EMS department selection."
       ],
-      "fixed": [],
+      "fixed": [
+        "Updated PWA cache versioning so new app modules like Fire MDT load after deployment instead of using stale mobile bundles."
+      ],
       "removed": []
     },
     {

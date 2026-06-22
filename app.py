@@ -1371,7 +1371,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type or "application/octet-stream")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "public, max-age=3600" if resolved.name != "index.html" else "no-cache")
+        if resolved.name == "index.html" or resolved.name == "service-worker.js" or resolved.suffix in (".js", ".css"):
+            cache_control = "no-cache"
+        else:
+            cache_control = "public, max-age=3600"
+        self.send_header("Cache-Control", cache_control)
         self.end_headers()
         self.wfile.write(body)
 

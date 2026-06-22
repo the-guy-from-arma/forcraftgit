@@ -1,8 +1,8 @@
-const CACHE = "rp-command-v1";
+const CACHE = "rp-command-v2-fire-mdt";
 const ASSETS = [
   "/",
-  "/static/styles.css",
-  "/static/app.js",
+  "/static/styles.css?v=0.0.2-fire-mdt",
+  "/static/app.js?v=0.0.2-fire-mdt",
   "/static/icons/icon.svg",
   "/manifest.webmanifest"
 ];
@@ -25,13 +25,16 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (url.pathname.startsWith("/api/")) return;
   event.respondWith(
-    caches.match(event.request).then((cached) =>
-      cached ||
-      fetch(event.request).then((response) => {
+    fetch(event.request)
+      .then((response) => {
         const clone = response.clone();
         caches.open(CACHE).then((cache) => cache.put(event.request, clone));
         return response;
       })
-    )
+      .catch(() =>
+        caches.match(event.request).then((cached) =>
+          cached || caches.match("/")
+        )
+      )
   );
 });
