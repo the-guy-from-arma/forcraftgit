@@ -2,7 +2,6 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const initialLinkCode = new URLSearchParams(window.location.search).get("code") || "";
 
 const state = {
   authMode: "login",
@@ -21,7 +20,6 @@ const state = {
   contractsInfoOpen: false,
   contractProofId: null,
   businessTab: "apply",
-  profileLinkCode: initialLinkCode,
   adminTab: "users",
   adminAccountId: null,
   cache: {},
@@ -59,6 +57,7 @@ const tileColors = {
   contracts: "linear-gradient(145deg, #ff5d7d, #4120a4)",
   changelog: "linear-gradient(145deg, #7ee7ff, #3158e8)",
   mdt: "linear-gradient(145deg, #28343c, #050709)",
+  system: "linear-gradient(145deg, #35e0b6, #22485c)",
   admin: "linear-gradient(145deg, #ffcf5a, #6c5010)",
 };
 
@@ -102,11 +101,6 @@ async function api(path, options = {}) {
 
 async function loadSession() {
   state.session = await api("/api/session");
-  if (state.session?.user && state.profileLinkCode && !state.activeApp) {
-    state.activeApp = "profile";
-    await loadAppData("profile");
-    window.history.replaceState({}, "", "/");
-  }
   render();
 }
 
@@ -266,6 +260,7 @@ function renderPanel(id) {
     contracts: "Contracts",
     changelog: "Changelog",
     mdt: "MDT CAD",
+    system: "System",
     admin: "Admin",
   };
   const body = {
@@ -281,6 +276,7 @@ function renderPanel(id) {
     contracts: renderContracts,
     changelog: renderChangelog,
     mdt: renderMdt,
+    system: renderSystem,
     admin: renderAdmin,
   }[id]?.() || `<div class="empty">Module unavailable</div>`;
 
@@ -314,6 +310,7 @@ async function loadAppData(id) {
       cid: canAny("cid", "owner") ? await api("/api/cid/overview") : null,
       search: state.cache.mdt?.search || []
     }),
+    system: () => api("/api/system/settings"),
     admin: async () => ({ overview: await api("/api/admin/overview"), users: await api("/api/admin/users"), jobs: await api("/api/admin/jobs") }),
   };
   if (loaders[id]) {
@@ -347,6 +344,7 @@ function bindPanel() {
     messages: bindMessages,
     contracts: bindContracts,
     mdt: bindMdt,
+    system: bindSystem,
     admin: bindAdmin,
   };
   binders[state.activeApp]?.();
@@ -363,81 +361,27 @@ function canAny(...roles) {
 function renderProfile() {
   const data = state.cache.profile || {};
   const user = data.user || state.session.user;
-  const link = data.arma_link;
-  const activity = data.recent_activity || [];
   return `
     <div class="stack profile-app">
       <div class="profile-hero">
         <div>
           <p class="eyebrow">Player profile</p>
           <h3>${escapeHtml(user.name)}</h3>
-          <p>CIV ${escapeHtml(user.civ_number || "pending")} · ${escapeHtml(user.verified ? "verified" : "pending verification")}</p>
+          <p>CIV ${escapeHtml(user.civ_number || "pending")} - ${escapeHtml(user.verified ? "verified" : "pending verification")}</p>
         </div>
-        <span class="pill ${link ? "green" : "amber"}">${link ? "linked" : "not linked"}</span>
+        <span class="pill ${user.verified ? "green" : "amber"}">${user.verified ? "verified" : "pending"}</span>
       </div>
       <div class="profile-grid">
         <div><span>Email</span><strong>${escapeHtml(user.email || state.session.user.email || "")}</strong></div>
-        <div><span>Registered Arma ID</span><strong>${escapeHtml(user.registered_arma_id || "Not linked")}</strong></div>
         <div><span>Roles</span><strong>${escapeHtml((user.roles || state.session.user.roles || []).join(", "))}</strong></div>
         <div><span>Agency</span><strong>${escapeHtml(user.primary_agency || "Civilian")}</strong></div>
+        <div><span>Status</span><strong>${escapeHtml(user.verified ? "Verified civilian" : "Awaiting verification")}</strong></div>
       </div>
-      <section class="profile-link-card">
-        <div class="row tight">
-          <div>
-            <p class="eyebrow">TBS RP LINKING SYSTEM</p>
-            <h3>Arma Account Link</h3>
-          </div>
-          <span class="pill ${link ? "green" : "amber"}">${link ? escapeHtml(link.server_id) : "claim code"}</span>
-        </div>
-        ${link ? `
-          <div class="profile-grid compact">
-            <div><span>Player</span><strong>${escapeHtml(link.player_name || "Unknown")}</strong></div>
-            <div><span>Identity</span><strong>${escapeHtml(link.identity_id)}</strong></div>
-            <div><span>Platform</span><strong>${escapeHtml(link.platform || "Unknown")}</strong></div>
-            <div><span>Last sync</span><strong>${link.last_sync_at ? new Date(link.last_sync_at).toLocaleString() : "Waiting"}</strong></div>
-          </div>
-        ` : `<p class="muted small">Enter the code shown in-game after the server/mod generates your account link request.</p>`}
-        <form id="profileLinkForm" class="form-grid">
-          <label>Server link code<input name="code" value="${escapeHtml(state.profileLinkCode)}" placeholder="1-483921" required /></label>
-          <button class="primary" type="submit">${link ? "Update link" : "Link Arma account"}</button>
-        </form>
-      </section>
-      <section class="profile-link-card">
-        <div class="row"><h3>Recent Server Activity</h3><span class="pill">${activity.length}</span></div>
-        <div class="list">
-          ${activity.map((item) => `
-            <article class="profile-activity">
-              <div class="row tight">
-                <div>
-                  <p class="eyebrow">${escapeHtml(item.server_id)}</p>
-                  <h3>${escapeHtml(item.event_type)}</h3>
-                </div>
-                <span class="pill ${Number(item.amount || 0) >= 0 ? "green" : "red"}">${money(item.amount || 0)}</span>
-              </div>
-              <p class="muted small">${escapeHtml(item.reason || item.source_system || "Server sync")} · ${new Date(item.received_at).toLocaleString()}</p>
-            </article>
-          `).join("") || `<div class="empty">No Arma server activity logged yet</div>`}
-        </div>
-      </section>
     </div>
   `;
 }
 
-function bindProfile() {
-  $("#profileLinkForm")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
-    state.profileLinkCode = String(payload.code || "").trim();
-    try {
-      await api("/api/profile/link-arma", { method: "POST", body: payload });
-      toast("Arma account linked");
-      await loadAppData("profile");
-      await loadSession();
-    } catch (error) {
-      toast(error.message);
-    }
-  });
-}
+function bindProfile() {}
 
 function renderDmv() {
   const data = state.cache.dmv;
@@ -2329,6 +2273,43 @@ function renderAdmin() {
   `;
 }
 
+function renderSystem() {
+  const data = state.cache.system || {};
+  const settings = data.settings || { autopilot_verify_enabled: false, autopilot_verify_minutes: 120 };
+  const stats = data.stats || { pending_accounts: 0, eligible_accounts: 0 };
+  const minutesValue = Number(settings.autopilot_verify_minutes || 120);
+  const hoursLabel = minutesValue >= 60 ? `${(minutesValue / 60).toFixed(minutesValue % 60 ? 1 : 0)} hours` : `${minutesValue} minutes`;
+  return `
+    <div class="stack system-app">
+      <section class="profile-hero system-hero">
+        <div>
+          <p class="eyebrow">Owner controls</p>
+          <h3>System Settings</h3>
+          <p>Verification autopilot is ${settings.autopilot_verify_enabled ? "enabled" : "disabled"}</p>
+        </div>
+        <span class="pill ${settings.autopilot_verify_enabled ? "green" : "amber"}">${settings.autopilot_verify_enabled ? "auto" : "manual"}</span>
+      </section>
+      <div class="grid-2">
+        <div class="metric"><span>Pending</span><strong>${stats.pending_accounts || 0}</strong></div>
+        <div class="metric"><span>Eligible now</span><strong>${stats.eligible_accounts || 0}</strong></div>
+      </div>
+      <form id="systemSettingsForm" class="card form-grid">
+        <div class="row">
+          <div>
+            <p class="eyebrow">Auto pilot</p>
+            <h3>Account Verification</h3>
+          </div>
+          <span class="pill">${escapeHtml(hoursLabel)}</span>
+        </div>
+        <label class="check-row"><input type="checkbox" name="autopilot_verify_enabled" ${settings.autopilot_verify_enabled ? "checked" : ""} /> Enable auto pilot mode</label>
+        <label>Verify after minutes<input name="autopilot_verify_minutes" type="number" min="1" max="10080" step="1" value="${escapeHtml(minutesValue)}" /></label>
+        <button class="primary" type="submit">Save system settings</button>
+      </form>
+      ${data.auto_verified_now ? `<div class="card"><h3>${data.auto_verified_now} accounts verified</h3><p class="muted small">Auto pilot processed eligible accounts on this check.</p></div>` : ""}
+    </div>
+  `;
+}
+
 const roleOptions = ["civ", "owner", "admin", "leo", "judge", "ems", "dispatcher", "sheriff", "police", "state_police", "cid", "business_owner", "business_registrar", "city_hall", "economy_manager"];
 
 function renderAdminUsers(users) {
@@ -2424,6 +2405,27 @@ function renderAdminMarkets(markets) {
       </form>
     </article>
   `).join("")}</div>`;
+}
+
+function bindSystem() {
+  $("#systemSettingsForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    try {
+      await api("/api/system/settings", {
+        method: "PATCH",
+        body: {
+          autopilot_verify_enabled: formData.get("autopilot_verify_enabled") === "on",
+          autopilot_verify_minutes: formData.get("autopilot_verify_minutes"),
+        },
+      });
+      toast("System settings saved");
+      await loadAppData("system");
+      await loadSession();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
 }
 
 function bindAdmin() {

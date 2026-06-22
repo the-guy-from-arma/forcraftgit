@@ -253,6 +253,10 @@ BUSINESS_APPLICATION_STATUSES = ("submitted", "under_review", "interview_request
 BUSINESS_LICENSE_STATUSES = ("active", "suspended", "revoked", "expired")
 BUSINESS_LICENSE_CATEGORIES = ("basic", "commercial", "restricted", "government_contract")
 BUSINESS_MAX_ACTIVE_PER_OWNER = 2
+SYSTEM_SETTING_DEFAULTS = {
+    "autopilot_verify_enabled": "0",
+    "autopilot_verify_minutes": "120",
+}
 
 
 def business_staff_required(user: DbRow | None) -> str | None:
@@ -304,6 +308,12 @@ def ensure_schema() -> None:
                 last_seen TEXT,
                 PRIMARY KEY (user_id, day),
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS system_settings (
+                setting_key TEXT PRIMARY KEY,
+                setting_value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS arma_account_links (
@@ -708,6 +718,20 @@ def ensure_schema() -> None:
 
 
 def ensure_migrations(db: Database) -> None:
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS system_settings (
+            setting_key TEXT PRIMARY KEY,
+            setting_value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    for key, value in SYSTEM_SETTING_DEFAULTS.items():
+        db.execute(
+            "INSERT INTO system_settings (setting_key, setting_value, updated_at) VALUES (?, ?, ?) ON CONFLICT(setting_key) DO NOTHING",
+            (key, value, now_iso()),
+        )
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS civ_number TEXT")
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS arma_id TEXT")
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_civ_number_unique ON users (civ_number)")
@@ -724,6 +748,86 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS arma_link_codes_code_idx ON arma_link_codes (code)")
     db.execute("CREATE INDEX IF NOT EXISTS arma_link_codes_status_idx ON arma_link_codes (status)")
     db.execute("CREATE INDEX IF NOT EXISTS arma_activity_logs_user_idx ON arma_activity_logs (user_id)")
+
+
+def get_system_settings(db: Database) -> dict[str, Any]:
+    rows = all_rows(db, "SELECT setting_key, setting_value FROM system_settings")
+    raw = {row["setting_key"]: row["setting_value"] for row in rows}
+    raw = {**SYSTEM_SETTING_DEFAULTS, **raw}
+    try:
+        minutes = int(raw.get("autopilot_verify_minutes") or SYSTEM_SETTING_DEFAULTS["autopilot_verify_minutes"])
+    except (TypeError, ValueError):
+        minutes = int(SYSTEM_SETTING_DEFAULTS["autopilot_verify_minutes"])
+    minutes = max(1, min(minutes, 10080))
+    return {
+        "autopilot_verify_enabled": str(raw.get("autopilot_verify_enabled") or "0") in ("1", "true", "True", "yes", "on"),
+        "autopilot_verify_minutes": minutes,
+    }
+
+
+def set_system_setting(db: Database, key: str, value: str) -> None:
+    if key not in SYSTEM_SETTING_DEFAULTS:
+        raise ValueError("Unsupported system setting")
+    db.execute(
+        """
+        INSERT INTO system_settings (setting_key, setting_value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = excluded.updated_at
+        """,
+        (key, value, now_iso()),
+    )
+
+
+def auto_verify_stats(db: Database, settings: dict[str, Any] | None = None) -> dict[str, int]:
+    settings = settings or get_system_settings(db)
+    cutoff = (utcnow() - dt.timedelta(minutes=int(settings["autopilot_verify_minutes"]))).isoformat()
+    pending = one(db, "SELECT COUNT(*) AS count FROM users WHERE verified = 0")
+    eligible = one(
+        db,
+        "SELECT COUNT(*) AS count FROM users WHERE verified = 0 AND created_at <= ? AND roles NOT LIKE ? AND roles NOT LIKE ?",
+        (cutoff, "%owner%", "%admin%"),
+    )
+    return {
+        "pending_accounts": int(pending["count"] if pending else 0),
+        "eligible_accounts": int(eligible["count"] if eligible else 0),
+    }
+
+
+def apply_auto_verification(db: Database) -> int:
+    settings = get_system_settings(db)
+    if not settings["autopilot_verify_enabled"]:
+        return 0
+    cutoff = (utcnow() - dt.timedelta(minutes=int(settings["autopilot_verify_minutes"]))).isoformat()
+    rows = all_rows(
+        db,
+        """
+        SELECT id, name
+        FROM users
+        WHERE verified = 0
+          AND created_at <= ?
+          AND roles NOT LIKE ?
+          AND roles NOT LIKE ?
+        ORDER BY created_at ASC
+        LIMIT 100
+        """,
+        (cutoff, "%owner%", "%admin%"),
+    )
+    ts = now_iso()
+    for row in rows:
+        user_id = int(row["id"])
+        db.execute("UPDATE users SET verified = 1 WHERE id = ?", (user_id,))
+        create_default_dmv(db, user_id)
+        db.execute(
+            "UPDATE dmv_records SET license_status = 'Valid', registration_status = 'Active', insurance_status = 'Active', updated_at = ? WHERE user_id = ?",
+            (ts, user_id),
+        )
+        add_message(
+            db,
+            user_id,
+            "Account auto-verified",
+            f"System autopilot verified your civilian profile after {settings['autopilot_verify_minutes']} minutes.",
+        )
+    return len(rows)
 
 
 def seed_owner(db: Database) -> None:
@@ -986,6 +1090,8 @@ def app_catalog(user: DbRow | None) -> list[dict[str, Any]]:
         apps.append({"id": "contracts", "label": "Contracts", "icon": "target", "enabled": True, "coming_soon": False, "hidden": False})
     if has_any(user, "leo", "cid", "owner"):
         apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "hidden": False})
+    if has_any(user, "owner"):
+        apps.append({"id": "system", "label": "System", "icon": "settings", "enabled": True, "hidden": False})
     if has_any(user, "owner", "admin"):
         apps.append({"id": "admin", "label": "Admin", "icon": "settings", "enabled": True, "hidden": False})
     return apps
@@ -1348,6 +1454,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_cid_create_ia(db, user)
                 elif path.startswith("/api/cid/internal-affairs/") and method == "PATCH":
                     self.api_cid_update_ia(db, user, self.path_int(path, 3))
+                elif path == "/api/system/settings" and method == "GET":
+                    self.api_system_settings(db, user)
+                elif path == "/api/system/settings" and method == "PATCH":
+                    self.api_update_system_settings(db, user)
                 elif path == "/api/admin/overview" and method == "GET":
                     self.api_admin_overview(db, user)
                 elif path == "/api/admin/users" and method == "GET":
@@ -1430,6 +1540,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not user:
             self.send_json(200, {"user": None, "apps": []})
             return
+        apply_auto_verification(db)
+        user = one(db, "SELECT * FROM users WHERE id = ?", (user["id"],)) or user
         unread = one(db, "SELECT COUNT(*) AS count FROM messages WHERE recipient_id = ? AND read_at IS NULL", (user["id"],))
         self.send_json(
             200,
@@ -1473,6 +1585,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "INSERT INTO user_presence (user_id, day, seconds, last_seen) VALUES (?, ?, ?, ?)",
                 (user["id"], day, increment, ts),
             )
+        apply_auto_verification(db)
         self.send_json(200, {"ok": True, "presence_seconds_today": presence_seconds(db, user["id"])})
 
     def api_profile(self, db: Database, user: DbRow | None) -> None:
@@ -3374,6 +3487,41 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             (str(payload.get("status") or "active").strip()[:30], str(payload.get("priority") or "standard").strip()[:30], now_iso(), ia_id),
         )
         self.send_json(200, {"ok": True})
+
+    def api_system_settings(self, db: Database, user: DbRow | None) -> None:
+        err = owner_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        auto_verified = apply_auto_verification(db)
+        settings = get_system_settings(db)
+        self.send_json(200, {"settings": settings, "stats": auto_verify_stats(db, settings), "auto_verified_now": auto_verified})
+
+    def api_update_system_settings(self, db: Database, user: DbRow | None) -> None:
+        err = owner_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        if "autopilot_verify_enabled" in payload:
+            enabled = payload.get("autopilot_verify_enabled")
+        else:
+            enabled = payload.get("enabled")
+        current_settings = get_system_settings(db)
+        if enabled is None:
+            enabled = current_settings["autopilot_verify_enabled"]
+        try:
+            minutes = int(payload.get("autopilot_verify_minutes") or payload.get("minutes") or SYSTEM_SETTING_DEFAULTS["autopilot_verify_minutes"])
+        except (TypeError, ValueError):
+            self.error(400, "Autopilot time must be a number of minutes")
+            return
+        minutes = max(1, min(minutes, 10080))
+        enabled_value = "1" if str(enabled).lower() in ("1", "true", "yes", "on") else "0"
+        set_system_setting(db, "autopilot_verify_enabled", enabled_value)
+        set_system_setting(db, "autopilot_verify_minutes", str(minutes))
+        auto_verified = apply_auto_verification(db)
+        settings = get_system_settings(db)
+        self.send_json(200, {"ok": True, "settings": settings, "stats": auto_verify_stats(db, settings), "auto_verified_now": auto_verified})
 
     def api_admin_overview(self, db: Database, user: DbRow | None) -> None:
         err = admin_required(user)
