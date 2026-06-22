@@ -633,6 +633,7 @@ def ensure_schema() -> None:
             CREATE TABLE IF NOT EXISTS panic_alerts (
                 id SERIAL PRIMARY KEY,
                 officer_id INTEGER NOT NULL,
+                department TEXT NOT NULL DEFAULT 'police',
                 location TEXT NOT NULL,
                 note TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'active',
@@ -745,9 +746,11 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS target_context TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS last_known TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS requirements TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE panic_alerts ADD COLUMN IF NOT EXISTS department TEXT NOT NULL DEFAULT 'police'")
     db.execute("CREATE INDEX IF NOT EXISTS arma_link_codes_code_idx ON arma_link_codes (code)")
     db.execute("CREATE INDEX IF NOT EXISTS arma_link_codes_status_idx ON arma_link_codes (status)")
     db.execute("CREATE INDEX IF NOT EXISTS arma_activity_logs_user_idx ON arma_activity_logs (user_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS panic_alerts_department_idx ON panic_alerts (department)")
 
 
 def get_system_settings(db: Database) -> dict[str, Any]:
@@ -1048,6 +1051,35 @@ def leo_required(user: DbRow | None) -> str | None:
     return None
 
 
+def fire_required(user: DbRow | None) -> str | None:
+    if not user:
+        return "Authentication required"
+    if not has_any(user, "fireman", "ems", "owner"):
+        return "Fire department access required"
+    return None
+
+
+def emergency_required(user: DbRow | None) -> str | None:
+    if not user:
+        return "Authentication required"
+    if not has_any(user, "leo", "cid", "fireman", "ems", "dispatcher", "owner"):
+        return "Emergency services access required"
+    return None
+
+
+def emergency_departments_for(user: DbRow) -> list[str]:
+    if has_any(user, "owner", "dispatcher"):
+        return ["police", "fire", "ems"]
+    departments: list[str] = []
+    if has_any(user, "leo", "cid"):
+        departments.append("police")
+    if has_any(user, "fireman"):
+        departments.append("fire")
+    if has_any(user, "ems"):
+        departments.append("ems")
+    return departments or ["police"]
+
+
 def cid_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
@@ -1090,6 +1122,8 @@ def app_catalog(user: DbRow | None) -> list[dict[str, Any]]:
         apps.append({"id": "contracts", "label": "Contracts", "icon": "target", "enabled": True, "coming_soon": False, "hidden": False})
     if has_any(user, "leo", "cid", "owner"):
         apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "hidden": False})
+    if has_any(user, "fireman", "ems", "owner"):
+        apps.append({"id": "fire", "label": "Fire MDT", "icon": "flame", "enabled": True, "hidden": False})
     if has_any(user, "owner"):
         apps.append({"id": "system", "label": "System", "icon": "settings", "enabled": True, "hidden": False})
     if has_any(user, "owner", "admin"):
@@ -1438,6 +1472,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_alerts(db, user)
                 elif path.startswith("/api/mdt/alerts/") and method == "PATCH":
                     self.api_clear_alert(db, user, self.path_int(path, 3))
+                elif path == "/api/fire/overview" and method == "GET":
+                    self.api_fire_overview(db, user)
+                elif path.startswith("/api/fire/alerts/") and method == "PATCH":
+                    self.api_update_fire_alert(db, user, self.path_int(path, 3))
                 elif path == "/api/cid/overview" and method == "GET":
                     self.api_cid_overview(db, user)
                 elif path == "/api/cid/investigations" and method == "POST":
@@ -3208,27 +3246,37 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(201, {"ok": True, "citation_id": citation_id, "court_date": court_date, "judge_id": presiding_judge["id"] if presiding_judge else None})
 
     def api_panic(self, db: Database, user: DbRow | None) -> None:
-        err = leo_required(user)
+        err = emergency_required(user)
         if err:
             self.error(403 if user else 401, err)
             return
         payload = self.read_json()
+        department = str(payload.get("department") or "police").strip().lower()
+        if department not in ("police", "fire", "ems"):
+            self.error(400, "Invalid emergency department")
+            return
         location = str(payload.get("location") or "Unknown location")[:120]
         note = str(payload.get("note") or "Emergency activation")[:240]
         cur = db.execute(
-            "INSERT INTO panic_alerts (officer_id, location, note, created_at) VALUES (?, ?, ?, ?) RETURNING id",
-            (user["id"], location, note, now_iso()),
+            "INSERT INTO panic_alerts (officer_id, department, location, note, created_at) VALUES (?, ?, ?, ?, ?) RETURNING id",
+            (user["id"], department, location, note, now_iso()),
         )
         created = cur.fetchone()
+        recipient_patterns = {
+            "police": ("%leo%", "%cid%", "%dispatcher%", "%owner%"),
+            "fire": ("%fireman%", "%dispatcher%", "%owner%", "%admin%"),
+            "ems": ("%ems%", "%dispatcher%", "%owner%", "%admin%"),
+        }[department]
         recipients = all_rows(
             db,
             "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ? OR roles LIKE ? OR roles LIKE ?",
-            ("%leo%", "%cid%", "%dispatcher%", "%owner%"),
+            recipient_patterns,
         )
+        subject = f"911 {department.upper()} ALERT"
         for recipient in recipients:
             if recipient["id"] != user["id"]:
-                add_message(db, recipient["id"], "PANIC ALERT", f"{user['name']} activated panic at {location}. {note}", user["id"])
-        self.send_json(201, {"ok": True, "alert_id": int(created["id"])})
+                add_message(db, recipient["id"], subject, f"{user['name']} activated a {department} emergency at {location}. {note}", user["id"])
+        self.send_json(201, {"ok": True, "alert_id": int(created["id"]), "department": department})
 
     def api_alerts(self, db: Database, user: DbRow | None) -> None:
         err = leo_required(user)
@@ -3261,6 +3309,64 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             (now_iso(), alert_id),
         )
         add_message(db, alert["officer_id"], "Panic alert cleared", f"{user['name']} cleared your panic activation at {alert['location']}.", user["id"])
+        self.send_json(200, {"ok": True})
+
+    def api_fire_overview(self, db: Database, user: DbRow | None) -> None:
+        err = fire_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        departments = emergency_departments_for(user)
+        visible = [department for department in departments if department in ("fire", "ems")]
+        if has_any(user, "owner"):
+            visible = ["fire", "ems"]
+        if not visible:
+            visible = ["fire"]
+        placeholders = ",".join(["?"] * len(visible))
+        rows = all_rows(
+            db,
+            f"""
+            SELECT p.*, u.name AS officer_name, u.primary_agency
+            FROM panic_alerts p
+            JOIN users u ON u.id = p.officer_id
+            WHERE p.department IN ({placeholders})
+            ORDER BY CASE p.status WHEN 'active' THEN 0 WHEN 'responding' THEN 1 ELSE 2 END, p.created_at DESC
+            LIMIT 80
+            """,
+            tuple(visible),
+        )
+        stats = {
+            "active": sum(1 for row in rows if row.get("status") == "active"),
+            "responding": sum(1 for row in rows if row.get("status") == "responding"),
+            "cleared": sum(1 for row in rows if row.get("status") == "cleared"),
+        }
+        self.send_json(200, {"departments": visible, "stats": stats, "alerts": [dict(row) for row in rows]})
+
+    def api_update_fire_alert(self, db: Database, user: DbRow | None, alert_id: int) -> None:
+        err = fire_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        status = str(payload.get("status") or "responding").strip().lower()
+        if status not in ("active", "responding", "cleared"):
+            self.error(400, "Invalid incident status")
+            return
+        alert = one(db, "SELECT * FROM panic_alerts WHERE id = ? AND department IN ('fire','ems')", (alert_id,))
+        if not alert:
+            self.error(404, "Fire incident not found")
+            return
+        departments = emergency_departments_for(user)
+        if not has_any(user, "owner") and alert["department"] not in departments:
+            self.error(403, "You cannot update that department incident")
+            return
+        resolved_at = now_iso() if status == "cleared" else None
+        db.execute(
+            "UPDATE panic_alerts SET status = ?, resolved_at = ? WHERE id = ?",
+            (status, resolved_at, alert_id),
+        )
+        add_message(db, alert["officer_id"], "Fire MDT incident updated", f"Incident #{alert_id} is now {status}.", user["id"])
         self.send_json(200, {"ok": True})
 
     def api_cid_overview(self, db: Database, user: DbRow | None) -> None:

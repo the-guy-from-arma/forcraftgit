@@ -8,10 +8,13 @@
       "added": [
         "Owner-only System Settings app icon.",
         "Auto pilot verification mode for automatically verifying civilian accounts after a configurable waiting period.",
-        "System queue stats showing pending accounts and accounts eligible for auto-verification."
+        "System queue stats showing pending accounts and accounts eligible for auto-verification.",
+        "Fire Department MDT for fireman and EMS roles with active 911 incident tracking.",
+        "Fireman role option in account role assignment."
       ],
       "changed": [
-        "Default auto-verification wait time starts at 120 minutes and can be adjusted by the owner."
+        "Default auto-verification wait time starts at 120 minutes and can be adjusted by the owner.",
+        "911 emergency alerting now supports Police, Fire, and EMS department selection."
       ],
       "fixed": [],
       "removed": []

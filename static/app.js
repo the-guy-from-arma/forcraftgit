@@ -36,6 +36,7 @@ const iconSvg = {
   user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/><path d="M16 11l2 2 4-5"/></svg>',
   message: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/></svg>',
   shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="M9 12l2 2 4-5"/></svg>',
+  flame: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8.5 14.5A4.5 4.5 0 1 0 17 12c0-3-2-5-5-8-.5 3-2 4.5-3.5 6S6 12.7 8.5 14.5Z"/><path d="M12 22a4 4 0 0 0 4-4c0-1.8-1-3.3-3-5-.3 1.8-1.3 2.7-2.2 3.5-.8.8-1.3 1.5-1.3 2.5A2.5 2.5 0 0 0 12 22Z"/></svg>',
   target: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
   scroll: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 21h9a3 3 0 0 0 3-3V5a2 2 0 0 0-2-2H7a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3h1Z"/><path d="M8 21a3 3 0 0 1-3-3V7h13"/><path d="M9 11h6M9 15h5"/></svg>',
   settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V22a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 18l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1A2 2 0 1 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>',
@@ -57,6 +58,7 @@ const tileColors = {
   contracts: "linear-gradient(145deg, #ff5d7d, #4120a4)",
   changelog: "linear-gradient(145deg, #7ee7ff, #3158e8)",
   mdt: "linear-gradient(145deg, #28343c, #050709)",
+  fire: "linear-gradient(145deg, #ff6b4a, #2d1b1b)",
   system: "linear-gradient(145deg, #35e0b6, #22485c)",
   admin: "linear-gradient(145deg, #ffcf5a, #6c5010)",
 };
@@ -125,9 +127,9 @@ function render() {
     bindAuth();
     return;
   }
-  if (state.activeApp === "mdt") {
-    app.innerHTML = renderMdtWorkspace();
-    bindMdtWorkspace();
+  if (state.activeApp === "mdt" || state.activeApp === "fire") {
+    app.innerHTML = state.activeApp === "fire" ? renderFireWorkspace() : renderMdtWorkspace();
+    state.activeApp === "fire" ? bindFireWorkspace() : bindMdtWorkspace();
     return;
   }
   if (state.activeApp) {
@@ -260,6 +262,7 @@ function renderPanel(id) {
     contracts: "Contracts",
     changelog: "Changelog",
     mdt: "MDT CAD",
+    fire: "Fire MDT",
     system: "System",
     admin: "Admin",
   };
@@ -276,6 +279,7 @@ function renderPanel(id) {
     contracts: renderContracts,
     changelog: renderChangelog,
     mdt: renderMdt,
+    fire: renderFireMdt,
     system: renderSystem,
     admin: renderAdmin,
   }[id]?.() || `<div class="empty">Module unavailable</div>`;
@@ -310,6 +314,7 @@ async function loadAppData(id) {
       cid: canAny("cid", "owner") ? await api("/api/cid/overview") : null,
       search: state.cache.mdt?.search || []
     }),
+    fire: () => api("/api/fire/overview"),
     system: () => api("/api/system/settings"),
     admin: async () => ({ overview: await api("/api/admin/overview"), users: await api("/api/admin/users"), jobs: await api("/api/admin/jobs") }),
   };
@@ -344,6 +349,7 @@ function bindPanel() {
     messages: bindMessages,
     contracts: bindContracts,
     mdt: bindMdt,
+    fire: bindFireMdt,
     system: bindSystem,
     admin: bindAdmin,
   };
@@ -1644,7 +1650,7 @@ function bindMdtLegacy() {
     event.preventDefault();
     try {
       await api("/api/mdt/panic", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
-      toast("Panic alert sent");
+      toast("911 alert sent");
       await loadAppData("mdt");
       render();
     } catch (error) {
@@ -1731,6 +1737,88 @@ function bindMdtWorkspace() {
     render();
   });
   bindMdt();
+}
+
+function renderFireWorkspace() {
+  const data = state.cache.fire || {};
+  const alerts = data.alerts || [];
+  const stats = data.stats || { active: 0, responding: 0, cleared: 0 };
+  return `
+    <section class="mdt-workspace fire-workspace">
+      <header class="mdt-topbar">
+        <div>
+          <p class="eyebrow">${escapeHtml(state.session.user.primary_agency || "Fire Department")}</p>
+          <h1>Fire Department MDT</h1>
+        </div>
+        <div class="mdt-top-actions">
+          <button class="ghost" data-refresh-fire>Refresh</button>
+          <button class="secondary" data-close-fire>Exit MDT</button>
+        </div>
+      </header>
+      <div class="mdt-stat-strip">
+        <div class="metric"><span>Active Calls</span><strong>${stats.active || 0}</strong></div>
+        <div class="metric"><span>Responding</span><strong>${stats.responding || 0}</strong></div>
+        <div class="metric"><span>Cleared</span><strong>${stats.cleared || 0}</strong></div>
+      </div>
+      <main class="mdt-main fire-main">
+        <div class="mdt-section-head">
+          <div><p class="eyebrow">911 Queue</p><h2>Fire / EMS Incidents</h2></div>
+          <span class="pill">${alerts.length} calls</span>
+        </div>
+        <div class="mdt-code-grid">
+          ${alerts.map((alert) => `
+            <article class="mdt-return fire-call-card">
+              <div class="row">
+                <div>
+                  <p class="eyebrow">${escapeHtml(alert.department || "fire")}</p>
+                  <h3>${escapeHtml(alert.location)}</h3>
+                </div>
+                <span class="pill ${panicStatusClass(alert.status)}">${escapeHtml(alert.status)}</span>
+              </div>
+              <p>${escapeHtml(alert.note || "No notes supplied")}</p>
+              <p class="muted small">Reported by ${escapeHtml(alert.officer_name || "Unknown")} - ${new Date(alert.created_at).toLocaleString()}</p>
+              <div class="row">
+                ${alert.status !== "responding" && alert.status !== "cleared" ? `<button class="secondary" data-fire-alert="${alert.id}" data-fire-status="responding">Responding</button>` : ""}
+                ${alert.status !== "cleared" ? `<button class="primary" data-fire-alert="${alert.id}" data-fire-status="cleared">Clear</button>` : ""}
+              </div>
+            </article>
+          `).join("") || `<div class="empty">No fire or EMS incidents</div>`}
+        </div>
+      </main>
+    </section>
+  `;
+}
+
+function bindFireWorkspace() {
+  $("[data-close-fire]")?.addEventListener("click", async () => {
+    state.activeApp = null;
+    await loadSession();
+  });
+  $("[data-refresh-fire]")?.addEventListener("click", async () => {
+    await loadAppData("fire");
+    render();
+  });
+  bindFireMdt();
+}
+
+function renderFireMdt() {
+  return renderFireWorkspace();
+}
+
+function bindFireMdt() {
+  $$("[data-fire-alert]").forEach((button) => button.addEventListener("click", async () => {
+    try {
+      await api(`/api/fire/alerts/${button.dataset.fireAlert}`, {
+        method: "PATCH",
+        body: { status: button.dataset.fireStatus },
+      });
+      toast(`Incident ${button.dataset.fireStatus}`);
+      await loadAppData("fire");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
 }
 
 function renderMdt() {
@@ -2073,14 +2161,19 @@ function renderPanic() {
   const canClearPanic = can("owner");
   return `
     <form id="panicForm" class="mdt-form">
-      <button class="panic-button pulse" type="submit">PANIC BUTTON</button>
+      <button class="panic-button pulse" type="submit">911 ALERT</button>
+      <label>Department<select name="department">
+        <option value="police">Police</option>
+        <option value="fire">Fire</option>
+        <option value="ems">EMS</option>
+      </select></label>
       <label>Location<input name="location" placeholder="Nearest postal / street" /></label>
       <label>Note<input name="note" placeholder="Short emergency note" /></label>
     </form>
     <div class="list">
       ${alerts.map((alert) => `
         <article class="case-card">
-          <div class="row"><h3>${escapeHtml(alert.officer_name)}</h3><span class="pill ${panicStatusClass(alert.status)}">${escapeHtml(alert.status)}</span></div>
+          <div class="row"><h3>${escapeHtml(alert.officer_name)}</h3><span class="pill ${panicStatusClass(alert.status)}">${escapeHtml(alert.department || "police")} - ${escapeHtml(alert.status)}</span></div>
           <p>${escapeHtml(alert.location)}</p>
           <p class="muted small">${escapeHtml(alert.note)}</p>
           <p class="muted small">Activated ${new Date(alert.created_at).toLocaleString()}${alert.resolved_at ? ` - Cleared ${new Date(alert.resolved_at).toLocaleString()}` : ""}</p>
@@ -2310,7 +2403,7 @@ function renderSystem() {
   `;
 }
 
-const roleOptions = ["civ", "owner", "admin", "leo", "judge", "ems", "dispatcher", "sheriff", "police", "state_police", "cid", "business_owner", "business_registrar", "city_hall", "economy_manager"];
+const roleOptions = ["civ", "owner", "admin", "leo", "judge", "ems", "fireman", "dispatcher", "sheriff", "police", "state_police", "cid", "business_owner", "business_registrar", "city_hall", "economy_manager"];
 
 function renderAdminUsers(users) {
   if (!users.length) return `<div class="empty">No accounts yet</div>`;
