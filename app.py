@@ -1694,7 +1694,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             (code,),
         )
         if not request:
-            self.error(404, "Link code not found or already claimed")
+            self.error(404, "Link code was not found in Railway yet. Wait for the TBS bridge to sync the in-game code, then try again.")
             return
         if parse_iso(request["expires_at"]) < utcnow():
             db.execute("UPDATE arma_link_codes SET status = 'expired' WHERE id = ?", (request["id"],))
@@ -1764,15 +1764,30 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not isinstance(requests, list):
             requests = [data] if data.get("LinkCode") else []
         accepted: list[str] = []
-        for request in requests:
+        rejected: list[dict[str, str]] = []
+        for index, request in enumerate(requests):
             if not isinstance(request, dict):
+                rejected.append({"index": str(index), "reason": "Request was not an object"})
                 continue
-            code = str(request.get("LinkCode") or "").strip().upper()
-            identity_id = str(request.get("IdentityId") or request.get("Uid") or "").strip()
+            code = str(self.bridge_value(request, "LinkCode", "code", "linkCode", "link_code")).strip().upper()
+            identity_id = str(self.bridge_value(request, "IdentityId", "Uid", "identityId", "uid")).strip()
             rpl_identity = str(self.bridge_value(request, "RplIdentityValue", "RplIdentity"))[:160]
-            if not code or not identity_id:
+            request_id = str(request.get("RequestId") or "")[:120]
+            player_name = str(request.get("PlayerName") or "")[:120]
+            if not code:
+                rejected.append({"index": str(index), "request_id": request_id, "player_name": player_name, "reason": "Missing LinkCode"})
                 continue
-            server_id = str(request.get("ServerId") or data.get("ServerId") or "default").strip() or "default"
+            if not identity_id:
+                rejected.append({"index": str(index), "code": code, "request_id": request_id, "player_name": player_name, "reason": "Missing IdentityId/Uid"})
+                continue
+            request_server_id = str(request.get("ServerId") or "").strip()
+            data_server_id = str(data.get("ServerId") or "").strip()
+            if request_server_id and request_server_id.lower() != "default":
+                server_id = request_server_id
+            elif data_server_id:
+                server_id = data_server_id
+            else:
+                server_id = request_server_id or "default"
             existing = one(db, "SELECT * FROM arma_link_codes WHERE server_id = ? AND UPPER(code) = UPPER(?)", (server_id, code))
             if existing and existing["status"] == "claimed":
                 accepted.append(code)
@@ -1790,7 +1805,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     WHERE id = ?
                     """,
                     (
-                        str(request.get("RequestId") or "")[:120],
+                        request_id,
                         identity_id,
                         str(request.get("Uid") or "")[:160],
                         rpl_identity,
@@ -1811,7 +1826,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     """,
                     (
                         code,
-                        str(request.get("RequestId") or "")[:120],
+                        request_id,
                         server_id,
                         identity_id,
                         str(request.get("Uid") or "")[:160],
@@ -1824,7 +1839,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     ),
                 )
             accepted.append(code)
-        self.send_json(200, {"ok": True, "accepted": accepted, "count": len(accepted)})
+        self.send_json(200, {"ok": True, "accepted": accepted, "rejected": rejected, "count": len(accepted), "rejected_count": len(rejected)})
 
     def api_arma_snapshot(self, db: Database) -> None:
         err = self.bridge_error()

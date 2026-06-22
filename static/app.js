@@ -7,6 +7,7 @@ const state = {
   authMode: "login",
   session: null,
   activeApp: null,
+  pendingArmaCode: new URL(window.location.href).searchParams.get("code") || "",
   dmvTab: "overview",
   mdtTab: "search",
   mdtNavOpen: false,
@@ -103,6 +104,10 @@ async function api(path, options = {}) {
 
 async function loadSession() {
   state.session = await api("/api/session");
+  if (state.session?.user && state.pendingArmaCode && !state.activeApp) {
+    state.activeApp = "profile";
+    await loadAppData("profile");
+  }
   render();
 }
 
@@ -367,6 +372,9 @@ function canAny(...roles) {
 function renderProfile() {
   const data = state.cache.profile || {};
   const user = data.user || state.session.user;
+  const link = data.arma_link;
+  const activity = data.recent_activity || [];
+  const claimedCodes = data.claimed_codes || [];
   return `
     <div class="stack profile-app">
       <div class="profile-hero">
@@ -382,12 +390,78 @@ function renderProfile() {
         <div><span>Roles</span><strong>${escapeHtml((user.roles || state.session.user.roles || []).join(", "))}</strong></div>
         <div><span>Agency</span><strong>${escapeHtml(user.primary_agency || "Civilian")}</strong></div>
         <div><span>Status</span><strong>${escapeHtml(user.verified ? "Verified civilian" : "Awaiting verification")}</strong></div>
+        <div><span>Registered Arma ID</span><strong>${escapeHtml(user.registered_arma_id || user.arma_id || "Not attached")}</strong></div>
+        <div><span>Live Link</span><strong>${escapeHtml(link ? "Attached" : "Not attached")}</strong></div>
       </div>
+      <section class="profile-link-card">
+        <div class="row">
+          <div>
+            <p class="eyebrow">Arma attachment</p>
+            <h3>${link ? "Account attached" : "Attach in-game account"}</h3>
+          </div>
+          <span class="pill ${link ? "green" : "amber"}">${link ? "linked" : "pending"}</span>
+        </div>
+        ${link ? `
+          <div class="profile-grid compact">
+            <div><span>Player</span><strong>${escapeHtml(link.player_name || "Unknown")}</strong></div>
+            <div><span>Server</span><strong>${escapeHtml(link.server_id || "default")}</strong></div>
+            <div><span>Identity</span><strong>${escapeHtml(link.identity_id || "Not provided")}</strong></div>
+            <div><span>Last sync</span><strong>${escapeHtml(link.last_sync_at || link.linked_at || "Awaiting sync")}</strong></div>
+          </div>
+        ` : `
+          <p class="muted small">Enter the in-game link code shown by TBS RP LINKING SYSTEM after joining the server.</p>
+          <form id="armaLinkForm" class="form-grid arma-link-form">
+            <label>Link code<input name="code" value="${escapeHtml(state.pendingArmaCode)}" placeholder="1-145595" autocomplete="one-time-code" inputmode="text" required /></label>
+            <button class="primary" type="submit">Attach Account</button>
+          </form>
+        `}
+      </section>
+      ${claimedCodes.length ? `
+        <section class="profile-activity">
+          <div class="row"><h3>Recent link claims</h3><span class="pill green">${claimedCodes.length}</span></div>
+          <div class="profile-grid compact">
+            ${claimedCodes.map((item) => `
+              <div><span>${escapeHtml(item.server_id || "default")}</span><strong>${escapeHtml(item.player_name || item.code)}</strong></div>
+            `).join("")}
+          </div>
+        </section>
+      ` : ""}
+      ${activity.length ? `
+        <section class="profile-activity">
+          <div class="row"><h3>Arma activity</h3><span class="pill">${activity.length}</span></div>
+          <div class="list">
+            ${activity.slice(0, 5).map((item) => `
+              <article>
+                <strong>${escapeHtml(item.action || item.event_type || "Activity")}</strong>
+                <p>${escapeHtml(item.reason || item.source_system || item.received_at || "")}</p>
+              </article>
+            `).join("")}
+          </div>
+        </section>
+      ` : ""}
     </div>
   `;
 }
 
-function bindProfile() {}
+function bindProfile() {
+  $("#armaLinkForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const payload = Object.fromEntries(new FormData(form).entries());
+    try {
+      await api("/api/profile/link-arma", { method: "POST", body: payload });
+      toast("Arma account attached");
+      state.pendingArmaCode = "";
+      if (window.location.search.includes("code=")) {
+        window.history.replaceState({}, "", "/");
+      }
+      await loadAppData("profile");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+}
 
 function renderDmv() {
   const data = state.cache.dmv;
