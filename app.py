@@ -256,6 +256,8 @@ BUSINESS_MAX_ACTIVE_PER_OWNER = 2
 SYSTEM_SETTING_DEFAULTS = {
     "autopilot_verify_enabled": "0",
     "autopilot_verify_minutes": "120",
+    "autopilot_license_enabled": "1",
+    "autopilot_license_minutes": "6",
 }
 
 
@@ -762,9 +764,16 @@ def get_system_settings(db: Database) -> dict[str, Any]:
     except (TypeError, ValueError):
         minutes = int(SYSTEM_SETTING_DEFAULTS["autopilot_verify_minutes"])
     minutes = max(1, min(minutes, 10080))
+    try:
+        license_minutes = int(raw.get("autopilot_license_minutes") or SYSTEM_SETTING_DEFAULTS["autopilot_license_minutes"])
+    except (TypeError, ValueError):
+        license_minutes = int(SYSTEM_SETTING_DEFAULTS["autopilot_license_minutes"])
+    license_minutes = max(1, min(license_minutes, 10080))
     return {
         "autopilot_verify_enabled": str(raw.get("autopilot_verify_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "autopilot_verify_minutes": minutes,
+        "autopilot_license_enabled": str(raw.get("autopilot_license_enabled") or "0") in ("1", "true", "True", "yes", "on"),
+        "autopilot_license_minutes": license_minutes,
     }
 
 
@@ -793,6 +802,31 @@ def auto_verify_stats(db: Database, settings: dict[str, Any] | None = None) -> d
     return {
         "pending_accounts": int(pending["count"] if pending else 0),
         "eligible_accounts": int(eligible["count"] if eligible else 0),
+    }
+
+
+def auto_license_stats(db: Database, settings: dict[str, Any] | None = None) -> dict[str, int]:
+    settings = settings or get_system_settings(db)
+    cutoff = (utcnow() - dt.timedelta(minutes=int(settings["autopilot_license_minutes"]))).isoformat()
+    pending = one(
+        db,
+        "SELECT COUNT(*) AS count FROM dmv_license_applications WHERE status IN ('submitted','pending','under_review')",
+    )
+    eligible = one(
+        db,
+        """
+        SELECT COUNT(*) AS count
+        FROM dmv_license_applications a
+        LEFT JOIN dmv_records d ON d.user_id = a.user_id
+        WHERE a.status IN ('submitted','pending','under_review')
+          AND a.created_at <= ?
+          AND COALESCE(d.license_status, '') NOT IN ('Suspended','Revoked')
+        """,
+        (cutoff,),
+    )
+    return {
+        "pending_license_applications": int(pending["count"] if pending else 0),
+        "eligible_license_applications": int(eligible["count"] if eligible else 0),
     }
 
 
@@ -829,6 +863,47 @@ def apply_auto_verification(db: Database) -> int:
             user_id,
             "Account auto-verified",
             f"System autopilot verified your civilian profile after {settings['autopilot_verify_minutes']} minutes.",
+        )
+    return len(rows)
+
+
+def apply_auto_license_approval(db: Database) -> int:
+    settings = get_system_settings(db)
+    if not settings["autopilot_license_enabled"]:
+        return 0
+    cutoff = (utcnow() - dt.timedelta(minutes=int(settings["autopilot_license_minutes"]))).isoformat()
+    rows = all_rows(
+        db,
+        """
+        SELECT a.id, a.user_id, a.application_type, a.license_class, u.name
+        FROM dmv_license_applications a
+        JOIN users u ON u.id = a.user_id
+        LEFT JOIN dmv_records d ON d.user_id = a.user_id
+        WHERE a.status IN ('submitted','pending','under_review')
+          AND a.created_at <= ?
+          AND COALESCE(d.license_status, '') NOT IN ('Suspended','Revoked')
+        ORDER BY a.created_at ASC
+        LIMIT 100
+        """,
+        (cutoff,),
+    )
+    ts = now_iso()
+    for row in rows:
+        user_id = int(row["user_id"])
+        create_default_dmv(db, user_id)
+        db.execute(
+            "UPDATE dmv_license_applications SET status = 'approved', updated_at = ? WHERE id = ?",
+            (ts, row["id"]),
+        )
+        db.execute(
+            "UPDATE dmv_records SET license_status = 'Valid', license_class = ?, updated_at = ? WHERE user_id = ?",
+            (row["license_class"], ts, user_id),
+        )
+        add_message(
+            db,
+            user_id,
+            "Driver license approved",
+            f"Your {row['application_type']} was automatically approved after {settings['autopilot_license_minutes']} minutes.",
         )
     return len(rows)
 
@@ -1468,6 +1543,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_mdt_search(db, user, query)
                 elif path == "/api/mdt/charges" and method == "GET":
                     self.api_mdt_charges(db, user)
+                elif path.startswith("/api/mdt/users/") and path.endswith("/license") and method == "PATCH":
+                    self.api_mdt_update_license(db, user, self.path_int(path, 3))
                 elif path == "/api/mdt/citations" and method == "POST":
                     self.api_issue_citation(db, user)
                 elif path == "/api/mdt/panic" and method == "POST":
@@ -1583,6 +1660,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"user": None, "apps": []})
             return
         apply_auto_verification(db)
+        apply_auto_license_approval(db)
         user = one(db, "SELECT * FROM users WHERE id = ?", (user["id"],)) or user
         unread = one(db, "SELECT COUNT(*) AS count FROM messages WHERE recipient_id = ? AND read_at IS NULL", (user["id"],))
         self.send_json(
@@ -1628,6 +1706,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 (user["id"], day, increment, ts),
             )
         apply_auto_verification(db)
+        apply_auto_license_approval(db)
         self.send_json(200, {"ok": True, "presence_seconds_today": presence_seconds(db, user["id"])})
 
     def api_profile(self, db: Database, user: DbRow | None) -> None:
@@ -2118,6 +2197,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err)
             return
+        apply_auto_license_approval(db)
         record = one(db, "SELECT * FROM dmv_records WHERE user_id = ?", (user["id"],))
         if not record:
             create_default_dmv(db, user["id"])
@@ -3200,6 +3280,41 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             },
         )
 
+    def api_mdt_update_license(self, db: Database, user: DbRow | None, target_id: int) -> None:
+        err = leo_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        status = str(payload.get("status") or "Suspended").strip()[:30]
+        if status != "Suspended":
+            self.error(400, "Only license suspension is supported from the MDT")
+            return
+        target = one(
+            db,
+            """
+            SELECT u.id, u.name, d.license_status, d.license_class
+            FROM users u
+            JOIN dmv_records d ON d.user_id = u.id
+            WHERE u.id = ?
+            """,
+            (target_id,),
+        )
+        if not target:
+            self.error(404, "Civilian DMV record not found")
+            return
+        if target["license_status"] != "Valid":
+            self.error(409, "Only a valid driver license can be suspended")
+            return
+        reason = str(payload.get("reason") or "Suspended by law enforcement MDT").strip()[:240]
+        ts = now_iso()
+        db.execute(
+            "UPDATE dmv_records SET license_status = 'Suspended', updated_at = ? WHERE user_id = ?",
+            (ts, target_id),
+        )
+        add_message(db, target_id, "Driver license suspended", f"Your driver license was suspended. Reason: {reason}", user["id"])
+        self.send_json(200, {"ok": True, "license_status": "Suspended"})
+
     def api_issue_citation(self, db: Database, user: DbRow | None) -> None:
         err = leo_required(user)
         if err:
@@ -3396,7 +3511,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         investigations = all_rows(
             db,
             """
-            SELECT i.*, lead.name AS lead_name, target.name AS target_civ_name
+            SELECT i.*, lead.name AS lead_name, target.name AS target_civ_name,
+                   (SELECT COUNT(*) FROM cid_investigation_notes n WHERE n.investigation_id = i.id) AS note_count,
+                   (SELECT COUNT(*) FROM cid_warrants w WHERE w.investigation_id = i.id) AS warrant_count
             FROM cid_investigations i
             JOIN users lead ON lead.id = i.lead_id
             LEFT JOIN users target ON target.id = i.target_civ_id
@@ -3435,7 +3552,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             JOIN cid_investigations i ON i.id = n.investigation_id
             JOIN users author ON author.id = n.author_id
             ORDER BY n.created_at DESC
-            LIMIT 30
+            LIMIT 300
             """
         )
         stats = {
@@ -3619,8 +3736,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403 if user else 401, err)
             return
         auto_verified = apply_auto_verification(db)
+        auto_licensed = apply_auto_license_approval(db)
         settings = get_system_settings(db)
-        self.send_json(200, {"settings": settings, "stats": auto_verify_stats(db, settings), "auto_verified_now": auto_verified})
+        stats = {**auto_verify_stats(db, settings), **auto_license_stats(db, settings)}
+        self.send_json(200, {"settings": settings, "stats": stats, "auto_verified_now": auto_verified, "auto_licensed_now": auto_licensed})
 
     def api_update_system_settings(self, db: Database, user: DbRow | None) -> None:
         err = owner_required(user)
@@ -3641,12 +3760,27 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(400, "Autopilot time must be a number of minutes")
             return
         minutes = max(1, min(minutes, 10080))
+        if "autopilot_license_enabled" in payload:
+            license_enabled = payload.get("autopilot_license_enabled")
+        else:
+            license_enabled = current_settings["autopilot_license_enabled"]
+        try:
+            license_minutes = int(payload.get("autopilot_license_minutes") or current_settings["autopilot_license_minutes"])
+        except (TypeError, ValueError):
+            self.error(400, "Driver license autopilot time must be a number of minutes")
+            return
+        license_minutes = max(1, min(license_minutes, 10080))
         enabled_value = "1" if str(enabled).lower() in ("1", "true", "yes", "on") else "0"
+        license_enabled_value = "1" if str(license_enabled).lower() in ("1", "true", "yes", "on") else "0"
         set_system_setting(db, "autopilot_verify_enabled", enabled_value)
         set_system_setting(db, "autopilot_verify_minutes", str(minutes))
+        set_system_setting(db, "autopilot_license_enabled", license_enabled_value)
+        set_system_setting(db, "autopilot_license_minutes", str(license_minutes))
         auto_verified = apply_auto_verification(db)
+        auto_licensed = apply_auto_license_approval(db)
         settings = get_system_settings(db)
-        self.send_json(200, {"ok": True, "settings": settings, "stats": auto_verify_stats(db, settings), "auto_verified_now": auto_verified})
+        stats = {**auto_verify_stats(db, settings), **auto_license_stats(db, settings)}
+        self.send_json(200, {"ok": True, "settings": settings, "stats": stats, "auto_verified_now": auto_verified, "auto_licensed_now": auto_licensed})
 
     def api_admin_overview(self, db: Database, user: DbRow | None) -> None:
         err = admin_required(user)

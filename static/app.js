@@ -16,6 +16,9 @@ const state = {
   mdtCatalogMode: "citation",
   mdtSelectedCiv: "",
   mdtNotice: null,
+  cidSelectedCaseId: null,
+  mdtProfileUserId: null,
+  mdtProfileTab: "profile",
   courtTab: "mine",
   contractsTab: "open",
   contractsInfoOpen: false,
@@ -79,6 +82,14 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function selectedAttr(value, current) {
+  return String(value) === String(current) ? " selected" : "";
+}
+
+function renderOptions(options, current) {
+  return options.map((option) => `<option value="${escapeHtml(option)}"${selectedAttr(option, current)}>${escapeHtml(option)}</option>`).join("");
 }
 
 function toast(message) {
@@ -1779,6 +1790,7 @@ function renderMdtWorkspace() {
       ${(state.mdtNavOpen || state.mdtSideOpen) ? `<button class="mdt-drawer-backdrop" data-close-mdt-drawers aria-label="Close MDT drawer"></button>` : ""}
       ${state.mdtCatalogOpen ? renderMdtCatalogModal() : ""}
       ${state.mdtNotice ? renderMdtNoticeModal() : ""}
+      ${state.mdtProfileUserId ? renderMdtProfileModal() : ""}
     </section>
   `;
 }
@@ -1944,6 +1956,12 @@ function panicStatusClass(status) {
   return status === "active" ? "red" : "green";
 }
 
+function mdtStatusClass(status) {
+  if (["Valid", "verified", "approved", "Active"].includes(status)) return "green";
+  if (["Suspended", "Revoked", "denied"].includes(status)) return "red";
+  return "amber";
+}
+
 function renderMdtSearch() {
   const results = state.cache.mdt?.search || [];
   return `
@@ -1965,7 +1983,7 @@ function renderMdtSearch() {
             <div class="metric"><span>Insurance</span><strong>${escapeHtml(item.insurance_status || "None")}</strong></div>
           </div>
           <div class="mdt-subsection">
-            <div class="row"><h4>Registered vehicles</h4><button class="secondary" data-use-civ="${item.id}">Use for ticket</button></div>
+            <div class="row"><h4>Registered vehicles</h4><div class="row-actions"><button class="secondary" data-open-mdt-profile="${item.id}">Open profile</button><button class="secondary" data-use-civ="${item.id}">Use for ticket</button></div></div>
             ${(item.vehicles || []).map((vehicle) => `<p class="small">${escapeHtml(vehicle.vehicle_year)} ${escapeHtml(vehicle.vehicle_color)} ${escapeHtml(vehicle.vehicle_make)} ${escapeHtml(vehicle.vehicle_model)} - ${escapeHtml(vehicle.plate)} - ${escapeHtml(vehicle.registration_status)}</p>`).join("") || `<p class="muted small">No registered vehicles on file</p>`}
           </div>
           <div class="mdt-subsection">
@@ -1974,6 +1992,82 @@ function renderMdtSearch() {
           </div>
         </article>
       `).join("") || `<div class="empty">Run a search to pull DMV and case records</div>`}
+    </div>
+  `;
+}
+
+function renderMdtProfileModal() {
+  const person = (state.cache.mdt?.search || []).find((item) => String(item.id) === String(state.mdtProfileUserId));
+  if (!person) {
+    return "";
+  }
+  const vehicles = person.vehicles || [];
+  const applications = person.license_applications || [];
+  const licenseStatus = person.license_status || "None";
+  const canSuspendLicense = licenseStatus === "Valid";
+  return `
+    <div class="modal-backdrop mdt-profile-backdrop" data-close-mdt-profile>
+      <section class="mdt-modal mdt-profile-modal" role="dialog" aria-modal="true" aria-label="Civilian MDT profile">
+        <header class="row">
+          <div>
+            <p class="eyebrow">Civilian profile file</p>
+            <h2>${escapeHtml(person.name)}</h2>
+            <p class="muted small">CIV ${escapeHtml(person.civ_number || "pending")} / DB #${person.id}</p>
+          </div>
+          <button class="icon-action" type="button" data-close-mdt-profile aria-label="Close">${iconSvg.back}</button>
+        </header>
+        <div class="court-tabs">
+          <button class="${state.mdtProfileTab === "profile" ? "active" : ""}" type="button" data-mdt-profile-tab="profile">Profile</button>
+          <button class="${state.mdtProfileTab === "license" ? "active" : ""}" type="button" data-mdt-profile-tab="license">Driver License</button>
+        </div>
+        <div class="admin-account-scroll">
+          ${state.mdtProfileTab === "license" ? `
+            <section class="account-section mdt-license-file">
+              <div class="row tight">
+                <h3>Driver License</h3>
+                <span class="pill ${mdtStatusClass(licenseStatus)}">${escapeHtml(licenseStatus)}</span>
+              </div>
+              <div class="profile-grid compact">
+                <div class="metric"><span>Class</span><strong>${escapeHtml(person.license_class || "None")}</strong></div>
+                <div class="metric"><span>Primary Plate</span><strong>${escapeHtml(person.plate || "None")}</strong></div>
+                <div class="metric"><span>Registration</span><strong>${escapeHtml(person.registration_status || "None")}</strong></div>
+                <div class="metric"><span>Insurance</span><strong>${escapeHtml(person.insurance_status || "None")}</strong></div>
+              </div>
+              ${canSuspendLicense ? `
+                <form class="mdt-license-suspend-form form-grid" data-user-id="${person.id}">
+                  <label>Suspension reason<textarea name="reason" required placeholder="Probable cause or RP reason for the suspension"></textarea></label>
+                  <button class="danger" type="submit">Suspend driver license</button>
+                </form>
+              ` : `<p class="muted small">Suspension action is available only when the license status is Valid.</p>`}
+              <div class="mdt-subsection">
+                <h4>License applications</h4>
+                ${applications.map((item) => `<div class="row"><span>${escapeHtml(item.application_type)} / ${escapeHtml(item.license_class)}</span><span class="pill ${mdtStatusClass(item.status)}">${escapeHtml(item.status)}</span></div>`).join("") || `<p class="muted small">No license applications on file</p>`}
+              </div>
+            </section>
+          ` : `
+            <section class="account-section">
+              <div class="row tight">
+                <h3>Identity</h3>
+                <span class="pill ${person.verified ? "green" : "amber"}">${person.verified ? "verified" : "unverified"}</span>
+              </div>
+              <div class="profile-grid compact">
+                <div class="metric"><span>Email</span><strong>${escapeHtml(person.email)}</strong></div>
+                <div class="metric"><span>Roles</span><strong>${escapeHtml((person.roles || []).join(", ") || "civ")}</strong></div>
+                <div class="metric"><span>License</span><strong>${escapeHtml(licenseStatus)}</strong></div>
+                <div class="metric"><span>Open cases</span><strong>${(person.open_cases || []).length}</strong></div>
+              </div>
+              <div class="mdt-subsection">
+                <div class="row"><h4>Registered vehicles</h4><button class="secondary" data-use-civ="${person.id}">Use for ticket</button></div>
+                ${vehicles.map((vehicle) => `<p class="small">${escapeHtml(vehicle.vehicle_year)} ${escapeHtml(vehicle.vehicle_color)} ${escapeHtml(vehicle.vehicle_make)} ${escapeHtml(vehicle.vehicle_model)} - ${escapeHtml(vehicle.plate)} - ${escapeHtml(vehicle.registration_status)}</p>`).join("") || `<p class="muted small">No registered vehicles on file</p>`}
+              </div>
+              <div class="mdt-subsection">
+                <h4>Open court/citation returns</h4>
+                ${(person.open_cases || []).map((c) => `<div class="row"><span>${escapeHtml(c.charge_code)} ${escapeHtml(c.charge_title)}</span><strong>${money(c.fine_amount)}</strong></div>`).join("") || `<p class="muted small">No open citations</p>`}
+              </div>
+            </section>
+          `}
+        </div>
+      </section>
     </div>
   `;
 }
@@ -2086,10 +2180,37 @@ function renderMdtNoticeModal() {
   `;
 }
 
+function getSelectedCidCase(cases) {
+  if (!cases.length) {
+    state.cidSelectedCaseId = null;
+    return null;
+  }
+  const selected = cases.find((item) => String(item.id) === String(state.cidSelectedCaseId)) || cases[0];
+  state.cidSelectedCaseId = selected.id;
+  return selected;
+}
+
+function cidNotesForCase(cid, caseId) {
+  return (cid?.notes || [])
+    .filter((note) => String(note.investigation_id) === String(caseId))
+    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+}
+
+function cidWarrantsForCase(cid, caseId) {
+  return (cid?.warrants || [])
+    .filter((warrant) => String(warrant.investigation_id || "") === String(caseId))
+    .sort((a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at));
+}
+
 function renderCidInvestigations() {
   const cid = state.cache.mdt?.cid;
   const cases = cid?.investigations || [];
-  const notes = cid?.notes || [];
+  const selectedCase = getSelectedCidCase(cases);
+  const selectedNotes = selectedCase ? cidNotesForCase(cid, selectedCase.id) : [];
+  const linkedWarrants = selectedCase ? cidWarrantsForCase(cid, selectedCase.id) : [];
+  const statusOptions = ["open", "active", "pending warrant", "surveillance", "closed", "archived"];
+  const priorityOptions = ["standard", "elevated", "critical"];
+  const noteTypeOptions = ["case note", "surveillance log", "evidence", "interview", "operation update"];
   return `
     <div class="cid-tools">
       <form id="cidInvestigationForm" class="mdt-form">
@@ -2112,32 +2233,87 @@ function renderCidInvestigations() {
         <label>Investigation summary<textarea name="summary" required></textarea></label>
         <button class="primary" type="submit">Create CID case</button>
       </form>
-      <div class="mdt-code-grid">
-        ${cases.map((item) => `
-          <article class="cid-card">
-            <div class="row"><div><h3>${escapeHtml(item.case_number)} - ${escapeHtml(item.title)}</h3><p class="muted small">${escapeHtml(item.case_type)} - Lead ${escapeHtml(item.lead_name)} - ${escapeHtml(item.location || "No area")}</p></div><span class="pill ${item.priority === "critical" ? "red" : item.priority === "elevated" ? "amber" : "green"}">${escapeHtml(item.priority)}</span></div>
-            <p>${escapeHtml(item.summary)}</p>
-            <div class="grid-2">
-              <form class="cid-case-update form-grid" data-case-id="${item.id}">
-                <label>Status<select name="status"><option>open</option><option>active</option><option>pending warrant</option><option>surveillance</option><option>closed</option><option>archived</option></select></label>
-                <label>Priority<select name="priority"><option>standard</option><option>elevated</option><option>critical</option></select></label>
-                <button class="secondary" type="submit">Update case</button>
-              </form>
-              <form class="cid-note-form form-grid" data-case-id="${item.id}">
-                <label>Note type<select name="note_type"><option>case note</option><option>surveillance log</option><option>evidence</option><option>interview</option><option>operation update</option></select></label>
-                <label>Note<textarea name="body" required></textarea></label>
-                <button class="secondary" type="submit">Add note</button>
-              </form>
+      <section class="cid-case-workspace">
+        <nav class="cid-case-rail" aria-label="CID case folders">
+          ${cases.map((item) => {
+            const noteCount = Number(item.note_count ?? cidNotesForCase(cid, item.id).length);
+            return `
+              <button type="button" class="cid-case-tab ${String(item.id) === String(selectedCase?.id) ? "active" : ""}" data-cid-open-case="${item.id}">
+                <span class="cid-case-tab-code">${escapeHtml(item.case_number)}</span>
+                <strong>${escapeHtml(item.title)}</strong>
+                <span>${escapeHtml(item.case_type)} / ${escapeHtml(item.status)}</span>
+                <small>${noteCount} notes</small>
+              </button>
+            `;
+          }).join("") || `<div class="empty">No CID investigations yet</div>`}
+        </nav>
+        ${selectedCase ? `
+          <article class="cid-case-folder">
+            <div class="cid-folder-head">
+              <div>
+                <p class="eyebrow">Case Folder</p>
+                <h2>${escapeHtml(selectedCase.case_number)} - ${escapeHtml(selectedCase.title)}</h2>
+                <p class="muted small">${escapeHtml(selectedCase.case_type)} / Lead ${escapeHtml(selectedCase.lead_name)} / ${escapeHtml(selectedCase.location || "No area logged")}</p>
+              </div>
+              <span class="pill ${selectedCase.priority === "critical" ? "red" : selectedCase.priority === "elevated" ? "amber" : "green"}">${escapeHtml(selectedCase.priority)}</span>
+            </div>
+            <div class="cid-folder-grid">
+              <div class="metric"><span>Status</span><strong>${escapeHtml(selectedCase.status)}</strong></div>
+              <div class="metric"><span>Target</span><strong>${escapeHtml(selectedCase.target_civ_name || selectedCase.target_name || "Unlisted")}</strong></div>
+              <div class="metric"><span>Notes</span><strong>${Number(selectedCase.note_count ?? selectedNotes.length)}</strong></div>
+              <div class="metric"><span>Warrants</span><strong>${Number(selectedCase.warrant_count ?? linkedWarrants.length)}</strong></div>
+            </div>
+            <div class="cid-summary">
+              <strong>Investigation Summary</strong>
+              <p>${escapeHtml(selectedCase.summary)}</p>
+            </div>
+            <div class="cid-tool-strip">
+              <button type="button" data-cid-note-type="surveillance log" data-case-id="${selectedCase.id}"><strong>Surveillance</strong><span>Tail, scene, camera, or pattern log</span></button>
+              <button type="button" data-cid-note-type="evidence" data-case-id="${selectedCase.id}"><strong>Evidence</strong><span>Clip, witness, property, or chain note</span></button>
+              <button type="button" data-cid-note-type="interview" data-case-id="${selectedCase.id}"><strong>Interview</strong><span>Witness, suspect, or officer statement</span></button>
+              <button type="button" data-cid-note-type="operation update" data-case-id="${selectedCase.id}"><strong>Operation</strong><span>Warrant, IA, raid, or command update</span></button>
+            </div>
+            <div class="cid-folder-columns">
+              <div class="cid-folder-panel">
+                <h3>Case Controls</h3>
+                <form class="cid-case-update form-grid" data-case-id="${selectedCase.id}">
+                  <label>Status<select name="status">${renderOptions(statusOptions, selectedCase.status)}</select></label>
+                  <label>Priority<select name="priority">${renderOptions(priorityOptions, selectedCase.priority)}</select></label>
+                  <button class="secondary" type="submit">Update case folder</button>
+                </form>
+                <form class="cid-note-form form-grid" data-case-id="${selectedCase.id}">
+                  <label>Log type<select name="note_type">${renderOptions(noteTypeOptions, "case note")}</select></label>
+                  <label>Case note<textarea name="body" required placeholder="Log the case-specific tracking note here"></textarea></label>
+                  <button class="primary" type="submit">Add to this case</button>
+                </form>
+              </div>
+              <div class="cid-folder-panel">
+                <div class="row"><h3>Case Notes</h3><span class="pill">${selectedNotes.length}</span></div>
+                <div class="cid-note-list">
+                  ${selectedNotes.map((note) => `
+                    <div class="message-card">
+                      <div class="row"><strong>${escapeHtml(note.note_type)}</strong><span class="pill">${escapeHtml(note.author_name)}</span></div>
+                      <p class="muted small">${new Date(note.created_at).toLocaleString()}</p>
+                      <p>${escapeHtml(note.body)}</p>
+                    </div>
+                  `).join("") || `<p class="muted small">No notes logged inside this case folder</p>`}
+                </div>
+              </div>
+            </div>
+            <div class="cid-folder-panel">
+              <div class="row"><h3>Linked Warrants</h3><span class="pill red">${linkedWarrants.filter((item) => item.status === "active").length} active</span></div>
+              <div class="cid-linked-list">
+                ${linkedWarrants.map((warrant) => `
+                  <div class="cid-linked-item">
+                    <strong>${escapeHtml(warrant.warrant_number)} - ${escapeHtml(warrant.subject_name)}</strong>
+                    <span>${escapeHtml(warrant.warrant_type)} / ${escapeHtml(warrant.status)} / ${escapeHtml(warrant.priority)}</span>
+                  </div>
+                `).join("") || `<p class="muted small">No warrants linked to this investigation yet</p>`}
+              </div>
             </div>
           </article>
-        `).join("") || `<div class="empty">No CID investigations yet</div>`}
-      </div>
-      <div class="mdt-side-panel">
-        <h3>Recent CID Notes</h3>
-        <div class="list">
-          ${notes.map((note) => `<div class="message-card"><div class="row"><strong>${escapeHtml(note.case_number)}</strong><span class="pill">${escapeHtml(note.note_type)}</span></div><p class="muted small">${escapeHtml(note.author_name)} - ${new Date(note.created_at).toLocaleString()}</p><p>${escapeHtml(note.body)}</p></div>`).join("") || `<p class="muted small">No notes logged</p>`}
-        </div>
-      </div>
+        ` : `<div class="empty">Create a CID investigation to open a case folder</div>`}
+      </section>
     </div>
   `;
 }
@@ -2288,7 +2464,46 @@ function bindMdt() {
   $$("[data-use-civ]").forEach((button) => button.addEventListener("click", () => {
     state.mdtSelectedCiv = button.dataset.useCiv;
     state.mdtTab = "ticket";
+    state.mdtProfileUserId = null;
     render();
+  }));
+  $$("[data-open-mdt-profile]").forEach((button) => button.addEventListener("click", () => {
+    state.mdtProfileUserId = button.dataset.openMdtProfile;
+    state.mdtProfileTab = "profile";
+    render();
+  }));
+  $$("[data-close-mdt-profile]").forEach((button) => button.addEventListener("click", (event) => {
+    if (event.currentTarget.classList?.contains("modal-backdrop") && event.target !== event.currentTarget) return;
+    state.mdtProfileUserId = null;
+    render();
+  }));
+  $$("[data-mdt-profile-tab]").forEach((button) => button.addEventListener("click", () => {
+    state.mdtProfileTab = button.dataset.mdtProfileTab;
+    render();
+  }));
+  $$(".mdt-license-suspend-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const payload = Object.fromEntries(new FormData(form).entries());
+      const result = await api(`/api/mdt/users/${form.dataset.userId}/license`, { method: "PATCH", body: { ...payload, status: "Suspended" } });
+      const target = (state.cache.mdt?.search || []).find((item) => String(item.id) === String(form.dataset.userId));
+      if (target) target.license_status = result.license_status || "Suspended";
+      toast("Driver license suspended");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+  $$("[data-cid-open-case]").forEach((button) => button.addEventListener("click", () => {
+    state.cidSelectedCaseId = button.dataset.cidOpenCase;
+    render();
+  }));
+  $$("[data-cid-note-type]").forEach((button) => button.addEventListener("click", () => {
+    const form = $$(".cid-note-form").find((item) => String(item.dataset.caseId) === String(button.dataset.caseId));
+    const select = form?.querySelector("[name='note_type']");
+    const body = form?.querySelector("[name='body']");
+    if (select) select.value = button.dataset.cidNoteType;
+    body?.focus();
   }));
   $("#mdtSearch")?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -2343,6 +2558,7 @@ function bindMdt() {
     try {
       const result = await api("/api/cid/investigations", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
       toast(`CID case opened ${result.case_number}`);
+      state.cidSelectedCaseId = result.id;
       await loadAppData("mdt");
       render();
     } catch (error) {
@@ -2442,37 +2658,56 @@ function renderAdmin() {
 
 function renderSystem() {
   const data = state.cache.system || {};
-  const settings = data.settings || { autopilot_verify_enabled: false, autopilot_verify_minutes: 120 };
-  const stats = data.stats || { pending_accounts: 0, eligible_accounts: 0 };
+  const settings = data.settings || { autopilot_verify_enabled: false, autopilot_verify_minutes: 120, autopilot_license_enabled: true, autopilot_license_minutes: 6 };
+  const stats = data.stats || { pending_accounts: 0, eligible_accounts: 0, pending_license_applications: 0, eligible_license_applications: 0 };
   const minutesValue = Number(settings.autopilot_verify_minutes || 120);
+  const licenseMinutesValue = Number(settings.autopilot_license_minutes || 6);
   const hoursLabel = minutesValue >= 60 ? `${(minutesValue / 60).toFixed(minutesValue % 60 ? 1 : 0)} hours` : `${minutesValue} minutes`;
+  const licenseLabel = licenseMinutesValue >= 60 ? `${(licenseMinutesValue / 60).toFixed(licenseMinutesValue % 60 ? 1 : 0)} hours` : `${licenseMinutesValue} minutes`;
   return `
     <div class="stack system-app">
       <section class="profile-hero system-hero">
         <div>
           <p class="eyebrow">Owner controls</p>
           <h3>System Settings</h3>
-          <p>Verification autopilot is ${settings.autopilot_verify_enabled ? "enabled" : "disabled"}</p>
+          <p>Verification autopilot is ${settings.autopilot_verify_enabled ? "enabled" : "disabled"} / Driver license autopilot is ${settings.autopilot_license_enabled ? "enabled" : "disabled"}</p>
         </div>
-        <span class="pill ${settings.autopilot_verify_enabled ? "green" : "amber"}">${settings.autopilot_verify_enabled ? "auto" : "manual"}</span>
+        <span class="pill ${settings.autopilot_license_enabled || settings.autopilot_verify_enabled ? "green" : "amber"}">${settings.autopilot_license_enabled || settings.autopilot_verify_enabled ? "auto" : "manual"}</span>
       </section>
       <div class="grid-2">
-        <div class="metric"><span>Pending</span><strong>${stats.pending_accounts || 0}</strong></div>
-        <div class="metric"><span>Eligible now</span><strong>${stats.eligible_accounts || 0}</strong></div>
+        <div class="metric"><span>Pending accounts</span><strong>${stats.pending_accounts || 0}</strong></div>
+        <div class="metric"><span>Account eligible</span><strong>${stats.eligible_accounts || 0}</strong></div>
+        <div class="metric"><span>Pending licenses</span><strong>${stats.pending_license_applications || 0}</strong></div>
+        <div class="metric"><span>License eligible</span><strong>${stats.eligible_license_applications || 0}</strong></div>
       </div>
       <form id="systemSettingsForm" class="card form-grid">
-        <div class="row">
-          <div>
-            <p class="eyebrow">Auto pilot</p>
-            <h3>Account Verification</h3>
+        <div class="system-setting-block">
+          <div class="row">
+            <div>
+              <p class="eyebrow">Auto pilot</p>
+              <h3>Account Verification</h3>
+            </div>
+            <span class="pill">${escapeHtml(hoursLabel)}</span>
           </div>
-          <span class="pill">${escapeHtml(hoursLabel)}</span>
+          <label class="check-row"><input type="checkbox" name="autopilot_verify_enabled" ${settings.autopilot_verify_enabled ? "checked" : ""} /> Enable account auto pilot</label>
+          <label>Verify accounts after minutes<input name="autopilot_verify_minutes" type="number" min="1" max="10080" step="1" value="${escapeHtml(minutesValue)}" /></label>
         </div>
-        <label class="check-row"><input type="checkbox" name="autopilot_verify_enabled" ${settings.autopilot_verify_enabled ? "checked" : ""} /> Enable auto pilot mode</label>
-        <label>Verify after minutes<input name="autopilot_verify_minutes" type="number" min="1" max="10080" step="1" value="${escapeHtml(minutesValue)}" /></label>
+        <div class="system-setting-block">
+          <div class="row">
+            <div>
+              <p class="eyebrow">DMV auto pilot</p>
+              <h3>Driver License Applications</h3>
+            </div>
+            <span class="pill">${escapeHtml(licenseLabel)}</span>
+          </div>
+          <label class="check-row"><input type="checkbox" name="autopilot_license_enabled" ${settings.autopilot_license_enabled ? "checked" : ""} /> Enable driver license auto approval</label>
+          <label>Approve licenses after minutes<input name="autopilot_license_minutes" type="number" min="1" max="10080" step="1" value="${escapeHtml(licenseMinutesValue)}" /></label>
+          <p class="muted small">Default is 6 minutes. Suspended or revoked licenses are not auto-reinstated.</p>
+        </div>
         <button class="primary" type="submit">Save system settings</button>
       </form>
       ${data.auto_verified_now ? `<div class="card"><h3>${data.auto_verified_now} accounts verified</h3><p class="muted small">Auto pilot processed eligible accounts on this check.</p></div>` : ""}
+      ${data.auto_licensed_now ? `<div class="card"><h3>${data.auto_licensed_now} driver licenses approved</h3><p class="muted small">DMV auto pilot processed eligible license applications on this check.</p></div>` : ""}
     </div>
   `;
 }
@@ -2584,6 +2819,8 @@ function bindSystem() {
         body: {
           autopilot_verify_enabled: formData.get("autopilot_verify_enabled") === "on",
           autopilot_verify_minutes: formData.get("autopilot_verify_minutes"),
+          autopilot_license_enabled: formData.get("autopilot_license_enabled") === "on",
+          autopilot_license_minutes: formData.get("autopilot_license_minutes"),
         },
       });
       toast("System settings saved");

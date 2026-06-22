@@ -1,6 +1,25 @@
 {
-  "version": "0.0.2",
+  "version": "0.0.3",
   "entries": [
+    {
+      "date": "2026-06-22",
+      "version": "0.0.3",
+      "title": "DMV License Autopilot",
+      "added": [
+        "Driver license auto-approval system for submitted DMV license applications.",
+        "Owner-controlled DMV autopilot settings under the System app with pending and eligible license queue counts.",
+        "MDT civilian profile popup with profile and driver license tabs.",
+        "Law enforcement driver license suspension action from the MDT license tab."
+      ],
+      "changed": [
+        "Driver license applications default to auto-approval after 6 minutes when DMV autopilot is enabled.",
+        "Suspended or revoked driver licenses are protected from automatic re-approval."
+      ],
+      "fixed": [
+        "Added a license approval path so DMV applications no longer remain submitted forever when no admin review screen exists."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-06-21",
       "version": "0.0.2",
