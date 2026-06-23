@@ -1554,6 +1554,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
     def do_PATCH(self) -> None:
         self.route()
 
+    def do_DELETE(self) -> None:
+        self.route()
+
     def do_OPTIONS(self) -> None:
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin", "*"))
@@ -1824,6 +1827,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_admin_overview(db, user)
                 elif path == "/api/admin/users" and method == "GET":
                     self.api_admin_users(db, user)
+                elif path.startswith("/api/admin/users/") and method == "DELETE":
+                    self.api_admin_delete_user(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/admin/users/") and method == "PATCH":
                     self.api_admin_update_user(db, user, self.path_int(path, 3))
                 elif path == "/api/admin/jobs" and method == "GET":
@@ -4637,6 +4642,25 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 (now_iso(), target_id),
             )
         add_message(db, target_id, "Account updated", "An owner/admin updated your account settings.", user["id"])
+        self.send_json(200, {"ok": True})
+
+    def api_admin_delete_user(self, db: Database, user: DbRow | None, target_id: int) -> None:
+        err = owner_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        target = one(db, "SELECT * FROM users WHERE id = ?", (target_id,))
+        if not target:
+            self.error(404, "User not found")
+            return
+        if target_id == user["id"]:
+            self.error(400, "You cannot delete the account you are signed in with")
+            return
+        if has_any(target, "owner"):
+            self.error(403, "Owner accounts cannot be deleted from the account panel")
+            return
+        db.execute("DELETE FROM users WHERE id = ?", (target_id,))
         self.send_json(200, {"ok": True})
 
     def api_admin_jobs(self, db: Database, user: DbRow | None) -> None:

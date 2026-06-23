@@ -19,6 +19,7 @@ const state = {
   mdtReportAlertId: "",
   mdtNotice: null,
   cidSelectedCaseId: null,
+  cidSelectedIaId: null,
   cidWarrantModalId: null,
   mdtProfileUserId: null,
   mdtProfileTab: "profile",
@@ -2057,46 +2058,70 @@ function bindMdtWorkspace() {
   bindMdt();
 }
 
+function fireRigCode(name) {
+  const parts = String(name || "Unit").trim().split(/\s+/);
+  const prefix = (parts[0] || "Unit").slice(0, 3).toUpperCase();
+  const number = parts.find((part) => /^\d+$/.test(part)) || "";
+  return `${prefix}${number ? ` ${number}` : ""}`;
+}
+
 function renderFireRigAssignments(data) {
   const rigs = data.rigs || [];
   const personnel = data.personnel || [];
   const canManage = Boolean(data.can_manage_rigs);
   const positionOptions = ["Fire Chief", "Deputy Chief", "Fire Marshal", "Battalion Chief", "Officer", "Driver", "Firefighter", "Medic", "Engineer"];
   return `
-    <section class="fire-rig-panel">
-      <div class="mdt-section-head">
-        <div><p class="eyebrow">Fire command</p><h2>Rig Assignments</h2></div>
+    <section class="fire-rig-panel fire-command-board">
+      <div class="fire-rig-command-head">
+        <div>
+          <p class="eyebrow">Fire command board</p>
+          <h2>Apparatus Assignments</h2>
+          <p>${rigs.length} units indexed / ${personnel.length} fire personnel available</p>
+        </div>
         <span class="pill ${canManage ? "green" : "amber"}">${canManage ? "Chief controls" : "Read only"}</span>
       </div>
-      <div class="fire-rig-grid">
+      <div class="fire-board-table">
+        <div class="fire-board-header" aria-hidden="true">
+          <span>Unit</span>
+          <span>Crew</span>
+          <span>Role</span>
+          <span>Status</span>
+          <span>Command notes</span>
+          <span>Action</span>
+        </div>
         ${rigs.map((rig) => `
-          <article class="fire-rig-card">
-            <div class="row">
-              <div>
-                <h3>${escapeHtml(rig.rig_name)}</h3>
-                <p class="muted small">${escapeHtml(rig.assigned_name || "Unassigned")} ${rig.assigned_civ_number ? `- CIV ${escapeHtml(rig.assigned_civ_number)}` : ""}</p>
+          ${canManage ? `
+            <form class="fire-rig-form fire-board-row status-${escapeHtml(rig.status || "available")}" data-rig-name="${escapeHtml(rig.rig_name)}">
+              <div class="fire-unit-cell">
+                <span>${escapeHtml(fireRigCode(rig.rig_name))}</span>
+                <strong>${escapeHtml(rig.rig_name)}</strong>
               </div>
-              <span class="pill ${rig.status === "assigned" ? "green" : rig.status === "out_of_service" ? "red" : "amber"}">${escapeHtml(rig.status || "available")}</span>
-            </div>
-            ${canManage ? `
-              <form class="fire-rig-form form-grid" data-rig-name="${escapeHtml(rig.rig_name)}">
-                <label>Assigned member<select name="user_id">
-                  <option value="">Unassigned</option>
-                  ${personnel.map((person) => `<option value="${person.id}"${selectedAttr(person.id, rig.user_id)}>${escapeHtml(person.name)} - CIV ${escapeHtml(person.civ_number || "pending")}</option>`).join("")}
-                </select></label>
-                <div class="grid-2">
-                  <label>Position<select name="position">
-                    ${renderOptions(positionOptions, rig.position || "Firefighter")}
-                  </select></label>
-                  <label>Status<select name="status">
-                    ${renderOptions(["available", "assigned", "out_of_service"], rig.status || "available")}
-                  </select></label>
-                </div>
-                <label>Notes<input name="notes" value="${escapeHtml(rig.notes || "")}" placeholder="Crew notes or special assignment" /></label>
-                <button class="primary" type="submit">Save ${escapeHtml(rig.rig_name)}</button>
-              </form>
-            ` : `<p class="muted small">${escapeHtml(rig.position || "Firefighter")} ${rig.notes ? `- ${escapeHtml(rig.notes)}` : ""}</p>`}
-          </article>
+              <label class="fire-board-field" data-label="Crew"><span>Crew</span><select name="user_id" aria-label="${escapeHtml(rig.rig_name)} assigned member">
+                <option value="">Unassigned</option>
+                ${personnel.map((person) => `<option value="${person.id}"${selectedAttr(person.id, rig.user_id)}>${escapeHtml(person.name)} - CIV ${escapeHtml(person.civ_number || "pending")}</option>`).join("")}
+              </select></label>
+              <label class="fire-board-field" data-label="Role"><span>Role</span><select name="position" aria-label="${escapeHtml(rig.rig_name)} position">
+                ${renderOptions(positionOptions, rig.position || "Firefighter")}
+              </select></label>
+              <label class="fire-board-field" data-label="Status"><span>Status</span><select name="status" aria-label="${escapeHtml(rig.rig_name)} status">
+                ${renderOptions(["available", "assigned", "out_of_service"], rig.status || "available")}
+              </select></label>
+              <label class="fire-board-field fire-board-notes" data-label="Notes"><span>Notes</span><input name="notes" value="${escapeHtml(rig.notes || "")}" placeholder="Crew notes or special assignment" aria-label="${escapeHtml(rig.rig_name)} notes" /></label>
+              <button class="primary" type="submit">Save</button>
+            </form>
+          ` : `
+            <article class="fire-board-row status-${escapeHtml(rig.status || "available")}">
+              <div class="fire-unit-cell">
+                <span>${escapeHtml(fireRigCode(rig.rig_name))}</span>
+                <strong>${escapeHtml(rig.rig_name)}</strong>
+              </div>
+              <div class="fire-read-cell" data-label="Crew">${escapeHtml(rig.assigned_name || "Unassigned")} ${rig.assigned_civ_number ? `/ CIV ${escapeHtml(rig.assigned_civ_number)}` : ""}</div>
+              <div class="fire-read-cell" data-label="Role">${escapeHtml(rig.position || "Firefighter")}</div>
+              <div class="fire-read-cell" data-label="Status"><span class="pill ${rig.status === "assigned" ? "green" : rig.status === "out_of_service" ? "red" : "amber"}">${escapeHtml(rig.status || "available")}</span></div>
+              <div class="fire-read-cell" data-label="Notes">${escapeHtml(rig.notes || "No command notes logged")}</div>
+              <div class="fire-read-cell muted small">Locked</div>
+            </article>
+          `}
         `).join("") || `<div class="empty">No rigs configured</div>`}
       </div>
     </section>
@@ -2115,7 +2140,11 @@ function renderFireSettings() {
           <h3>Department Control</h3>
           <p>Chief-level rig assignment, battalion coverage, and command staffing for Fire MDT operations.</p>
         </div>
-        <span class="pill ${data.can_manage_rigs ? "green" : "amber"}">${data.can_manage_rigs ? "Command enabled" : "Read only"}</span>
+        <div class="fire-hero-status">
+          <span class="fire-hero-pulse"></span>
+          <strong>${data.can_manage_rigs ? "Command enabled" : "Read only"}</strong>
+          <small>${stats.active || 0} active / ${stats.responding || 0} responding</small>
+        </div>
       </section>
       <div class="profile-grid compact fire-command-grid">
         <div><span>Active calls</span><strong>${stats.active || 0}</strong></div>
@@ -2315,7 +2344,7 @@ function renderCidCommandCenter() {
           <div class="row"><h3>Internal Affairs Queue</h3><span class="pill amber">${activeIa.length}</span></div>
           <div class="cid-mini-list">
             ${activeIa.slice(0, 7).map((item) => `
-              <button type="button" class="cid-mini-case ia" data-mdt-tab="cid-ia">
+              <button type="button" class="cid-mini-case ia" data-mdt-tab="cid-ia" data-cid-open-ia="${item.id}">
                 <span>${escapeHtml(item.ia_number)}</span>
                 <strong>${escapeHtml(item.subject_officer_name || item.subject_name)}</strong>
                 <small>${escapeHtml(item.allegation_type)} / ${escapeHtml(item.status)} / ${escapeHtml(item.priority)}</small>
@@ -3110,14 +3139,21 @@ function renderCidWarrantModal(item) {
 function renderCidInternalAffairs() {
   const cid = state.cache.mdt?.cid;
   const ia = cid?.ia_cases || [];
+  const openStatuses = ["intake", "active", "command review"];
+  const activeIa = ia.filter((item) => openStatuses.includes(item.status));
+  const previousIa = ia.filter((item) => !openStatuses.includes(item.status));
+  const selectedIa = ia.find((item) => String(item.id) === String(state.cidSelectedIaId)) || activeIa[0] || ia[0] || null;
+  state.cidSelectedIaId = selectedIa?.id || null;
+  const statusOptions = ["intake", "active", "command review", "sustained", "unfounded", "closed"];
+  const priorityOptions = ["standard", "elevated", "critical"];
   return `
-    <div class="cid-tools">
+    <div class="cid-tools ia-tools">
       <form id="cidIaForm" class="cid-intake-board ia-intake-board">
         <div class="cid-intake-head">
           <div>
             <p class="eyebrow">CID internal affairs</p>
             <h2>IA Intake</h2>
-            <p>${ia.length} IA records / command-level accountability tracking</p>
+            <p>${activeIa.length} active folders / ${previousIa.length} previous IA files</p>
           </div>
           <div class="cid-intake-signal">
             <span></span>
@@ -3133,21 +3169,68 @@ function renderCidInternalAffairs() {
         <label class="cid-summary-field">Summary<textarea name="summary" required rows="10" placeholder="Complaint, evidence, involved parties, timeline, policy issue, and command recommendations"></textarea></label>
         <button class="primary" type="submit">Create IA record</button>
       </form>
-      <div class="mdt-code-grid">
-        ${ia.map((item) => `
-          <article class="cid-card">
-            <div class="row"><div><h3>${escapeHtml(item.ia_number)} - ${escapeHtml(item.subject_name)}</h3><p class="muted small">${escapeHtml(item.allegation_type)} - assigned ${escapeHtml(item.assigned_name)}</p></div><span class="pill ${item.priority === "critical" ? "red" : item.priority === "elevated" ? "amber" : "green"}">${escapeHtml(item.status)}</span></div>
-            <p>${escapeHtml(item.summary)}</p>
-            <form class="cid-ia-update form-grid" data-ia-id="${item.id}">
-              <div class="grid-2">
-                <label>Status<select name="status"><option>intake</option><option>active</option><option>command review</option><option>sustained</option><option>unfounded</option><option>closed</option></select></label>
-                <label>Priority<select name="priority"><option>standard</option><option>elevated</option><option>critical</option></select></label>
+      <section class="cid-case-workspace ia-folder-workspace">
+        <nav class="cid-case-rail ia-case-rail" aria-label="Internal affairs folders">
+          <div class="ia-rail-label">Active IA</div>
+          ${activeIa.map((item) => `
+            <button type="button" class="cid-case-tab ia-case-tab ${String(item.id) === String(selectedIa?.id) ? "active" : ""}" data-cid-open-ia="${item.id}">
+              <span class="cid-case-tab-code">${escapeHtml(item.ia_number)}</span>
+              <strong>${escapeHtml(item.subject_officer_name || item.subject_name)}</strong>
+              <span>${escapeHtml(item.allegation_type)} / ${escapeHtml(item.status)}</span>
+              <small>${escapeHtml(item.priority)} priority</small>
+            </button>
+          `).join("") || `<div class="empty">No active IA folders</div>`}
+          <div class="ia-rail-label previous">Previous IA</div>
+          ${previousIa.map((item) => `
+            <button type="button" class="cid-case-tab ia-case-tab previous ${String(item.id) === String(selectedIa?.id) ? "active" : ""}" data-cid-open-ia="${item.id}">
+              <span class="cid-case-tab-code">${escapeHtml(item.ia_number)}</span>
+              <strong>${escapeHtml(item.subject_officer_name || item.subject_name)}</strong>
+              <span>${escapeHtml(item.allegation_type)} / ${escapeHtml(item.status)}</span>
+              <small>${escapeHtml(item.priority)} priority</small>
+            </button>
+          `).join("") || `<p class="muted small">No previous IA files</p>`}
+        </nav>
+        ${selectedIa ? `
+          <article class="cid-case-folder ia-case-folder">
+            <div class="cid-folder-head">
+              <div>
+                <p class="eyebrow">Internal Affairs File</p>
+                <h2>${escapeHtml(selectedIa.ia_number)} - ${escapeHtml(selectedIa.subject_officer_name || selectedIa.subject_name)}</h2>
+                <p class="muted small">${escapeHtml(selectedIa.allegation_type)} / Assigned ${escapeHtml(selectedIa.assigned_name || "CID")} / Opened ${selectedIa.created_at ? new Date(selectedIa.created_at).toLocaleDateString() : "N/A"}</p>
               </div>
-              <button class="secondary" type="submit">Update IA</button>
-            </form>
+              <span class="pill ${selectedIa.priority === "critical" ? "red" : selectedIa.priority === "elevated" ? "amber" : "green"}">${escapeHtml(selectedIa.status)}</span>
+            </div>
+            <div class="cid-folder-grid">
+              <div class="metric"><span>Status</span><strong>${escapeHtml(selectedIa.status)}</strong></div>
+              <div class="metric"><span>Priority</span><strong>${escapeHtml(selectedIa.priority)}</strong></div>
+              <div class="metric"><span>Allegation</span><strong>${escapeHtml(selectedIa.allegation_type)}</strong></div>
+              <div class="metric"><span>Assigned</span><strong>${escapeHtml(selectedIa.assigned_name || "CID")}</strong></div>
+            </div>
+            <div class="cid-summary ia-summary-file">
+              <strong>IA Summary</strong>
+              <p>${escapeHtml(selectedIa.summary)}</p>
+            </div>
+            <div class="cid-folder-columns">
+              <div class="cid-folder-panel">
+                <h3>IA Controls</h3>
+                <form class="cid-ia-update form-grid" data-ia-id="${selectedIa.id}">
+                  <label>Status<select name="status">${renderOptions(statusOptions, selectedIa.status)}</select></label>
+                  <label>Priority<select name="priority">${renderOptions(priorityOptions, selectedIa.priority)}</select></label>
+                  <button class="secondary" type="submit">Update IA file</button>
+                </form>
+              </div>
+              <div class="cid-folder-panel ia-review-panel">
+                <h3>File Handling</h3>
+                <div class="list compact-list">
+                  <div class="row"><span>Subject</span><strong>${escapeHtml(selectedIa.subject_officer_name || selectedIa.subject_name)}</strong></div>
+                  <div class="row"><span>Created by</span><strong>${escapeHtml(selectedIa.created_by_name || "CID")}</strong></div>
+                  <div class="row"><span>Last update</span><strong>${selectedIa.updated_at ? new Date(selectedIa.updated_at).toLocaleString() : "N/A"}</strong></div>
+                </div>
+              </div>
+            </div>
           </article>
-        `).join("") || `<div class="empty">No internal affairs records</div>`}
-      </div>
+        ` : `<div class="empty">Create an IA record to open a file folder</div>`}
+      </section>
     </div>
   `;
 }
@@ -3188,6 +3271,9 @@ function bindMdt() {
     state.mdtTab = button.dataset.mdtTab;
     if (button.dataset.cidOpenCase) {
       state.cidSelectedCaseId = button.dataset.cidOpenCase;
+    }
+    if (button.dataset.cidOpenIa) {
+      state.cidSelectedIaId = button.dataset.cidOpenIa;
     }
     state.mdtCatalogOpen = false;
     state.mdtNavOpen = false;
@@ -3300,6 +3386,10 @@ function bindMdt() {
   });
   $$("[data-cid-open-case]").forEach((button) => button.addEventListener("click", () => {
     state.cidSelectedCaseId = button.dataset.cidOpenCase;
+    render();
+  }));
+  $$("[data-cid-open-ia]").forEach((button) => button.addEventListener("click", () => {
+    state.cidSelectedIaId = button.dataset.cidOpenIa;
     render();
   }));
   $$("[data-cid-note-type]").forEach((button) => button.addEventListener("click", () => {
@@ -3469,6 +3559,7 @@ function bindMdt() {
     try {
       const result = await api("/api/cid/internal-affairs", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
       toast(`IA record opened ${result.ia_number}`);
+      state.cidSelectedIaId = result.id;
       await loadAppData("mdt");
       render();
     } catch (error) {
@@ -3591,6 +3682,7 @@ function renderAdminAccountModal(user) {
     return "";
   }
   const nameChange = user.name_change || { locked: false, used: 0, limit: 3, remaining: 3, window_days: 3 };
+  const canDeleteAccount = can("owner") && String(user.id) !== String(state.session?.user?.id) && !(user.roles || []).includes("owner");
   return `
     <div class="modal-backdrop admin-account-backdrop" data-close-admin-account>
       <section class="mdt-modal admin-account-modal" role="dialog" aria-modal="true" aria-label="Account management">
@@ -3635,6 +3727,15 @@ function renderAdminAccountModal(user) {
             <label>Confirm password<input name="confirm_password" type="password" minlength="6" autocomplete="new-password" required /></label>
             <button class="secondary" type="submit">Reset password</button>
           </form>
+          ${canDeleteAccount ? `
+            <section class="account-section danger-zone">
+              <div>
+                <h3>Delete account</h3>
+                <p class="muted small">Permanently remove this account and its owned civilian records from the system.</p>
+              </div>
+              <button class="danger" type="button" data-delete-admin-user="${user.id}" data-delete-name="${escapeHtml(user.name)}">Delete account</button>
+            </section>
+          ` : ""}
         </div>
       </section>
     </div>
@@ -3751,6 +3852,19 @@ function bindAdmin() {
       toast("Password reset");
       await loadAppData("admin");
       render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+  $$("[data-delete-admin-user]").forEach((button) => button.addEventListener("click", async () => {
+    const name = button.dataset.deleteName || "this account";
+    if (!confirm(`Delete ${name}? This cannot be undone.`)) return;
+    try {
+      await api(`/api/admin/users/${button.dataset.deleteAdminUser}`, { method: "DELETE" });
+      state.adminAccountId = null;
+      toast("Account deleted");
+      await loadAppData("admin");
+      await loadSession();
     } catch (error) {
       toast(error.message);
     }

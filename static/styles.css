@@ -376,6 +376,39 @@ textarea:focus {
   color: white;
 }
 
+.primary:hover,
+.secondary:hover,
+.danger:hover,
+.ghost:hover,
+.icon-action:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.22);
+}
+
+.primary:hover {
+  background: #35e08b;
+}
+
+.secondary:hover,
+.ghost:hover,
+.icon-action:hover {
+  border-color: rgba(126, 231, 255, 0.22);
+  background: rgba(255, 255, 255, 0.13);
+}
+
+.danger:hover {
+  background: #ff5d74;
+}
+
+.primary:focus-visible,
+.secondary:focus-visible,
+.danger:focus-visible,
+.ghost:focus-visible,
+.icon-action:focus-visible {
+  outline: 2px solid rgba(126, 231, 255, 0.72);
+  outline-offset: 2px;
+}
+
 .ghost,
 .icon-action {
   background: rgba(255, 255, 255, 0.06);
@@ -1923,8 +1956,7 @@ textarea:focus {
     repeating-linear-gradient(90deg, rgba(239, 78, 99, 0.045) 0 1px, transparent 1px 56px);
 }
 
-.warrant-button-grid,
-.fire-rig-grid {
+.warrant-button-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 10px;
@@ -1935,7 +1967,6 @@ textarea:focus {
 }
 
 .warrant-button,
-.fire-rig-card,
 .warrant-file,
 .fire-rig-panel {
   border: 1px solid rgba(255, 255, 255, 0.09);
@@ -1968,7 +1999,6 @@ textarea:focus {
 }
 
 .warrant-file,
-.fire-rig-card,
 .fire-rig-panel {
   display: grid;
   gap: 10px;
@@ -1987,8 +2017,174 @@ textarea:focus {
     repeating-linear-gradient(90deg, rgba(255, 107, 74, 0.04) 0 1px, transparent 1px 52px);
 }
 
-.fire-rig-card h3 {
+.fire-workspace .mdt-stat-strip {
+  display: flex;
+  gap: 0;
+  overflow: hidden;
+  border-color: rgba(255, 107, 74, 0.18);
+  background:
+    linear-gradient(90deg, rgba(255, 107, 74, 0.08), rgba(255, 177, 90, 0.035)),
+    rgba(8, 12, 13, 0.9);
+}
+
+.fire-workspace .mdt-stat-strip .metric {
+  flex: 1 1 0;
+  border-radius: 0;
+  border-right: 1px solid rgba(255, 255, 255, 0.075);
+  background: transparent;
+}
+
+.fire-workspace .mdt-stat-strip .metric:last-child {
+  border-right: 0;
+}
+
+.fire-command-board {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  border-color: rgba(255, 107, 74, 0.24);
+  background:
+    linear-gradient(145deg, rgba(31, 15, 14, 0.94), rgba(9, 14, 16, 0.96)),
+    radial-gradient(circle at 94% 8%, rgba(255, 107, 74, 0.14), transparent 30%);
+}
+
+.fire-rig-command-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255, 107, 74, 0.14);
+  background:
+    linear-gradient(90deg, rgba(255, 107, 74, 0.12), rgba(255, 177, 90, 0.045) 48%, rgba(255, 255, 255, 0.02));
+}
+
+.fire-rig-command-head h2,
+.fire-rig-command-head p {
   margin: 0;
+}
+
+.fire-rig-command-head p:not(.eyebrow) {
+  margin-top: 4px;
+  color: rgba(255, 231, 220, 0.72);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.fire-board-table {
+  display: grid;
+  padding: 12px;
+}
+
+.fire-board-header,
+.fire-board-row {
+  display: grid;
+  grid-template-columns: minmax(118px, 0.72fr) minmax(220px, 1.35fr) minmax(140px, 0.75fr) minmax(132px, 0.65fr) minmax(190px, 1fr) minmax(82px, auto);
+  gap: 8px;
+  align-items: center;
+}
+
+.fire-board-header {
+  min-height: 34px;
+  padding: 0 10px;
+  color: rgba(255, 231, 220, 0.58);
+  font-size: 10px;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.fire-board-row {
+  position: relative;
+  min-height: 58px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding: 8px 10px 8px 14px;
+  background: rgba(255, 255, 255, 0.028);
+  transition: background 160ms ease, transform 160ms ease;
+}
+
+.fire-board-row:nth-child(even) {
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.fire-board-row:hover {
+  transform: translateX(2px);
+  background: rgba(255, 107, 74, 0.075);
+}
+
+.fire-board-row::before {
+  content: "";
+  position: absolute;
+  inset: 8px auto 8px 0;
+  width: 4px;
+  border-radius: 999px;
+  background: var(--amber);
+}
+
+.fire-board-row.status-assigned::before {
+  background: var(--green);
+}
+
+.fire-board-row.status-out_of_service::before {
+  background: var(--red);
+}
+
+.fire-unit-cell {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fire-unit-cell span {
+  width: max-content;
+  border: 1px solid rgba(255, 177, 90, 0.24);
+  border-radius: 6px;
+  padding: 4px 7px;
+  color: #ffe7c2;
+  background: rgba(255, 177, 90, 0.08);
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.fire-unit-cell strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #fff7f0;
+}
+
+.fire-board-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.fire-board-field > span {
+  display: none;
+  color: rgba(255, 231, 220, 0.58);
+  font-size: 10px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.fire-board-field select,
+.fire-board-field input {
+  min-height: 36px;
+  width: 100%;
+  border-radius: 6px;
+  background: rgba(8, 11, 12, 0.65);
+}
+
+.fire-board-row button {
+  min-height: 36px;
+  border-radius: 6px;
+}
+
+.fire-read-cell {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: rgba(255, 231, 220, 0.82);
+  font-size: 13px;
+  font-weight: 800;
 }
 
 .fire-settings-screen {
@@ -2021,8 +2217,49 @@ textarea:focus {
   font-size: 13px;
 }
 
+.fire-hero-status {
+  display: grid;
+  justify-items: end;
+  gap: 3px;
+  min-width: 170px;
+  border: 1px solid rgba(255, 177, 90, 0.22);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(255, 177, 90, 0.08);
+}
+
+.fire-hero-status strong {
+  color: #ffe7c2;
+  text-transform: uppercase;
+  font-size: 12px;
+}
+
+.fire-hero-status small {
+  color: rgba(255, 231, 220, 0.7);
+  font-weight: 800;
+}
+
+.fire-hero-pulse {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--green);
+  box-shadow: 0 0 18px rgba(40, 209, 124, 0.75);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
 .fire-command-grid {
   margin-bottom: 2px;
+}
+
+.danger-zone {
+  border-color: rgba(239, 78, 99, 0.32);
+  background:
+    linear-gradient(145deg, rgba(74, 20, 28, 0.36), rgba(255, 255, 255, 0.035));
+}
+
+.danger-zone p {
+  margin-bottom: 0;
 }
 
 .cid-tools {
@@ -2633,6 +2870,57 @@ textarea:focus {
   font-weight: 800;
 }
 
+.ia-folder-workspace {
+  align-items: stretch;
+}
+
+.ia-case-rail {
+  align-content: start;
+}
+
+.ia-rail-label {
+  margin-top: 3px;
+  color: rgba(255, 226, 163, 0.68);
+  font-size: 10px;
+  font-weight: 950;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ia-rail-label.previous {
+  margin-top: 14px;
+}
+
+.ia-case-tab {
+  border-color: rgba(255, 226, 163, 0.16);
+}
+
+.ia-case-tab.active {
+  border-color: rgba(255, 226, 163, 0.48);
+  background: linear-gradient(135deg, rgba(255, 226, 163, 0.16), rgba(92, 156, 255, 0.08));
+}
+
+.ia-case-tab.previous {
+  opacity: 0.82;
+}
+
+.ia-case-folder {
+  border-color: rgba(255, 226, 163, 0.2);
+}
+
+.ia-summary-file p {
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+  scrollbar-width: thin;
+}
+
+.ia-review-panel .row strong {
+  max-width: 60%;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -2642,6 +2930,7 @@ textarea:focus {
   padding: 20px;
   background: rgba(0, 0, 0, 0.58);
   backdrop-filter: blur(8px);
+  animation: modalFade 180ms ease both;
 }
 
 .mdt-modal {
@@ -2651,6 +2940,28 @@ textarea:focus {
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 12px;
   padding: 14px;
+  border-radius: 8px;
+  border-color: rgba(126, 231, 255, 0.16);
+  background:
+    linear-gradient(180deg, rgba(17, 24, 28, 0.97), rgba(8, 12, 14, 0.98)),
+    repeating-linear-gradient(90deg, rgba(126, 231, 255, 0.025) 0 1px, transparent 1px 56px);
+  animation: modalLift 210ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes modalFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes modalLift {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .mdt-modal-list {
@@ -2810,6 +3121,30 @@ textarea:focus {
   .fire-settings-hero {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .fire-board-header {
+    display: none;
+  }
+
+  .fire-board-row {
+    grid-template-columns: 1fr;
+    gap: 9px;
+    padding: 12px 12px 12px 16px;
+  }
+
+  .fire-board-field > span,
+  .fire-read-cell::before {
+    display: block;
+  }
+
+  .fire-read-cell::before {
+    content: attr(data-label);
+    margin-bottom: 3px;
+    color: rgba(255, 231, 220, 0.58);
+    font-size: 10px;
+    font-weight: 950;
+    text-transform: uppercase;
   }
 
   .cid-command-pulse {

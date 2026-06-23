@@ -1,6 +1,45 @@
 {
-  "version": "0.0.13",
+  "version": "0.0.15",
   "entries": [
+    {
+      "date": "2026-06-23",
+      "version": "0.0.15",
+      "title": "IA Folder Board and Interaction Polish",
+      "added": [
+        "Internal Affairs now uses selectable IA folders instead of showing every IA file as one long board.",
+        "Active IA and previous IA files are separated in the folder rail.",
+        "New IA records automatically open the newly created IA folder."
+      ],
+      "changed": [
+        "Only the selected IA file opens with full summary, metrics, and update controls.",
+        "MDT buttons now have stronger hover, focus, and press feedback.",
+        "MDT popups now animate in with a smoother fade and lift treatment."
+      ],
+      "fixed": [
+        "Fixed Internal Affairs dumping all summaries and update forms into the same visible board.",
+        "Updated PWA cache versioning so installed devices load the IA folder board and interaction polish."
+      ],
+      "removed": []
+    },
+    {
+      "date": "2026-06-23",
+      "version": "0.0.14",
+      "title": "Fire MDT Roster Redesign and Account Deletion",
+      "added": [
+        "Owner account panel now includes an owner-only delete account action for non-owner accounts.",
+        "Fire command rig assignments now use a dispatch roster layout with one column header row and operational apparatus rows."
+      ],
+      "changed": [
+        "Fire MDT rig assignments no longer render as a grid of box-like mini forms.",
+        "Fire MDT command stats now display as a slimmer telemetry bar instead of chunky stat boxes.",
+        "Fire rig controls now use compact roster fields to reduce clutter on desktop while stacking cleanly on mobile."
+      ],
+      "fixed": [
+        "Reduced the cramped visual layout shown when multiple battalion and apparatus assignments are visible at once.",
+        "Updated PWA cache versioning so installed phones load the redesigned Fire MDT roster."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-06-23",
       "version": "0.0.13",

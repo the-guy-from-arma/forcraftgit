@@ -1,8 +1,8 @@
-const CACHE = "rp-command-v13-fire-command-settings";
+const CACHE = "rp-command-v15-ia-folder-polish";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.13-fire-command-settings",
-  "/static/app.js?v=0.0.13-fire-command-settings",
+  "/static/styles.css?v=0.0.15-ia-folder-polish",
+  "/static/app.js?v=0.0.15-ia-folder-polish",
   "/static/icons/icon.svg",
   "/manifest.webmanifest"
 ];
