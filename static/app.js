@@ -18,6 +18,7 @@ const state = {
   mdtSelectedChargeId: "",
   mdtNotice: null,
   cidSelectedCaseId: null,
+  cidWarrantModalId: null,
   mdtProfileUserId: null,
   mdtProfileTab: "profile",
   courtTab: "mine",
@@ -27,6 +28,8 @@ const state = {
   businessTab: "apply",
   adminTab: "users",
   adminAccountId: null,
+  dmvCountdownTimer: null,
+  dmvCountdownRefreshing: false,
   cache: {},
 };
 
@@ -139,6 +142,9 @@ function phone(content) {
 }
 
 function render() {
+  if (state.activeApp !== "dmv") {
+    clearDmvCountdown();
+  }
   if (!state.session?.user) {
     app.innerHTML = phone(renderAuth());
     bindAuth();
@@ -475,12 +481,88 @@ function bindProfile() {
   });
 }
 
+function isPendingLicenseApplication(item) {
+  return ["submitted", "pending", "under_review"].includes(item?.status);
+}
+
+function formatDuration(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const minutesLeft = Math.floor(total / 60);
+  const secs = total % 60;
+  if (minutesLeft >= 60) {
+    const hours = Math.floor(minutesLeft / 60);
+    const mins = minutesLeft % 60;
+    return `${hours}h ${String(mins).padStart(2, "0")}m`;
+  }
+  return `${minutesLeft}m ${String(secs).padStart(2, "0")}s`;
+}
+
+function pendingLicenseCountdown(item, settings) {
+  const totalSeconds = Math.max(60, Number(settings?.minutes || 6) * 60);
+  const approvalAt = item?.approval_at ? new Date(item.approval_at).getTime() : 0;
+  const remainingSeconds = approvalAt ? Math.max(0, Math.ceil((approvalAt - Date.now()) / 1000)) : Number(item?.approval_remaining_seconds || totalSeconds);
+  const pct = Math.max(0, Math.min(100, Math.round(((totalSeconds - remainingSeconds) / totalSeconds) * 100)));
+  return { remainingSeconds, totalSeconds, pct, approvalAt };
+}
+
+function renderDmvApprovalTracker(applications, settings) {
+  const pending = applications.find((item) => isPendingLicenseApplication(item));
+  const latest = applications[0];
+  if (pending) {
+    const countdown = pendingLicenseCountdown(pending, settings);
+    return `
+      <section class="dmv-approval-card">
+        <div class="row">
+          <div>
+            <p class="eyebrow">DMV approval queue</p>
+            <h3>${escapeHtml(pending.application_type)}</h3>
+            <p class="muted small">${escapeHtml(pending.license_class)} filed ${new Date(pending.created_at).toLocaleString()}</p>
+          </div>
+          <span class="pill amber">${escapeHtml(pending.status)}</span>
+        </div>
+        ${settings?.enabled ? `
+          <div class="approval-countdown">
+            <span>Estimated approval</span>
+            <strong data-dmv-countdown-target="${escapeHtml(pending.approval_at)}">${formatDuration(countdown.remainingSeconds)}</strong>
+          </div>
+          <div class="progress approval-progress" style="--pct:${countdown.pct}%"><span></span></div>
+          <p class="muted small">Owner DMV autopilot is set to approve licenses after ${Number(settings.minutes || 6)} minutes.</p>
+        ` : `
+          <p class="muted small">DMV auto approval is paused by owner settings. Your application is still saved.</p>
+        `}
+      </section>
+    `;
+  }
+  if (latest?.status === "approved") {
+    return `
+      <section class="dmv-approval-card approved">
+        <div class="row">
+          <div>
+            <p class="eyebrow">DMV approval complete</p>
+            <h3>${escapeHtml(latest.application_type)}</h3>
+            <p class="muted small">${escapeHtml(latest.license_class)} approved ${new Date(latest.updated_at || latest.created_at).toLocaleString()}</p>
+          </div>
+          <span class="pill green">approved</span>
+        </div>
+      </section>
+    `;
+  }
+  return `
+    <section class="dmv-approval-card">
+      <p class="eyebrow">DMV approval queue</p>
+      <h3>No pending application</h3>
+      <p class="muted small">Submit a driver license application to start the approval countdown.</p>
+    </section>
+  `;
+}
+
 function renderDmv() {
   const data = state.cache.dmv;
   const record = data?.record;
   if (!record) return `<div class="empty">DMV record loading</div>`;
   const vehicles = data.vehicles || [];
   const applications = data.license_applications || [];
+  const licenseAutopilot = data.license_autopilot || { enabled: true, minutes: 6 };
   const activeVehicle = vehicles[0] || record;
   return `
     <div class="stack">
@@ -489,7 +571,7 @@ function renderDmv() {
         <button class="${state.dmvTab === "license" ? "active" : ""}" data-dmv-tab="license">License</button>
         <button class="${state.dmvTab === "vehicles" ? "active" : ""}" data-dmv-tab="vehicles">Vehicles</button>
       </div>
-      ${state.dmvTab === "license" ? renderDmvLicense(applications) : state.dmvTab === "vehicles" ? renderDmvVehicles(vehicles, record) : renderDmvOverview(record, vehicles, applications, activeVehicle)}
+      ${state.dmvTab === "license" ? renderDmvLicense(applications, licenseAutopilot) : state.dmvTab === "vehicles" ? renderDmvVehicles(vehicles, record) : renderDmvOverview(record, vehicles, applications, activeVehicle)}
     </div>
   `;
 }
@@ -531,9 +613,10 @@ function renderDmvOverview(record, vehicles, applications, activeVehicle) {
   `;
 }
 
-function renderDmvLicense(applications) {
+function renderDmvLicense(applications, settings) {
   return `
     <div class="stack">
+      ${renderDmvApprovalTracker(applications, settings)}
       <form id="dmvLicenseForm" class="card form-grid">
         <div class="grid-2">
           <label>Application type<select name="application_type" required>
@@ -604,11 +687,43 @@ function renderDmvVehicles(vehicles, record) {
   `;
 }
 
+function clearDmvCountdown() {
+  if (state.dmvCountdownTimer) {
+    clearInterval(state.dmvCountdownTimer);
+    state.dmvCountdownTimer = null;
+  }
+  state.dmvCountdownRefreshing = false;
+}
+
+function setupDmvCountdown() {
+  clearDmvCountdown();
+  const nodes = $$("[data-dmv-countdown-target]");
+  if (!nodes.length) return;
+  const tick = async () => {
+    let expired = false;
+    nodes.forEach((node) => {
+      const target = new Date(node.dataset.dmvCountdownTarget || "").getTime();
+      const remaining = Number.isFinite(target) ? Math.max(0, Math.ceil((target - Date.now()) / 1000)) : 0;
+      node.textContent = remaining ? formatDuration(remaining) : "approving...";
+      if (remaining <= 0) expired = true;
+    });
+    if (expired && !state.dmvCountdownRefreshing) {
+      state.dmvCountdownRefreshing = true;
+      clearDmvCountdown();
+      await loadAppData("dmv");
+      render();
+    }
+  };
+  tick();
+  state.dmvCountdownTimer = setInterval(tick, 1000);
+}
+
 function bindDmv() {
   $$("[data-dmv-tab]").forEach((button) => button.addEventListener("click", () => {
     state.dmvTab = button.dataset.dmvTab;
     render();
   }));
+  setupDmvCountdown();
   $("#dmvLicenseForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
@@ -1826,6 +1941,51 @@ function bindMdtWorkspace() {
   bindMdt();
 }
 
+function renderFireRigAssignments(data) {
+  const rigs = data.rigs || [];
+  const personnel = data.personnel || [];
+  const canManage = Boolean(data.can_manage_rigs);
+  return `
+    <section class="fire-rig-panel">
+      <div class="mdt-section-head">
+        <div><p class="eyebrow">Fire command</p><h2>Rig Assignments</h2></div>
+        <span class="pill ${canManage ? "green" : "amber"}">${canManage ? "Chief controls" : "Read only"}</span>
+      </div>
+      <div class="fire-rig-grid">
+        ${rigs.map((rig) => `
+          <article class="fire-rig-card">
+            <div class="row">
+              <div>
+                <h3>${escapeHtml(rig.rig_name)}</h3>
+                <p class="muted small">${escapeHtml(rig.assigned_name || "Unassigned")} ${rig.assigned_civ_number ? `- CIV ${escapeHtml(rig.assigned_civ_number)}` : ""}</p>
+              </div>
+              <span class="pill ${rig.status === "assigned" ? "green" : rig.status === "out_of_service" ? "red" : "amber"}">${escapeHtml(rig.status || "available")}</span>
+            </div>
+            ${canManage ? `
+              <form class="fire-rig-form form-grid" data-rig-name="${escapeHtml(rig.rig_name)}">
+                <label>Assigned member<select name="user_id">
+                  <option value="">Unassigned</option>
+                  ${personnel.map((person) => `<option value="${person.id}"${selectedAttr(person.id, rig.user_id)}>${escapeHtml(person.name)} - CIV ${escapeHtml(person.civ_number || "pending")}</option>`).join("")}
+                </select></label>
+                <div class="grid-2">
+                  <label>Position<select name="position">
+                    ${renderOptions(["Officer", "Driver", "Firefighter", "Medic", "Engineer"], rig.position || "Firefighter")}
+                  </select></label>
+                  <label>Status<select name="status">
+                    ${renderOptions(["available", "assigned", "out_of_service"], rig.status || "available")}
+                  </select></label>
+                </div>
+                <label>Notes<input name="notes" value="${escapeHtml(rig.notes || "")}" placeholder="Crew notes or special assignment" /></label>
+                <button class="primary" type="submit">Save ${escapeHtml(rig.rig_name)}</button>
+              </form>
+            ` : `<p class="muted small">${escapeHtml(rig.position || "Firefighter")} ${rig.notes ? `- ${escapeHtml(rig.notes)}` : ""}</p>`}
+          </article>
+        `).join("") || `<div class="empty">No rigs configured</div>`}
+      </div>
+    </section>
+  `;
+}
+
 function renderFireWorkspace() {
   const data = state.cache.fire || {};
   const alerts = data.alerts || [];
@@ -1848,6 +2008,7 @@ function renderFireWorkspace() {
         <div class="metric"><span>Cleared</span><strong>${stats.cleared || 0}</strong></div>
       </div>
       <main class="mdt-main fire-main">
+        ${renderFireRigAssignments(data)}
         <div class="mdt-section-head">
           <div><p class="eyebrow">911 Queue</p><h2>Fire / EMS Incidents</h2></div>
           <span class="pill">${alerts.length} calls</span>
@@ -1893,6 +2054,18 @@ function renderFireMdt() {
 }
 
 function bindFireMdt() {
+  $$(".fire-rig-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const payload = Object.fromEntries(new FormData(form).entries());
+      await api("/api/fire/rigs", { method: "PATCH", body: { ...payload, rig_name: form.dataset.rigName } });
+      toast(`${form.dataset.rigName} assignment saved`);
+      await loadAppData("fire");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
   $$("[data-fire-alert]").forEach((button) => button.addEventListener("click", async () => {
     try {
       await api(`/api/fire/alerts/${button.dataset.fireAlert}`, {
@@ -2022,6 +2195,9 @@ function renderMdtProfileModal() {
   }
   const vehicles = person.vehicles || [];
   const applications = person.license_applications || [];
+  const warrants = person.warrants || [];
+  const activeWarrants = warrants.filter((item) => ["active", "pending"].includes(item.status));
+  const previousWarrants = warrants.filter((item) => !["active", "pending"].includes(item.status));
   const licenseStatus = person.license_status || "None";
   const canSuspendLicense = licenseStatus === "Valid";
   return `
@@ -2038,9 +2214,40 @@ function renderMdtProfileModal() {
         <div class="court-tabs">
           <button class="${state.mdtProfileTab === "profile" ? "active" : ""}" type="button" data-mdt-profile-tab="profile">Profile</button>
           <button class="${state.mdtProfileTab === "license" ? "active" : ""}" type="button" data-mdt-profile-tab="license">Driver License</button>
+          <button class="${state.mdtProfileTab === "warrants" ? "active" : ""}" type="button" data-mdt-profile-tab="warrants">Warrants ${activeWarrants.length ? `(${activeWarrants.length})` : ""}</button>
         </div>
         <div class="admin-account-scroll">
-          ${state.mdtProfileTab === "license" ? `
+          ${state.mdtProfileTab === "warrants" ? `
+            <section class="account-section">
+              <div class="row tight">
+                <h3>Warrant Record</h3>
+                <span class="pill red">${activeWarrants.length} active</span>
+              </div>
+              <div class="mdt-subsection">
+                <h4>Active warrants</h4>
+                ${activeWarrants.map((warrant) => `
+                  <article class="warrant-file">
+                    <div class="row">
+                      <div>
+                        <strong>${escapeHtml(warrant.warrant_number)} - ${escapeHtml(warrant.warrant_type)}</strong>
+                        <p class="muted small">${escapeHtml(warrant.case_number || "No linked case")} - ${escapeHtml(warrant.priority)} - ${escapeHtml(warrant.creator_name || "Unknown issuer")}</p>
+                      </div>
+                      <span class="pill red">${escapeHtml(warrant.status)}</span>
+                    </div>
+                    <p>${escapeHtml(warrant.probable_cause)}</p>
+                    <div class="row-actions">
+                      <button class="secondary" type="button" data-profile-warrant-status="${warrant.id}" data-status="served">Mark served</button>
+                      <button class="secondary" type="button" data-profile-warrant-status="${warrant.id}" data-status="recalled">Recall</button>
+                    </div>
+                  </article>
+                `).join("") || `<p class="muted small">No active warrants attached to this profile</p>`}
+              </div>
+              <div class="mdt-subsection">
+                <h4>Previous warrants</h4>
+                ${previousWarrants.map((warrant) => `<div class="row"><span>${escapeHtml(warrant.warrant_number)} - ${escapeHtml(warrant.warrant_type)}</span><span class="pill ${mdtStatusClass(warrant.status)}">${escapeHtml(warrant.status)}</span></div>`).join("") || `<p class="muted small">No previous warrant history</p>`}
+              </div>
+            </section>
+          ` : state.mdtProfileTab === "license" ? `
             <section class="account-section mdt-license-file">
               <div class="row tight">
                 <h3>Driver License</h3>
@@ -2391,6 +2598,8 @@ function renderCidInvestigations() {
 function renderCidWarrants() {
   const cid = state.cache.mdt?.cid;
   const warrants = cid?.warrants || [];
+  const activeWarrants = warrants.filter((item) => ["active", "pending"].includes(item.status));
+  const previousWarrants = warrants.filter((item) => !["active", "pending"].includes(item.status));
   const cases = cid?.investigations || [];
   const civilians = cid?.civilians || [];
   return `
@@ -2421,22 +2630,72 @@ function renderCidWarrants() {
         <label>Operation plan<textarea name="operation_plan"></textarea></label>
         <button class="primary" type="submit">Create warrant record</button>
       </form>
-      <div class="mdt-code-grid">
-        ${warrants.map((item) => `
-          <article class="cid-card">
-            <div class="row"><div><h3>${escapeHtml(item.warrant_number)} - ${escapeHtml(item.subject_civ_name || item.subject_name)}</h3><p class="muted small">${escapeHtml(item.warrant_type)} - ${escapeHtml(item.case_number || "No linked case")} - ${escapeHtml(item.subject_civ_number || "No CIV link")}</p></div><span class="pill ${item.status === "active" ? "red" : item.status === "served" ? "green" : "amber"}">${escapeHtml(item.status)}</span></div>
-            <p><strong>PC:</strong> ${escapeHtml(item.probable_cause)}</p>
-            <p class="muted small">${escapeHtml(item.operation_plan || "No operation plan logged")}</p>
-            <form class="cid-warrant-update form-grid" data-warrant-id="${item.id}">
-              <div class="grid-2">
-                <label>Status<select name="status"><option>active</option><option>pending</option><option>served</option><option>recalled</option><option>expired</option></select></label>
-                <label>Priority<select name="priority"><option>standard</option><option>elevated</option><option>critical</option></select></label>
-              </div>
-              <button class="secondary" type="submit">Update warrant</button>
-            </form>
-          </article>
-        `).join("") || `<div class="empty">No warrants tracked</div>`}
-      </div>
+      <section class="cid-folder-panel">
+        <div class="row"><h3>Active Warrant Board</h3><span class="pill red">${activeWarrants.length} active</span></div>
+        <div class="warrant-button-grid">
+          ${activeWarrants.map((item) => `
+            <button type="button" class="warrant-button" data-open-cid-warrant="${item.id}">
+              <strong>${escapeHtml(item.warrant_number)}</strong>
+              <span>${escapeHtml(item.subject_civ_name || item.subject_name)}</span>
+              <small>${escapeHtml(item.warrant_type)} / ${escapeHtml(item.status)}</small>
+            </button>
+          `).join("") || `<div class="empty">No active warrants</div>`}
+        </div>
+      </section>
+      <section class="cid-folder-panel">
+        <div class="row"><h3>Previous Warrants</h3><span class="pill">${previousWarrants.length}</span></div>
+        <div class="warrant-button-grid compact">
+          ${previousWarrants.map((item) => `
+            <button type="button" class="warrant-button previous" data-open-cid-warrant="${item.id}">
+              <strong>${escapeHtml(item.warrant_number)}</strong>
+              <span>${escapeHtml(item.subject_civ_name || item.subject_name)}</span>
+              <small>${escapeHtml(item.status)}</small>
+            </button>
+          `).join("") || `<p class="muted small">No previous warrants</p>`}
+        </div>
+      </section>
+      ${state.cidWarrantModalId ? renderCidWarrantModal(warrants.find((item) => String(item.id) === String(state.cidWarrantModalId))) : ""}
+    </div>
+  `;
+}
+
+function renderCidWarrantModal(item) {
+  if (!item) return "";
+  return `
+    <div class="modal-backdrop" data-close-cid-warrant>
+      <section class="mdt-modal warrant-detail-modal" role="dialog" aria-modal="true" aria-label="Warrant detail">
+        <header class="row">
+          <div>
+            <p class="eyebrow">Warrant file</p>
+            <h2>${escapeHtml(item.warrant_number)} - ${escapeHtml(item.subject_civ_name || item.subject_name)}</h2>
+            <p class="muted small">${escapeHtml(item.subject_civ_number || "No CIV link")} / ${escapeHtml(item.case_number || "No linked case")}</p>
+          </div>
+          <button class="icon-action" type="button" data-close-cid-warrant aria-label="Close">${iconSvg.back}</button>
+        </header>
+        <div class="admin-account-scroll">
+          <div class="profile-grid compact">
+            <div class="metric"><span>Status</span><strong>${escapeHtml(item.status)}</strong></div>
+            <div class="metric"><span>Priority</span><strong>${escapeHtml(item.priority)}</strong></div>
+            <div class="metric"><span>Type</span><strong>${escapeHtml(item.warrant_type)}</strong></div>
+            <div class="metric"><span>Issued</span><strong>${item.issued_at ? new Date(item.issued_at).toLocaleDateString() : "N/A"}</strong></div>
+          </div>
+          <div class="mdt-subsection">
+            <h4>Probable cause</h4>
+            <p>${escapeHtml(item.probable_cause)}</p>
+          </div>
+          <div class="mdt-subsection">
+            <h4>Operation plan</h4>
+            <p>${escapeHtml(item.operation_plan || "No operation plan logged")}</p>
+          </div>
+          <form class="cid-warrant-update form-grid" data-warrant-id="${item.id}">
+            <div class="grid-2">
+              <label>Status<select name="status">${renderOptions(["active", "pending", "served", "recalled", "expired"], item.status)}</select></label>
+              <label>Priority<select name="priority">${renderOptions(["standard", "elevated", "critical"], item.priority)}</select></label>
+            </div>
+            <button class="secondary" type="submit">Update warrant</button>
+          </form>
+        </div>
+      </section>
     </div>
   `;
 }
@@ -2556,6 +2815,29 @@ function bindMdt() {
     state.mdtProfileTab = button.dataset.mdtProfileTab;
     render();
   }));
+  $$("[data-profile-warrant-status]").forEach((button) => button.addEventListener("click", async () => {
+    try {
+      const currentPerson = (state.cache.mdt?.search || []).find((item) => String(item.id) === String(state.mdtProfileUserId));
+      const currentWarrant = (currentPerson?.warrants || []).find((item) => String(item.id) === String(button.dataset.profileWarrantStatus));
+      await api(`/api/cid/warrants/${button.dataset.profileWarrantStatus}`, {
+        method: "PATCH",
+        body: { status: button.dataset.status, priority: currentWarrant?.priority || "standard" },
+      });
+      toast(`Warrant ${button.dataset.status}`);
+      const activeSearch = state.cache.mdt?.search || [];
+      if (activeSearch.length) {
+        const q = activeSearch.find((item) => String(item.id) === String(state.mdtProfileUserId))?.name || "";
+        if (q) {
+          const refreshed = await api(`/api/mdt/search?q=${encodeURIComponent(q)}`);
+          state.cache.mdt.search = refreshed.results;
+        }
+      }
+      await loadAppData("mdt");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
   $$(".mdt-license-suspend-form").forEach((form) => form.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
@@ -2609,6 +2891,10 @@ function bindMdt() {
       const results = await api(`/api/mdt/search?q=${encodeURIComponent(q)}`);
       state.cache.mdt = state.cache.mdt || {};
       state.cache.mdt.search = results.results;
+      if (results.results.length) {
+        state.mdtProfileUserId = results.results[0].id;
+        state.mdtProfileTab = "profile";
+      }
       state.mdtNotice = results.results.length
         ? null
         : { query: q, reference: `NCIC-${Math.floor(100000 + Math.random() * 900000)}` };
@@ -2707,11 +2993,21 @@ function bindMdt() {
       toast(error.message);
     }
   });
+  $$("[data-open-cid-warrant]").forEach((button) => button.addEventListener("click", () => {
+    state.cidWarrantModalId = button.dataset.openCidWarrant;
+    render();
+  }));
+  $$("[data-close-cid-warrant]").forEach((button) => button.addEventListener("click", (event) => {
+    if (event.currentTarget.classList?.contains("modal-backdrop") && event.target !== event.currentTarget) return;
+    state.cidWarrantModalId = null;
+    render();
+  }));
   $$(".cid-warrant-update").forEach((form) => form.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
       await api(`/api/cid/warrants/${form.dataset.warrantId}`, { method: "PATCH", body: Object.fromEntries(new FormData(form).entries()) });
       toast("Warrant updated");
+      state.cidWarrantModalId = null;
       await loadAppData("mdt");
       render();
     } catch (error) {
@@ -2821,7 +3117,7 @@ function renderSystem() {
   `;
 }
 
-const roleOptions = ["civ", "owner", "admin", "leo", "judge", "ems", "fireman", "dispatcher", "sheriff", "police", "state_police", "cid", "business_owner", "business_registrar", "city_hall", "economy_manager"];
+const roleOptions = ["civ", "owner", "admin", "leo", "judge", "ems", "fireman", "fire_chief", "dispatcher", "sheriff", "police", "state_police", "cid", "business_owner", "business_registrar", "city_hall", "economy_manager"];
 
 function renderAdminUsers(users) {
   if (!users.length) return `<div class="empty">No accounts yet</div>`;

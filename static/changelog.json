@@ -1,6 +1,46 @@
 {
-  "version": "0.0.6",
+  "version": "0.0.8",
   "entries": [
+    {
+      "date": "2026-06-23",
+      "version": "0.0.8",
+      "title": "DMV License Approval Countdown",
+      "added": [
+        "DMV License page now shows a visible approval queue card after a driver license application is submitted.",
+        "Pending license applications now display a countdown until automatic approval.",
+        "Countdown uses the owner-configured DMV autopilot approval time from System Settings."
+      ],
+      "changed": [
+        "DMV license applications refresh automatically when their approval countdown reaches zero.",
+        "DMV API now returns license autopilot settings and estimated approval times for pending applications."
+      ],
+      "fixed": [
+        "Made driver license approval visible to civilians even without a separate DMV department dashboard.",
+        "Updated PWA cache versioning so the DMV countdown page replaces older cached DMV screens."
+      ],
+      "removed": []
+    },
+    {
+      "date": "2026-06-23",
+      "version": "0.0.7",
+      "title": "Profile Warrants and Fire Chief Rigs",
+      "added": [
+        "NCIC/DMV searches now open a civilian profile popup with attached warrant records.",
+        "Civilian profile popup now has a Warrants tab with active and previous warrant history.",
+        "Fire Chief role for command-level Fire MDT access.",
+        "Fire Chief rig builder for assigning personnel to Engine 1, Ladder 1, Truck 1, Rescue 1, and Battalion 1."
+      ],
+      "changed": [
+        "CID warrant board now uses button containers and detail popups instead of showing full warrant files on the main wall.",
+        "Served, recalled, and expired warrants move out of the active warrant board and into previous warrant history."
+      ],
+      "fixed": [
+        "Fixed warrants not appearing on the searched civilian profile record.",
+        "Fixed fire alerts not recognizing a dedicated Fire Chief command role.",
+        "Updated PWA cache versioning so profile warrant and Fire Chief rig changes replace older cached MDT screens."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-06-22",
       "version": "0.0.6",

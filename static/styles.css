@@ -1298,6 +1298,48 @@ textarea:focus {
   background: rgba(255, 255, 255, 0.045);
 }
 
+.dmv-approval-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(78, 205, 196, 0.2);
+  border-radius: 10px;
+  padding: 12px;
+  background:
+    linear-gradient(135deg, rgba(78, 205, 196, 0.12), rgba(92, 156, 255, 0.06)),
+    rgba(255, 255, 255, 0.05);
+}
+
+.dmv-approval-card.approved {
+  border-color: rgba(40, 209, 124, 0.26);
+  background:
+    linear-gradient(135deg, rgba(40, 209, 124, 0.12), rgba(78, 205, 196, 0.06)),
+    rgba(255, 255, 255, 0.05);
+}
+
+.approval-countdown {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.approval-countdown span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.approval-countdown strong {
+  color: var(--green);
+  font-size: 24px;
+  line-height: 1;
+}
+
+.approval-progress span {
+  width: var(--pct, 0%);
+}
+
 .system-setting-block {
   display: grid;
   gap: 10px;
@@ -1772,6 +1814,74 @@ textarea:focus {
   background:
     linear-gradient(180deg, rgba(32, 18, 22, 0.92), rgba(13, 17, 19, 0.92)),
     repeating-linear-gradient(90deg, rgba(239, 78, 99, 0.045) 0 1px, transparent 1px 56px);
+}
+
+.warrant-button-grid,
+.fire-rig-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+.warrant-button-grid.compact {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.warrant-button,
+.fire-rig-card,
+.warrant-file,
+.fire-rig-panel {
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.warrant-button {
+  display: grid;
+  gap: 5px;
+  min-height: 94px;
+  padding: 12px;
+  color: var(--ink);
+  text-align: left;
+}
+
+.warrant-button:hover {
+  border-color: rgba(239, 78, 99, 0.42);
+  background: rgba(239, 78, 99, 0.1);
+}
+
+.warrant-button.previous {
+  opacity: 0.78;
+}
+
+.warrant-button span,
+.warrant-button small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.warrant-file,
+.fire-rig-card,
+.fire-rig-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.warrant-detail-modal {
+  width: min(700px, 100%);
+}
+
+.fire-rig-panel {
+  margin-bottom: 12px;
+  border-color: rgba(255, 107, 74, 0.2);
+  background:
+    linear-gradient(180deg, rgba(34, 21, 18, 0.9), rgba(13, 17, 19, 0.9)),
+    repeating-linear-gradient(90deg, rgba(255, 107, 74, 0.04) 0 1px, transparent 1px 52px);
+}
+
+.fire-rig-card h3 {
+  margin: 0;
 }
 
 .cid-tools {

@@ -253,6 +253,7 @@ BUSINESS_APPLICATION_STATUSES = ("submitted", "under_review", "interview_request
 BUSINESS_LICENSE_STATUSES = ("active", "suspended", "revoked", "expired")
 BUSINESS_LICENSE_CATEGORIES = ("basic", "commercial", "restricted", "government_contract")
 BUSINESS_MAX_ACTIVE_PER_OWNER = 2
+FIRE_RIG_NAMES = ("Engine 1", "Ladder 1", "Truck 1", "Rescue 1", "Battalion 1")
 SYSTEM_SETTING_DEFAULTS = {
     "autopilot_verify_enabled": "0",
     "autopilot_verify_minutes": "120",
@@ -644,6 +645,19 @@ def ensure_schema() -> None:
                 FOREIGN KEY (officer_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS fire_rig_assignments (
+                id SERIAL PRIMARY KEY,
+                rig_name TEXT NOT NULL UNIQUE,
+                user_id INTEGER,
+                position TEXT NOT NULL DEFAULT 'Firefighter',
+                status TEXT NOT NULL DEFAULT 'available',
+                notes TEXT NOT NULL DEFAULT '',
+                assigned_by INTEGER,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+                FOREIGN KEY (assigned_by) REFERENCES users(id) ON DELETE SET NULL
+            );
+
             CREATE TABLE IF NOT EXISTS cid_investigations (
                 id SERIAL PRIMARY KEY,
                 case_number TEXT NOT NULL UNIQUE,
@@ -749,6 +763,22 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS last_known TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS requirements TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE panic_alerts ADD COLUMN IF NOT EXISTS department TEXT NOT NULL DEFAULT 'police'")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS fire_rig_assignments (
+            id SERIAL PRIMARY KEY,
+            rig_name TEXT NOT NULL UNIQUE,
+            user_id INTEGER,
+            position TEXT NOT NULL DEFAULT 'Firefighter',
+            status TEXT NOT NULL DEFAULT 'available',
+            notes TEXT NOT NULL DEFAULT '',
+            assigned_by INTEGER,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+            FOREIGN KEY (assigned_by) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
     db.execute("CREATE INDEX IF NOT EXISTS arma_link_codes_code_idx ON arma_link_codes (code)")
     db.execute("CREATE INDEX IF NOT EXISTS arma_link_codes_status_idx ON arma_link_codes (status)")
     db.execute("CREATE INDEX IF NOT EXISTS arma_activity_logs_user_idx ON arma_activity_logs (user_id)")
@@ -1129,15 +1159,23 @@ def leo_required(user: DbRow | None) -> str | None:
 def fire_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
-    if not has_any(user, "fireman", "ems", "owner"):
+    if not has_any(user, "fireman", "fire_chief", "ems", "owner"):
         return "Fire department access required"
+    return None
+
+
+def fire_chief_required(user: DbRow | None) -> str | None:
+    if not user:
+        return "Authentication required"
+    if not has_any(user, "fire_chief", "owner"):
+        return "Fire chief access required"
     return None
 
 
 def emergency_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
-    if not has_any(user, "leo", "cid", "fireman", "ems", "dispatcher", "owner"):
+    if not has_any(user, "leo", "cid", "fireman", "fire_chief", "ems", "dispatcher", "owner"):
         return "Emergency services access required"
     return None
 
@@ -1148,7 +1186,7 @@ def emergency_departments_for(user: DbRow) -> list[str]:
     departments: list[str] = []
     if has_any(user, "leo", "cid"):
         departments.append("police")
-    if has_any(user, "fireman"):
+    if has_any(user, "fireman", "fire_chief"):
         departments.append("fire")
     if has_any(user, "ems"):
         departments.append("ems")
@@ -1197,7 +1235,7 @@ def app_catalog(user: DbRow | None) -> list[dict[str, Any]]:
         apps.append({"id": "contracts", "label": "Contracts", "icon": "target", "enabled": True, "coming_soon": False, "hidden": False})
     if has_any(user, "leo", "cid", "owner"):
         apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "hidden": False})
-    if has_any(user, "fireman", "ems", "owner"):
+    if has_any(user, "fireman", "fire_chief", "ems", "owner"):
         apps.append({"id": "fire", "label": "Fire MDT", "icon": "flame", "enabled": True, "hidden": False})
     if has_any(user, "owner"):
         apps.append({"id": "system", "label": "System", "icon": "settings", "enabled": True, "hidden": False})
@@ -1557,6 +1595,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_clear_alert(db, user, self.path_int(path, 3))
                 elif path == "/api/fire/overview" and method == "GET":
                     self.api_fire_overview(db, user)
+                elif path == "/api/fire/rigs" and method == "PATCH":
+                    self.api_update_fire_rig(db, user)
                 elif path.startswith("/api/fire/alerts/") and method == "PATCH":
                     self.api_update_fire_alert(db, user, self.path_int(path, 3))
                 elif path == "/api/cid/overview" and method == "GET":
@@ -2200,6 +2240,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403 if user else 401, err)
             return
         apply_auto_license_approval(db)
+        settings = get_system_settings(db)
         record = one(db, "SELECT * FROM dmv_records WHERE user_id = ?", (user["id"],))
         if not record:
             create_default_dmv(db, user["id"])
@@ -2210,7 +2251,32 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "SELECT * FROM dmv_license_applications WHERE user_id = ? ORDER BY created_at DESC",
             (user["id"],),
         )
-        self.send_json(200, {"record": dict(record), "vehicles": vehicles, "license_applications": applications})
+        server_now = utcnow()
+        application_payload = []
+        approval_minutes = int(settings["autopilot_license_minutes"])
+        for application in applications:
+            item = dict(application)
+            if settings["autopilot_license_enabled"] and item.get("status") in ("submitted", "pending", "under_review"):
+                approval_at = parse_iso(item["created_at"]) + dt.timedelta(minutes=approval_minutes)
+                item["approval_at"] = approval_at.isoformat()
+                item["approval_remaining_seconds"] = max(0, int((approval_at - server_now).total_seconds()))
+            else:
+                item["approval_at"] = ""
+                item["approval_remaining_seconds"] = 0
+            application_payload.append(item)
+        self.send_json(
+            200,
+            {
+                "record": dict(record),
+                "vehicles": vehicles,
+                "license_applications": application_payload,
+                "license_autopilot": {
+                    "enabled": settings["autopilot_license_enabled"],
+                    "minutes": approval_minutes,
+                    "server_time": server_now.isoformat(),
+                },
+            },
+        )
 
     def api_dmv_update(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -3258,11 +3324,25 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "SELECT application_type, license_class, status, created_at FROM dmv_license_applications WHERE user_id = ? ORDER BY created_at DESC LIMIT 4",
                 (row["id"],),
             )
+            user_warrants = all_rows(
+                db,
+                """
+                SELECT w.*, creator.name AS creator_name, i.case_number
+                FROM cid_warrants w
+                JOIN users creator ON creator.id = w.created_by
+                LEFT JOIN cid_investigations i ON i.id = w.investigation_id
+                WHERE w.subject_civ_id = ?
+                ORDER BY CASE w.status WHEN 'active' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, w.updated_at DESC
+                LIMIT 20
+                """,
+                (row["id"],),
+            )
             item = dict(row)
             item["roles"] = roles_for(row)
             item["open_cases"] = [dict(w) for w in warrants]
             item["vehicles"] = vehicles
             item["license_applications"] = applications
+            item["warrants"] = [dict(warrant) for warrant in user_warrants]
             results.append(item)
         self.send_json(200, {"results": results})
 
@@ -3533,7 +3613,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         created = cur.fetchone()
         recipient_patterns = {
             "police": ("%leo%", "%cid%", "%dispatcher%", "%owner%"),
-            "fire": ("%fireman%", "%dispatcher%", "%owner%", "%admin%"),
+            "fire": ("%fireman%", "%fire_chief%", "%dispatcher%", "%owner%"),
             "ems": ("%ems%", "%dispatcher%", "%owner%", "%admin%"),
         }[department]
         recipients = all_rows(
@@ -3610,7 +3690,100 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "responding": sum(1 for row in rows if row.get("status") == "responding"),
             "cleared": sum(1 for row in rows if row.get("status") == "cleared"),
         }
-        self.send_json(200, {"departments": visible, "stats": stats, "alerts": [dict(row) for row in rows]})
+        rig_rows = all_rows(
+            db,
+            """
+            SELECT r.*, u.name AS assigned_name, u.civ_number AS assigned_civ_number, chief.name AS assigned_by_name
+            FROM fire_rig_assignments r
+            LEFT JOIN users u ON u.id = r.user_id
+            LEFT JOIN users chief ON chief.id = r.assigned_by
+            ORDER BY r.rig_name
+            """
+        )
+        rigs_by_name = {row["rig_name"]: dict(row) for row in rig_rows}
+        rigs = []
+        for rig_name in FIRE_RIG_NAMES:
+            rigs.append(
+                rigs_by_name.get(
+                    rig_name,
+                    {
+                        "rig_name": rig_name,
+                        "user_id": None,
+                        "assigned_name": "",
+                        "assigned_civ_number": "",
+                        "assigned_by_name": "",
+                        "position": "Firefighter",
+                        "status": "available",
+                        "notes": "",
+                        "updated_at": "",
+                    },
+                )
+            )
+        for rig_name, row in rigs_by_name.items():
+            if rig_name not in FIRE_RIG_NAMES:
+                rigs.append(row)
+        personnel = all_rows(
+            db,
+            """
+            SELECT id, civ_number, name, roles, primary_agency
+            FROM users
+            WHERE roles LIKE ? OR roles LIKE ? OR roles LIKE ? OR roles LIKE ?
+            ORDER BY name
+            LIMIT 200
+            """,
+            ("%fireman%", "%fire_chief%", "%ems%", "%owner%"),
+        )
+        self.send_json(
+            200,
+            {
+                "departments": visible,
+                "stats": stats,
+                "alerts": [dict(row) for row in rows],
+                "rigs": rigs,
+                "personnel": [dict(row) for row in personnel],
+                "can_manage_rigs": has_any(user, "fire_chief", "owner"),
+            },
+        )
+
+    def api_update_fire_rig(self, db: Database, user: DbRow | None) -> None:
+        err = fire_chief_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        rig_name = str(payload.get("rig_name") or "").strip()[:60]
+        if not rig_name:
+            self.error(400, "Rig name is required")
+            return
+        user_id_raw = str(payload.get("user_id") or "").strip()
+        user_id = int(user_id_raw) if user_id_raw else None
+        if user_id and not one(db, "SELECT id FROM users WHERE id = ?", (user_id,)):
+            self.error(404, "Assigned firefighter not found")
+            return
+        status = str(payload.get("status") or "available").strip().lower()
+        if status not in ("available", "assigned", "out_of_service"):
+            self.error(400, "Invalid rig status")
+            return
+        position = str(payload.get("position") or "Firefighter").strip()[:60]
+        notes = str(payload.get("notes") or "").strip()[:400]
+        ts = now_iso()
+        db.execute(
+            """
+            INSERT INTO fire_rig_assignments (rig_name, user_id, position, status, notes, assigned_by, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(rig_name) DO UPDATE SET
+                user_id = excluded.user_id,
+                position = excluded.position,
+                status = excluded.status,
+                notes = excluded.notes,
+                assigned_by = excluded.assigned_by,
+                updated_at = excluded.updated_at
+            """,
+            (rig_name, user_id, position, status, notes, user["id"], ts),
+        )
+        if user_id:
+            add_message(db, user_id, "Fire rig assignment", f"You were assigned to {rig_name} as {position}. Status: {status}.", user["id"])
+        self.send_json(200, {"ok": True})
 
     def api_update_fire_alert(self, db: Database, user: DbRow | None, alert_id: int) -> None:
         err = fire_required(user)
@@ -3828,7 +4001,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(201, {"ok": True, "id": int(created["id"]), "warrant_number": created["warrant_number"]})
 
     def api_cid_update_warrant(self, db: Database, user: DbRow | None, warrant_id: int) -> None:
-        err = cid_required(user)
+        err = leo_required(user)
         if err:
             self.error(403 if user else 401, err)
             return
