@@ -1,6 +1,22 @@
 {
-  "version": "0.0.3",
+  "version": "0.0.4",
   "entries": [
+    {
+      "date": "2026-06-22",
+      "version": "0.0.4",
+      "title": "CID Warrant Linking",
+      "added": [
+        "CID warrant creation now includes a civilian profile dropdown for selecting the warrant subject by name and CIV number."
+      ],
+      "changed": [
+        "Warrants now store the selected civilian profile ID with the subject name so warrant records remain linked to the correct player profile."
+      ],
+      "fixed": [
+        "Fixed warrants not attaching cleanly to civilian profiles when officers only typed a subject name.",
+        "Updated PWA cache versioning so the warrant-linking form replaces older cached MDT screens."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-06-22",
       "version": "0.0.3",
@@ -16,7 +32,8 @@
         "Suspended or revoked driver licenses are protected from automatic re-approval."
       ],
       "fixed": [
-        "Added a license approval path so DMV applications no longer remain submitted forever when no admin review screen exists."
+        "Added a license approval path so DMV applications no longer remain submitted forever when no admin review screen exists.",
+        "Updated PWA cache versioning so the CID investigation folder interface replaces older MDT layouts on mobile."
       ],
       "removed": []
     },

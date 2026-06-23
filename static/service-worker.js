@@ -1,8 +1,8 @@
-const CACHE = "rp-command-v2-fire-mdt";
+const CACHE = "rp-command-v4-warrant-linking";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.2-fire-mdt",
-  "/static/app.js?v=0.0.2-fire-mdt",
+  "/static/styles.css?v=0.0.4-warrant-linking",
+  "/static/app.js?v=0.0.4-warrant-linking",
   "/static/icons/icon.svg",
   "/manifest.webmanifest"
 ];

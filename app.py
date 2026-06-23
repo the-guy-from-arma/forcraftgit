@@ -3524,7 +3524,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         warrants = all_rows(
             db,
             """
-            SELECT w.*, creator.name AS creator_name, target.name AS subject_civ_name, i.case_number
+            SELECT w.*, creator.name AS creator_name, target.name AS subject_civ_name, target.civ_number AS subject_civ_number, i.case_number
             FROM cid_warrants w
             JOIN users creator ON creator.id = w.created_by
             LEFT JOIN users target ON target.id = w.subject_civ_id
@@ -3555,12 +3555,22 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             LIMIT 300
             """
         )
+        civilians = all_rows(
+            db,
+            """
+            SELECT u.id, u.civ_number, u.name, u.verified, d.license_status, d.license_class
+            FROM users u
+            LEFT JOIN dmv_records d ON d.user_id = u.id
+            ORDER BY u.name
+            LIMIT 300
+            """
+        )
         stats = {
             "open_investigations": one(db, "SELECT COUNT(*) AS count FROM cid_investigations WHERE status NOT IN ('closed','archived')")["count"],
             "active_warrants": one(db, "SELECT COUNT(*) AS count FROM cid_warrants WHERE status = 'active'")["count"],
             "ia_open": one(db, "SELECT COUNT(*) AS count FROM cid_internal_affairs WHERE status NOT IN ('closed','sustained','unfounded')")["count"],
         }
-        self.send_json(200, {"stats": stats, "investigations": investigations, "warrants": warrants, "ia_cases": ia_cases, "notes": notes})
+        self.send_json(200, {"stats": stats, "investigations": investigations, "warrants": warrants, "ia_cases": ia_cases, "notes": notes, "civilians": civilians})
 
     def api_cid_create_investigation(self, db: Database, user: DbRow | None) -> None:
         err = cid_required(user)
@@ -3638,12 +3648,23 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403 if user else 401, err)
             return
         payload = self.read_json()
-        missing = require_fields(payload, "subject_name", "warrant_type", "probable_cause")
+        missing = require_fields(payload, "warrant_type", "probable_cause")
         if missing:
             self.error(400, missing)
             return
         investigation_id = int(payload["investigation_id"]) if str(payload.get("investigation_id") or "").strip() else None
         subject_civ_id = int(payload["subject_civ_id"]) if str(payload.get("subject_civ_id") or "").strip() else None
+        subject = one(db, "SELECT id, name FROM users WHERE id = ?", (subject_civ_id,)) if subject_civ_id else None
+        if subject_civ_id and not subject:
+            self.error(404, "Selected civilian not found")
+            return
+        subject_name_value = payload.get("subject_name")
+        if subject and not str(subject_name_value or "").strip():
+            subject_name_value = subject["name"]
+        subject_name = str(subject_name_value or "").strip()[:120]
+        if not subject_name:
+            self.error(400, "Subject civilian or subject name is required")
+            return
         ts = now_iso()
         created = db.execute(
             """
@@ -3656,7 +3677,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 generate_record_number(db, "cid_warrants", "warrant_number", "WAR"),
                 investigation_id,
                 subject_civ_id,
-                str(payload["subject_name"]).strip()[:120],
+                subject_name,
                 str(payload["warrant_type"]).strip()[:70],
                 str(payload.get("status") or "active").strip()[:30],
                 str(payload.get("priority") or "standard").strip()[:30],

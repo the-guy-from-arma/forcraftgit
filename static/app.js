@@ -1962,6 +1962,13 @@ function mdtStatusClass(status) {
   return "amber";
 }
 
+function syncCidWarrantSubject(form) {
+  const select = form?.querySelector("[data-cid-warrant-subject]");
+  const hidden = form?.querySelector("[name='subject_name']");
+  if (!select || !hidden) return;
+  hidden.value = select.selectedOptions[0]?.dataset.name || "";
+}
+
 function renderMdtSearch() {
   const results = state.cache.mdt?.search || [];
   return `
@@ -2322,6 +2329,7 @@ function renderCidWarrants() {
   const cid = state.cache.mdt?.cid;
   const warrants = cid?.warrants || [];
   const cases = cid?.investigations || [];
+  const civilians = cid?.civilians || [];
   return `
     <div class="cid-tools">
       <form id="cidWarrantForm" class="mdt-form">
@@ -2330,8 +2338,12 @@ function renderCidWarrants() {
           <span class="pill red">${warrants.filter((item) => item.status === "active").length} active</span>
         </div>
         <div class="grid-2">
-          <label>Subject name<input name="subject_name" required /></label>
-          <label>Subject CIV ID<input name="subject_civ_id" type="number" placeholder="Optional database ID" /></label>
+          <label>Subject civilian<select name="subject_civ_id" required data-cid-warrant-subject>
+            <option value="">Select civilian record</option>
+            ${civilians.map((person) => `<option value="${person.id}" data-name="${escapeHtml(person.name)}">${escapeHtml(person.name)} - CIV ${escapeHtml(person.civ_number || "pending")} - ${escapeHtml(person.license_status || "No license")}</option>`).join("")}
+          </select></label>
+          <label>Subject status<input value="Linked to selected civilian profile" disabled /></label>
+          <input type="hidden" name="subject_name" />
         </div>
         <div class="grid-2">
           <label>Warrant type<select name="warrant_type"><option>Arrest Warrant</option><option>Search Warrant</option><option>Bench Warrant</option><option>BOLO / Locate</option><option>High Risk Operation</option></select></label>
@@ -2349,7 +2361,7 @@ function renderCidWarrants() {
       <div class="mdt-code-grid">
         ${warrants.map((item) => `
           <article class="cid-card">
-            <div class="row"><div><h3>${escapeHtml(item.warrant_number)} - ${escapeHtml(item.subject_name)}</h3><p class="muted small">${escapeHtml(item.warrant_type)} - ${escapeHtml(item.case_number || "No linked case")}</p></div><span class="pill ${item.status === "active" ? "red" : item.status === "served" ? "green" : "amber"}">${escapeHtml(item.status)}</span></div>
+            <div class="row"><div><h3>${escapeHtml(item.warrant_number)} - ${escapeHtml(item.subject_civ_name || item.subject_name)}</h3><p class="muted small">${escapeHtml(item.warrant_type)} - ${escapeHtml(item.case_number || "No linked case")} - ${escapeHtml(item.subject_civ_number || "No CIV link")}</p></div><span class="pill ${item.status === "active" ? "red" : item.status === "served" ? "green" : "amber"}">${escapeHtml(item.status)}</span></div>
             <p><strong>PC:</strong> ${escapeHtml(item.probable_cause)}</p>
             <p class="muted small">${escapeHtml(item.operation_plan || "No operation plan logged")}</p>
             <form class="cid-warrant-update form-grid" data-warrant-id="${item.id}">
@@ -2587,9 +2599,13 @@ function bindMdt() {
       toast(error.message);
     }
   }));
+  $("#cidWarrantForm [data-cid-warrant-subject]")?.addEventListener("change", (event) => {
+    syncCidWarrantSubject(event.currentTarget.closest("form"));
+  });
   $("#cidWarrantForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
+      syncCidWarrantSubject(event.currentTarget);
       const result = await api("/api/cid/warrants", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
       toast(`Warrant tracked ${result.warrant_number}`);
       await loadAppData("mdt");
