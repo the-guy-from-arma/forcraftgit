@@ -1,6 +1,28 @@
 {
-  "version": "0.0.12",
+  "version": "0.0.13",
   "entries": [
+    {
+      "date": "2026-06-23",
+      "version": "0.0.13",
+      "title": "Fire Command Settings",
+      "added": [
+        "Fire command roles now include Fire Chief, Deputy Chief, and Fire Marshal.",
+        "Fire Settings app icon now appears for fire command users and owner accounts.",
+        "Fire Settings includes chief-level rig assignment controls using the same live data as Fire MDT.",
+        "Rig assignment options now include Battalion 1 through Battalion 5.",
+        "Rig positions now include Fire Chief, Deputy Chief, Fire Marshal, and Battalion Chief."
+      ],
+      "changed": [
+        "Fire rig assignment control now unlocks for Fire Chief, Deputy Chief, Fire Marshal, and owner accounts.",
+        "Owner/admin account management can assign the new fire command roles.",
+        "Fire alert routing now includes Deputy Chief and Fire Marshal recipients."
+      ],
+      "fixed": [
+        "Fixed Fire MDT rig assignments showing read-only for command users outside the original fire_chief role.",
+        "Updated PWA cache versioning so installed phones load the new Fire Settings icon and expanded rig list."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-06-23",
       "version": "0.0.12",

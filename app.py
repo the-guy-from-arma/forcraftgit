@@ -258,7 +258,9 @@ BUSINESS_APPLICATION_STATUSES = ("submitted", "under_review", "interview_request
 BUSINESS_LICENSE_STATUSES = ("active", "suspended", "revoked", "expired")
 BUSINESS_LICENSE_CATEGORIES = ("basic", "commercial", "restricted", "government_contract")
 BUSINESS_MAX_ACTIVE_PER_OWNER = 2
-FIRE_RIG_NAMES = ("Engine 1", "Ladder 1", "Truck 1", "Rescue 1", "Battalion 1")
+FIRE_COMMAND_ROLES = ("fire_chief", "deputy_chief", "fire_marshal")
+FIRE_SERVICE_ROLES = ("fireman", "ems", *FIRE_COMMAND_ROLES)
+FIRE_RIG_NAMES = ("Engine 1", "Ladder 1", "Truck 1", "Rescue 1", "Battalion 1", "Battalion 2", "Battalion 3", "Battalion 4", "Battalion 5")
 SYSTEM_SETTING_DEFAULTS = {
     "autopilot_verify_enabled": "0",
     "autopilot_verify_minutes": "120",
@@ -1346,7 +1348,7 @@ def leo_required(user: DbRow | None) -> str | None:
 def fire_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
-    if not has_any(user, "fireman", "fire_chief", "ems", "owner"):
+    if not has_any(user, *FIRE_SERVICE_ROLES, "owner"):
         return "Fire department access required"
     return None
 
@@ -1354,15 +1356,15 @@ def fire_required(user: DbRow | None) -> str | None:
 def fire_chief_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
-    if not has_any(user, "fire_chief", "owner"):
-        return "Fire chief access required"
+    if not has_any(user, *FIRE_COMMAND_ROLES, "owner"):
+        return "Fire command access required"
     return None
 
 
 def emergency_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
-    if not has_any(user, "leo", "cid", "fireman", "fire_chief", "ems", "dispatcher", "owner"):
+    if not has_any(user, "leo", "cid", *FIRE_SERVICE_ROLES, "dispatcher", "owner"):
         return "Emergency services access required"
     return None
 
@@ -1373,7 +1375,7 @@ def emergency_departments_for(user: DbRow) -> list[str]:
     departments: list[str] = []
     if has_any(user, "leo", "cid"):
         departments.append("police")
-    if has_any(user, "fireman", "fire_chief"):
+    if has_any(user, "fireman", *FIRE_COMMAND_ROLES):
         departments.append("fire")
     if has_any(user, "ems"):
         departments.append("ems")
@@ -1422,8 +1424,10 @@ def app_catalog(user: DbRow | None) -> list[dict[str, Any]]:
         apps.append({"id": "contracts", "label": "Contracts", "icon": "target", "enabled": True, "coming_soon": False, "hidden": False})
     if has_any(user, "leo", "cid", "owner"):
         apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "hidden": False})
-    if has_any(user, "fireman", "fire_chief", "ems", "owner"):
+    if has_any(user, *FIRE_SERVICE_ROLES, "owner"):
         apps.append({"id": "fire", "label": "Fire MDT", "icon": "flame", "enabled": True, "hidden": False})
+    if has_any(user, *FIRE_COMMAND_ROLES, "owner"):
+        apps.append({"id": "fire-settings", "label": "Fire Settings", "icon": "settings", "enabled": True, "hidden": False})
     if has_any(user, "owner"):
         apps.append({"id": "system", "label": "System", "icon": "settings", "enabled": True, "hidden": False})
     if has_any(user, "owner", "admin"):
@@ -3896,12 +3900,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         created = cur.fetchone()
         recipient_patterns = {
             "police": ("%leo%", "%cid%", "%dispatcher%", "%owner%"),
-            "fire": ("%fireman%", "%fire_chief%", "%dispatcher%", "%owner%"),
+            "fire": ("%fireman%", "%fire_chief%", "%deputy_chief%", "%fire_marshal%", "%dispatcher%", "%owner%"),
             "ems": ("%ems%", "%dispatcher%", "%owner%", "%admin%"),
         }[department]
+        recipient_sql = "SELECT id FROM users WHERE " + " OR ".join(["roles LIKE ?"] * len(recipient_patterns))
         recipients = all_rows(
             db,
-            "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ? OR roles LIKE ? OR roles LIKE ?",
+            recipient_sql,
             recipient_patterns,
         )
         subject = f"911 {department.upper()} ALERT"
@@ -4156,11 +4161,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             """
             SELECT id, civ_number, name, roles, primary_agency
             FROM users
-            WHERE roles LIKE ? OR roles LIKE ? OR roles LIKE ? OR roles LIKE ?
+            WHERE roles LIKE ? OR roles LIKE ? OR roles LIKE ? OR roles LIKE ? OR roles LIKE ? OR roles LIKE ?
             ORDER BY name
             LIMIT 200
             """,
-            ("%fireman%", "%fire_chief%", "%ems%", "%owner%"),
+            ("%fireman%", "%fire_chief%", "%deputy_chief%", "%fire_marshal%", "%ems%", "%owner%"),
         )
         self.send_json(
             200,
@@ -4170,7 +4175,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "alerts": [dict(row) for row in rows],
                 "rigs": rigs,
                 "personnel": [dict(row) for row in personnel],
-                "can_manage_rigs": has_any(user, "fire_chief", "owner"),
+                "can_manage_rigs": has_any(user, *FIRE_COMMAND_ROLES, "owner"),
             },
         )
 

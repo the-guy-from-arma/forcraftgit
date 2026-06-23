@@ -68,6 +68,7 @@ const tileColors = {
   changelog: "linear-gradient(145deg, #7ee7ff, #3158e8)",
   mdt: "linear-gradient(145deg, #28343c, #050709)",
   fire: "linear-gradient(145deg, #ff6b4a, #2d1b1b)",
+  "fire-settings": "linear-gradient(145deg, #ffb15a, #5b1815)",
   system: "linear-gradient(145deg, #35e0b6, #22485c)",
   admin: "linear-gradient(145deg, #ffcf5a, #6c5010)",
 };
@@ -287,6 +288,7 @@ function renderPanel(id) {
     changelog: "Changelog",
     mdt: "MDT CAD",
     fire: "Fire MDT",
+    "fire-settings": "Fire Settings",
     system: "System",
     admin: "Admin",
   };
@@ -304,6 +306,7 @@ function renderPanel(id) {
     changelog: renderChangelog,
     mdt: renderMdt,
     fire: renderFireMdt,
+    "fire-settings": renderFireSettings,
     system: renderSystem,
     admin: renderAdmin,
   }[id]?.() || `<div class="empty">Module unavailable</div>`;
@@ -346,6 +349,7 @@ async function loadAppData(id) {
       return data;
     },
     fire: () => api("/api/fire/overview"),
+    "fire-settings": () => api("/api/fire/overview"),
     system: () => api("/api/system/settings"),
     admin: async () => ({ overview: await api("/api/admin/overview"), users: await api("/api/admin/users"), jobs: await api("/api/admin/jobs") }),
   };
@@ -381,6 +385,7 @@ function bindPanel() {
     contracts: bindContracts,
     mdt: bindMdt,
     fire: bindFireMdt,
+    "fire-settings": bindFireSettings,
     system: bindSystem,
     admin: bindAdmin,
   };
@@ -2056,6 +2061,7 @@ function renderFireRigAssignments(data) {
   const rigs = data.rigs || [];
   const personnel = data.personnel || [];
   const canManage = Boolean(data.can_manage_rigs);
+  const positionOptions = ["Fire Chief", "Deputy Chief", "Fire Marshal", "Battalion Chief", "Officer", "Driver", "Firefighter", "Medic", "Engineer"];
   return `
     <section class="fire-rig-panel">
       <div class="mdt-section-head">
@@ -2080,7 +2086,7 @@ function renderFireRigAssignments(data) {
                 </select></label>
                 <div class="grid-2">
                   <label>Position<select name="position">
-                    ${renderOptions(["Officer", "Driver", "Firefighter", "Medic", "Engineer"], rig.position || "Firefighter")}
+                    ${renderOptions(positionOptions, rig.position || "Firefighter")}
                   </select></label>
                   <label>Status<select name="status">
                     ${renderOptions(["available", "assigned", "out_of_service"], rig.status || "available")}
@@ -2094,6 +2100,31 @@ function renderFireRigAssignments(data) {
         `).join("") || `<div class="empty">No rigs configured</div>`}
       </div>
     </section>
+  `;
+}
+
+function renderFireSettings() {
+  const data = state.cache["fire-settings"] || state.cache.fire || {};
+  const stats = data.stats || { active: 0, responding: 0, cleared: 0 };
+  const commandRoles = ["Fire Chief", "Deputy Chief", "Fire Marshal"];
+  return `
+    <div class="fire-settings-screen">
+      <section class="fire-settings-hero">
+        <div>
+          <p class="eyebrow">Fire command settings</p>
+          <h3>Department Control</h3>
+          <p>Chief-level rig assignment, battalion coverage, and command staffing for Fire MDT operations.</p>
+        </div>
+        <span class="pill ${data.can_manage_rigs ? "green" : "amber"}">${data.can_manage_rigs ? "Command enabled" : "Read only"}</span>
+      </section>
+      <div class="profile-grid compact fire-command-grid">
+        <div><span>Active calls</span><strong>${stats.active || 0}</strong></div>
+        <div><span>Responding</span><strong>${stats.responding || 0}</strong></div>
+        <div><span>Cleared</span><strong>${stats.cleared || 0}</strong></div>
+        <div><span>Command roles</span><strong>${commandRoles.join(", ")}</strong></div>
+      </div>
+      ${renderFireRigAssignments(data)}
+    </div>
   `;
 }
 
@@ -2171,7 +2202,7 @@ function bindFireMdt() {
       const payload = Object.fromEntries(new FormData(form).entries());
       await api("/api/fire/rigs", { method: "PATCH", body: { ...payload, rig_name: form.dataset.rigName } });
       toast(`${form.dataset.rigName} assignment saved`);
-      await loadAppData("fire");
+      await loadAppData(state.activeApp || "fire");
       render();
     } catch (error) {
       toast(error.message);
@@ -2184,12 +2215,16 @@ function bindFireMdt() {
         body: { status: button.dataset.fireStatus },
       });
       toast(`Incident ${button.dataset.fireStatus}`);
-      await loadAppData("fire");
+      await loadAppData(state.activeApp || "fire");
       render();
     } catch (error) {
       toast(error.message);
     }
   }));
+}
+
+function bindFireSettings() {
+  bindFireMdt();
 }
 
 function renderMdt() {
@@ -3532,7 +3567,7 @@ function renderSystem() {
   `;
 }
 
-const roleOptions = ["civ", "owner", "admin", "leo", "judge", "ems", "fireman", "fire_chief", "dispatcher", "sheriff", "police", "state_police", "cid", "business_owner", "business_registrar", "city_hall", "economy_manager"];
+const roleOptions = ["civ", "owner", "admin", "leo", "judge", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "state_police", "cid", "business_owner", "business_registrar", "city_hall", "economy_manager"];
 
 function renderAdminUsers(users) {
   if (!users.length) return `<div class="empty">No accounts yet</div>`;
@@ -3587,7 +3622,7 @@ function renderAdminAccountModal(user) {
               ${nameChange.locked ? `<label class="check-row"><input type="checkbox" name="unlock_name_changes" /> Unlock name changes</label>` : `<p class="muted small">Name changes are currently open.</p>`}
             </div>
             <div class="role-grid">
-              ${roleOptions.map((role) => `<label class="check-row"><input type="checkbox" name="roles" value="${role}" ${user.roles.includes(role) ? "checked" : ""} /> ${role.replace("_", " ")}</label>`).join("")}
+              ${roleOptions.map((role) => `<label class="check-row"><input type="checkbox" name="roles" value="${role}" ${user.roles.includes(role) ? "checked" : ""} /> ${role.replaceAll("_", " ")}</label>`).join("")}
             </div>
             <button class="primary" type="submit">Save account</button>
           </form>
