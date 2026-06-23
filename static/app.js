@@ -1969,6 +1969,17 @@ function syncCidWarrantSubject(form) {
   hidden.value = select.selectedOptions[0]?.dataset.name || "";
 }
 
+function getMdtCivilians() {
+  return state.cache.mdt?.cid?.civilians || state.cache.mdt?.charges?.civilians || [];
+}
+
+function syncChargeWarrantSubject(form) {
+  const select = form?.querySelector("[data-charge-warrant-subject]");
+  const hidden = form?.querySelector("[name='subject_name']");
+  if (!select || !hidden) return;
+  hidden.value = select.selectedOptions[0]?.dataset.name || "";
+}
+
 function renderMdtSearch() {
   const results = state.cache.mdt?.search || [];
   return `
@@ -2113,9 +2124,44 @@ function renderTicketWriter() {
   `;
 }
 
+function renderCriminalWarrantWriter(charges) {
+  const civilians = getMdtCivilians();
+  const cases = state.cache.mdt?.cid?.investigations || [];
+  const defaultCourt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  return `
+    <form id="chargeWarrantForm" class="mdt-form charge-warrant-form">
+      <div class="mdt-section-head">
+        <div><p class="eyebrow">Criminal charge warrant</p><h2>Sign and Issue Warrant</h2></div>
+        <span class="pill red">Active warrant</span>
+      </div>
+      <div class="grid-2">
+        <label>Subject civilian<select name="civ_id" required data-charge-warrant-subject>
+          <option value="">Select civilian record</option>
+          ${civilians.map((person) => `<option value="${person.id}" data-name="${escapeHtml(person.name)}">${escapeHtml(person.name)} - CIV ${escapeHtml(person.civ_number || "pending")} - ${escapeHtml(person.license_status || "No license")}</option>`).join("")}
+        </select></label>
+        <label>Court date<input name="court_date" type="date" value="${defaultCourt}" /></label>
+        <input type="hidden" name="subject_name" />
+      </div>
+      <label>Criminal charge<select name="charge_id" required>
+        <option value="">Select criminal charge</option>
+        ${charges.map((charge) => `<option value="${charge.id}">${escapeHtml(charge.code)} - ${escapeHtml(charge.title)} - ${escapeHtml(charge.severity)}</option>`).join("")}
+      </select></label>
+      <div class="grid-2">
+        <label>Priority<select name="priority"><option>elevated</option><option>standard</option><option>critical</option></select></label>
+        <label>Linked CID case<select name="investigation_id"><option value="">None</option>${cases.map((item) => `<option value="${item.id}">${escapeHtml(item.case_number)} - ${escapeHtml(item.title)}</option>`).join("")}</select></label>
+      </div>
+      <label>Location<input name="location" placeholder="Street, postal, landmark" required /></label>
+      <label>Probable cause<textarea name="probable_cause" required placeholder="Facts supporting the criminal charge and warrant"></textarea></label>
+      <label>Operation plan<textarea name="operation_plan" placeholder="Optional service plan, unit notes, or court transport instructions"></textarea></label>
+      <button class="danger" type="submit">Sign and issue warrant</button>
+    </form>
+  `;
+}
+
 function renderCodeSection(kind) {
   const rows = getMdtCatalog(kind);
   return `
+    ${kind === "criminal" ? renderCriminalWarrantWriter(rows) : ""}
     <div class="mdt-section-head">
       <div><p class="eyebrow">${kind === "citation" ? "Traffic and civil" : "Criminal"} catalog</p><h2>${kind === "citation" ? "Citation Codes" : "Criminal Charges"}</h2></div>
       <button class="secondary" data-open-catalog data-catalog-kind="${kind}">Open catalog</button>
@@ -2127,6 +2173,7 @@ function renderCodeSection(kind) {
           <h3>${escapeHtml(charge.title)}</h3>
           <p class="muted small">${escapeHtml(charge.category)} - ${money(charge.fine_amount)} - ${charge.points} pts</p>
           <p>${escapeHtml(charge.description)}</p>
+          ${kind === "criminal" ? `<button class="secondary" type="button" data-select-criminal-charge="${charge.id}">Use charge</button>` : ""}
         </article>
       `).join("") || `<div class="empty">No ${kind} codes loaded</div>`}
     </div>
@@ -2506,6 +2553,27 @@ function bindMdt() {
       toast(error.message);
     }
   }));
+  $("#chargeWarrantForm [data-charge-warrant-subject]")?.addEventListener("change", (event) => {
+    syncChargeWarrantSubject(event.currentTarget.closest("form"));
+  });
+  $$("[data-select-criminal-charge]").forEach((button) => button.addEventListener("click", () => {
+    const form = $("#chargeWarrantForm");
+    const select = form?.querySelector("[name='charge_id']");
+    if (select) select.value = button.dataset.selectCriminalCharge;
+    form?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }));
+  $("#chargeWarrantForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      syncChargeWarrantSubject(event.currentTarget);
+      const result = await api("/api/mdt/charge-warrants", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast(`Warrant ${result.warrant_number} signed - court ${result.court_date}`);
+      await loadAppData("mdt");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
   $$("[data-cid-open-case]").forEach((button) => button.addEventListener("click", () => {
     state.cidSelectedCaseId = button.dataset.cidOpenCase;
     render();

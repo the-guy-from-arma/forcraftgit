@@ -1,6 +1,23 @@
 {
-  "version": "0.0.4",
+  "version": "0.0.5",
   "entries": [
+    {
+      "date": "2026-06-22",
+      "version": "0.0.5",
+      "title": "Criminal Charge Warrants",
+      "added": [
+        "Criminal Charges tab now includes a charge-warrant writer with civilian profile dropdown, criminal charge selector, probable cause, priority, and optional linked CID case.",
+        "Officers can sign and issue an active warrant directly from a criminal charge."
+      ],
+      "changed": [
+        "Signed charge warrants now create both a court criminal charge and a linked active warrant for the selected civilian."
+      ],
+      "fixed": [
+        "Criminal charges can now be tied to warrant creation instead of only appearing as catalog entries.",
+        "Updated PWA cache versioning so the Criminal Charges warrant writer replaces older cached MDT screens."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-06-22",
       "version": "0.0.4",

@@ -1766,6 +1766,14 @@ textarea:focus {
   background: rgba(255, 255, 255, 0.045);
 }
 
+.charge-warrant-form {
+  margin-bottom: 12px;
+  border-color: rgba(239, 78, 99, 0.24);
+  background:
+    linear-gradient(180deg, rgba(32, 18, 22, 0.92), rgba(13, 17, 19, 0.92)),
+    repeating-linear-gradient(90deg, rgba(239, 78, 99, 0.045) 0 1px, transparent 1px 56px);
+}
+
 .cid-tools {
   display: grid;
   gap: 12px;

@@ -1545,6 +1545,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_mdt_charges(db, user)
                 elif path.startswith("/api/mdt/users/") and path.endswith("/license") and method == "PATCH":
                     self.api_mdt_update_license(db, user, self.path_int(path, 3))
+                elif path == "/api/mdt/charge-warrants" and method == "POST":
+                    self.api_issue_charge_warrant(db, user)
                 elif path == "/api/mdt/citations" and method == "POST":
                     self.api_issue_citation(db, user)
                 elif path == "/api/mdt/panic" and method == "POST":
@@ -3271,12 +3273,23 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         rows = all_rows(db, "SELECT * FROM charge_catalog ORDER BY kind DESC, category, code")
         catalog = [dict(row) for row in rows]
+        civilians = all_rows(
+            db,
+            """
+            SELECT u.id, u.civ_number, u.name, u.verified, d.license_status, d.license_class
+            FROM users u
+            LEFT JOIN dmv_records d ON d.user_id = u.id
+            ORDER BY u.name
+            LIMIT 300
+            """
+        )
         self.send_json(
             200,
             {
                 "charges": catalog,
                 "citations": [row for row in catalog if row.get("kind") == "citation"],
                 "criminal_charges": [row for row in catalog if row.get("kind") == "criminal"],
+                "civilians": civilians,
             },
         )
 
@@ -3314,6 +3327,121 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         add_message(db, target_id, "Driver license suspended", f"Your driver license was suspended. Reason: {reason}", user["id"])
         self.send_json(200, {"ok": True, "license_status": "Suspended"})
+
+    def api_issue_charge_warrant(self, db: Database, user: DbRow | None) -> None:
+        err = leo_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        missing = require_fields(payload, "civ_id", "charge_id", "location", "probable_cause")
+        if missing:
+            self.error(400, missing)
+            return
+        civ = one(db, "SELECT * FROM users WHERE id = ?", (int(payload["civ_id"]),))
+        if not civ:
+            self.error(404, "Civilian not found")
+            return
+        charge = one(db, "SELECT * FROM charge_catalog WHERE id = ?", (int(payload["charge_id"]),))
+        if not charge:
+            self.error(404, "Charge not found")
+            return
+        if charge.get("kind") != "criminal":
+            self.error(400, "Charge warrant requires a criminal charge")
+            return
+        presiding_judge = pick_presiding_judge(db)
+        ts = now_iso()
+        default_court_date = (utcnow() + dt.timedelta(days=3)).date().isoformat()
+        court_date = str(payload.get("court_date") or "").strip() or default_court_date
+        probable_cause = str(payload["probable_cause"]).strip()[:1400]
+        location = str(payload["location"]).strip()[:120]
+        citation = db.execute(
+            """
+            INSERT INTO citations
+            (civ_id, officer_id, judge_id, charge_id, charge_code, charge_title, category, fine_amount, points, severity, location, narrative, court_date, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id
+            """,
+            (
+                civ["id"],
+                user["id"],
+                presiding_judge["id"] if presiding_judge else None,
+                charge["id"],
+                charge["code"],
+                charge["title"],
+                charge["category"],
+                float(charge["fine_amount"]),
+                int(charge["points"]),
+                charge["severity"],
+                location,
+                probable_cause,
+                court_date,
+                ts,
+                ts,
+            ),
+        ).fetchone()
+        warrant_number = generate_record_number(db, "cid_warrants", "warrant_number", "WAR")
+        warrant_pc = f"{charge['code']} - {charge['title']}. Probable cause: {probable_cause}"[:1600]
+        operation_plan = str(payload.get("operation_plan") or "Serve warrant and bring defendant before the assigned court.").strip()[:1600]
+        created_warrant = db.execute(
+            """
+            INSERT INTO cid_warrants
+            (warrant_number, investigation_id, subject_civ_id, subject_name, warrant_type, status, priority, probable_cause, operation_plan, authorized_by, created_by, issued_at, expires_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id, warrant_number
+            """,
+            (
+                warrant_number,
+                int(payload["investigation_id"]) if str(payload.get("investigation_id") or "").strip() else None,
+                civ["id"],
+                civ["name"],
+                str(payload.get("warrant_type") or "Criminal Charge Warrant").strip()[:70],
+                "active",
+                str(payload.get("priority") or "elevated").strip()[:30],
+                warrant_pc,
+                operation_plan,
+                str(payload.get("authorized_by") or f"Officer {user['name']}").strip()[:120],
+                user["id"],
+                ts,
+                str(payload.get("expires_at") or "").strip()[:20] or None,
+                ts,
+            ),
+        ).fetchone()
+        citation_id = int(citation["id"])
+        warrant_id = int(created_warrant["id"])
+        add_message(
+            db,
+            civ["id"],
+            "Criminal warrant issued",
+            f"{charge['code']} - {charge['title']} was filed with warrant {created_warrant['warrant_number']}. Court date: {court_date}.",
+            user["id"],
+        )
+        add_message(
+            db,
+            user["id"],
+            "Charge warrant signed",
+            f"Warrant {created_warrant['warrant_number']} and court case #{citation_id} were filed against {civ['name']}.",
+            user["id"],
+        )
+        if presiding_judge:
+            add_message(
+                db,
+                presiding_judge["id"],
+                "Criminal warrant case assigned",
+                f"Case #{citation_id} / warrant {created_warrant['warrant_number']} was assigned to you. Defendant: {civ['name']}.",
+                user["id"],
+            )
+        self.send_json(
+            201,
+            {
+                "ok": True,
+                "citation_id": citation_id,
+                "warrant_id": warrant_id,
+                "warrant_number": created_warrant["warrant_number"],
+                "court_date": court_date,
+                "judge_id": presiding_judge["id"] if presiding_judge else None,
+            },
+        )
 
     def api_issue_citation(self, db: Database, user: DbRow | None) -> None:
         err = leo_required(user)
