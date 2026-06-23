@@ -1,6 +1,88 @@
 {
-  "version": "0.0.8",
+  "version": "0.0.12",
   "entries": [
+    {
+      "date": "2026-06-23",
+      "version": "0.0.12",
+      "title": "CAD After-Call Reports",
+      "added": [
+        "MDT now includes a Reports tab for officers to file after-call incident reports.",
+        "Reports can link to a CAD/911 call, an involved civilian profile, call type, disposition, location, narrative, actions taken, and evidence or clip links.",
+        "Officers can mark calls as cleared, founded, unfounded, report taken, citation issued, arrest made, referred to CID, false alarm, or unable to locate.",
+        "Recent reports now appear in the MDT side watch panel for quick command review."
+      ],
+      "changed": [
+        "Linked CAD calls are automatically cleared when an after-call report is filed as cleared, unfounded, false alarm, or unable to locate.",
+        "CAD report narratives preserve long-form text and line breaks for detailed officer documentation.",
+        "CID Command quick actions now include direct access to CAD Reports."
+      ],
+      "fixed": [
+        "Officers now have a dedicated place to document incident outcomes instead of relying only on tickets, panic alerts, or court cases.",
+        "Updated PWA cache versioning so installed MDT views load the new Reports tab."
+      ],
+      "removed": []
+    },
+    {
+      "date": "2026-06-23",
+      "version": "0.0.11",
+      "title": "CID Command MDT",
+      "added": [
+        "CID users now open into a dedicated CID Command MDT instead of a patrol-style MDT with only investigation tabs.",
+        "New CID Command dashboard with priority case watch, active warrant operations, intelligence feed, internal affairs queue, and quick action launchers.",
+        "CID-wide side intelligence panels for command tracker, priority cases, and warrant watch.",
+        "Warrant detail popup can now be opened from the CID Command dashboard, side watch, or Warrant Ops board."
+      ],
+      "changed": [
+        "CID MDT shell now uses CID-specific navigation labels, command statistics, title treatment, and investigative visual styling.",
+        "Warrant Ops and Internal Affairs intake screens now use the same CID command-board layout as investigations.",
+        "CID case notes now store full text instead of being capped at the previous note length."
+      ],
+      "fixed": [
+        "CID MDT no longer feels limited to a single Investigations tab; the whole module is now an investigative command system.",
+        "Non-CID users are safely returned to NCIC if an old session points at a CID-only tab.",
+        "Updated PWA cache versioning so installed MDT views load the new CID Command MDT."
+      ],
+      "removed": []
+    },
+    {
+      "date": "2026-06-23",
+      "version": "0.0.10",
+      "title": "CID Investigation Desk Redesign",
+      "added": [
+        "Investigative MDT CID Investigations tab now has a redesigned command-desk case intake board.",
+        "CID investigation creation now includes a target civilian dropdown populated from all user profiles.",
+        "Target civilian selection auto-fills the target name while still allowing unlisted target aliases."
+      ],
+      "changed": [
+        "CID investigation summaries now store full text instead of being capped at the previous short limit.",
+        "CID investigation intake layout now uses a larger long-form summary area and cleaner responsive mobile layout."
+      ],
+      "fixed": [
+        "Removed the need for officers to type raw target CIV database IDs when opening CID investigations.",
+        "Updated PWA cache versioning so installed MDT views load the redesigned CID tab."
+      ],
+      "removed": []
+    },
+    {
+      "date": "2026-06-23",
+      "version": "0.0.9",
+      "title": "Character Profiles and Name Locking",
+      "added": [
+        "Profile app now includes a character roster where players can create multiple RP characters.",
+        "Players can activate a saved character and the active character name becomes the profile name used across the PWA.",
+        "Profile app now includes a controlled active-name change form with a 3 changes per 3 days limit.",
+        "Admin Account pop-up now shows character count and name-change status."
+      ],
+      "changed": [
+        "Existing accounts automatically receive a default character based on their current profile name.",
+        "Name-change limits are enforced by the backend instead of only being hidden in the UI."
+      ],
+      "fixed": [
+        "Admins and owners can unlock a user's name changes from the Account pop-up after the limit locks them.",
+        "Updated PWA cache versioning so installed phone views load the new Profile character tools."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-06-23",
       "version": "0.0.8",

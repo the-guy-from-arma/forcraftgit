@@ -1,8 +1,8 @@
-const CACHE = "rp-command-v8-dmv-license-countdown";
+const CACHE = "rp-command-v12-cad-after-call-reports";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.8-dmv-license-countdown",
-  "/static/app.js?v=0.0.8-dmv-license-countdown",
+  "/static/styles.css?v=0.0.12-cad-after-call-reports",
+  "/static/app.js?v=0.0.12-cad-after-call-reports",
   "/static/icons/icon.svg",
   "/manifest.webmanifest"
 ];

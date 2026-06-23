@@ -29,6 +29,8 @@ OWNER_PASSWORD = os.environ.get("OWNER_PASSWORD", "owner1234")
 OWNER_NAME = os.environ.get("OWNER_NAME", "Server Owner")
 ARMA_BRIDGE_API_KEY = os.environ.get("ARMA_BRIDGE_API_KEY", "").strip()
 ARMA_LINK_CODE_TTL_MINUTES = int(os.environ.get("ARMA_LINK_CODE_TTL_MINUTES", "30"))
+NAME_CHANGE_LIMIT = 3
+NAME_CHANGE_WINDOW_DAYS = 3
 
 
 def now_iso() -> str:
@@ -203,6 +205,8 @@ def public_user(user: DbRow) -> dict[str, Any]:
         "primary_agency": user["primary_agency"],
         "bank_balance": round(float(user["bank_balance"] or 0), 2),
         "cash_balance": round(float(user["cash_balance"] or 0), 2),
+        "active_character_id": user.get("active_character_id"),
+        "name_change_locked": bool(user.get("name_change_locked", 0)),
         "created_at": user["created_at"],
     }
 
@@ -236,6 +240,7 @@ def generate_record_number(db: Database, table: str, column: str, prefix: str) -
         ("cid_investigations", "case_number"),
         ("cid_warrants", "warrant_number"),
         ("cid_internal_affairs", "ia_number"),
+        ("cad_after_call_reports", "report_number"),
         ("rp_contracts", "contract_number"),
         ("business_applications", "application_number"),
         ("businesses", "license_number"),
@@ -300,6 +305,9 @@ def ensure_schema() -> None:
                 primary_agency TEXT,
                 bank_balance NUMERIC(12,2) NOT NULL DEFAULT 0,
                 cash_balance NUMERIC(12,2) NOT NULL DEFAULT 250,
+                active_character_id INTEGER,
+                name_change_locked INTEGER NOT NULL DEFAULT 0,
+                name_change_unlocked_at TEXT,
                 last_income_at TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
@@ -311,6 +319,29 @@ def ensure_schema() -> None:
                 last_seen TEXT,
                 PRIMARY KEY (user_id, day),
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS user_characters (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                character_name TEXT NOT NULL,
+                biography TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                is_active INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS profile_name_changes (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                character_id INTEGER,
+                old_name TEXT NOT NULL,
+                new_name TEXT NOT NULL,
+                changed_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (character_id) REFERENCES user_characters(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS system_settings (
@@ -645,6 +676,26 @@ def ensure_schema() -> None:
                 FOREIGN KEY (officer_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS cad_after_call_reports (
+                id SERIAL PRIMARY KEY,
+                report_number TEXT NOT NULL UNIQUE,
+                officer_id INTEGER NOT NULL,
+                related_alert_id INTEGER,
+                involved_civ_id INTEGER,
+                involved_name TEXT NOT NULL DEFAULT '',
+                call_type TEXT NOT NULL,
+                disposition TEXT NOT NULL DEFAULT 'cleared',
+                location TEXT NOT NULL DEFAULT '',
+                narrative TEXT NOT NULL,
+                actions_taken TEXT NOT NULL DEFAULT '',
+                evidence_links TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (officer_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (related_alert_id) REFERENCES panic_alerts(id) ON DELETE SET NULL,
+                FOREIGN KEY (involved_civ_id) REFERENCES users(id) ON DELETE SET NULL
+            );
+
             CREATE TABLE IF NOT EXISTS fire_rig_assignments (
                 id SERIAL PRIMARY KEY,
                 rig_name TEXT NOT NULL UNIQUE,
@@ -751,9 +802,45 @@ def ensure_migrations(db: Database) -> None:
         )
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS civ_number TEXT")
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS arma_id TEXT")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS active_character_id INTEGER")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS name_change_locked INTEGER NOT NULL DEFAULT 0")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS name_change_unlocked_at TEXT")
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_civ_number_unique ON users (civ_number)")
     for user in all_rows(db, "SELECT id FROM users WHERE civ_number IS NULL"):
         db.execute("UPDATE users SET civ_number = ? WHERE id = ?", (generate_civ_number(db), user["id"]))
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_characters (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            character_name TEXT NOT NULL,
+            biography TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'active',
+            is_active INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS profile_name_changes (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            character_id INTEGER,
+            old_name TEXT NOT NULL,
+            new_name TEXT NOT NULL,
+            changed_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (character_id) REFERENCES user_characters(id) ON DELETE SET NULL
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS user_characters_user_idx ON user_characters (user_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS profile_name_changes_user_idx ON profile_name_changes (user_id, changed_at)")
+    for existing_user in all_rows(db, "SELECT id, name FROM users ORDER BY id"):
+        ensure_default_character(db, int(existing_user["id"]), str(existing_user["name"] or "Civilian"))
     db.execute("ALTER TABLE charge_catalog ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'criminal'")
     db.execute("UPDATE charge_catalog SET kind = 'citation' WHERE code LIKE ?", ("TRF-%",))
     db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS judge_id INTEGER")
@@ -763,6 +850,29 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS last_known TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS requirements TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE panic_alerts ADD COLUMN IF NOT EXISTS department TEXT NOT NULL DEFAULT 'police'")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cad_after_call_reports (
+            id SERIAL PRIMARY KEY,
+            report_number TEXT NOT NULL UNIQUE,
+            officer_id INTEGER NOT NULL,
+            related_alert_id INTEGER,
+            involved_civ_id INTEGER,
+            involved_name TEXT NOT NULL DEFAULT '',
+            call_type TEXT NOT NULL,
+            disposition TEXT NOT NULL DEFAULT 'cleared',
+            location TEXT NOT NULL DEFAULT '',
+            narrative TEXT NOT NULL,
+            actions_taken TEXT NOT NULL DEFAULT '',
+            evidence_links TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (officer_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (related_alert_id) REFERENCES panic_alerts(id) ON DELETE SET NULL,
+            FOREIGN KEY (involved_civ_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS fire_rig_assignments (
@@ -783,6 +893,9 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS arma_link_codes_status_idx ON arma_link_codes (status)")
     db.execute("CREATE INDEX IF NOT EXISTS arma_activity_logs_user_idx ON arma_activity_logs (user_id)")
     db.execute("CREATE INDEX IF NOT EXISTS panic_alerts_department_idx ON panic_alerts (department)")
+    db.execute("CREATE INDEX IF NOT EXISTS cad_after_call_reports_officer_idx ON cad_after_call_reports (officer_id, created_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS cad_after_call_reports_alert_idx ON cad_after_call_reports (related_alert_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS cad_after_call_reports_disposition_idx ON cad_after_call_reports (disposition)")
 
 
 def get_system_settings(db: Database) -> dict[str, Any]:
@@ -954,16 +1067,24 @@ def seed_owner(db: Database) -> None:
             """,
             (OWNER_NAME, hash_password(OWNER_PASSWORD), json.dumps(owner_roles), existing["id"]),
         )
+        character = ensure_default_character(db, int(existing["id"]), OWNER_NAME)
+        db.execute(
+            "UPDATE user_characters SET character_name = ?, updated_at = ? WHERE id = ?",
+            (OWNER_NAME, now_iso(), character["id"]),
+        )
+        db.execute("UPDATE users SET active_character_id = ?, name = ? WHERE id = ?", (character["id"], OWNER_NAME, existing["id"]))
         return
     ts = now_iso()
-    db.execute(
+    created = db.execute(
         """
         INSERT INTO users
         (civ_number, name, email, arma_id, password_hash, verified, roles, primary_agency, bank_balance, cash_balance, last_income_at, created_at)
         VALUES (?, ?, ?, ?, ?, 1, ?, 'Owner Command', 50000, 1000, ?, ?)
+        RETURNING id
         """,
         (generate_civ_number(db), OWNER_NAME, OWNER_EMAIL, os.environ.get("OWNER_ARMA_ID", "OWNER"), hash_password(OWNER_PASSWORD), json.dumps(owner_roles), ts, ts),
-    )
+    ).fetchone()
+    ensure_default_character(db, int(created["id"]), OWNER_NAME)
 
 
 def seed_jobs(db: Database) -> None:
@@ -1110,6 +1231,72 @@ def create_default_dmv(db: Database, user_id: int) -> None:
         """,
         (user_id, plate, now_iso()),
     )
+
+
+def clean_character_name(value: Any) -> str:
+    name = " ".join(str(value or "").strip().split())
+    if len(name) < 3:
+        raise ValueError("Character name must be at least 3 characters")
+    if len(name) > 80:
+        raise ValueError("Character name must be 80 characters or less")
+    return name
+
+
+def ensure_default_character(db: Database, user_id: int, current_name: str | None = None) -> DbRow:
+    active = one(
+        db,
+        "SELECT * FROM user_characters WHERE user_id = ? AND is_active = 1 ORDER BY updated_at DESC, id DESC LIMIT 1",
+        (user_id,),
+    )
+    if active:
+        db.execute("UPDATE users SET active_character_id = ?, name = ? WHERE id = ?", (active["id"], active["character_name"], user_id))
+        return active
+    existing = one(db, "SELECT * FROM user_characters WHERE user_id = ? ORDER BY created_at ASC, id ASC LIMIT 1", (user_id,))
+    if existing:
+        db.execute("UPDATE user_characters SET is_active = CASE WHEN id = ? THEN 1 ELSE 0 END WHERE user_id = ?", (existing["id"], user_id))
+        db.execute("UPDATE users SET active_character_id = ?, name = ? WHERE id = ?", (existing["id"], existing["character_name"], user_id))
+        return existing
+    try:
+        character_name = clean_character_name(current_name)
+    except ValueError:
+        character_name = f"Civilian {user_id}"
+    ts = now_iso()
+    created = db.execute(
+        """
+        INSERT INTO user_characters (user_id, character_name, biography, status, is_active, created_at, updated_at)
+        VALUES (?, ?, '', 'active', 1, ?, ?)
+        RETURNING *
+        """,
+        (user_id, character_name, ts, ts),
+    ).fetchone()
+    db.execute("UPDATE users SET active_character_id = ?, name = ? WHERE id = ?", (created["id"], character_name, user_id))
+    return created
+
+
+def name_change_status(db: Database, user_id: int) -> dict[str, Any]:
+    user = one(db, "SELECT name_change_locked, name_change_unlocked_at FROM users WHERE id = ?", (user_id,))
+    window_start = utcnow() - dt.timedelta(days=NAME_CHANGE_WINDOW_DAYS)
+    unlocked_at = user.get("name_change_unlocked_at") if user else None
+    if unlocked_at:
+        unlocked_dt = parse_iso(unlocked_at)
+        if unlocked_dt > window_start:
+            window_start = unlocked_dt
+    row = one(
+        db,
+        "SELECT COUNT(*) AS count FROM profile_name_changes WHERE user_id = ? AND changed_at >= ?",
+        (user_id, window_start.isoformat()),
+    )
+    used = int(row["count"] if row else 0)
+    locked = bool(user.get("name_change_locked", 0)) if user else False
+    return {
+        "locked": locked,
+        "used": used,
+        "limit": NAME_CHANGE_LIMIT,
+        "remaining": max(0, NAME_CHANGE_LIMIT - used),
+        "window_days": NAME_CHANGE_WINDOW_DAYS,
+        "window_start": window_start.isoformat(),
+        "unlocked_at": unlocked_at,
+    }
 
 
 def admin_required(user: DbRow | None) -> str | None:
@@ -1513,6 +1700,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_presence(db, user)
                 elif path == "/api/profile" and method == "GET":
                     self.api_profile(db, user)
+                elif path == "/api/profile/name" and method == "POST":
+                    self.api_profile_change_name(db, user)
+                elif path == "/api/profile/characters" and method == "POST":
+                    self.api_profile_create_character(db, user)
+                elif path.startswith("/api/profile/characters/") and path.endswith("/activate") and method == "POST":
+                    self.api_profile_activate_character(db, user, self.path_int(path, 3))
                 elif path == "/api/profile/link-arma" and method == "POST":
                     self.api_claim_arma_link(db, user)
                 elif path == "/api/arma/link-requests" and method == "POST":
@@ -1589,6 +1782,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_issue_citation(db, user)
                 elif path == "/api/mdt/panic" and method == "POST":
                     self.api_panic(db, user)
+                elif path == "/api/mdt/reports" and method == "GET":
+                    self.api_mdt_reports(db, user)
+                elif path == "/api/mdt/reports" and method == "POST":
+                    self.api_create_mdt_report(db, user)
                 elif path == "/api/mdt/alerts" and method == "GET":
                     self.api_alerts(db, user)
                 elif path.startswith("/api/mdt/alerts/") and method == "PATCH":
@@ -1674,6 +1871,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         created = cur.fetchone()
         user_id = int(created["id"])
         create_default_dmv(db, user_id)
+        ensure_default_character(db, user_id, str(payload["name"]).strip())
         owner = one(db, "SELECT id FROM users WHERE email = ?", (OWNER_EMAIL,))
         add_message(
             db,
@@ -1755,6 +1953,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not user:
             self.error(401, "Authentication required")
             return
+        active_character = ensure_default_character(db, int(user["id"]), str(user["name"] or "Civilian"))
+        user = one(db, "SELECT * FROM users WHERE id = ?", (user["id"],)) or user
+        characters = all_rows(
+            db,
+            """
+            SELECT *
+            FROM user_characters
+            WHERE user_id = ?
+            ORDER BY is_active DESC, updated_at DESC, id DESC
+            """,
+            (user["id"],),
+        )
         link = one(db, "SELECT * FROM arma_account_links WHERE user_id = ?", (user["id"],))
         activity = all_rows(
             db,
@@ -1781,11 +1991,85 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             200,
             {
                 "user": {**public_user(user), "registered_arma_id": user.get("arma_id") or ""},
+                "characters": [dict(row) for row in characters],
+                "active_character": dict(active_character) if active_character else None,
+                "name_change": name_change_status(db, int(user["id"])),
                 "arma_link": dict(link) if link else None,
                 "recent_activity": [dict(row) for row in activity],
                 "claimed_codes": [dict(row) for row in pending_codes],
             },
         )
+
+    def api_profile_create_character(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        payload = self.read_json()
+        character_name = clean_character_name(payload.get("character_name") or payload.get("name"))
+        biography = str(payload.get("biography") or "").strip()[:800]
+        ts = now_iso()
+        db.execute("UPDATE user_characters SET is_active = 0 WHERE user_id = ?", (user["id"],))
+        created = db.execute(
+            """
+            INSERT INTO user_characters (user_id, character_name, biography, status, is_active, created_at, updated_at)
+            VALUES (?, ?, ?, 'active', 1, ?, ?)
+            RETURNING *
+            """,
+            (user["id"], character_name, biography, ts, ts),
+        ).fetchone()
+        db.execute("UPDATE users SET active_character_id = ?, name = ? WHERE id = ?", (created["id"], character_name, user["id"]))
+        add_message(db, user["id"], "Character created", f"{character_name} is now your active RP character.")
+        self.send_json(201, {"ok": True, "character": dict(created), "user": public_user(one(db, "SELECT * FROM users WHERE id = ?", (user["id"],)))})
+
+    def api_profile_activate_character(self, db: Database, user: DbRow | None, character_id: int) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        character = one(db, "SELECT * FROM user_characters WHERE id = ? AND user_id = ?", (character_id, user["id"]))
+        if not character:
+            self.error(404, "Character not found")
+            return
+        if character["status"] != "active":
+            self.error(409, "Only active characters can be selected")
+            return
+        ts = now_iso()
+        db.execute("UPDATE user_characters SET is_active = 0 WHERE user_id = ?", (user["id"],))
+        db.execute("UPDATE user_characters SET is_active = 1, updated_at = ? WHERE id = ?", (ts, character_id))
+        db.execute("UPDATE users SET active_character_id = ?, name = ? WHERE id = ?", (character_id, character["character_name"], user["id"]))
+        self.send_json(200, {"ok": True, "active_character_id": character_id, "name": character["character_name"]})
+
+    def api_profile_change_name(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        active_character = ensure_default_character(db, int(user["id"]), str(user["name"] or "Civilian"))
+        status = name_change_status(db, int(user["id"]))
+        if status["locked"]:
+            self.error(423, "Name changes are locked until an admin unlocks this account.")
+            return
+        if status["used"] >= NAME_CHANGE_LIMIT:
+            db.execute("UPDATE users SET name_change_locked = 1 WHERE id = ?", (user["id"],))
+            self.error(423, "Name change limit reached. An admin must unlock this account before another name change.")
+            return
+        payload = self.read_json()
+        new_name = clean_character_name(payload.get("name") or payload.get("character_name"))
+        old_name = str(active_character["character_name"])
+        if old_name.lower() == new_name.lower():
+            self.error(400, "New name must be different from the current name")
+            return
+        ts = now_iso()
+        db.execute("UPDATE user_characters SET character_name = ?, updated_at = ? WHERE id = ?", (new_name, ts, active_character["id"]))
+        db.execute("UPDATE users SET name = ? WHERE id = ?", (new_name, user["id"]))
+        db.execute(
+            "INSERT INTO profile_name_changes (user_id, character_id, old_name, new_name, changed_at) VALUES (?, ?, ?, ?, ?)",
+            (user["id"], active_character["id"], old_name, new_name, ts),
+        )
+        updated_status = name_change_status(db, int(user["id"]))
+        if updated_status["used"] >= NAME_CHANGE_LIMIT:
+            db.execute("UPDATE users SET name_change_locked = 1 WHERE id = ?", (user["id"],))
+            updated_status = name_change_status(db, int(user["id"]))
+        add_message(db, user["id"], "Profile name changed", f"Your active character name changed from {old_name} to {new_name}.")
+        self.send_json(200, {"ok": True, "name": new_name, "name_change": updated_status})
 
     def api_claim_arma_link(self, db: Database, user: DbRow | None) -> None:
         if not user:
@@ -3360,7 +3644,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             FROM users u
             LEFT JOIN dmv_records d ON d.user_id = u.id
             ORDER BY u.name
-            LIMIT 300
             """
         )
         self.send_json(
@@ -3627,6 +3910,152 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 add_message(db, recipient["id"], subject, f"{user['name']} activated a {department} emergency at {location}. {note}", user["id"])
         self.send_json(201, {"ok": True, "alert_id": int(created["id"]), "department": department})
 
+    def api_mdt_reports(self, db: Database, user: DbRow | None) -> None:
+        err = leo_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        can_review_all = has_any(user, "owner", "cid")
+        report_where = "" if can_review_all else "WHERE r.officer_id = ?"
+        report_params: tuple[Any, ...] = () if can_review_all else (user["id"],)
+        reports = all_rows(
+            db,
+            f"""
+            SELECT r.*, officer.name AS officer_name, officer.primary_agency AS officer_agency,
+                   civ.name AS involved_civ_name, civ.civ_number AS involved_civ_number,
+                   alert.department AS related_department, alert.status AS related_alert_status,
+                   alert.created_at AS related_alert_created_at
+            FROM cad_after_call_reports r
+            JOIN users officer ON officer.id = r.officer_id
+            LEFT JOIN users civ ON civ.id = r.involved_civ_id
+            LEFT JOIN panic_alerts alert ON alert.id = r.related_alert_id
+            {report_where}
+            ORDER BY r.created_at DESC
+            LIMIT 160
+            """,
+            report_params,
+        )
+        alerts = all_rows(
+            db,
+            """
+            SELECT p.*, u.name AS officer_name, u.primary_agency
+            FROM panic_alerts p
+            JOIN users u ON u.id = p.officer_id
+            ORDER BY CASE p.status WHEN 'active' THEN 0 WHEN 'responding' THEN 1 ELSE 2 END, p.created_at DESC
+            LIMIT 80
+            """,
+        )
+        civilians = all_rows(
+            db,
+            """
+            SELECT u.id, u.civ_number, u.name, u.verified, d.license_status, d.license_class
+            FROM users u
+            LEFT JOIN dmv_records d ON d.user_id = u.id
+            ORDER BY u.name
+            LIMIT 500
+            """,
+        )
+        self.send_json(
+            200,
+            {
+                "reports": [dict(row) for row in reports],
+                "alerts": [dict(row) for row in alerts],
+                "civilians": [dict(row) for row in civilians],
+                "can_review_all": can_review_all,
+            },
+        )
+
+    def api_create_mdt_report(self, db: Database, user: DbRow | None) -> None:
+        err = leo_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        missing = require_fields(payload, "call_type", "disposition", "location", "narrative")
+        if missing:
+            self.error(400, missing)
+            return
+        allowed_dispositions = {
+            "cleared",
+            "founded",
+            "unfounded",
+            "report taken",
+            "citation issued",
+            "arrest made",
+            "referred to CID",
+            "false alarm",
+            "unable to locate",
+        }
+        disposition = str(payload["disposition"]).strip()[:60]
+        if disposition not in allowed_dispositions:
+            self.error(400, "Unsupported report disposition")
+            return
+        related_alert_id: int | None = None
+        if str(payload.get("related_alert_id") or "").strip():
+            try:
+                related_alert_id = int(payload["related_alert_id"])
+            except (TypeError, ValueError):
+                self.error(400, "Invalid linked CAD call")
+                return
+            if not one(db, "SELECT id FROM panic_alerts WHERE id = ?", (related_alert_id,)):
+                self.error(404, "Linked CAD call not found")
+                return
+        involved_civ_id: int | None = None
+        involved_name = str(payload.get("involved_name") or "").strip()[:140]
+        if str(payload.get("involved_civ_id") or "").strip():
+            try:
+                involved_civ_id = int(payload["involved_civ_id"])
+            except (TypeError, ValueError):
+                self.error(400, "Invalid involved civilian")
+                return
+            civ = one(db, "SELECT id, name FROM users WHERE id = ?", (involved_civ_id,))
+            if not civ:
+                self.error(404, "Involved civilian not found")
+                return
+            if not involved_name:
+                involved_name = str(civ["name"])[:140]
+        call_type = str(payload["call_type"]).strip()[:80]
+        location = str(payload["location"]).strip()[:180]
+        narrative = str(payload["narrative"]).strip()
+        actions_taken = str(payload.get("actions_taken") or "").strip()
+        evidence_links = str(payload.get("evidence_links") or "").strip()
+        if not narrative:
+            self.error(400, "Narrative is required")
+            return
+        ts = now_iso()
+        report_number = generate_record_number(db, "cad_after_call_reports", "report_number", "ACR")
+        created = db.execute(
+            """
+            INSERT INTO cad_after_call_reports
+            (report_number, officer_id, related_alert_id, involved_civ_id, involved_name, call_type, disposition, location, narrative, actions_taken, evidence_links, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id, report_number
+            """,
+            (
+                report_number,
+                user["id"],
+                related_alert_id,
+                involved_civ_id,
+                involved_name,
+                call_type,
+                disposition,
+                location,
+                narrative,
+                actions_taken,
+                evidence_links,
+                ts,
+                ts,
+            ),
+        ).fetchone()
+        if related_alert_id and disposition in ("cleared", "unfounded", "false alarm", "unable to locate"):
+            db.execute(
+                "UPDATE panic_alerts SET status = 'cleared', resolved_at = COALESCE(resolved_at, ?) WHERE id = ?",
+                (ts, related_alert_id),
+            )
+        self.send_json(201, {"ok": True, "id": int(created["id"]), "report_number": created["report_number"], "disposition": disposition})
+
     def api_alerts(self, db: Database, user: DbRow | None) -> None:
         err = leo_required(user)
         if err:
@@ -3891,7 +4320,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(400, missing)
             return
         ts = now_iso()
-        target_civ_id = int(payload["target_civ_id"]) if str(payload.get("target_civ_id") or "").strip() else None
+        target_civ_raw = str(payload.get("target_civ_id") or "").strip()
+        target_civ_id = int(target_civ_raw) if target_civ_raw and target_civ_raw != "0" else None
+        target = one(db, "SELECT id, name FROM users WHERE id = ?", (target_civ_id,)) if target_civ_id else None
+        if target_civ_id and not target:
+            self.error(404, "Selected civilian target not found")
+            return
+        target_name = str(payload.get("target_name") or (target["name"] if target else "")).strip()
         created = db.execute(
             """
             INSERT INTO cid_investigations
@@ -3907,8 +4342,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 str(payload.get("priority") or "standard").strip()[:30],
                 user["id"],
                 target_civ_id,
-                str(payload.get("target_name") or "").strip()[:120],
-                str(payload["summary"]).strip()[:1400],
+                target_name[:120],
+                str(payload["summary"]).strip(),
                 str(payload.get("location") or "").strip()[:140],
                 ts,
                 ts,
@@ -3945,7 +4380,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         db.execute(
             "INSERT INTO cid_investigation_notes (investigation_id, author_id, note_type, body, created_at) VALUES (?, ?, ?, ?, ?)",
-            (investigation_id, user["id"], str(payload.get("note_type") or "case note").strip()[:50], str(payload["body"]).strip()[:1800], now_iso()),
+            (investigation_id, user["id"], str(payload.get("note_type") or "case note").strip()[:50], str(payload["body"]).strip(), now_iso()),
         )
         db.execute("UPDATE cid_investigations SET updated_at = ? WHERE id = ?", (now_iso(), investigation_id))
         self.send_json(201, {"ok": True})
@@ -4136,6 +4571,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             item = public_user(row)
             item["arma_id"] = row.get("arma_id")
             item["presence_seconds_today"] = presence_seconds(db, row["id"])
+            item["name_change"] = name_change_status(db, int(row["id"]))
+            count = one(db, "SELECT COUNT(*) AS count FROM user_characters WHERE user_id = ?", (row["id"],))
+            active = one(db, "SELECT character_name FROM user_characters WHERE user_id = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1", (row["id"],))
+            item["character_count"] = int(count["count"] if count else 0)
+            item["active_character_name"] = active["character_name"] if active else row["name"]
             users.append(item)
         self.send_json(200, {"users": users})
 
@@ -4178,6 +4618,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         if next_password:
             db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(next_password), target_id))
+        if bool(payload.get("unlock_name_changes", False)):
+            db.execute(
+                "UPDATE users SET name_change_locked = 0, name_change_unlocked_at = ? WHERE id = ?",
+                (now_iso(), target_id),
+            )
         dmv = one(db, "SELECT id FROM dmv_records WHERE user_id = ?", (target_id,))
         if not dmv:
             create_default_dmv(db, target_id)
