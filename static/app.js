@@ -2886,6 +2886,12 @@ function cidNotesForCase(cid, caseId) {
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 }
 
+function cidIaNotesForCase(cid, iaId) {
+  return (cid?.ia_notes || [])
+    .filter((note) => String(note.ia_id) === String(iaId))
+    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+}
+
 function cidWarrantsForCase(cid, caseId) {
   return (cid?.warrants || [])
     .filter((warrant) => String(warrant.investigation_id || "") === String(caseId))
@@ -3143,9 +3149,11 @@ function renderCidInternalAffairs() {
   const activeIa = ia.filter((item) => openStatuses.includes(item.status));
   const previousIa = ia.filter((item) => !openStatuses.includes(item.status));
   const selectedIa = ia.find((item) => String(item.id) === String(state.cidSelectedIaId)) || activeIa[0] || ia[0] || null;
+  const selectedIaNotes = selectedIa ? cidIaNotesForCase(cid, selectedIa.id) : [];
   state.cidSelectedIaId = selectedIa?.id || null;
   const statusOptions = ["intake", "active", "command review", "sustained", "unfounded", "closed"];
   const priorityOptions = ["standard", "elevated", "critical"];
+  const noteTypeOptions = ["file note", "evidence", "interview", "command review", "finding", "discipline", "timeline update"];
   return `
     <div class="cid-tools ia-tools">
       <form id="cidIaForm" class="cid-intake-board ia-intake-board">
@@ -3177,7 +3185,7 @@ function renderCidInternalAffairs() {
               <span class="cid-case-tab-code">${escapeHtml(item.ia_number)}</span>
               <strong>${escapeHtml(item.subject_officer_name || item.subject_name)}</strong>
               <span>${escapeHtml(item.allegation_type)} / ${escapeHtml(item.status)}</span>
-              <small>${escapeHtml(item.priority)} priority</small>
+              <small>${escapeHtml(item.priority)} priority / ${Number(item.note_count || 0)} entries</small>
             </button>
           `).join("") || `<div class="empty">No active IA folders</div>`}
           <div class="ia-rail-label previous">Previous IA</div>
@@ -3186,7 +3194,7 @@ function renderCidInternalAffairs() {
               <span class="cid-case-tab-code">${escapeHtml(item.ia_number)}</span>
               <strong>${escapeHtml(item.subject_officer_name || item.subject_name)}</strong>
               <span>${escapeHtml(item.allegation_type)} / ${escapeHtml(item.status)}</span>
-              <small>${escapeHtml(item.priority)} priority</small>
+              <small>${escapeHtml(item.priority)} priority / ${Number(item.note_count || 0)} entries</small>
             </button>
           `).join("") || `<p class="muted small">No previous IA files</p>`}
         </nav>
@@ -3204,11 +3212,17 @@ function renderCidInternalAffairs() {
               <div class="metric"><span>Status</span><strong>${escapeHtml(selectedIa.status)}</strong></div>
               <div class="metric"><span>Priority</span><strong>${escapeHtml(selectedIa.priority)}</strong></div>
               <div class="metric"><span>Allegation</span><strong>${escapeHtml(selectedIa.allegation_type)}</strong></div>
-              <div class="metric"><span>Assigned</span><strong>${escapeHtml(selectedIa.assigned_name || "CID")}</strong></div>
+              <div class="metric"><span>File Entries</span><strong>${Number(selectedIa.note_count ?? selectedIaNotes.length)}</strong></div>
             </div>
             <div class="cid-summary ia-summary-file">
               <strong>IA Summary</strong>
               <p>${escapeHtml(selectedIa.summary)}</p>
+            </div>
+            <div class="cid-tool-strip ia-tool-strip">
+              <button type="button" data-cid-ia-note-type="evidence" data-ia-id="${selectedIa.id}"><strong>Evidence</strong><span>Clip, statement, document, or chain note</span></button>
+              <button type="button" data-cid-ia-note-type="interview" data-ia-id="${selectedIa.id}"><strong>Interview</strong><span>Officer, witness, complainant statement</span></button>
+              <button type="button" data-cid-ia-note-type="command review" data-ia-id="${selectedIa.id}"><strong>Review</strong><span>Supervisor direction or command review</span></button>
+              <button type="button" data-cid-ia-note-type="finding" data-ia-id="${selectedIa.id}"><strong>Finding</strong><span>Sustained, unfounded, policy outcome</span></button>
             </div>
             <div class="cid-folder-columns">
               <div class="cid-folder-panel">
@@ -3218,14 +3232,35 @@ function renderCidInternalAffairs() {
                   <label>Priority<select name="priority">${renderOptions(priorityOptions, selectedIa.priority)}</select></label>
                   <button class="secondary" type="submit">Update IA file</button>
                 </form>
+                <form class="cid-ia-note-form ia-chat-form" data-ia-id="${selectedIa.id}">
+                  <label>Tool<select name="note_type">${renderOptions(noteTypeOptions, "file note")}</select></label>
+                  <label class="ia-chat-input">Add to file<textarea name="body" rows="3" required placeholder="Add a file update, evidence note, interview summary, or command action to this IA folder"></textarea></label>
+                  <button class="primary" type="submit">Add entry</button>
+                </form>
               </div>
               <div class="cid-folder-panel ia-review-panel">
-                <h3>File Handling</h3>
+                <div class="row"><h3>File Handling</h3><span class="pill">${selectedIaNotes.length} entries</span></div>
                 <div class="list compact-list">
                   <div class="row"><span>Subject</span><strong>${escapeHtml(selectedIa.subject_officer_name || selectedIa.subject_name)}</strong></div>
                   <div class="row"><span>Created by</span><strong>${escapeHtml(selectedIa.created_by_name || "CID")}</strong></div>
+                  <div class="row"><span>Assigned</span><strong>${escapeHtml(selectedIa.assigned_name || "CID")}</strong></div>
                   <div class="row"><span>Last update</span><strong>${selectedIa.updated_at ? new Date(selectedIa.updated_at).toLocaleString() : "N/A"}</strong></div>
                 </div>
+              </div>
+            </div>
+            <div class="cid-folder-panel ia-file-log">
+              <div class="row"><h3>IA File Log</h3><span class="pill amber">${selectedIaNotes.length}</span></div>
+              <div class="ia-chat-list">
+                ${selectedIaNotes.map((note) => `
+                  <article class="ia-chat-entry ${String(note.author_id) === String(state.session?.user?.id) ? "mine" : ""}">
+                    <div class="row">
+                      <strong>${escapeHtml(note.note_type)}</strong>
+                      <span class="pill">${escapeHtml(note.author_name || "CID")}</span>
+                    </div>
+                    <p>${escapeHtml(note.body)}</p>
+                    <small>${note.created_at ? new Date(note.created_at).toLocaleString() : ""}</small>
+                  </article>
+                `).join("") || `<div class="empty">No investigator entries in this IA file yet</div>`}
               </div>
             </div>
           </article>
@@ -3397,6 +3432,13 @@ function bindMdt() {
     const select = form?.querySelector("[name='note_type']");
     const body = form?.querySelector("[name='body']");
     if (select) select.value = button.dataset.cidNoteType;
+    body?.focus();
+  }));
+  $$("[data-cid-ia-note-type]").forEach((button) => button.addEventListener("click", () => {
+    const form = $$(".cid-ia-note-form").find((item) => String(item.dataset.iaId) === String(button.dataset.iaId));
+    const select = form?.querySelector("[name='note_type']");
+    const body = form?.querySelector("[name='body']");
+    if (select) select.value = button.dataset.cidIaNoteType;
     body?.focus();
   }));
   $("#cidInvestigationForm [data-cid-investigation-target]")?.addEventListener("change", (event) => {
@@ -3571,6 +3613,18 @@ function bindMdt() {
     try {
       await api(`/api/cid/internal-affairs/${form.dataset.iaId}`, { method: "PATCH", body: Object.fromEntries(new FormData(form).entries()) });
       toast("IA record updated");
+      await loadAppData("mdt");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+  $$(".cid-ia-note-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api(`/api/cid/internal-affairs/${form.dataset.iaId}/notes`, { method: "POST", body: Object.fromEntries(new FormData(form).entries()) });
+      toast("IA file entry added");
+      form.reset();
       await loadAppData("mdt");
       render();
     } catch (error) {

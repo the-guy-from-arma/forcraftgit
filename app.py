@@ -122,6 +122,31 @@ def read_session(token: str | None) -> int | None:
 DbRow = dict[str, Any]
 
 
+ROLE_ALIASES = {
+    "chief": "fire_chief",
+    "cheif": "fire_chief",
+    "fire chief": "fire_chief",
+    "fire-chief": "fire_chief",
+    "firechief": "fire_chief",
+    "fire_cheif": "fire_chief",
+    "fd chief": "fire_chief",
+    "fd_chief": "fire_chief",
+    "deputy chief": "deputy_chief",
+    "deputy-chief": "deputy_chief",
+    "deputy fire chief": "deputy_chief",
+    "fire marshal": "fire_marshal",
+    "fire-marshall": "fire_marshal",
+    "fire marshall": "fire_marshal",
+}
+
+
+def normalize_role(role: Any) -> str:
+    clean = str(role or "").strip().lower().replace("-", "_")
+    clean = " ".join(clean.split())
+    clean = clean.replace(" ", "_") if clean not in ROLE_ALIASES else clean
+    return ROLE_ALIASES.get(clean, clean)
+
+
 class CursorAdapter:
     def __init__(self, cursor: psycopg.Cursor[DbRow]):
         self.cursor = cursor
@@ -186,7 +211,8 @@ def roles_for(user: DbRow) -> list[str]:
         roles = json.loads(raw or "[]")
     except json.JSONDecodeError:
         roles = []
-    return sorted(set(["civ", *roles]))
+    normalized = [normalize_role(role) for role in roles]
+    return sorted(set(["civ", *[role for role in normalized if role]]))
 
 
 def has_any(user: DbRow, *roles: str) -> bool:
@@ -778,6 +804,17 @@ def ensure_schema() -> None:
                 FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS cid_internal_affairs_notes (
+                id SERIAL PRIMARY KEY,
+                ia_id INTEGER NOT NULL,
+                author_id INTEGER NOT NULL,
+                note_type TEXT NOT NULL DEFAULT 'file note',
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (ia_id) REFERENCES cid_internal_affairs(id) ON DELETE CASCADE,
+                FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
+            );
             """
         )
         ensure_migrations(db)
@@ -898,6 +935,21 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS cad_after_call_reports_officer_idx ON cad_after_call_reports (officer_id, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS cad_after_call_reports_alert_idx ON cad_after_call_reports (related_alert_id)")
     db.execute("CREATE INDEX IF NOT EXISTS cad_after_call_reports_disposition_idx ON cad_after_call_reports (disposition)")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cid_internal_affairs_notes (
+            id SERIAL PRIMARY KEY,
+            ia_id INTEGER NOT NULL,
+            author_id INTEGER NOT NULL,
+            note_type TEXT NOT NULL DEFAULT 'file note',
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (ia_id) REFERENCES cid_internal_affairs(id) ON DELETE CASCADE,
+            FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS cid_internal_affairs_notes_ia_idx ON cid_internal_affairs_notes (ia_id, created_at)")
 
 
 def get_system_settings(db: Database) -> dict[str, Any]:
@@ -1817,6 +1869,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_cid_update_warrant(db, user, self.path_int(path, 3))
                 elif path == "/api/cid/internal-affairs" and method == "POST":
                     self.api_cid_create_ia(db, user)
+                elif path.startswith("/api/cid/internal-affairs/") and path.endswith("/notes") and method == "POST":
+                    self.api_cid_add_ia_note(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/cid/internal-affairs/") and method == "PATCH":
                     self.api_cid_update_ia(db, user, self.path_int(path, 3))
                 elif path == "/api/system/settings" and method == "GET":
@@ -4161,17 +4215,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         for rig_name, row in rigs_by_name.items():
             if rig_name not in FIRE_RIG_NAMES:
                 rigs.append(row)
-        personnel = all_rows(
+        personnel_rows = all_rows(
             db,
             """
             SELECT id, civ_number, name, roles, primary_agency
             FROM users
-            WHERE roles LIKE ? OR roles LIKE ? OR roles LIKE ? OR roles LIKE ? OR roles LIKE ? OR roles LIKE ?
             ORDER BY name
             LIMIT 200
-            """,
-            ("%fireman%", "%fire_chief%", "%deputy_chief%", "%fire_marshal%", "%ems%", "%owner%"),
+            """
         )
+        personnel = [dict(row) for row in personnel_rows if has_any(row, *FIRE_SERVICE_ROLES, "owner")]
         self.send_json(
             200,
             {
@@ -4179,7 +4232,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "stats": stats,
                 "alerts": [dict(row) for row in rows],
                 "rigs": rigs,
-                "personnel": [dict(row) for row in personnel],
+                "personnel": personnel,
                 "can_manage_rigs": has_any(user, *FIRE_COMMAND_ROLES, "owner"),
             },
         )
@@ -4283,9 +4336,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         ia_cases = all_rows(
             db,
             """
-            SELECT ia.*, assigned.name AS assigned_name, subject.name AS subject_officer_name
+            SELECT ia.*, assigned.name AS assigned_name, subject.name AS subject_officer_name, creator.name AS created_by_name,
+                   (SELECT COUNT(*) FROM cid_internal_affairs_notes n WHERE n.ia_id = ia.id) AS note_count
             FROM cid_internal_affairs ia
             JOIN users assigned ON assigned.id = ia.assigned_to
+            JOIN users creator ON creator.id = ia.created_by
             LEFT JOIN users subject ON subject.id = ia.subject_officer_id
             ORDER BY CASE ia.status WHEN 'intake' THEN 0 WHEN 'active' THEN 1 ELSE 2 END, ia.updated_at DESC
             LIMIT 80
@@ -4300,6 +4355,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             JOIN users author ON author.id = n.author_id
             ORDER BY n.created_at DESC
             LIMIT 300
+            """
+        )
+        ia_notes = all_rows(
+            db,
+            """
+            SELECT n.*, ia.ia_number, author.name AS author_name
+            FROM cid_internal_affairs_notes n
+            JOIN cid_internal_affairs ia ON ia.id = n.ia_id
+            JOIN users author ON author.id = n.author_id
+            ORDER BY n.created_at DESC
+            LIMIT 500
             """
         )
         civilians = all_rows(
@@ -4317,7 +4383,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "active_warrants": one(db, "SELECT COUNT(*) AS count FROM cid_warrants WHERE status = 'active'")["count"],
             "ia_open": one(db, "SELECT COUNT(*) AS count FROM cid_internal_affairs WHERE status NOT IN ('closed','sustained','unfounded')")["count"],
         }
-        self.send_json(200, {"stats": stats, "investigations": investigations, "warrants": warrants, "ia_cases": ia_cases, "notes": notes, "civilians": civilians})
+        self.send_json(200, {"stats": stats, "investigations": investigations, "warrants": warrants, "ia_cases": ia_cases, "ia_notes": ia_notes, "notes": notes, "civilians": civilians})
 
     def api_cid_create_investigation(self, db: Database, user: DbRow | None) -> None:
         err = cid_required(user)
@@ -4504,6 +4570,27 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         self.send_json(200, {"ok": True})
 
+    def api_cid_add_ia_note(self, db: Database, user: DbRow | None, ia_id: int) -> None:
+        err = cid_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        missing = require_fields(payload, "body")
+        if missing:
+            self.error(400, missing)
+            return
+        if not one(db, "SELECT id FROM cid_internal_affairs WHERE id = ?", (ia_id,)):
+            self.error(404, "IA file not found")
+            return
+        ts = now_iso()
+        db.execute(
+            "INSERT INTO cid_internal_affairs_notes (ia_id, author_id, note_type, body, created_at) VALUES (?, ?, ?, ?, ?)",
+            (ia_id, user["id"], str(payload.get("note_type") or "file note").strip()[:60], str(payload["body"]).strip(), ts),
+        )
+        db.execute("UPDATE cid_internal_affairs SET updated_at = ? WHERE id = ?", (ts, ia_id))
+        self.send_json(201, {"ok": True})
+
     def api_system_settings(self, db: Database, user: DbRow | None) -> None:
         err = owner_required(user)
         if err:
@@ -4603,7 +4690,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not isinstance(next_roles, list):
             self.error(400, "Roles must be a list")
             return
-        cleaned = sorted(set(["civ", *[str(role).strip().lower() for role in next_roles if str(role).strip()]]))
+        cleaned = sorted(set(["civ", *[normalize_role(role) for role in next_roles if str(role).strip()]]))
         if "owner" in cleaned and not has_any(user, "owner"):
             self.error(403, "Only owners can assign owner access")
             return

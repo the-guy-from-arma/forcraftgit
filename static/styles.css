@@ -2252,6 +2252,123 @@ textarea:focus {
   margin-bottom: 2px;
 }
 
+.fire-settings-screen .fire-settings-hero,
+.fire-settings-screen .fire-rig-command-head {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+.fire-settings-screen .fire-hero-status {
+  justify-items: start;
+  min-width: 0;
+}
+
+.fire-settings-screen .fire-command-board {
+  border-radius: 10px;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 177, 90, 0.04),
+    0 18px 42px rgba(0, 0, 0, 0.26);
+}
+
+.fire-settings-screen .fire-rig-command-head {
+  gap: 8px;
+  padding: 14px;
+}
+
+.fire-settings-screen .fire-rig-command-head .pill {
+  align-self: flex-start;
+}
+
+.fire-settings-screen .fire-board-table {
+  gap: 10px;
+  padding: 10px;
+  overflow: visible;
+}
+
+.fire-settings-screen .fire-board-header {
+  display: none;
+}
+
+.fire-settings-screen .fire-board-row {
+  grid-template-columns: 1fr;
+  gap: 10px;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid rgba(255, 231, 220, 0.08);
+  border-radius: 10px;
+  padding: 12px 12px 12px 16px;
+  background:
+    linear-gradient(145deg, rgba(39, 24, 22, 0.94), rgba(13, 16, 18, 0.97)),
+    radial-gradient(circle at 94% 0%, rgba(255, 177, 90, 0.12), transparent 34%);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.24);
+  animation: fireAssignmentIn 220ms ease both;
+}
+
+.fire-settings-screen .fire-board-row:nth-child(even) {
+  background:
+    linear-gradient(145deg, rgba(43, 26, 22, 0.95), rgba(12, 16, 18, 0.97)),
+    radial-gradient(circle at 94% 0%, rgba(255, 177, 90, 0.14), transparent 34%);
+}
+
+.fire-settings-screen .fire-board-row:hover {
+  transform: translateY(-1px);
+  background:
+    linear-gradient(145deg, rgba(52, 29, 23, 0.96), rgba(13, 18, 19, 0.98)),
+    radial-gradient(circle at 94% 0%, rgba(255, 177, 90, 0.16), transparent 34%);
+}
+
+.fire-settings-screen .fire-unit-cell {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 3px 10px;
+}
+
+.fire-settings-screen .fire-unit-cell strong {
+  font-size: 17px;
+}
+
+.fire-settings-screen .fire-board-field {
+  gap: 6px;
+}
+
+.fire-settings-screen .fire-board-field > span,
+.fire-settings-screen .fire-read-cell[data-label]::before {
+  display: block;
+}
+
+.fire-settings-screen .fire-read-cell[data-label]::before {
+  content: attr(data-label);
+  margin-bottom: 4px;
+  color: rgba(255, 231, 220, 0.58);
+  font-size: 10px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.fire-settings-screen .fire-board-field select,
+.fire-settings-screen .fire-board-field input {
+  min-height: 44px;
+  border-radius: 8px;
+  padding-inline: 12px;
+}
+
+.fire-settings-screen .fire-board-row button {
+  width: 100%;
+  min-height: 44px;
+  border-radius: 8px;
+}
+
+@keyframes fireAssignmentIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .danger-zone {
   border-color: rgba(239, 78, 99, 0.32);
   background:
@@ -2913,6 +3030,76 @@ textarea:focus {
   overflow: auto;
   white-space: pre-wrap;
   scrollbar-width: thin;
+}
+
+.ia-tool-strip button {
+  border-color: rgba(255, 226, 163, 0.2);
+  background:
+    linear-gradient(145deg, rgba(255, 226, 163, 0.1), rgba(92, 156, 255, 0.045));
+}
+
+.ia-tool-strip button:hover {
+  border-color: rgba(255, 226, 163, 0.54);
+  background:
+    linear-gradient(145deg, rgba(255, 226, 163, 0.16), rgba(92, 156, 255, 0.07));
+}
+
+.ia-chat-form {
+  border-top: 1px solid rgba(255, 226, 163, 0.12);
+  padding-top: 10px;
+}
+
+.ia-chat-form textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.ia-file-log {
+  border-color: rgba(255, 226, 163, 0.16);
+  background:
+    linear-gradient(180deg, rgba(22, 25, 28, 0.9), rgba(10, 13, 15, 0.94)),
+    repeating-linear-gradient(90deg, rgba(255, 226, 163, 0.025) 0 1px, transparent 1px 48px);
+}
+
+.ia-chat-list {
+  display: grid;
+  gap: 9px;
+  max-height: 440px;
+  overflow: auto;
+  padding-right: 3px;
+  scrollbar-width: thin;
+}
+
+.ia-chat-entry {
+  display: grid;
+  gap: 6px;
+  width: min(780px, 94%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.055);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.18);
+  animation: modalLift 190ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.ia-chat-entry.mine {
+  justify-self: end;
+  border-color: rgba(40, 209, 124, 0.22);
+  background:
+    linear-gradient(145deg, rgba(40, 209, 124, 0.12), rgba(255, 226, 163, 0.055));
+}
+
+.ia-chat-entry p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.42;
+  color: rgba(255, 255, 255, 0.86);
+}
+
+.ia-chat-entry small {
+  color: rgba(255, 226, 163, 0.62);
+  font-weight: 800;
 }
 
 .ia-review-panel .row strong {

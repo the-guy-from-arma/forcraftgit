@@ -1,6 +1,60 @@
 {
-  "version": "0.0.15",
+  "version": "0.0.18",
   "entries": [
+    {
+      "date": "2026-06-23",
+      "version": "0.0.18",
+      "title": "Fire Chief Command Access Fix",
+      "added": [
+        "Fire command role handling now recognizes Fire Chief role aliases from older or display-form account records."
+      ],
+      "changed": [
+        "Fire personnel lists now use the same normalized role checks as Fire command permissions."
+      ],
+      "fixed": [
+        "Fixed Fire Chief accounts seeing read-only rig assignment controls instead of chief command controls.",
+        "Updated PWA cache versioning so installed devices load the Fire Chief access fix."
+      ],
+      "removed": []
+    },
+    {
+      "date": "2026-06-23",
+      "version": "0.0.17",
+      "title": "IA Folder File Logs",
+      "added": [
+        "Internal Affairs folders now support investigator file entries tied to the selected IA record.",
+        "IA folders now include quick tools for evidence, interviews, command review, and findings.",
+        "Each IA file now has a chat-style file log showing author, entry type, body, and timestamp."
+      ],
+      "changed": [
+        "Ongoing IA tools now live inside the selected IA folder instead of feeling like static page-level controls.",
+        "IA folder cards now show file entry counts in the folder rail and detail metrics."
+      ],
+      "fixed": [
+        "Fixed IA investigations lacking a place for investigators to keep adding updates after the intake file was created.",
+        "Updated PWA cache versioning so installed devices load the IA folder file log."
+      ],
+      "removed": []
+    },
+    {
+      "date": "2026-06-23",
+      "version": "0.0.16",
+      "title": "Fire Settings Mobile Assignment Polish",
+      "added": [
+        "Fire Settings now has a dedicated phone-native apparatus assignment layout.",
+        "Apparatus rows animate in as touch-friendly assignment cards inside the Fire Settings app."
+      ],
+      "changed": [
+        "Fire Settings no longer uses the wide desktop roster layout inside the phone app panel.",
+        "Rig assignment fields, status selectors, notes, and save buttons now stack cleanly on mobile.",
+        "Fire Settings buttons and apparatus cards now have stronger hover and touch feedback."
+      ],
+      "fixed": [
+        "Fixed Fire Settings cutting off role, status, notes, and action columns on phone screens.",
+        "Updated PWA cache versioning so installed devices load the Fire Settings mobile layout."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-06-23",
       "version": "0.0.15",
