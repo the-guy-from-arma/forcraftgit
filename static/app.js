@@ -15,6 +15,7 @@ const state = {
   mdtCatalogOpen: false,
   mdtCatalogMode: "citation",
   mdtSelectedCiv: "",
+  mdtSelectedChargeId: "",
   mdtNotice: null,
   cidSelectedCaseId: null,
   mdtProfileUserId: null,
@@ -2098,11 +2099,13 @@ function getMdtCatalog(kind) {
 
 function renderTicketWriter() {
   const charges = getMdtCatalog(state.mdtCatalogMode);
+  const civilians = getMdtCivilians();
+  const criminalMode = state.mdtCatalogMode === "criminal";
   const defaultCourt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   return `
-    <form id="ticketForm" class="mdt-form">
+    <form id="ticketForm" class="mdt-form ${criminalMode ? "charge-warrant-form" : ""}">
       <div class="mdt-section-head">
-        <div><p class="eyebrow">Citation writer</p><h2>Issue ${state.mdtCatalogMode === "citation" ? "Citation" : "Criminal Charge"}</h2></div>
+        <div><p class="eyebrow">${criminalMode ? "Criminal warrant writer" : "Citation writer"}</p><h2>Issue ${criminalMode ? "Criminal Charge" : "Citation"}</h2></div>
         <button class="secondary" type="button" data-open-catalog>Browse codes</button>
       </div>
       <div class="segmented mdt-code-switch">
@@ -2111,15 +2114,29 @@ function renderTicketWriter() {
         <button type="button" data-open-catalog>Catalog</button>
       </div>
       <div class="grid-2">
-        <label>Civilian user ID<input name="civ_id" type="number" value="${escapeHtml(state.mdtSelectedCiv)}" required /></label>
+        <label>${criminalMode ? "Subject civilian" : "Civilian"}<select name="civ_id" required data-issue-subject>
+          <option value="">Select civilian record</option>
+          ${civilians.map((person) => `<option value="${person.id}" data-name="${escapeHtml(person.name)}"${selectedAttr(person.id, state.mdtSelectedCiv)}>${escapeHtml(person.name)} - CIV ${escapeHtml(person.civ_number || "pending")} - ${escapeHtml(person.license_status || "No license")}</option>`).join("")}
+        </select></label>
         <label>Court date<input name="court_date" type="date" value="${defaultCourt}" /></label>
       </div>
       <label>Code<select name="charge_id" required>
-        ${charges.map((charge) => `<option value="${charge.id}">${escapeHtml(charge.code)} - ${escapeHtml(charge.title)} - ${money(charge.fine_amount)}</option>`).join("")}
+        ${charges.map((charge) => `<option value="${charge.id}"${selectedAttr(charge.id, state.mdtSelectedChargeId)}>${escapeHtml(charge.code)} - ${escapeHtml(charge.title)} - ${money(charge.fine_amount)}</option>`).join("")}
       </select></label>
       <label>Location<input name="location" placeholder="Street, postal, landmark" required /></label>
-      <label>Narrative<textarea name="narrative" required></textarea></label>
-      <button class="primary" type="submit">Submit to court queue</button>
+      ${criminalMode ? `
+        <label>Probable cause<textarea name="probable_cause" required placeholder="Facts supporting the criminal charge and warrant"></textarea></label>
+        <section class="mdt-subsection bypass-court-section">
+          <div class="row"><h4>Bypass court</h4><span class="pill amber">Optional</span></div>
+          <label class="check-row"><input type="checkbox" name="bypass_court" /> Bypass court docket and issue warrant only</label>
+          <p class="muted small">Unchecked creates a court case and an active warrant. Checked creates the active warrant only and links it directly to the selected account.</p>
+        </section>
+        <label>Operation plan<textarea name="operation_plan" placeholder="Optional service plan, unit notes, or transport instructions"></textarea></label>
+        <button class="danger" type="submit">Sign and issue warrant</button>
+      ` : `
+        <label>Narrative<textarea name="narrative" required></textarea></label>
+        <button class="primary" type="submit">Submit to court queue</button>
+      `}
     </form>
   `;
 }
@@ -2161,7 +2178,6 @@ function renderCriminalWarrantWriter(charges) {
 function renderCodeSection(kind) {
   const rows = getMdtCatalog(kind);
   return `
-    ${kind === "criminal" ? renderCriminalWarrantWriter(rows) : ""}
     <div class="mdt-section-head">
       <div><p class="eyebrow">${kind === "citation" ? "Traffic and civil" : "Criminal"} catalog</p><h2>${kind === "citation" ? "Citation Codes" : "Criminal Charges"}</h2></div>
       <button class="secondary" data-open-catalog data-catalog-kind="${kind}">Open catalog</button>
@@ -2557,10 +2573,11 @@ function bindMdt() {
     syncChargeWarrantSubject(event.currentTarget.closest("form"));
   });
   $$("[data-select-criminal-charge]").forEach((button) => button.addEventListener("click", () => {
-    const form = $("#chargeWarrantForm");
-    const select = form?.querySelector("[name='charge_id']");
-    if (select) select.value = button.dataset.selectCriminalCharge;
-    form?.scrollIntoView({ behavior: "smooth", block: "start" });
+    state.mdtCatalogMode = "criminal";
+    state.mdtSelectedChargeId = button.dataset.selectCriminalCharge;
+    state.mdtTab = "ticket";
+    state.mdtCatalogOpen = false;
+    render();
   }));
   $("#chargeWarrantForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -2604,10 +2621,18 @@ function bindMdt() {
     event.preventDefault();
     try {
       const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
-      const result = await api("/api/mdt/citations", { method: "POST", body: payload });
-      toast(`Citation issued - court ${result.court_date}`);
+      if (state.mdtCatalogMode === "criminal") {
+        const result = await api("/api/mdt/charge-warrants", { method: "POST", body: payload });
+        toast(result.bypass_court ? `Warrant ${result.warrant_number} signed - court bypassed` : `Warrant ${result.warrant_number} signed - court ${result.court_date}`);
+      } else {
+        const result = await api("/api/mdt/citations", { method: "POST", body: payload });
+        toast(`Citation issued - court ${result.court_date}`);
+      }
       event.currentTarget.reset();
       state.mdtSelectedCiv = "";
+      state.mdtSelectedChargeId = "";
+      await loadAppData("mdt");
+      render();
     } catch (error) {
       toast(error.message);
     }

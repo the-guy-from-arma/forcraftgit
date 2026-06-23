@@ -3355,34 +3355,39 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         court_date = str(payload.get("court_date") or "").strip() or default_court_date
         probable_cause = str(payload["probable_cause"]).strip()[:1400]
         location = str(payload["location"]).strip()[:120]
-        citation = db.execute(
-            """
-            INSERT INTO citations
-            (civ_id, officer_id, judge_id, charge_id, charge_code, charge_title, category, fine_amount, points, severity, location, narrative, court_date, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            RETURNING id
-            """,
-            (
-                civ["id"],
-                user["id"],
-                presiding_judge["id"] if presiding_judge else None,
-                charge["id"],
-                charge["code"],
-                charge["title"],
-                charge["category"],
-                float(charge["fine_amount"]),
-                int(charge["points"]),
-                charge["severity"],
-                location,
-                probable_cause,
-                court_date,
-                ts,
-                ts,
-            ),
-        ).fetchone()
+        bypass_court = str(payload.get("bypass_court") or "").lower() in ("1", "true", "yes", "on")
+        citation_id = None
+        if not bypass_court:
+            citation = db.execute(
+                """
+                INSERT INTO citations
+                (civ_id, officer_id, judge_id, charge_id, charge_code, charge_title, category, fine_amount, points, severity, location, narrative, court_date, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                RETURNING id
+                """,
+                (
+                    civ["id"],
+                    user["id"],
+                    presiding_judge["id"] if presiding_judge else None,
+                    charge["id"],
+                    charge["code"],
+                    charge["title"],
+                    charge["category"],
+                    float(charge["fine_amount"]),
+                    int(charge["points"]),
+                    charge["severity"],
+                    location,
+                    probable_cause,
+                    court_date,
+                    ts,
+                    ts,
+                ),
+            ).fetchone()
+            citation_id = int(citation["id"])
         warrant_number = generate_record_number(db, "cid_warrants", "warrant_number", "WAR")
         warrant_pc = f"{charge['code']} - {charge['title']}. Probable cause: {probable_cause}"[:1600]
-        operation_plan = str(payload.get("operation_plan") or "Serve warrant and bring defendant before the assigned court.").strip()[:1600]
+        operation_plan_default = "Serve warrant and hold subject for command review." if bypass_court else "Serve warrant and bring defendant before the assigned court."
+        operation_plan = str(payload.get("operation_plan") or operation_plan_default).strip()[:1600]
         created_warrant = db.execute(
             """
             INSERT INTO cid_warrants
@@ -3400,30 +3405,31 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 str(payload.get("priority") or "elevated").strip()[:30],
                 warrant_pc,
                 operation_plan,
-                str(payload.get("authorized_by") or f"Officer {user['name']}").strip()[:120],
+                str(payload.get("authorized_by") or f"Officer {user['name']}{' / court bypass' if bypass_court else ''}").strip()[:120],
                 user["id"],
                 ts,
                 str(payload.get("expires_at") or "").strip()[:20] or None,
                 ts,
             ),
         ).fetchone()
-        citation_id = int(citation["id"])
         warrant_id = int(created_warrant["id"])
         add_message(
             db,
             civ["id"],
             "Criminal warrant issued",
-            f"{charge['code']} - {charge['title']} was filed with warrant {created_warrant['warrant_number']}. Court date: {court_date}.",
+            f"{charge['code']} - {charge['title']} was filed with warrant {created_warrant['warrant_number']}." + ("" if bypass_court else f" Court date: {court_date}."),
             user["id"],
         )
         add_message(
             db,
             user["id"],
             "Charge warrant signed",
-            f"Warrant {created_warrant['warrant_number']} and court case #{citation_id} were filed against {civ['name']}.",
+            f"Warrant {created_warrant['warrant_number']} was filed against {civ['name']}."
+            if bypass_court
+            else f"Warrant {created_warrant['warrant_number']} and court case #{citation_id} were filed against {civ['name']}.",
             user["id"],
         )
-        if presiding_judge:
+        if presiding_judge and not bypass_court:
             add_message(
                 db,
                 presiding_judge["id"],
@@ -3438,8 +3444,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "citation_id": citation_id,
                 "warrant_id": warrant_id,
                 "warrant_number": created_warrant["warrant_number"],
-                "court_date": court_date,
-                "judge_id": presiding_judge["id"] if presiding_judge else None,
+                "court_date": None if bypass_court else court_date,
+                "bypass_court": bypass_court,
+                "judge_id": None if bypass_court or not presiding_judge else presiding_judge["id"],
             },
         )
 

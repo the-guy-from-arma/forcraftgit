@@ -1,6 +1,26 @@
 {
-  "version": "0.0.5",
+  "version": "0.0.6",
   "entries": [
+    {
+      "date": "2026-06-22",
+      "version": "0.0.6",
+      "title": "Issue Criminal Charge Warrants",
+      "added": [
+        "Issue Criminal Charge screen now has the civilian name/CIV dropdown directly inside the Issue form.",
+        "Issue Criminal Charge screen now includes a Bypass Court section.",
+        "Bypass Court creates an active warrant linked directly to the selected account without creating a court docket case."
+      ],
+      "changed": [
+        "Criminal charge submissions from the Issue screen now sign and issue an active warrant immediately.",
+        "Criminal catalog Use Charge now opens the Issue screen with that criminal charge already selected."
+      ],
+      "fixed": [
+        "Fixed the criminal charge issue flow still relying on a raw CIV ID instead of the profile dropdown.",
+        "Fixed charge warrants being available in the wrong MDT area instead of the Issue Criminal Charge section.",
+        "Updated PWA cache versioning so the corrected Issue Criminal Charge screen replaces older cached MDT screens."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-06-22",
       "version": "0.0.5",
