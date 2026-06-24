@@ -1,6 +1,42 @@
 {
-  "version": "0.0.19",
+  "version": "0.0.21",
   "entries": [
+    {
+      "date": "2026-06-24",
+      "version": "0.0.21",
+      "title": "Law Enforcement Application Packets",
+      "added": [
+        "Law enforcement department applications now use the full required questionnaire covering in-game name, Discord, age, department selection, experience, scenarios, and policy acknowledgements.",
+        "Added Metro Police Chief, State Police Commander, and CID Director command roles for department application routing.",
+        "Submitted law enforcement packets now include a reviewable answer preview in the Jobs app."
+      ],
+      "changed": [
+        "Metro Police, State Police, Sheriff Office, and CID postings now save full structured application packets instead of a single short statement.",
+        "Department application messages now include the completed answers for command review."
+      ],
+      "fixed": [
+        "Updated PWA cache versioning so installed devices load the new law enforcement application form."
+      ],
+      "removed": []
+    },
+    {
+      "date": "2026-06-23",
+      "version": "0.0.20",
+      "title": "Profile Car Entry Codes",
+      "added": [
+        "Civilian registration now requires an in-game car entry code.",
+        "Existing users without a car entry code now get a blocking profile update popup after login until the code is saved.",
+        "Profile now includes a car entry code section where users can update their code.",
+        "MDT/NCIC searches now show the civilian car entry code on account returns and profile popups."
+      ],
+      "changed": [
+        "Officers can search NCIC/DMV by car entry code in addition to name, email, CIV number, and plate."
+      ],
+      "fixed": [
+        "Updated PWA cache versioning so installed devices load the car entry code requirement."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-06-23",
       "version": "0.0.19",

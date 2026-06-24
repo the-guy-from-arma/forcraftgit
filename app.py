@@ -137,6 +137,13 @@ ROLE_ALIASES = {
     "fire marshal": "fire_marshal",
     "fire-marshall": "fire_marshal",
     "fire marshall": "fire_marshal",
+    "metro police chief": "metro_police_chief",
+    "metro-police-chief": "metro_police_chief",
+    "police chief": "metro_police_chief",
+    "state police commander": "state_police_commander",
+    "state-police-commander": "state_police_commander",
+    "cid director": "cid_director",
+    "cid-director": "cid_director",
 }
 
 
@@ -229,6 +236,8 @@ def public_user(user: DbRow) -> dict[str, Any]:
         "verified": bool(user["verified"]),
         "roles": roles_for(user),
         "primary_agency": user["primary_agency"],
+        "car_entry_code": user.get("car_entry_code") or "",
+        "car_entry_code_required": not bool(str(user.get("car_entry_code") or "").strip()),
         "bank_balance": round(float(user["bank_balance"] or 0), 2),
         "cash_balance": round(float(user["cash_balance"] or 0), 2),
         "active_character_id": user.get("active_character_id"),
@@ -250,6 +259,18 @@ def generate_civ_number(db: Database) -> str:
         if not one(db, "SELECT id FROM users WHERE civ_number = ?", (number,)):
             return number
     raise RuntimeError("Unable to generate unique civilian ID")
+
+
+def clean_car_entry_code(value: Any) -> str:
+    code = str(value or "").strip().upper()
+    if not code:
+        raise ValueError("Car entry code is required")
+    if len(code) < 2 or len(code) > 32:
+        raise ValueError("Car entry code must be 2-32 characters")
+    allowed = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+    if any(character not in allowed for character in code):
+        raise ValueError("Car entry code can only use letters, numbers, dashes, or underscores")
+    return code
 
 
 def generate_vehicle_vin(db: Database) -> str:
@@ -288,12 +309,38 @@ BUSINESS_MAX_ACTIVE_PER_OWNER = 2
 FIRE_COMMAND_ROLES = ("fire_chief", "deputy_chief", "fire_marshal")
 FIRE_SERVICE_ROLES = ("fireman", "ems", *FIRE_COMMAND_ROLES)
 FIRE_RIG_NAMES = ("Engine 1", "Ladder 1", "Truck 1", "Rescue 1", "Battalion 1", "Battalion 2", "Battalion 3", "Battalion 4", "Battalion 5")
+LAW_ENFORCEMENT_DEPARTMENT_KEYS = ("state_police", "metro_police", "sheriff", "cid")
+LAW_ENFORCEMENT_DEPARTMENT_CHOICES = ("Sheriffs Department", "Police Department", "State Police", "CID")
+LAW_ENFORCEMENT_COMMAND_ROLES = {
+    "metro_police": ("metro_police_chief",),
+    "state_police": ("state_police_commander",),
+    "cid": ("cid_director",),
+}
+LAW_ENFORCEMENT_APPLICATION_FIELDS = (
+    {"key": "in_game_name", "label": "What is your in-game name?", "kind": "text", "min": 2, "max": 120},
+    {"key": "discord_name", "label": "Discord Name", "kind": "text", "min": 2, "max": 120},
+    {"key": "age", "label": "Whats your Age", "kind": "age", "min": 1, "max": 3},
+    {"key": "why_law_enforcement", "label": "Why do you want to join Law Enforcement", "kind": "long", "min": 20, "max": 4000},
+    {"key": "department_choice", "label": "Which department do you want to apply for", "kind": "choice", "choices": LAW_ENFORCEMENT_DEPARTMENT_CHOICES},
+    {"key": "prior_experience", "label": "Do you have any prior experience with Law Enforcement on any Rp servers", "kind": "long", "min": 2, "max": 3000},
+    {"key": "position_fit", "label": "Explain why you would be Good for this position", "kind": "long", "min": 20, "max": 4000},
+    {"key": "robbery_scenario", "label": "While on duty, you're dispatched to a Gas Station Robbery. Upon arrival, you notice an individual running out the side door towards their vehicle with a knife in their hand. How would you handle this situation?", "kind": "long", "min": 20, "max": 5000},
+    {"key": "off_duty_corruption_scenario", "label": "While off duty, you are driving around Faircroft, and notice one of your friends, who is a Deputy, in the parking lot with a Citizen. You notice that the Deputy is pulling items out of his Patrol Belt and handing them to the individual. How would you handle this situation?", "kind": "long", "min": 20, "max": 5000},
+    {"key": "drug_trafficking_process", "label": "While on duty, you detain a suspect for suspected drug trafficking, once you search them you discover the suspect does indeed have Cocaine. How would you process the suspect?", "kind": "long", "min": 20, "max": 5000},
+    {"key": "corruption_acknowledgement", "label": "Do you understand that any proven corruption within the Faircroft Sheriff Offce may result in termination", "kind": "yesno"},
+    {"key": "procedure_commitment", "label": "Do you commit to following the Global Operating Procedures, Division Standard Operating Procedures, and all announcements?", "kind": "yesno"},
+    {"key": "english_communication", "label": "Can you communicate clearly using the English language, which is crucial for clear and concise communication across the Police Department?", "kind": "yesno"},
+    {"key": "chain_of_command", "label": "Do you agree to follow chain of command", "kind": "yesno"},
+    {"key": "truth_acknowledgement", "label": "Do you acknowledge that falsifying any information on this application will result in an automatic denial and could result in blacklisting", "kind": "yesno"},
+)
 DEPARTMENT_POSTINGS = (
     {
         "key": "state_police",
         "label": "State Police",
         "division": "State Police",
         "role_key": "state_police",
+        "form_type": "law_enforcement",
+        "command_roles": LAW_ENFORCEMENT_COMMAND_ROLES["state_police"],
         "badge": "Trooper Candidate",
         "schedule": "Patrol, traffic enforcement, highway response, and statewide operations.",
         "requirements": "Professional conduct, clean RP record, radio discipline, and command interview.",
@@ -303,6 +350,8 @@ DEPARTMENT_POSTINGS = (
         "label": "Metro Police",
         "division": "Metro Police",
         "role_key": "police",
+        "form_type": "law_enforcement",
+        "command_roles": LAW_ENFORCEMENT_COMMAND_ROLES["metro_police"],
         "badge": "Police Recruit",
         "schedule": "City patrol, 911 response, arrests, citations, and community policing.",
         "requirements": "Must understand MDT use, report writing, lawful stops, and use-of-force policy.",
@@ -312,6 +361,8 @@ DEPARTMENT_POSTINGS = (
         "label": "Sheriff Office",
         "division": "Sheriff Office",
         "role_key": "sheriff",
+        "form_type": "law_enforcement",
+        "command_roles": (),
         "badge": "Deputy Trainee",
         "schedule": "County patrol, warrant service, transport, court security, and rural response.",
         "requirements": "Interview required, mature RP, custody awareness, and county patrol availability.",
@@ -321,6 +372,8 @@ DEPARTMENT_POSTINGS = (
         "label": "CID",
         "division": "Criminal Investigations Division",
         "role_key": "cid",
+        "form_type": "law_enforcement",
+        "command_roles": LAW_ENFORCEMENT_COMMAND_ROLES["cid"],
         "badge": "Investigator Applicant",
         "schedule": "Investigations, surveillance, warrants, internal affairs support, and case files.",
         "requirements": "Prior LEO experience preferred, detailed writing, evidence handling, and command approval.",
@@ -361,6 +414,70 @@ SYSTEM_SETTING_DEFAULTS = {
 }
 
 
+def posting_command_roles(posting: dict[str, Any]) -> tuple[str, ...]:
+    roles = ["owner", "admin"]
+    roles.extend(str(role) for role in posting.get("command_roles", ()) if str(role).strip())
+    return tuple(sorted(set(normalize_role(role) for role in roles)))
+
+
+def clean_law_enforcement_application(payload: dict[str, Any], posting: dict[str, Any], user: DbRow) -> tuple[str, str]:
+    answers: list[dict[str, str]] = []
+    answer_map: dict[str, str] = {}
+    for field in LAW_ENFORCEMENT_APPLICATION_FIELDS:
+        key = str(field["key"])
+        label = str(field["label"])
+        value = str(payload.get(key) or "").strip()
+        kind = str(field.get("kind") or "text")
+        if not value:
+            raise ValueError(f"Missing required field: {label}")
+        if kind == "yesno":
+            clean = value.lower()
+            if clean not in ("yes", "no"):
+                raise ValueError(f"{label} must be Yes or No")
+            value = "Yes" if clean == "yes" else "No"
+        elif kind == "choice":
+            choices = tuple(str(choice) for choice in field.get("choices", ()))
+            if value not in choices:
+                raise ValueError(f"Invalid selection for {label}")
+        elif kind == "age":
+            if not value.isdigit():
+                raise ValueError("Age must be a number")
+            age = int(value)
+            if age < 13 or age > 100:
+                raise ValueError("Age must be between 13 and 100")
+        else:
+            minimum = int(field.get("min", 1))
+            maximum = int(field.get("max", 4000))
+            if len(value) < minimum:
+                raise ValueError(f"{label} must be at least {minimum} characters")
+            if len(value) > maximum:
+                value = value[:maximum]
+        answer_map[key] = value
+        answers.append({"key": key, "question": label, "answer": value})
+    if answer_map.get("truth_acknowledgement") != "Yes":
+        raise ValueError("You must acknowledge the falsification policy to submit this application")
+    if answer_map.get("chain_of_command") != "Yes":
+        raise ValueError("You must agree to follow chain of command to submit this application")
+    record = {
+        "type": "law_enforcement_application",
+        "version": 1,
+        "posting_key": posting["key"],
+        "posting_label": posting["label"],
+        "applicant_user_id": user["id"],
+        "applicant_civ_number": user.get("civ_number") or "",
+        "answers": answers,
+    }
+    message_lines = [
+        f"Applicant: {answer_map['in_game_name']} / CIV {user.get('civ_number') or 'pending'}",
+        f"Discord: {answer_map['discord_name']}",
+        f"Age: {answer_map['age']}",
+        f"Requested department: {answer_map['department_choice']}",
+        "",
+    ]
+    message_lines.extend(f"{item['question']}\n{item['answer']}" for item in answers)
+    return json.dumps(record, ensure_ascii=False), "\n\n".join(message_lines)
+
+
 def business_staff_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
@@ -393,6 +510,7 @@ def ensure_schema() -> None:
                 name TEXT NOT NULL,
                 email TEXT NOT NULL UNIQUE,
                 arma_id TEXT,
+                car_entry_code TEXT NOT NULL DEFAULT '',
                 password_hash TEXT NOT NULL,
                 verified INTEGER NOT NULL DEFAULT 0,
                 roles TEXT NOT NULL DEFAULT '["civ"]',
@@ -924,6 +1042,7 @@ def ensure_migrations(db: Database) -> None:
         )
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS civ_number TEXT")
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS arma_id TEXT")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS car_entry_code TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS active_character_id INTEGER")
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS name_change_locked INTEGER NOT NULL DEFAULT 0")
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS name_change_unlocked_at TEXT")
@@ -1864,6 +1983,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_presence(db, user)
                 elif path == "/api/profile" and method == "GET":
                     self.api_profile(db, user)
+                elif path == "/api/profile/car-entry-code" and method == "POST":
+                    self.api_profile_update_car_entry_code(db, user)
                 elif path == "/api/profile/name" and method == "POST":
                     self.api_profile_change_name(db, user)
                 elif path == "/api/profile/characters" and method == "POST":
@@ -2016,12 +2137,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
 
     def api_register(self, db: Database) -> None:
         payload = self.read_json()
-        missing = require_fields(payload, "name", "email", "arma_id", "password")
+        missing = require_fields(payload, "name", "email", "arma_id", "car_entry_code", "password")
         if missing:
             self.error(400, missing)
             return
         email = str(payload["email"]).strip().lower()
         arma_id = str(payload["arma_id"]).strip()
+        try:
+            car_entry_code = clean_car_entry_code(payload.get("car_entry_code"))
+        except ValueError as exc:
+            self.error(400, str(exc))
+            return
         password = str(payload["password"])
         if len(password) < 6:
             self.error(400, "Password must be at least 6 characters")
@@ -2032,11 +2158,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         ts = now_iso()
         cur = db.execute(
             """
-            INSERT INTO users (civ_number, name, email, arma_id, password_hash, verified, roles, bank_balance, cash_balance, last_income_at, created_at)
-            VALUES (?, ?, ?, ?, ?, 0, ?, 0, 250, ?, ?)
+            INSERT INTO users (civ_number, name, email, arma_id, car_entry_code, password_hash, verified, roles, bank_balance, cash_balance, last_income_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, 250, ?, ?)
             RETURNING id
             """,
-            (generate_civ_number(db), str(payload["name"]).strip(), email, arma_id, hash_password(password), json.dumps(["civ"]), ts, ts),
+            (generate_civ_number(db), str(payload["name"]).strip(), email, arma_id, car_entry_code, hash_password(password), json.dumps(["civ"]), ts, ts),
         )
         created = cur.fetchone()
         user_id = int(created["id"])
@@ -2190,6 +2316,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("UPDATE users SET active_character_id = ?, name = ? WHERE id = ?", (created["id"], character_name, user["id"]))
         add_message(db, user["id"], "Character created", f"{character_name} is now your active RP character.")
         self.send_json(201, {"ok": True, "character": dict(created), "user": public_user(one(db, "SELECT * FROM users WHERE id = ?", (user["id"],)))})
+
+    def api_profile_update_car_entry_code(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        payload = self.read_json()
+        try:
+            code = clean_car_entry_code(payload.get("car_entry_code") or payload.get("code"))
+        except ValueError as exc:
+            self.error(400, str(exc))
+            return
+        db.execute("UPDATE users SET car_entry_code = ? WHERE id = ?", (code, user["id"]))
+        updated = one(db, "SELECT * FROM users WHERE id = ?", (user["id"],))
+        self.send_json(200, {"ok": True, "user": public_user(updated), "car_entry_code": code})
 
     def api_profile_activate_character(self, db: Database, user: DbRow | None, character_id: int) -> None:
         if not user:
@@ -2632,10 +2772,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if existing:
             self.error(409, f"You already have an active {posting['label']} application")
             return
-        statement = str(payload.get("statement") or "").strip()
-        if len(statement) < 20:
-            self.error(400, "Application statement must be at least 20 characters")
-            return
+        message_body = ""
+        if posting.get("form_type") == "law_enforcement":
+            try:
+                statement, message_body = clean_law_enforcement_application(payload, posting, user)
+            except ValueError as exc:
+                self.error(400, str(exc))
+                return
+        else:
+            statement = str(payload.get("statement") or "").strip()
+            if len(statement) < 20:
+                self.error(400, "Application statement must be at least 20 characters")
+                return
+            statement = statement[:4000]
+            message_body = statement
         ts = now_iso()
         created = db.execute(
             """
@@ -2650,16 +2800,28 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 posting["key"],
                 posting["division"],
                 posting["role_key"],
-                statement[:1400],
+                statement,
                 ts,
                 ts,
             ),
         ).fetchone()
         add_message(db, user["id"], "Department application submitted", f"Your {posting['label']} application {created['application_number']} was submitted for command review.")
-        staff = all_rows(db, "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ? ORDER BY id LIMIT 80", ("%owner%", "%admin%"))
+        recipient_roles = posting_command_roles(posting)
+        recipient_patterns = tuple(f"%{role}%" for role in recipient_roles)
+        staff = all_rows(
+            db,
+            "SELECT id FROM users WHERE " + " OR ".join(["roles LIKE ?"] * len(recipient_patterns)) + " ORDER BY id LIMIT 120",
+            recipient_patterns,
+        )
         for row in staff:
             if row["id"] != user["id"]:
-                add_message(db, row["id"], "Department application pending", f"{user['name']} applied for {posting['label']} ({created['application_number']}).", user["id"])
+                add_message(
+                    db,
+                    row["id"],
+                    "Department application pending",
+                    f"{user['name']} applied for {posting['label']} ({created['application_number']}).\n\n{message_body}",
+                    user["id"],
+                )
         self.send_json(201, {"ok": True, "id": int(created["id"]), "application_number": created["application_number"]})
 
     def api_apply_job(self, db: Database, user: DbRow | None, job_id: int) -> None:
@@ -3825,16 +3987,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         rows = all_rows(
             db,
             """
-            SELECT u.id, u.civ_number, u.name, u.email, u.verified, u.roles, d.license_status, d.license_class, d.vehicle_make,
+            SELECT u.id, u.civ_number, u.name, u.email, u.verified, u.roles, u.car_entry_code, d.license_status, d.license_class, d.vehicle_make,
                    d.vehicle_model, d.vehicle_color, d.plate, d.registration_status, d.insurance_status
             FROM users u
             LEFT JOIN dmv_records d ON d.user_id = u.id
-            WHERE u.name ILIKE ? OR u.email ILIKE ? OR u.civ_number ILIKE ? OR d.plate ILIKE ?
+            WHERE u.name ILIKE ? OR u.email ILIKE ? OR u.civ_number ILIKE ? OR u.car_entry_code ILIKE ? OR d.plate ILIKE ?
                OR EXISTS (SELECT 1 FROM dmv_vehicles v WHERE v.user_id = u.id AND v.plate ILIKE ?)
             ORDER BY u.name
             LIMIT 25
             """,
-            (like, like, like, like, like),
+            (like, like, like, like, like, like),
         )
         results = []
         for row in rows:

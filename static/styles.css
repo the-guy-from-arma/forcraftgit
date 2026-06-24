@@ -987,6 +987,97 @@ textarea:focus {
   resize: vertical;
 }
 
+.law-application-form {
+  border: 1px solid rgba(92, 156, 255, 0.14);
+  border-radius: 10px;
+  padding: 12px;
+  background:
+    linear-gradient(145deg, rgba(12, 18, 23, 0.95), rgba(8, 12, 16, 0.96)),
+    repeating-linear-gradient(135deg, rgba(92, 156, 255, 0.035) 0 1px, transparent 1px 26px);
+}
+
+.application-form-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.application-form-head h3,
+.application-form-head p {
+  margin: 0;
+}
+
+.law-application-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.application-question {
+  display: grid;
+  gap: 7px;
+  color: rgba(230, 240, 246, 0.82);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.35;
+}
+
+.application-question-wide {
+  grid-column: 1 / -1;
+}
+
+.application-question textarea {
+  min-height: 132px;
+}
+
+.department-answer-preview {
+  border: 1px solid rgba(92, 156, 255, 0.14);
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.department-answer-preview summary {
+  cursor: pointer;
+  padding: 10px 12px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.department-answer-grid {
+  display: grid;
+  gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 0 12px 12px;
+}
+
+.department-answer-grid div {
+  border-left: 3px solid rgba(92, 156, 255, 0.5);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.department-answer-grid span {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 950;
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+
+.department-answer-grid p {
+  margin-top: 4px;
+  white-space: pre-wrap;
+}
+
 .civilian-job-board {
   display: grid;
   gap: 12px;
@@ -3433,6 +3524,29 @@ textarea:focus {
     repeating-linear-gradient(90deg, rgba(247, 183, 51, 0.06) 0 1px, transparent 1px 42px);
 }
 
+.force-code-backdrop {
+  z-index: 80;
+  background: rgba(0, 0, 0, 0.76);
+}
+
+.force-code-modal {
+  width: min(520px, calc(100vw - 24px));
+  border-color: rgba(92, 156, 255, 0.3);
+  background:
+    linear-gradient(180deg, rgba(18, 24, 31, 0.98), rgba(8, 12, 15, 0.99)),
+    repeating-linear-gradient(90deg, rgba(92, 156, 255, 0.045) 0 1px, transparent 1px 42px);
+}
+
+.force-code-modal h2,
+.force-code-modal p {
+  margin: 0;
+}
+
+.car-entry-form {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 10px;
+}
+
 .notice-body {
   display: grid;
   gap: 10px;
@@ -3556,8 +3670,14 @@ textarea:focus {
   }
 
   .jobs-hero-metrics,
-  .department-meta {
+  .department-meta,
+  .law-application-grid {
     grid-template-columns: 1fr;
+  }
+
+  .application-form-head {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .job-tabs {

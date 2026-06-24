@@ -155,18 +155,21 @@ function render() {
     return;
   }
   if (state.activeApp === "mdt" || state.activeApp === "fire") {
-    app.innerHTML = state.activeApp === "fire" ? renderFireWorkspace() : renderMdtWorkspace();
+    app.innerHTML = (state.activeApp === "fire" ? renderFireWorkspace() : renderMdtWorkspace()) + renderCarEntryRequiredModal();
     state.activeApp === "fire" ? bindFireWorkspace() : bindMdtWorkspace();
+    bindCarEntryRequiredModal();
     return;
   }
   if (state.activeApp) {
-    app.innerHTML = phone(renderHome() + renderPanel(state.activeApp));
+    app.innerHTML = phone(renderHome() + renderPanel(state.activeApp) + renderCarEntryRequiredModal());
     bindHome();
     bindPanel();
+    bindCarEntryRequiredModal();
     return;
   }
-  app.innerHTML = phone(renderHome());
+  app.innerHTML = phone(renderHome() + renderCarEntryRequiredModal());
   bindHome();
+  bindCarEntryRequiredModal();
 }
 
 function renderAuth() {
@@ -187,6 +190,7 @@ function renderAuth() {
       <form id="authForm" class="form-grid">
         ${register ? `<label>Name<input name="name" autocomplete="name" required /></label>` : ""}
         ${register ? `<label>Arma ID<input name="arma_id" autocomplete="off" required /></label>` : ""}
+        ${register ? `<label>Car entry code<input name="car_entry_code" autocomplete="off" maxlength="32" pattern="[A-Za-z0-9_-]{2,32}" placeholder="In-game vehicle access code" required /></label>` : ""}
         <label>Email<input name="email" type="email" autocomplete="email" required /></label>
         <label>Password<input name="password" type="password" autocomplete="${register ? "new-password" : "current-password"}" minlength="6" required /></label>
         <button class="primary" type="submit">${register ? "Create civilian" : "Unlock phone"}</button>
@@ -213,6 +217,42 @@ function bindAuth() {
       });
       await loadSession();
       toast(state.authMode === "register" ? "Civilian profile created" : "Signed in");
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+}
+
+function renderCarEntryRequiredModal() {
+  const user = state.session?.user;
+  if (!user || String(user.car_entry_code || "").trim()) return "";
+  return `
+    <div class="modal-backdrop force-code-backdrop">
+      <section class="mdt-modal force-code-modal" role="dialog" aria-modal="true" aria-label="Car entry code required">
+        <header>
+          <p class="eyebrow">Required profile update</p>
+          <h2>Enter Car Entry Code</h2>
+        </header>
+        <div class="notice-body">
+          <p>Your profile needs your in-game car entry code before the phone can continue.</p>
+          <p>This code will appear in NCIC/DMV returns when an officer searches your account.</p>
+        </div>
+        <form id="forcedCarEntryCodeForm" class="form-grid">
+          <label>Car entry code<input name="car_entry_code" maxlength="32" pattern="[A-Za-z0-9_-]{2,32}" placeholder="In-game vehicle access code" autocomplete="off" required autofocus /></label>
+          <button class="primary" type="submit">Save and continue</button>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+function bindCarEntryRequiredModal() {
+  $("#forcedCarEntryCodeForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await saveCarEntryCodeFromForm(event.currentTarget);
+      toast("Car entry code saved");
+      await loadSession();
     } catch (error) {
       toast(error.message);
     }
@@ -447,8 +487,23 @@ function renderProfile() {
         <div><span>Agency</span><strong>${escapeHtml(user.primary_agency || "Civilian")}</strong></div>
         <div><span>Status</span><strong>${escapeHtml(user.verified ? "Verified civilian" : "Awaiting verification")}</strong></div>
         <div><span>Registered Arma ID</span><strong>${escapeHtml(user.registered_arma_id || user.arma_id || "Not attached")}</strong></div>
+        <div><span>Car Entry Code</span><strong>${escapeHtml(user.car_entry_code || "Required")}</strong></div>
         <div><span>Live Link</span><strong>${escapeHtml(link ? "Attached" : "Not attached")}</strong></div>
       </div>
+      <section class="profile-link-card">
+        <div class="row">
+          <div>
+            <p class="eyebrow">In-game vehicle access</p>
+            <h3>Car Entry Code</h3>
+            <p class="muted small">Officers will see this code when they pull your NCIC/DMV profile.</p>
+          </div>
+          <span class="pill ${user.car_entry_code ? "green" : "red"}">${user.car_entry_code ? "filed" : "required"}</span>
+        </div>
+        <form id="carEntryCodeForm" class="form-grid car-entry-form">
+          <label>Car entry code<input name="car_entry_code" value="${escapeHtml(user.car_entry_code || "")}" maxlength="32" pattern="[A-Za-z0-9_-]{2,32}" placeholder="In-game vehicle access code" required /></label>
+          <button class="secondary" type="submit">Save car entry code</button>
+        </form>
+      </section>
       <section class="profile-link-card character-manager">
         <div class="row">
           <div>
@@ -534,7 +589,28 @@ function renderProfile() {
   `;
 }
 
+async function saveCarEntryCodeFromForm(form) {
+  const payload = Object.fromEntries(new FormData(form).entries());
+  const result = await api("/api/profile/car-entry-code", { method: "POST", body: payload });
+  state.session.user = result.user;
+  if (state.cache.profile?.user) {
+    state.cache.profile.user = { ...state.cache.profile.user, ...result.user };
+  }
+  return result;
+}
+
 function bindProfile() {
+  $("#carEntryCodeForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await saveCarEntryCodeFromForm(event.currentTarget);
+      toast("Car entry code saved");
+      await loadAppData("profile");
+      await loadSession();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
   $("#profileNameForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
@@ -857,6 +933,136 @@ function bindDmv() {
   });
 }
 
+const lawEnforcementDepartmentChoices = ["Sheriffs Department", "Police Department", "State Police", "CID"];
+const lawEnforcementApplicationFields = [
+  { key: "in_game_name", label: "What is your in-game name?", kind: "text", min: 2, max: 120, placeholder: "Your RP character name" },
+  { key: "discord_name", label: "Discord Name", kind: "text", min: 2, max: 120, placeholder: "Discord username" },
+  { key: "age", label: "Whats your Age", kind: "age", min: 13, max: 100, placeholder: "Age" },
+  { key: "why_law_enforcement", label: "Why do you want to join Law Enforcement", kind: "long", min: 20, max: 4000 },
+  { key: "department_choice", label: "Which department do you want to apply for", kind: "choice" },
+  { key: "prior_experience", label: "Do you have any prior experience with Law Enforcement on any Rp servers", kind: "long", min: 2, max: 3000 },
+  { key: "position_fit", label: "Explain why you would be Good for this position", kind: "long", min: 20, max: 4000 },
+  { key: "robbery_scenario", label: "While on duty, you're dispatched to a Gas Station Robbery. Upon arrival, you notice an individual running out the side door towards their vehicle with a knife in their hand. How would you handle this situation?", kind: "long", min: 20, max: 5000 },
+  { key: "off_duty_corruption_scenario", label: "While off duty, you are driving around Faircroft, and notice one of your friends, who is a Deputy, in the parking lot with a Citizen. You notice that the Deputy is pulling items out of his Patrol Belt and handing them to the individual. How would you handle this situation?", kind: "long", min: 20, max: 5000 },
+  { key: "drug_trafficking_process", label: "While on duty, you detain a suspect for suspected drug trafficking, once you search them you discover the suspect does indeed have Cocaine. How would you process the suspect?", kind: "long", min: 20, max: 5000 },
+  { key: "corruption_acknowledgement", label: "Do you understand that any proven corruption within the Faircroft Sheriff Offce may result in termination", kind: "yesno" },
+  { key: "procedure_commitment", label: "Do you commit to following the Global Operating Procedures, Division Standard Operating Procedures, and all announcements?", kind: "yesno" },
+  { key: "english_communication", label: "Can you communicate clearly using the English language, which is crucial for clear and concise communication across the Police Department?", kind: "yesno" },
+  { key: "chain_of_command", label: "Do you agree to follow chain of command", kind: "yesno" },
+  { key: "truth_acknowledgement", label: "Do you acknowledge that falsifying any information on this application will result in an automatic denial and could result in blacklisting", kind: "yesno" },
+];
+
+function departmentChoiceForPosting(posting) {
+  const map = {
+    sheriff: "Sheriffs Department",
+    metro_police: "Police Department",
+    state_police: "State Police",
+    cid: "CID",
+  };
+  return map[posting?.key] || "";
+}
+
+function parseDepartmentApplicationStatement(statement) {
+  if (!statement || typeof statement !== "string" || !statement.trim().startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(statement);
+    return parsed?.type === "law_enforcement_application" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function renderDepartmentApplicationPreview(application) {
+  const record = parseDepartmentApplicationStatement(application?.statement);
+  if (!record?.answers?.length) return "";
+  return `
+    <details class="department-answer-preview">
+      <summary>Submitted application answers</summary>
+      <div class="department-answer-grid">
+        ${record.answers.map((item) => `
+          <div>
+            <span>${escapeHtml(item.question)}</span>
+            <p>${escapeHtml(item.answer)}</p>
+          </div>
+        `).join("")}
+      </div>
+    </details>
+  `;
+}
+
+function renderDepartmentApplicationField(field, posting) {
+  const defaultName = field.key === "in_game_name" ? state.session?.user?.name || "" : "";
+  if (field.kind === "choice") {
+    const selected = departmentChoiceForPosting(posting);
+    return `
+      <label class="application-question">${escapeHtml(field.label)}
+        <select name="${field.key}" required>
+          <option value="">Select department</option>
+          ${lawEnforcementDepartmentChoices.map((choice) => `<option value="${escapeHtml(choice)}" ${choice === selected ? "selected" : ""}>${escapeHtml(choice)}</option>`).join("")}
+        </select>
+      </label>
+    `;
+  }
+  if (field.kind === "yesno") {
+    return `
+      <label class="application-question">${escapeHtml(field.label)}
+        <select name="${field.key}" required>
+          <option value="">Select answer</option>
+          <option value="Yes">Yes</option>
+          <option value="No">No</option>
+        </select>
+      </label>
+    `;
+  }
+  if (field.kind === "age") {
+    return `
+      <label class="application-question">${escapeHtml(field.label)}
+        <input name="${field.key}" type="number" min="${field.min}" max="${field.max}" placeholder="${escapeHtml(field.placeholder || "")}" required />
+      </label>
+    `;
+  }
+  if (field.kind === "long") {
+    return `
+      <label class="application-question application-question-wide">${escapeHtml(field.label)}
+        <textarea name="${field.key}" minlength="${field.min}" maxlength="${field.max}" required placeholder="Write your response here"></textarea>
+      </label>
+    `;
+  }
+  return `
+    <label class="application-question">${escapeHtml(field.label)}
+      <input name="${field.key}" minlength="${field.min}" maxlength="${field.max}" value="${escapeHtml(defaultName)}" placeholder="${escapeHtml(field.placeholder || "")}" required />
+    </label>
+  `;
+}
+
+function renderDepartmentApplicationForm(posting) {
+  if (posting.form_type === "law_enforcement") {
+    const commandRoles = (posting.command_roles || []).map(humanLabel).join(", ") || "Owner/Admin Command";
+    return `
+      <form class="department-application-form law-application-form" data-department-key="${escapeHtml(posting.key)}">
+        <div class="application-form-head">
+          <div>
+            <p class="eyebrow">Law enforcement application</p>
+            <h3>${escapeHtml(posting.label)} packet</h3>
+            <p class="muted small">Complete every required question. This packet is sent to ${escapeHtml(commandRoles)} plus owner/admin staff.</p>
+          </div>
+          <span class="pill amber">Command Review</span>
+        </div>
+        <div class="law-application-grid">
+          ${lawEnforcementApplicationFields.map((field) => renderDepartmentApplicationField(field, posting)).join("")}
+        </div>
+        <button class="primary" type="submit">Submit law enforcement application</button>
+      </form>
+    `;
+  }
+  return `
+    <form class="department-application-form" data-department-key="${escapeHtml(posting.key)}">
+      <label>Why should command select you?<textarea name="statement" minlength="20" maxlength="4000" required placeholder="Talk about experience, availability, roleplay style, training history, and why you want this department."></textarea></label>
+      <button class="primary" type="submit">Submit application</button>
+    </form>
+  `;
+}
+
 function renderJobs() {
   const data = state.cache.jobs;
   if (!data) return `<div class="empty">Jobs loading</div>`;
@@ -919,15 +1125,11 @@ function renderJobs() {
               </div>
               <span class="pill ${businessStatusClass(latestApplication.status)}">${humanLabel(latestApplication.status)}</span>
             </div>
+            ${renderDepartmentApplicationPreview(latestApplication)}
           ` : ""}
           ${hasActiveApplication ? `
             <div class="empty">Your ${escapeHtml(selectedPosting.label)} application is already active and waiting on command review.</div>
-          ` : `
-            <form class="department-application-form" data-department-key="${escapeHtml(selectedPosting.key)}">
-              <label>Why should command select you?<textarea name="statement" minlength="20" maxlength="1400" required placeholder="Talk about experience, availability, roleplay style, training history, and why you want this department."></textarea></label>
-              <button class="primary" type="submit">Submit application</button>
-            </form>
-          `}
+          ` : renderDepartmentApplicationForm(selectedPosting)}
         </section>
       ` : `<div class="empty">No department postings configured</div>`}
       <section class="civilian-job-board">
@@ -2689,7 +2891,7 @@ function renderMdtSearch() {
   const results = state.cache.mdt?.search || [];
   return `
     <form id="mdtSearch" class="mdt-searchbar">
-      <input name="q" minlength="2" placeholder="Search name, email, or plate" required />
+      <input name="q" minlength="2" placeholder="Search name, email, plate, or car code" required />
       <button class="primary" type="submit">Run NCIC</button>
     </form>
     <div class="mdt-results">
@@ -2703,7 +2905,7 @@ function renderMdtSearch() {
             <div class="metric"><span>License</span><strong>${escapeHtml(item.license_status || "None")}</strong></div>
             <div class="metric"><span>Class</span><strong>${escapeHtml(item.license_class || "None")}</strong></div>
             <div class="metric"><span>Primary Plate</span><strong>${escapeHtml(item.plate || "None")}</strong></div>
-            <div class="metric"><span>Insurance</span><strong>${escapeHtml(item.insurance_status || "None")}</strong></div>
+            <div class="metric"><span>Car Entry</span><strong>${escapeHtml(item.car_entry_code || "Not filed")}</strong></div>
           </div>
           <div class="mdt-subsection">
             <div class="row"><h4>Registered vehicles</h4><div class="row-actions"><button class="secondary" data-open-mdt-profile="${item.id}">Open profile</button><button class="secondary" data-use-civ="${item.id}">Use for ticket</button></div></div>
@@ -2810,7 +3012,7 @@ function renderMdtProfileModal() {
               <div class="profile-grid compact">
                 <div class="metric"><span>Email</span><strong>${escapeHtml(person.email)}</strong></div>
                 <div class="metric"><span>Roles</span><strong>${escapeHtml((person.roles || []).join(", ") || "civ")}</strong></div>
-                <div class="metric"><span>License</span><strong>${escapeHtml(licenseStatus)}</strong></div>
+                <div class="metric"><span>Car Entry</span><strong>${escapeHtml(person.car_entry_code || "Not filed")}</strong></div>
                 <div class="metric"><span>Open cases</span><strong>${(person.open_cases || []).length}</strong></div>
               </div>
               <div class="mdt-subsection">
@@ -3830,7 +4032,7 @@ function renderSystem() {
   `;
 }
 
-const roleOptions = ["civ", "owner", "admin", "leo", "judge", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "state_police", "cid", "business_owner", "business_registrar", "city_hall", "economy_manager"];
+const roleOptions = ["civ", "owner", "admin", "leo", "judge", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "business_owner", "business_registrar", "city_hall", "economy_manager"];
 
 function renderAdminUsers(users) {
   if (!users.length) return `<div class="empty">No accounts yet</div>`;
@@ -3868,6 +4070,7 @@ function renderAdminAccountModal(user) {
         <div class="account-summary">
           <div><span>CIV</span><strong>${escapeHtml(user.civ_number || "pending")}</strong></div>
           <div><span>Arma ID</span><strong>${escapeHtml(user.arma_id || "Not provided")}</strong></div>
+          <div><span>Car Entry</span><strong>${escapeHtml(user.car_entry_code || "Required")}</strong></div>
           <div><span>Email</span><strong>${escapeHtml(user.email)}</strong></div>
           <div><span>Today</span><strong>${minutes(user.presence_seconds_today)}m</strong></div>
           <div><span>Characters</span><strong>${Number(user.character_count || 0)}</strong></div>
