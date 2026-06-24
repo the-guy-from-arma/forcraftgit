@@ -275,7 +275,7 @@ function renderHome() {
       ${locked ? `
         <div class="home-alert">
           ${iconSvg.lock}
-          <div><strong>Apps locked</strong><p>An owner/admin must verify your civilian profile before the system opens.</p></div>
+          <div><strong>Most apps locked</strong><p>Jobs are open for applications. Owner/admin verification is still required for the rest of the system.</p></div>
         </div>
       ` : ""}
       <div class="app-grid">
@@ -1066,7 +1066,6 @@ function renderDepartmentApplicationForm(posting) {
 function renderJobs() {
   const data = state.cache.jobs;
   if (!data) return `<div class="empty">Jobs loading</div>`;
-  const activeIds = new Set((data.active_jobs || []).map((job) => job.id));
   const postings = data.department_postings || [];
   const applications = data.department_applications || [];
   const selectedPosting = postings.find((item) => item.key === state.jobsTab) || postings[0] || null;
@@ -1132,40 +1131,6 @@ function renderJobs() {
           ` : renderDepartmentApplicationForm(selectedPosting)}
         </section>
       ` : `<div class="empty">No department postings configured</div>`}
-      <section class="civilian-job-board">
-        <div class="row tight">
-          <div>
-            <p class="eyebrow">Civilian work board</p>
-            <h3>Passive Income Jobs</h3>
-          </div>
-          <span class="pill green">${money(data.income.eligible_rate_per_hour)}/h eligible</span>
-        </div>
-        ${(data.active_jobs || []).length ? `
-          <div class="current-job-strip">
-            ${data.active_jobs.map((job) => `<div><span>${escapeHtml(job.title)}</span><strong>${money(job.rate_per_hour)}/h</strong></div>`).join("")}
-          </div>
-        ` : ""}
-        <div class="list">
-        ${(data.jobs || []).map((job) => {
-          const pct = Math.min(100, Math.round((job.filled / Math.max(job.max_positions, 1)) * 100));
-          const marketPct = Math.min(100, Math.round((job.market_filled / Math.max(job.market_cap, 1)) * 100));
-          return `
-            <article class="job-card">
-              <div class="row"><h3>${escapeHtml(job.title)}</h3><span class="pill">${escapeHtml(job.market)}</span></div>
-              <p class="muted small">${escapeHtml(job.requirement)}</p>
-              <div class="grid-2">
-                <div><p class="small muted">Job slots ${job.filled}/${job.max_positions}</p><div class="progress"><span style="--pct:${pct}%"></span></div></div>
-                <div><p class="small muted">Market cap ${job.market_filled}/${job.market_cap}</p><div class="progress"><span style="--pct:${marketPct}%"></span></div></div>
-              </div>
-              <div class="row">
-                <strong>${money(job.rate_per_hour)}/hour</strong>
-                <button class="secondary" data-apply-job="${job.id}" ${activeIds.has(job.id) ? "disabled" : ""}>${activeIds.has(job.id) ? "Added" : "Apply"}</button>
-              </div>
-            </article>
-          `;
-        }).join("")}
-        </div>
-      </section>
       </div>
   `;
 }
@@ -1194,18 +1159,6 @@ function bindJobs() {
       }
     });
   });
-  $$("[data-apply-job]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      try {
-        await api(`/api/jobs/${button.dataset.applyJob}/apply`, { method: "POST" });
-        toast("Job added");
-        await loadAppData("jobs");
-        render();
-      } catch (error) {
-        toast(error.message);
-      }
-    });
-  });
 }
 
 function renderBank() {
@@ -1216,20 +1169,11 @@ function renderBank() {
       <div class="card">
         <p class="eyebrow">Available balance</p>
         <div class="money">${money(data.balance)}</div>
-        <p class="muted small">${money(data.income.pending_income)} passive income ready · ${money(data.income.eligible_rate_per_hour)}/h eligible</p>
-        <button class="primary" data-collect-income>Collect income</button>
+        <p class="muted small">Passive income has been removed from this server.</p>
       </div>
       <div class="grid-2">
         <div class="metric"><span>Cash wallet</span><strong>${money(data.cash)}</strong></div>
         <div class="metric"><span>Server time</span><strong>${minutes(data.income.presence_seconds_today)}m</strong></div>
-      </div>
-      <div class="card">
-        <h3>Daily requirements</h3>
-        <div class="list">
-          ${(data.income.requirements || []).map((req) => `
-            <div class="row"><span>${escapeHtml(req.title)}</span><span class="pill ${req.met ? "green" : "amber"}">${req.met ? "met" : `${req.required_minutes_daily}m`}</span></div>
-          `).join("") || `<div class="empty">No active jobs</div>`}
-        </div>
       </div>
       <div class="card">
         <h3>Activity</h3>
@@ -1242,16 +1186,6 @@ function renderBank() {
 }
 
 function bindBank() {
-  $("[data-collect-income]")?.addEventListener("click", async () => {
-    try {
-      const result = await api("/api/bank/collect", { method: "POST" });
-      toast(`Collected ${money(result.collected)}`);
-      await loadAppData("bank");
-      await loadSession();
-    } catch (error) {
-      toast(error.message);
-    }
-  });
 }
 
 function renderCash() {
@@ -3962,15 +3896,13 @@ function renderAdmin() {
       <div class="grid-2">
         <div class="metric"><span>Users</span><strong>${data.overview.stats.users}</strong></div>
         <div class="metric"><span>Unverified</span><strong>${data.overview.stats.unverified}</strong></div>
-        <div class="metric"><span>Active jobs</span><strong>${data.overview.stats.active_jobs}</strong></div>
+        <div class="metric"><span>Applications</span><strong>${data.overview.stats.department_applications || 0}</strong></div>
         <div class="metric"><span>Open cases</span><strong>${data.overview.stats.open_cases}</strong></div>
       </div>
       <div class="segmented">
         <button class="${state.adminTab === "users" ? "active" : ""}" data-admin-tab="users">Users</button>
-        <button class="${state.adminTab === "jobs" ? "active" : ""}" data-admin-tab="jobs">Jobs</button>
-        <button class="${state.adminTab === "markets" ? "active" : ""}" data-admin-tab="markets">Markets</button>
       </div>
-      ${state.adminTab === "jobs" ? renderAdminJobs(data.jobs.jobs) : state.adminTab === "markets" ? renderAdminMarkets(data.jobs.markets) : renderAdminUsers(data.users.users)}
+      ${renderAdminUsers(data.users.users)}
     </div>
     ${accountModal}
   `;

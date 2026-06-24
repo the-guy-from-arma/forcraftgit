@@ -1683,7 +1683,7 @@ def app_catalog(user: DbRow | None) -> list[dict[str, Any]]:
     base = [
         ("profile", "Profile", "user", True, False),
         ("dmv", "DMV", "id-card", verified, False),
-        ("jobs", "JOB", "briefcase", verified, False),
+        ("jobs", "JOB", "briefcase", True, False),
         ("court", "COURT", "gavel", verified, False),
         ("business", "Business", "store", business_enabled, False),
         ("properties", "PROPERTIES", "home", False, True),
@@ -1787,30 +1787,15 @@ def active_jobs(db: Database, user_id: int) -> list[dict[str, Any]]:
 
 
 def income_snapshot(db: Database, user: DbRow) -> dict[str, Any]:
-    jobs = active_jobs(db, user["id"])
     seconds = presence_seconds(db, user["id"])
-    minutes = seconds / 60
-    eligible = [job for job in jobs if minutes >= int(job["required_minutes_daily"])]
-    total_rate = sum(float(job["rate_per_hour"]) for job in eligible)
-    last = parse_iso(user["last_income_at"])
-    elapsed_hours = max((utcnow() - last).total_seconds(), 0) / 3600
-    pending = round(total_rate * elapsed_hours, 2)
-    next_requirements = [
-        {
-            "job_id": job["id"],
-            "title": job["title"],
-            "required_minutes_daily": job["required_minutes_daily"],
-            "met": minutes >= int(job["required_minutes_daily"]),
-        }
-        for job in jobs
-    ]
     return {
-        "pending_income": pending,
-        "eligible_rate_per_hour": round(total_rate, 2),
-        "active_jobs": jobs,
+        "pending_income": 0,
+        "eligible_rate_per_hour": 0,
+        "active_jobs": [],
         "presence_seconds_today": seconds,
-        "requirements": next_requirements,
+        "requirements": [],
         "last_income_at": user["last_income_at"],
+        "disabled": True,
     }
 
 
@@ -2707,24 +2692,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"ok": True, "accepted_event_ids": accepted, "skipped_event_ids": skipped})
 
     def api_jobs(self, db: Database, user: DbRow | None) -> None:
-        err = verified_required(user)
-        if err:
-            self.error(403 if user else 401, err)
+        if not user:
+            self.error(401, "Authentication required")
             return
-        rows = all_rows(
-            db,
-            """
-            SELECT j.*,
-                   (SELECT COUNT(*) FROM user_jobs uj WHERE uj.job_id = j.id AND uj.status = 'active') AS filled,
-                   COALESCE(mc.max_slots, 0) AS market_cap,
-                   (SELECT COUNT(*) FROM user_jobs uj JOIN jobs jj ON jj.id = uj.job_id WHERE jj.market = j.market AND uj.status = 'active') AS market_filled
-            FROM jobs j
-            LEFT JOIN market_caps mc ON mc.market = j.market
-            WHERE j.active = 1
-            ORDER BY j.market, j.rate_per_hour DESC
-            """
-        )
-        assignments = active_jobs(db, user["id"])
         applications = all_rows(
             db,
             """
@@ -2739,8 +2709,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(
             200,
             {
-                "jobs": [dict(row) for row in rows],
-                "active_jobs": assignments,
+                "jobs": [],
+                "active_jobs": [],
                 "income": income_snapshot(db, user),
                 "department_postings": [dict(posting) for posting in DEPARTMENT_POSTINGS],
                 "department_applications": [dict(row) for row in applications],
@@ -2748,9 +2718,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
 
     def api_apply_department(self, db: Database, user: DbRow | None) -> None:
-        err = verified_required(user)
-        if err:
-            self.error(403 if user else 401, err)
+        if not user:
+            self.error(401, "Authentication required")
             return
         payload = self.read_json()
         department_key = str(payload.get("department_key") or "").strip().lower()
@@ -2825,37 +2794,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(201, {"ok": True, "id": int(created["id"]), "application_number": created["application_number"]})
 
     def api_apply_job(self, db: Database, user: DbRow | None, job_id: int) -> None:
-        err = verified_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        job = one(db, "SELECT * FROM jobs WHERE id = ? AND active = 1", (job_id,))
-        if not job:
-            self.error(404, "Job not found")
-            return
-        existing = one(db, "SELECT id FROM user_jobs WHERE user_id = ? AND job_id = ? AND status = 'active'", (user["id"], job_id))
-        if existing:
-            self.error(409, "You already hold this job")
-            return
-        filled = one(db, "SELECT COUNT(*) AS count FROM user_jobs WHERE job_id = ? AND status = 'active'", (job_id,))
-        if int(filled["count"]) >= int(job["max_positions"]):
-            self.error(409, "This job has no open positions")
-            return
-        market_filled = one(
-            db,
-            "SELECT COUNT(*) AS count FROM user_jobs uj JOIN jobs j ON j.id = uj.job_id WHERE j.market = ? AND uj.status = 'active'",
-            (job["market"],),
-        )
-        market_cap = one(db, "SELECT max_slots FROM market_caps WHERE market = ?", (job["market"],))
-        if market_cap and int(market_filled["count"]) >= int(market_cap["max_slots"]):
-            self.error(409, "This market is capped by owner settings")
-            return
-        db.execute(
-            "INSERT INTO user_jobs (user_id, job_id, status, started_at) VALUES (?, ?, 'active', ?)",
-            (user["id"], job_id, now_iso()),
-        )
-        add_message(db, user["id"], "Job added", f"You are now employed as {job['title']}. Income unlocks after the daily server-time requirement is met.")
-        self.send_json(201, {"ok": True})
+        self.error(410, "Passive income jobs have been removed from this server.")
+        return
 
     def api_bank(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -2878,20 +2818,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
 
     def api_collect_bank(self, db: Database, user: DbRow | None) -> None:
-        err = verified_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        snapshot = income_snapshot(db, user)
-        pending = float(snapshot["pending_income"])
-        ts = now_iso()
-        if pending > 0:
-            db.execute("UPDATE users SET bank_balance = bank_balance + ?, last_income_at = ? WHERE id = ?", (pending, ts, user["id"]))
-            add_transaction(db, user["id"], "income", pending, "Collected passive job income")
-        else:
-            db.execute("UPDATE users SET last_income_at = ? WHERE id = ?", (ts, user["id"]))
-        updated = one(db, "SELECT * FROM users WHERE id = ?", (user["id"],))
-        self.send_json(200, {"ok": True, "collected": round(pending, 2), "balance": round(float(updated["bank_balance"]), 2)})
+        self.error(410, "Passive income collection has been removed from this server.")
+        return
 
     def api_cash_transfer(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -4995,7 +4923,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         stats = {
             "users": one(db, "SELECT COUNT(*) AS count FROM users")["count"],
             "unverified": one(db, "SELECT COUNT(*) AS count FROM users WHERE verified = 0")["count"],
-            "active_jobs": one(db, "SELECT COUNT(*) AS count FROM user_jobs WHERE status = 'active'")["count"],
+            "department_applications": one(db, "SELECT COUNT(*) AS count FROM department_applications WHERE status NOT IN ('denied','withdrawn','closed')")["count"],
             "open_cases": one(db, "SELECT COUNT(*) AS count FROM citations WHERE status NOT IN ('paid','dismissed')")["count"],
             "panic_alerts": one(db, "SELECT COUNT(*) AS count FROM panic_alerts WHERE status = 'active'")["count"],
         }

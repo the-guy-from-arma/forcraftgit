@@ -1,8 +1,8 @@
-const CACHE = "rp-command-v21-law-enforcement-applications";
+const CACHE = "rp-command-v22-recruitment-only-jobs";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.21-law-enforcement-applications",
-  "/static/app.js?v=0.0.21-law-enforcement-applications",
+  "/static/styles.css?v=0.0.22-recruitment-only-jobs",
+  "/static/app.js?v=0.0.22-recruitment-only-jobs",
   "/static/icons/icon.svg",
   "/manifest.webmanifest"
 ];

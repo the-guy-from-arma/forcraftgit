@@ -1,6 +1,27 @@
 {
-  "version": "0.0.21",
+  "version": "0.0.22",
   "entries": [
+    {
+      "date": "2026-06-24",
+      "version": "0.0.22",
+      "title": "Recruitment-Only Jobs",
+      "added": [
+        "Jobs is now unlocked for signed-in users so civilians can submit department applications before verification."
+      ],
+      "changed": [
+        "The Jobs app is now a recruitment/application portal only.",
+        "Admin overview now shows active department applications instead of passive job assignments."
+      ],
+      "fixed": [
+        "Passive job apply and passive income collect endpoints now return disabled responses.",
+        "PWA cache versioning now forces installed devices to load the recruitment-only Jobs screen."
+      ],
+      "removed": [
+        "Removed the Passive Income Jobs board from the Jobs app.",
+        "Removed passive income collection and daily requirement UI from Bank.",
+        "Removed passive Jobs and Markets tabs from the Admin panel."
+      ]
+    },
     {
       "date": "2026-06-24",
       "version": "0.0.21",
