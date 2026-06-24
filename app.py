@@ -270,6 +270,7 @@ def generate_record_number(db: Database, table: str, column: str, prefix: str) -
         ("rp_contracts", "contract_number"),
         ("business_applications", "application_number"),
         ("businesses", "license_number"),
+        ("department_applications", "application_number"),
     }
     if (table, column) not in allowed:
         raise ValueError("Invalid record number target")
@@ -287,6 +288,71 @@ BUSINESS_MAX_ACTIVE_PER_OWNER = 2
 FIRE_COMMAND_ROLES = ("fire_chief", "deputy_chief", "fire_marshal")
 FIRE_SERVICE_ROLES = ("fireman", "ems", *FIRE_COMMAND_ROLES)
 FIRE_RIG_NAMES = ("Engine 1", "Ladder 1", "Truck 1", "Rescue 1", "Battalion 1", "Battalion 2", "Battalion 3", "Battalion 4", "Battalion 5")
+DEPARTMENT_POSTINGS = (
+    {
+        "key": "state_police",
+        "label": "State Police",
+        "division": "State Police",
+        "role_key": "state_police",
+        "badge": "Trooper Candidate",
+        "schedule": "Patrol, traffic enforcement, highway response, and statewide operations.",
+        "requirements": "Professional conduct, clean RP record, radio discipline, and command interview.",
+    },
+    {
+        "key": "metro_police",
+        "label": "Metro Police",
+        "division": "Metro Police",
+        "role_key": "police",
+        "badge": "Police Recruit",
+        "schedule": "City patrol, 911 response, arrests, citations, and community policing.",
+        "requirements": "Must understand MDT use, report writing, lawful stops, and use-of-force policy.",
+    },
+    {
+        "key": "sheriff",
+        "label": "Sheriff Office",
+        "division": "Sheriff Office",
+        "role_key": "sheriff",
+        "badge": "Deputy Trainee",
+        "schedule": "County patrol, warrant service, transport, court security, and rural response.",
+        "requirements": "Interview required, mature RP, custody awareness, and county patrol availability.",
+    },
+    {
+        "key": "cid",
+        "label": "CID",
+        "division": "Criminal Investigations Division",
+        "role_key": "cid",
+        "badge": "Investigator Applicant",
+        "schedule": "Investigations, surveillance, warrants, internal affairs support, and case files.",
+        "requirements": "Prior LEO experience preferred, detailed writing, evidence handling, and command approval.",
+    },
+    {
+        "key": "fire",
+        "label": "Fire Dept",
+        "division": "Fire Department",
+        "role_key": "fireman",
+        "badge": "Firefighter Candidate",
+        "schedule": "Fire response, rescue support, incident staging, and apparatus operations.",
+        "requirements": "Scene safety, radio discipline, chain of command, and apparatus assignment training.",
+    },
+    {
+        "key": "ems",
+        "label": "EMS",
+        "division": "Emergency Medical Services",
+        "role_key": "ems",
+        "badge": "EMS Candidate",
+        "schedule": "Medical calls, triage, transport RP, scene coordination, and hospital handoff.",
+        "requirements": "Calm communication, medical RP standards, patient reports, and incident coordination.",
+    },
+    {
+        "key": "dispatcher",
+        "label": "Dispatcher",
+        "division": "Communications",
+        "role_key": "dispatcher",
+        "badge": "Dispatcher Applicant",
+        "schedule": "911 call intake, unit dispatching, status tracking, and interagency coordination.",
+        "requirements": "Strong radio presence, multitasking, map awareness, and professional call handling.",
+    },
+)
 SYSTEM_SETTING_DEFAULTS = {
     "autopilot_verify_enabled": "0",
     "autopilot_verify_minutes": "120",
@@ -461,6 +527,23 @@ def ensure_schema() -> None:
                 ended_at TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS department_applications (
+                id SERIAL PRIMARY KEY,
+                application_number TEXT NOT NULL UNIQUE,
+                user_id INTEGER NOT NULL,
+                department_key TEXT NOT NULL,
+                department_name TEXT NOT NULL,
+                desired_role TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'submitted',
+                statement TEXT NOT NULL DEFAULT '',
+                reviewed_by INTEGER,
+                reviewer_notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS messages (
@@ -928,6 +1011,26 @@ def ensure_migrations(db: Database) -> None:
         )
         """
     )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS department_applications (
+            id SERIAL PRIMARY KEY,
+            application_number TEXT NOT NULL UNIQUE,
+            user_id INTEGER NOT NULL,
+            department_key TEXT NOT NULL,
+            department_name TEXT NOT NULL,
+            desired_role TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'submitted',
+            statement TEXT NOT NULL DEFAULT '',
+            reviewed_by INTEGER,
+            reviewer_notes TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
     db.execute("CREATE INDEX IF NOT EXISTS arma_link_codes_code_idx ON arma_link_codes (code)")
     db.execute("CREATE INDEX IF NOT EXISTS arma_link_codes_status_idx ON arma_link_codes (status)")
     db.execute("CREATE INDEX IF NOT EXISTS arma_activity_logs_user_idx ON arma_activity_logs (user_id)")
@@ -935,6 +1038,8 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS cad_after_call_reports_officer_idx ON cad_after_call_reports (officer_id, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS cad_after_call_reports_alert_idx ON cad_after_call_reports (related_alert_id)")
     db.execute("CREATE INDEX IF NOT EXISTS cad_after_call_reports_disposition_idx ON cad_after_call_reports (disposition)")
+    db.execute("CREATE INDEX IF NOT EXISTS department_applications_user_idx ON department_applications (user_id, created_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS department_applications_department_idx ON department_applications (department_key, status)")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS cid_internal_affairs_notes (
@@ -1459,7 +1564,7 @@ def app_catalog(user: DbRow | None) -> list[dict[str, Any]]:
     base = [
         ("profile", "Profile", "user", True, False),
         ("dmv", "DMV", "id-card", verified, False),
-        ("jobs", "JOB", "briefcase", False, True),
+        ("jobs", "JOB", "briefcase", verified, False),
         ("court", "COURT", "gavel", verified, False),
         ("business", "Business", "store", business_enabled, False),
         ("properties", "PROPERTIES", "home", False, True),
@@ -1775,6 +1880,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_arma_events(db)
                 elif path == "/api/jobs" and method == "GET":
                     self.api_jobs(db, user)
+                elif path == "/api/jobs/department-applications" and method == "POST":
+                    self.api_apply_department(db, user)
                 elif path.startswith("/api/jobs/") and path.endswith("/apply") and method == "POST":
                     self.api_apply_job(db, user, self.path_int(path, 2))
                 elif path == "/api/bank" and method == "GET":
@@ -2478,7 +2585,82 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             """
         )
         assignments = active_jobs(db, user["id"])
-        self.send_json(200, {"jobs": [dict(row) for row in rows], "active_jobs": assignments, "income": income_snapshot(db, user)})
+        applications = all_rows(
+            db,
+            """
+            SELECT a.*, reviewer.name AS reviewer_name
+            FROM department_applications a
+            LEFT JOIN users reviewer ON reviewer.id = a.reviewed_by
+            WHERE a.user_id = ?
+            ORDER BY a.updated_at DESC
+            """,
+            (user["id"],),
+        )
+        self.send_json(
+            200,
+            {
+                "jobs": [dict(row) for row in rows],
+                "active_jobs": assignments,
+                "income": income_snapshot(db, user),
+                "department_postings": [dict(posting) for posting in DEPARTMENT_POSTINGS],
+                "department_applications": [dict(row) for row in applications],
+            },
+        )
+
+    def api_apply_department(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        department_key = str(payload.get("department_key") or "").strip().lower()
+        posting = next((item for item in DEPARTMENT_POSTINGS if item["key"] == department_key), None)
+        if not posting:
+            self.error(400, "Unknown department posting")
+            return
+        existing = one(
+            db,
+            """
+            SELECT id, status
+            FROM department_applications
+            WHERE user_id = ? AND department_key = ? AND status NOT IN ('denied','withdrawn','closed')
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (user["id"], department_key),
+        )
+        if existing:
+            self.error(409, f"You already have an active {posting['label']} application")
+            return
+        statement = str(payload.get("statement") or "").strip()
+        if len(statement) < 20:
+            self.error(400, "Application statement must be at least 20 characters")
+            return
+        ts = now_iso()
+        created = db.execute(
+            """
+            INSERT INTO department_applications
+            (application_number, user_id, department_key, department_name, desired_role, status, statement, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'submitted', ?, ?, ?)
+            RETURNING id, application_number
+            """,
+            (
+                generate_record_number(db, "department_applications", "application_number", "DEPT"),
+                user["id"],
+                posting["key"],
+                posting["division"],
+                posting["role_key"],
+                statement[:1400],
+                ts,
+                ts,
+            ),
+        ).fetchone()
+        add_message(db, user["id"], "Department application submitted", f"Your {posting['label']} application {created['application_number']} was submitted for command review.")
+        staff = all_rows(db, "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ? ORDER BY id LIMIT 80", ("%owner%", "%admin%"))
+        for row in staff:
+            if row["id"] != user["id"]:
+                add_message(db, row["id"], "Department application pending", f"{user['name']} applied for {posting['label']} ({created['application_number']}).", user["id"])
+        self.send_json(201, {"ok": True, "id": int(created["id"]), "application_number": created["application_number"]})
 
     def api_apply_job(self, db: Database, user: DbRow | None, job_id: int) -> None:
         err = verified_required(user)

@@ -1,6 +1,27 @@
 {
-  "version": "0.0.18",
+  "version": "0.0.19",
   "entries": [
+    {
+      "date": "2026-06-23",
+      "version": "0.0.19",
+      "title": "Department Jobs Portal and Fire MDT Mobile Cleanup",
+      "added": [
+        "Jobs now opens as a department recruiting portal with tabs for State Police, Metro Police, Sheriff Office, CID, Fire Dept, EMS, and Dispatcher.",
+        "Players can submit saved department applications with a written statement from the Jobs app.",
+        "Department applications now receive application numbers and notify owner/admin accounts."
+      ],
+      "changed": [
+        "The Jobs app is now unlocked for verified users instead of remaining a coming-soon app.",
+        "Passive income jobs now sit below the department recruiting board as the Civilian Work Board.",
+        "Fire MDT apparatus assignments now render as compact command cards instead of a tall desktop-style roster on phones.",
+        "Fire MDT header, status strip, and command controls have tighter mobile sizing."
+      ],
+      "fixed": [
+        "Fire MDT now uses the current user's Fire Chief command role as a fallback when the overview cache reports read-only.",
+        "Updated PWA cache versioning so installed devices load the Jobs portal and Fire MDT mobile cleanup."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-06-23",
       "version": "0.0.18",

@@ -9,6 +9,7 @@ const state = {
   activeApp: null,
   pendingArmaCode: new URL(window.location.href).searchParams.get("code") || "",
   dmvTab: "overview",
+  jobsTab: "state_police",
   mdtTab: "search",
   mdtNavOpen: false,
   mdtSideOpen: false,
@@ -399,6 +400,24 @@ function can(role) {
 
 function canAny(...roles) {
   return roles.some((role) => can(role));
+}
+
+function normalizedRole(role) {
+  const clean = String(role || "").trim().toLowerCase().replaceAll("-", "_").replace(/\s+/g, "_");
+  const aliases = {
+    chief: "fire_chief",
+    cheif: "fire_chief",
+    firechief: "fire_chief",
+    fire_cheif: "fire_chief",
+    fd_chief: "fire_chief",
+    fire_marshall: "fire_marshal",
+  };
+  return aliases[clean] || clean;
+}
+
+function hasFireCommandAccess() {
+  const roles = (state.session?.user?.roles || []).map(normalizedRole);
+  return roles.some((role) => ["owner", "fire_chief", "deputy_chief", "fire_marshal"].includes(role));
 }
 
 function renderProfile() {
@@ -842,18 +861,89 @@ function renderJobs() {
   const data = state.cache.jobs;
   if (!data) return `<div class="empty">Jobs loading</div>`;
   const activeIds = new Set((data.active_jobs || []).map((job) => job.id));
+  const postings = data.department_postings || [];
+  const applications = data.department_applications || [];
+  const selectedPosting = postings.find((item) => item.key === state.jobsTab) || postings[0] || null;
+  if (selectedPosting && state.jobsTab !== selectedPosting.key) state.jobsTab = selectedPosting.key;
+  const latestApplication = selectedPosting
+    ? applications.find((item) => item.department_key === selectedPosting.key)
+    : null;
+  const hasActiveApplication = latestApplication && !["denied", "withdrawn", "closed"].includes(latestApplication.status);
   return `
-    <div class="stack">
-      <div class="grid-2">
-        <div class="metric"><span>Tracked today</span><strong>${minutes(data.income.presence_seconds_today)}m</strong></div>
-        <div class="metric"><span>Eligible rate</span><strong>${money(data.income.eligible_rate_per_hour)}/h</strong></div>
+    <div class="stack jobs-portal">
+      <section class="jobs-hero">
+        <div>
+          <p class="eyebrow">Recruitment board</p>
+          <h3>Department Applications</h3>
+          <p>Apply for whitelisted RP departments. Command staff will review your application and assign roles if approved.</p>
+        </div>
+        <div class="jobs-hero-metrics">
+          <div><span>Applications</span><strong>${applications.length}</strong></div>
+          <div><span>Server time</span><strong>${minutes(data.income.presence_seconds_today)}m</strong></div>
+        </div>
+      </section>
+      <div class="job-tabs" aria-label="Department job postings">
+        ${postings.map((posting) => `
+          <button class="${state.jobsTab === posting.key ? "active" : ""}" data-job-tab="${escapeHtml(posting.key)}">
+            <span>${escapeHtml(posting.label)}</span>
+          </button>
+        `).join("")}
       </div>
-      ${(data.active_jobs || []).length ? `
-        <div class="card"><h3>Current jobs</h3><div class="list">
-          ${data.active_jobs.map((job) => `<div class="row"><span>${escapeHtml(job.title)}</span><span class="pill green">${money(job.rate_per_hour)}/h</span></div>`).join("")}
-        </div></div>
-      ` : ""}
-      <div class="list">
+      ${selectedPosting ? `
+        <section class="department-posting">
+          <div class="department-posting-head">
+            <div>
+              <p class="eyebrow">${escapeHtml(selectedPosting.division)}</p>
+              <h3>${escapeHtml(selectedPosting.badge)}</h3>
+              <p>${escapeHtml(selectedPosting.schedule)}</p>
+            </div>
+            <span class="pill ${hasActiveApplication ? "amber" : latestApplication?.status === "approved" ? "green" : ""}">
+              ${latestApplication ? humanLabel(latestApplication.status) : "Open"}
+            </span>
+          </div>
+          <div class="department-meta">
+            <div><span>Department</span><strong>${escapeHtml(selectedPosting.label)}</strong></div>
+            <div><span>Role track</span><strong>${escapeHtml(humanLabel(selectedPosting.role_key))}</strong></div>
+            <div><span>Review</span><strong>Command Staff</strong></div>
+          </div>
+          <div class="department-requirements">
+            <span>Requirements</span>
+            <p>${escapeHtml(selectedPosting.requirements)}</p>
+          </div>
+          ${latestApplication ? `
+            <div class="department-application-status">
+              <div>
+                <p class="eyebrow">${escapeHtml(latestApplication.application_number)}</p>
+                <h3>${escapeHtml(selectedPosting.label)} application</h3>
+                <p class="muted small">Submitted ${new Date(latestApplication.created_at).toLocaleString()}${latestApplication.reviewer_name ? ` / Reviewer ${escapeHtml(latestApplication.reviewer_name)}` : ""}</p>
+              </div>
+              <span class="pill ${businessStatusClass(latestApplication.status)}">${humanLabel(latestApplication.status)}</span>
+            </div>
+          ` : ""}
+          ${hasActiveApplication ? `
+            <div class="empty">Your ${escapeHtml(selectedPosting.label)} application is already active and waiting on command review.</div>
+          ` : `
+            <form class="department-application-form" data-department-key="${escapeHtml(selectedPosting.key)}">
+              <label>Why should command select you?<textarea name="statement" minlength="20" maxlength="1400" required placeholder="Talk about experience, availability, roleplay style, training history, and why you want this department."></textarea></label>
+              <button class="primary" type="submit">Submit application</button>
+            </form>
+          `}
+        </section>
+      ` : `<div class="empty">No department postings configured</div>`}
+      <section class="civilian-job-board">
+        <div class="row tight">
+          <div>
+            <p class="eyebrow">Civilian work board</p>
+            <h3>Passive Income Jobs</h3>
+          </div>
+          <span class="pill green">${money(data.income.eligible_rate_per_hour)}/h eligible</span>
+        </div>
+        ${(data.active_jobs || []).length ? `
+          <div class="current-job-strip">
+            ${data.active_jobs.map((job) => `<div><span>${escapeHtml(job.title)}</span><strong>${money(job.rate_per_hour)}/h</strong></div>`).join("")}
+          </div>
+        ` : ""}
+        <div class="list">
         ${(data.jobs || []).map((job) => {
           const pct = Math.min(100, Math.round((job.filled / Math.max(job.max_positions, 1)) * 100));
           const marketPct = Math.min(100, Math.round((job.market_filled / Math.max(job.market_cap, 1)) * 100));
@@ -872,12 +962,36 @@ function renderJobs() {
             </article>
           `;
         }).join("")}
+        </div>
+      </section>
       </div>
-    </div>
   `;
 }
 
 function bindJobs() {
+  $$("[data-job-tab]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.jobsTab = button.dataset.jobTab;
+      render();
+    });
+  });
+  $$(".department-application-form").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        const payload = Object.fromEntries(new FormData(form).entries());
+        await api("/api/jobs/department-applications", {
+          method: "POST",
+          body: { ...payload, department_key: form.dataset.departmentKey },
+        });
+        toast("Department application submitted");
+        await loadAppData("jobs");
+        render();
+      } catch (error) {
+        toast(error.message);
+      }
+    });
+  });
   $$("[data-apply-job]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
@@ -2068,7 +2182,7 @@ function fireRigCode(name) {
 function renderFireRigAssignments(data) {
   const rigs = data.rigs || [];
   const personnel = data.personnel || [];
-  const canManage = Boolean(data.can_manage_rigs);
+  const canManage = Boolean(data.can_manage_rigs || hasFireCommandAccess());
   const positionOptions = ["Fire Chief", "Deputy Chief", "Fire Marshal", "Battalion Chief", "Officer", "Driver", "Firefighter", "Medic", "Engineer"];
   return `
     <section class="fire-rig-panel fire-command-board">
@@ -2132,6 +2246,7 @@ function renderFireSettings() {
   const data = state.cache["fire-settings"] || state.cache.fire || {};
   const stats = data.stats || { active: 0, responding: 0, cleared: 0 };
   const commandRoles = ["Fire Chief", "Deputy Chief", "Fire Marshal"];
+  const commandEnabled = Boolean(data.can_manage_rigs || hasFireCommandAccess());
   return `
     <div class="fire-settings-screen">
       <section class="fire-settings-hero">
@@ -2142,7 +2257,7 @@ function renderFireSettings() {
         </div>
         <div class="fire-hero-status">
           <span class="fire-hero-pulse"></span>
-          <strong>${data.can_manage_rigs ? "Command enabled" : "Read only"}</strong>
+          <strong>${commandEnabled ? "Command enabled" : "Read only"}</strong>
           <small>${stats.active || 0} active / ${stats.responding || 0} responding</small>
         </div>
       </section>
@@ -2161,14 +2276,17 @@ function renderFireWorkspace() {
   const data = state.cache.fire || {};
   const alerts = data.alerts || [];
   const stats = data.stats || { active: 0, responding: 0, cleared: 0 };
+  const commandEnabled = Boolean(data.can_manage_rigs || hasFireCommandAccess());
   return `
     <section class="mdt-workspace fire-workspace">
       <header class="mdt-topbar">
         <div>
           <p class="eyebrow">${escapeHtml(state.session.user.primary_agency || "Fire Department")}</p>
           <h1>Fire Department MDT</h1>
+          <p class="mdt-subtitle">${commandEnabled ? "Command controls active" : "Incident response mode"}</p>
         </div>
         <div class="mdt-top-actions">
+          <span class="pill ${commandEnabled ? "green" : "amber"}">${commandEnabled ? "Chief controls" : "Read only"}</span>
           <button class="ghost" data-refresh-fire>Refresh</button>
           <button class="secondary" data-close-fire>Exit MDT</button>
         </div>
