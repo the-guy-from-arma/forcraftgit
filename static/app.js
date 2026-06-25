@@ -154,6 +154,14 @@ function render() {
     bindAuth();
     return;
   }
+  if (isUpdateLockdown()) {
+    if (state.activeApp && !appAvailable(state.activeApp)) {
+      state.activeApp = null;
+    }
+    if (state.activeApp === "dmv") {
+      state.dmvTab = "license";
+    }
+  }
   if (state.activeApp === "mdt" || state.activeApp === "fire") {
     app.innerHTML = (state.activeApp === "fire" ? renderFireWorkspace() : renderMdtWorkspace()) + renderCarEntryRequiredModal();
     state.activeApp === "fire" ? bindFireWorkspace() : bindMdtWorkspace();
@@ -224,6 +232,7 @@ function bindAuth() {
 }
 
 function renderCarEntryRequiredModal() {
+  if (isUpdateLockdown()) return "";
   const user = state.session?.user;
   if (!user || String(user.car_entry_code || "").trim()) return "";
   return `
@@ -261,6 +270,7 @@ function bindCarEntryRequiredModal() {
 
 function renderHome() {
   const { user, apps, unread_messages: unread } = state.session;
+  if (isUpdateLockdown()) return renderUpdateLockdownHome(apps);
   const locked = !user.verified && !user.roles.includes("owner") && !user.roles.includes("admin");
   return `
     <section class="home-stack">
@@ -299,10 +309,50 @@ function renderHome() {
   `;
 }
 
+function renderUpdateLockdownHome(apps) {
+  const allowed = (apps || []).filter((item) => item.enabled);
+  const hasDmv = allowed.some((item) => item.id === "dmv");
+  const hasMdt = allowed.some((item) => item.id === "mdt");
+  return `
+    <section class="update-lockdown-screen">
+      <div class="ios-update-nav">
+        <span>General</span>
+        <strong>Software Update</strong>
+        <span></span>
+      </div>
+      <div class="ios-setting-row">
+        <span>Automatic Updates</span>
+        <strong>On</strong>
+      </div>
+      <article class="ios-update-card">
+        <div class="update-app-icon">RP</div>
+        <div>
+          <h2>RP Command Update</h2>
+          <p class="muted small">Server maintenance mode</p>
+        </div>
+        <p>${escapeHtml(updateLockdownMessage())}</p>
+        <div class="update-progress"><span></span></div>
+        <p class="muted small">Available during update: ${hasDmv ? "Driver License" : ""}${hasDmv && hasMdt ? " and " : ""}${hasMdt ? "LEO MDT" : ""}${!allowed.length ? "No actions available for this account" : ""}.</p>
+      </article>
+      <div class="update-action-list">
+        ${allowed.map((item) => `
+          <button class="ios-update-action" data-open-app="${item.id}">
+            <span>${escapeHtml(item.label)}</span>
+            <strong>${item.id === "dmv" ? "Open Driver License" : item.id === "mdt" ? "Open MDT" : "Open"}</strong>
+          </button>
+        `).join("") || `<div class="empty">No available update-mode actions</div>`}
+      </div>
+    </section>
+  `;
+}
+
 function bindHome() {
   $$("[data-open-app]").forEach((button) => {
     button.addEventListener("click", async () => {
       state.activeApp = button.dataset.openApp;
+      if (isUpdateLockdown() && state.activeApp === "dmv") {
+        state.dmvTab = "license";
+      }
       await loadAppData(state.activeApp);
       render();
     });
@@ -440,6 +490,18 @@ function can(role) {
 
 function canAny(...roles) {
   return roles.some((role) => can(role));
+}
+
+function isUpdateLockdown() {
+  return Boolean(state.session?.system?.update_lockdown_enabled);
+}
+
+function updateLockdownMessage() {
+  return state.session?.system?.update_lockdown_message || "System update in progress. Driver License and LEO MDT remain available.";
+}
+
+function appAvailable(id) {
+  return Boolean((state.session?.apps || []).find((item) => item.id === id && item.enabled));
 }
 
 function normalizedRole(role) {
@@ -749,13 +811,25 @@ function renderDmv() {
   const applications = data.license_applications || [];
   const licenseAutopilot = data.license_autopilot || { enabled: true, minutes: 6 };
   const activeVehicle = vehicles[0] || record;
+  const lockdown = isUpdateLockdown();
+  if (lockdown && state.dmvTab !== "license") {
+    state.dmvTab = "license";
+  }
   return `
     <div class="stack">
-      <div class="segmented">
-        <button class="${state.dmvTab === "overview" ? "active" : ""}" data-dmv-tab="overview">Overview</button>
-        <button class="${state.dmvTab === "license" ? "active" : ""}" data-dmv-tab="license">License</button>
-        <button class="${state.dmvTab === "vehicles" ? "active" : ""}" data-dmv-tab="vehicles">Vehicles</button>
-      </div>
+      ${lockdown ? `
+        <section class="update-lockdown-mini">
+          <p class="eyebrow">Software Update</p>
+          <h3>Driver License remains available</h3>
+          <p class="muted small">${escapeHtml(updateLockdownMessage())}</p>
+        </section>
+      ` : `
+        <div class="segmented">
+          <button class="${state.dmvTab === "overview" ? "active" : ""}" data-dmv-tab="overview">Overview</button>
+          <button class="${state.dmvTab === "license" ? "active" : ""}" data-dmv-tab="license">License</button>
+          <button class="${state.dmvTab === "vehicles" ? "active" : ""}" data-dmv-tab="vehicles">Vehicles</button>
+        </div>
+      `}
       ${state.dmvTab === "license" ? renderDmvLicense(applications, licenseAutopilot) : state.dmvTab === "vehicles" ? renderDmvVehicles(vehicles, record) : renderDmvOverview(record, vehicles, applications, activeVehicle)}
     </div>
   `;
@@ -3910,21 +3984,22 @@ function renderAdmin() {
 
 function renderSystem() {
   const data = state.cache.system || {};
-  const settings = data.settings || { autopilot_verify_enabled: false, autopilot_verify_minutes: 120, autopilot_license_enabled: true, autopilot_license_minutes: 6 };
+  const settings = data.settings || { autopilot_verify_enabled: false, autopilot_verify_minutes: 120, autopilot_license_enabled: true, autopilot_license_minutes: 6, update_lockdown_enabled: false, update_lockdown_message: "System update in progress. Driver License and LEO MDT remain available." };
   const stats = data.stats || { pending_accounts: 0, eligible_accounts: 0, pending_license_applications: 0, eligible_license_applications: 0 };
   const minutesValue = Number(settings.autopilot_verify_minutes || 120);
   const licenseMinutesValue = Number(settings.autopilot_license_minutes || 6);
   const hoursLabel = minutesValue >= 60 ? `${(minutesValue / 60).toFixed(minutesValue % 60 ? 1 : 0)} hours` : `${minutesValue} minutes`;
   const licenseLabel = licenseMinutesValue >= 60 ? `${(licenseMinutesValue / 60).toFixed(licenseMinutesValue % 60 ? 1 : 0)} hours` : `${licenseMinutesValue} minutes`;
+  const lockdownEnabled = Boolean(settings.update_lockdown_enabled);
   return `
     <div class="stack system-app">
       <section class="profile-hero system-hero">
         <div>
           <p class="eyebrow">Owner controls</p>
           <h3>System Settings</h3>
-          <p>Verification autopilot is ${settings.autopilot_verify_enabled ? "enabled" : "disabled"} / Driver license autopilot is ${settings.autopilot_license_enabled ? "enabled" : "disabled"}</p>
+          <p>Verification autopilot is ${settings.autopilot_verify_enabled ? "enabled" : "disabled"} / Driver license autopilot is ${settings.autopilot_license_enabled ? "enabled" : "disabled"} / Update lockdown is ${lockdownEnabled ? "enabled" : "disabled"}</p>
         </div>
-        <span class="pill ${settings.autopilot_license_enabled || settings.autopilot_verify_enabled ? "green" : "amber"}">${settings.autopilot_license_enabled || settings.autopilot_verify_enabled ? "auto" : "manual"}</span>
+        <span class="pill ${lockdownEnabled ? "amber" : settings.autopilot_license_enabled || settings.autopilot_verify_enabled ? "green" : "amber"}">${lockdownEnabled ? "lockdown" : settings.autopilot_license_enabled || settings.autopilot_verify_enabled ? "auto" : "manual"}</span>
       </section>
       <div class="grid-2">
         <div class="metric"><span>Pending accounts</span><strong>${stats.pending_accounts || 0}</strong></div>
@@ -3955,6 +4030,18 @@ function renderSystem() {
           <label class="check-row"><input type="checkbox" name="autopilot_license_enabled" ${settings.autopilot_license_enabled ? "checked" : ""} /> Enable driver license auto approval</label>
           <label>Approve licenses after minutes<input name="autopilot_license_minutes" type="number" min="1" max="10080" step="1" value="${escapeHtml(licenseMinutesValue)}" /></label>
           <p class="muted small">Default is 6 minutes. Suspended or revoked licenses are not auto-reinstated.</p>
+        </div>
+        <div class="system-setting-block update-lockdown-setting">
+          <div class="row">
+            <div>
+              <p class="eyebrow">Software update mode</p>
+              <h3>System Update Lockdown</h3>
+            </div>
+            <span class="pill ${lockdownEnabled ? "amber" : "green"}">${lockdownEnabled ? "enabled" : "off"}</span>
+          </div>
+          <label class="check-row"><input type="checkbox" name="update_lockdown_enabled" ${lockdownEnabled ? "checked" : ""} /> Enable system update lockdown</label>
+          <label>Lockdown message<textarea name="update_lockdown_message" maxlength="240">${escapeHtml(settings.update_lockdown_message || "")}</textarea></label>
+          <p class="muted small">When enabled, the phone enters a Software Update screen. Only Driver License, LEO MDT, and owner System controls stay available.</p>
         </div>
         <button class="primary" type="submit">Save system settings</button>
       </form>
@@ -4094,6 +4181,8 @@ function bindSystem() {
           autopilot_verify_minutes: formData.get("autopilot_verify_minutes"),
           autopilot_license_enabled: formData.get("autopilot_license_enabled") === "on",
           autopilot_license_minutes: formData.get("autopilot_license_minutes"),
+          update_lockdown_enabled: formData.get("update_lockdown_enabled") === "on",
+          update_lockdown_message: formData.get("update_lockdown_message"),
         },
       });
       toast("System settings saved");

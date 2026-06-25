@@ -411,6 +411,8 @@ SYSTEM_SETTING_DEFAULTS = {
     "autopilot_verify_minutes": "120",
     "autopilot_license_enabled": "1",
     "autopilot_license_minutes": "6",
+    "update_lockdown_enabled": "0",
+    "update_lockdown_message": "System update in progress. Driver License and LEO MDT remain available.",
 }
 
 
@@ -1195,6 +1197,8 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "autopilot_verify_minutes": minutes,
         "autopilot_license_enabled": str(raw.get("autopilot_license_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "autopilot_license_minutes": license_minutes,
+        "update_lockdown_enabled": str(raw.get("update_lockdown_enabled") or "0") in ("1", "true", "True", "yes", "on"),
+        "update_lockdown_message": str(raw.get("update_lockdown_message") or SYSTEM_SETTING_DEFAULTS["update_lockdown_message"]).strip()[:240],
     }
 
 
@@ -1674,12 +1678,23 @@ def judge_required(user: DbRow | None) -> str | None:
     return None
 
 
-def app_catalog(user: DbRow | None) -> list[dict[str, Any]]:
+def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     if not user:
         return []
+    settings = settings or {}
+    lockdown = bool(settings.get("update_lockdown_enabled"))
     verified = bool(user["verified"]) or has_any(user, "owner", "admin")
     contracts_enabled = contracts_required(user) is None
     business_enabled = verified or is_business_staff(user)
+    if lockdown:
+        apps: list[dict[str, Any]] = []
+        if verified:
+            apps.append({"id": "dmv", "label": "Driver License", "icon": "id-card", "enabled": True, "coming_soon": False, "hidden": False})
+        if has_any(user, "leo", "cid", "owner"):
+            apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "coming_soon": False, "hidden": False})
+        if has_any(user, "owner"):
+            apps.append({"id": "system", "label": "System", "icon": "settings", "enabled": True, "coming_soon": False, "hidden": False})
+        return apps
     base = [
         ("profile", "Profile", "user", True, False),
         ("dmv", "DMV", "id-card", verified, False),
@@ -2182,15 +2197,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         apply_auto_verification(db)
         apply_auto_license_approval(db)
+        settings = get_system_settings(db)
         user = one(db, "SELECT * FROM users WHERE id = ?", (user["id"],)) or user
         unread = one(db, "SELECT COUNT(*) AS count FROM messages WHERE recipient_id = ? AND read_at IS NULL", (user["id"],))
         self.send_json(
             200,
             {
                 "user": public_user(user),
-                "apps": app_catalog(user),
+                "apps": app_catalog(user, settings),
                 "unread_messages": int(unread["count"] if unread else 0),
                 "income": income_snapshot(db, user),
+                "system": {
+                    "update_lockdown_enabled": settings["update_lockdown_enabled"],
+                    "update_lockdown_message": settings["update_lockdown_message"],
+                },
             },
         )
 
@@ -2902,6 +2922,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err)
             return
+        if get_system_settings(db)["update_lockdown_enabled"]:
+            self.error(423, "DMV vehicle updates are locked during system update mode")
+            return
         payload = self.read_json()
         allowed = ["vehicle_make", "vehicle_model", "vehicle_color", "plate", "insurance_status"]
         updates = {key: str(payload[key]).strip()[:40] for key in allowed if key in payload and str(payload[key]).strip()}
@@ -2948,6 +2971,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         err = verified_required(user)
         if err:
             self.error(403 if user else 401, err)
+            return
+        if get_system_settings(db)["update_lockdown_enabled"]:
+            self.error(423, "Vehicle registration is locked during system update mode")
             return
         payload = self.read_json()
         missing = require_fields(payload, "vehicle_year", "vehicle_make", "vehicle_model", "vehicle_color", "plate", "insurance_status")
@@ -4905,10 +4931,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         license_minutes = max(1, min(license_minutes, 10080))
         enabled_value = "1" if str(enabled).lower() in ("1", "true", "yes", "on") else "0"
         license_enabled_value = "1" if str(license_enabled).lower() in ("1", "true", "yes", "on") else "0"
+        lockdown_enabled = payload.get("update_lockdown_enabled", current_settings["update_lockdown_enabled"])
+        lockdown_enabled_value = "1" if str(lockdown_enabled).lower() in ("1", "true", "yes", "on") else "0"
+        lockdown_message = str(payload.get("update_lockdown_message") or current_settings["update_lockdown_message"] or SYSTEM_SETTING_DEFAULTS["update_lockdown_message"]).strip()[:240]
         set_system_setting(db, "autopilot_verify_enabled", enabled_value)
         set_system_setting(db, "autopilot_verify_minutes", str(minutes))
         set_system_setting(db, "autopilot_license_enabled", license_enabled_value)
         set_system_setting(db, "autopilot_license_minutes", str(license_minutes))
+        set_system_setting(db, "update_lockdown_enabled", lockdown_enabled_value)
+        set_system_setting(db, "update_lockdown_message", lockdown_message)
         auto_verified = apply_auto_verification(db)
         auto_licensed = apply_auto_license_approval(db)
         settings = get_system_settings(db)

@@ -1,8 +1,8 @@
-const CACHE = "rp-command-v22-recruitment-only-jobs";
+const CACHE = "rp-command-v23-update-lockdown";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.22-recruitment-only-jobs",
-  "/static/app.js?v=0.0.22-recruitment-only-jobs",
+  "/static/styles.css?v=0.0.23-update-lockdown",
+  "/static/app.js?v=0.0.23-update-lockdown",
   "/static/icons/icon.svg",
   "/manifest.webmanifest"
 ];

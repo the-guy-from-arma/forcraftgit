@@ -1,6 +1,25 @@
 {
-  "version": "0.0.22",
+  "version": "0.0.23",
   "entries": [
+    {
+      "date": "2026-06-25",
+      "version": "0.0.23",
+      "title": "System Update Lockdown",
+      "added": [
+        "Owner System Settings now includes a System Update Lockdown mode with a custom lockdown message.",
+        "When lockdown is enabled, users see a Software Update-style phone screen.",
+        "Driver License and LEO MDT remain available during lockdown, with owner System controls preserved so lockdown can be disabled."
+      ],
+      "changed": [
+        "DMV opens directly to the Driver License page during update lockdown.",
+        "The app catalog is restricted during lockdown so unavailable apps cannot be opened from the phone screen."
+      ],
+      "fixed": [
+        "Vehicle registration and DMV vehicle updates are blocked while update lockdown is active.",
+        "PWA cache versioning now forces installed devices to load the update lockdown screen."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-06-24",
       "version": "0.0.22",
