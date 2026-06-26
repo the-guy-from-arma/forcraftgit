@@ -1,6 +1,21 @@
 {
-  "version": "0.0.27",
+  "version": "0.0.28",
   "entries": [
+    {
+      "date": "2026-06-25",
+      "version": "0.0.28",
+      "title": "Dispatch Past Calls Archive",
+      "added": [
+        "Moved completed dispatch calls out of the main dispatch queue and into a dedicated Past Calls modal.",
+        "Added a Past Calls button that opens full-call summaries with department, times, notes, and unit counts.",
+        "Allowed opening any past call directly into CAD for review and follow-up."
+      ],
+      "changed": [
+        "Main dispatch queue now stays focused on active calls while keeping historical calls available via button-open detail panel."
+      ],
+      "fixed": [],
+      "removed": []
+    },
     {
       "date": "2026-06-25",
       "version": "0.0.27",

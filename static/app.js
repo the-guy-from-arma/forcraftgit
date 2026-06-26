@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.27";
+const OS_VERSION = "0.0.28";
 
 const state = {
   authMode: "login",
@@ -27,6 +27,7 @@ const state = {
   mdtProfileTab: "profile",
   dispatchSelectedCallId: null,
   dispatchFilter: "active",
+  dispatchPastOpen: false,
   courtTab: "mine",
   contractsTab: "open",
   contractsInfoOpen: false,
@@ -2441,12 +2442,11 @@ function renderDispatchWorkspace() {
   const calls = data.calls || [];
   const stats = data.stats || { active: 0, critical: 0, assigned_units: 0, police: 0, fire: 0, ems: 0 };
   const activeStatuses = ["active", "staged", "responding", "on_scene", "held"];
-  const visibleCalls = state.dispatchFilter === "all"
-    ? calls
-    : calls.filter((call) => activeStatuses.includes(call.status));
+  const activeCalls = calls.filter((call) => activeStatuses.includes(call.status));
+  const pastCalls = calls.filter((call) => !activeStatuses.includes(call.status));
+  const visibleCalls = activeCalls;
   const selected = calls.find((call) => String(call.id) === String(state.dispatchSelectedCallId))
     || visibleCalls[0]
-    || calls[0]
     || null;
   state.dispatchSelectedCallId = selected?.id || null;
   const activeAssignments = selected ? dispatchCallAssignments(data, selected.id) : [];
@@ -2459,6 +2459,59 @@ function renderDispatchWorkspace() {
   const priorities = ["standard", "elevated", "critical"];
   const departments = ["police", "fire", "ems"];
   const callTypes = ["911 Call", "Traffic Stop", "Robbery", "Shots Fired", "Medical", "Fire", "Welfare Check", "Disturbance", "Officer Assist", "Other"];
+  const pastCallsMarkup = pastCalls.map((call) => {
+    const callAssignments = dispatchCallAssignments(data, call.id, true);
+    const callNotes = dispatchCallNotes(data, call.id);
+    const latestNote = callNotes[callNotes.length - 1];
+    const latestNoteText = latestNote ? String(latestNote.body || "").slice(0, 320) : "";
+    return `
+      <article class="dispatch-past-call">
+        <div class="dispatch-past-call-head">
+          <span class="dispatch-ticket-top">
+            <strong>#${call.id} ${escapeHtml(call.call_type || "Emergency Call")}</strong>
+            <span class="pill ${dispatchPriorityClass(call.priority)}">${escapeHtml(call.priority || "standard")}</span>
+          </span>
+          <span class="pill ${dispatchStatusClass(call.status)}">${escapeHtml(call.status || "active")}</span>
+        </div>
+        <div class="dispatch-past-call-meta">
+          <div><span>Department</span><strong>${escapeHtml((call.department || "police").toUpperCase())}</strong></div>
+          <div><span>Caller</span><strong>${escapeHtml(call.caller_name || call.created_by_name || "Unknown")}</strong></div>
+          <div><span>Location</span><strong>${escapeHtml(call.location || "Unknown")}</strong></div>
+          <div><span>Units</span><strong>${callAssignments.length}</strong></div>
+          <div><span>Created</span><strong>${call.created_at ? new Date(call.created_at).toLocaleString() : "N/A"}</strong></div>
+          <div><span>Updated</span><strong>${call.updated_at ? new Date(call.updated_at).toLocaleString() : "N/A"}</strong></div>
+        </div>
+        <div class="dispatch-call-note">
+          <strong>Intake note</strong>
+          <p>${escapeHtml(call.note || "No intake note")}</p>
+        </div>
+        <div class="dispatch-call-note">
+          <strong>${latestNote ? escapeHtml(latestNote.note_type || "dispatch update") : "Latest dispatch note"}</strong>
+          <p>${latestNoteText ? escapeHtml(latestNoteText) : "No dispatch notes yet"}</p>
+        </div>
+        <div class="row">
+          <div class="muted small">Call ID ${call.id}</div>
+          <button class="secondary" type="button" data-open-dispatch-past-call="${call.id}">Open in CAD</button>
+        </div>
+      </article>
+    `;
+  }).join("");
+  const pastCallsModal = state.dispatchPastOpen ? `
+    <div class="modal-backdrop dispatch-past-backdrop" data-close-dispatch-past>
+      <section class="mdt-modal dispatch-past-modal" role="dialog" aria-modal="true" aria-label="Past dispatch calls">
+        <header class="row">
+          <div>
+            <p class="eyebrow">Dispatch Archive</p>
+            <h2>Past Calls</h2>
+          </div>
+          <button class="icon-action" type="button" data-close-dispatch-past aria-label="Close">x</button>
+        </header>
+        <div class="mdt-modal-list dispatch-past-list">
+          ${pastCallsMarkup || `<div class="empty">No past calls yet.</div>`}
+        </div>
+      </section>
+    </div>
+  ` : "";
   return `
     <section class="mdt-workspace dispatch-workspace">
       <header class="mdt-topbar dispatch-topbar">
@@ -2486,10 +2539,7 @@ function renderDispatchWorkspace() {
               <p class="eyebrow">CAD queue</p>
               <h2>Calls</h2>
             </div>
-            <div class="dispatch-filter">
-              <button class="${state.dispatchFilter === "active" ? "active" : ""}" data-dispatch-filter="active">Active</button>
-              <button class="${state.dispatchFilter === "all" ? "active" : ""}" data-dispatch-filter="all">All</button>
-            </div>
+            <button class="ghost dispatch-past-button" type="button" data-open-dispatch-past ${pastCalls.length ? "" : "disabled"}>Past Calls (${pastCalls.length})</button>
           </div>
           <div class="dispatch-call-list">
             ${visibleCalls.map((call) => {
@@ -2624,6 +2674,7 @@ function renderDispatchWorkspace() {
           ` : ""}
         </aside>
       </div>
+      ${pastCallsModal}
     </section>
   `;
 }
@@ -2631,6 +2682,7 @@ function renderDispatchWorkspace() {
 function bindDispatchWorkspace() {
   $("[data-close-dispatch]")?.addEventListener("click", async () => {
     state.activeApp = null;
+    state.dispatchPastOpen = false;
     await loadSession();
   });
   $("[data-refresh-dispatch]")?.addEventListener("click", async () => {
@@ -2641,8 +2693,19 @@ function bindDispatchWorkspace() {
 }
 
 function bindDispatch() {
-  $$("[data-dispatch-filter]").forEach((button) => button.addEventListener("click", () => {
-    state.dispatchFilter = button.dataset.dispatchFilter;
+  $("[data-open-dispatch-past]")?.addEventListener("click", (event) => {
+    if (event.currentTarget?.disabled) return;
+    state.dispatchPastOpen = true;
+    render();
+  });
+  $$("[data-close-dispatch-past]").forEach((button) => button.addEventListener("click", (event) => {
+    if (event.currentTarget.classList?.contains("modal-backdrop") && event.target !== event.currentTarget) return;
+    state.dispatchPastOpen = false;
+    render();
+  }));
+  $$("[data-open-dispatch-past-call]").forEach((button) => button.addEventListener("click", () => {
+    state.dispatchSelectedCallId = button.dataset.openDispatchPastCall;
+    state.dispatchPastOpen = false;
     render();
   }));
   $$("[data-dispatch-call]").forEach((button) => button.addEventListener("click", () => {

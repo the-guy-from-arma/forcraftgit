@@ -1,8 +1,8 @@
-const CACHE = "rp-command-v27-dispatch-center";
+const CACHE = "rp-command-v28-dispatch-center";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.27-dispatch-center",
-  "/static/app.js?v=0.0.27-dispatch-center",
+  "/static/styles.css?v=0.0.28-dispatch-center",
+  "/static/app.js?v=0.0.28-dispatch-center",
   "/static/icons/icon.svg",
   "/manifest.webmanifest"
 ];
