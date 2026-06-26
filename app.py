@@ -900,12 +900,41 @@ def ensure_schema() -> None:
                 id SERIAL PRIMARY KEY,
                 officer_id INTEGER NOT NULL,
                 department TEXT NOT NULL DEFAULT 'police',
+                caller_name TEXT NOT NULL DEFAULT '',
+                call_type TEXT NOT NULL DEFAULT 'Emergency Call',
+                priority TEXT NOT NULL DEFAULT 'standard',
                 location TEXT NOT NULL,
                 note TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'active',
                 created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT '',
                 resolved_at TEXT,
                 FOREIGN KEY (officer_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS dispatch_call_units (
+                id SERIAL PRIMARY KEY,
+                alert_id INTEGER NOT NULL,
+                unit_id INTEGER NOT NULL,
+                assigned_by INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'assigned',
+                notes TEXT NOT NULL DEFAULT '',
+                attached_at TEXT NOT NULL,
+                detached_at TEXT,
+                FOREIGN KEY (alert_id) REFERENCES panic_alerts(id) ON DELETE CASCADE,
+                FOREIGN KEY (unit_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (assigned_by) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS dispatch_call_notes (
+                id SERIAL PRIMARY KEY,
+                alert_id INTEGER NOT NULL,
+                author_id INTEGER NOT NULL,
+                note_type TEXT NOT NULL DEFAULT 'dispatch update',
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (alert_id) REFERENCES panic_alerts(id) ON DELETE CASCADE,
+                FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS cad_after_call_reports (
@@ -1112,6 +1141,42 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS last_known TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS requirements TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE panic_alerts ADD COLUMN IF NOT EXISTS department TEXT NOT NULL DEFAULT 'police'")
+    db.execute("ALTER TABLE panic_alerts ADD COLUMN IF NOT EXISTS caller_name TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE panic_alerts ADD COLUMN IF NOT EXISTS call_type TEXT NOT NULL DEFAULT 'Emergency Call'")
+    db.execute("ALTER TABLE panic_alerts ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'standard'")
+    db.execute("ALTER TABLE panic_alerts ADD COLUMN IF NOT EXISTS updated_at TEXT NOT NULL DEFAULT ''")
+    db.execute("UPDATE panic_alerts SET updated_at = created_at WHERE updated_at = ''")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dispatch_call_units (
+            id SERIAL PRIMARY KEY,
+            alert_id INTEGER NOT NULL,
+            unit_id INTEGER NOT NULL,
+            assigned_by INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'assigned',
+            notes TEXT NOT NULL DEFAULT '',
+            attached_at TEXT NOT NULL,
+            detached_at TEXT,
+            FOREIGN KEY (alert_id) REFERENCES panic_alerts(id) ON DELETE CASCADE,
+            FOREIGN KEY (unit_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (assigned_by) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dispatch_call_notes (
+            id SERIAL PRIMARY KEY,
+            alert_id INTEGER NOT NULL,
+            author_id INTEGER NOT NULL,
+            note_type TEXT NOT NULL DEFAULT 'dispatch update',
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (alert_id) REFERENCES panic_alerts(id) ON DELETE CASCADE,
+            FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS cad_after_call_reports (
@@ -1196,6 +1261,10 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS arma_link_codes_status_idx ON arma_link_codes (status)")
     db.execute("CREATE INDEX IF NOT EXISTS arma_activity_logs_user_idx ON arma_activity_logs (user_id)")
     db.execute("CREATE INDEX IF NOT EXISTS panic_alerts_department_idx ON panic_alerts (department)")
+    db.execute("CREATE INDEX IF NOT EXISTS panic_alerts_status_idx ON panic_alerts (status, priority, created_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS dispatch_call_units_alert_idx ON dispatch_call_units (alert_id, detached_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS dispatch_call_units_unit_idx ON dispatch_call_units (unit_id, detached_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS dispatch_call_notes_alert_idx ON dispatch_call_notes (alert_id, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS cad_after_call_reports_officer_idx ON cad_after_call_reports (officer_id, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS cad_after_call_reports_alert_idx ON cad_after_call_reports (related_alert_id)")
     db.execute("CREATE INDEX IF NOT EXISTS cad_after_call_reports_disposition_idx ON cad_after_call_reports (disposition)")
@@ -1683,6 +1752,14 @@ def fire_chief_required(user: DbRow | None) -> str | None:
     return None
 
 
+def dispatcher_required(user: DbRow | None) -> str | None:
+    if not user:
+        return "Authentication required"
+    if not has_any(user, "dispatcher", "owner"):
+        return "Dispatcher access required"
+    return None
+
+
 def emergency_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
@@ -1755,6 +1832,8 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
     ]
     if contracts_enabled:
         apps.append({"id": "contracts", "label": "Contracts", "icon": "target", "enabled": True, "coming_soon": False, "hidden": False})
+    if has_any(user, "dispatcher", "owner"):
+        apps.append({"id": "dispatch", "label": "Dispatch", "icon": "radio", "enabled": True, "hidden": False})
     if has_any(user, "leo", "cid", "owner"):
         apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "hidden": False})
     if has_any(user, *FIRE_SERVICE_ROLES, "owner"):
@@ -2125,6 +2204,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_alerts(db, user)
                 elif path.startswith("/api/mdt/alerts/") and method == "PATCH":
                     self.api_clear_alert(db, user, self.path_int(path, 3))
+                elif path == "/api/dispatch/overview" and method == "GET":
+                    self.api_dispatch_overview(db, user)
+                elif path == "/api/dispatch/calls" and method == "POST":
+                    self.api_dispatch_create_call(db, user)
+                elif path.startswith("/api/dispatch/calls/") and path.endswith("/units") and method == "POST":
+                    self.api_dispatch_attach_unit(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/dispatch/calls/") and path.endswith("/notes") and method == "POST":
+                    self.api_dispatch_add_note(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/dispatch/calls/") and method == "PATCH":
+                    self.api_dispatch_update_call(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/dispatch/assignments/") and method == "PATCH":
+                    self.api_dispatch_update_assignment(db, user, self.path_int(path, 3))
                 elif path == "/api/fire/overview" and method == "GET":
                     self.api_fire_overview(db, user)
                 elif path == "/api/fire/rigs" and method == "PATCH":
@@ -4298,9 +4389,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         location = str(payload.get("location") or "Unknown location")[:120]
         note = str(payload.get("note") or "Emergency activation")[:240]
+        ts = now_iso()
         cur = db.execute(
-            "INSERT INTO panic_alerts (officer_id, department, location, note, created_at) VALUES (?, ?, ?, ?, ?) RETURNING id",
-            (user["id"], department, location, note, now_iso()),
+            """
+            INSERT INTO panic_alerts
+            (officer_id, department, call_type, priority, location, note, created_at, updated_at)
+            VALUES (?, ?, 'Panic Activation', 'critical', ?, ?, ?, ?)
+            RETURNING id
+            """,
+            (user["id"], department, location, note, ts, ts),
         )
         created = cur.fetchone()
         recipient_patterns = {
@@ -4585,7 +4682,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         rows = all_rows(
             db,
             """
-            SELECT p.*, u.name AS officer_name, u.primary_agency
+            SELECT p.*, u.name AS officer_name, u.primary_agency,
+                   (SELECT COUNT(*) FROM dispatch_call_units a WHERE a.alert_id = p.id AND a.detached_at IS NULL) AS assigned_unit_count,
+                   (SELECT n.body FROM dispatch_call_notes n WHERE n.alert_id = p.id ORDER BY n.created_at DESC LIMIT 1) AS dispatch_last_note,
+                   (SELECT n.note_type FROM dispatch_call_notes n WHERE n.alert_id = p.id ORDER BY n.created_at DESC LIMIT 1) AS dispatch_last_note_type
             FROM panic_alerts p
             JOIN users u ON u.id = p.officer_id
             ORDER BY CASE p.status WHEN 'active' THEN 0 ELSE 1 END, p.created_at DESC
@@ -4610,6 +4710,312 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         add_message(db, alert["officer_id"], "Panic alert cleared", f"{user['name']} cleared your panic activation at {alert['location']}.", user["id"])
         self.send_json(200, {"ok": True})
 
+    def api_dispatch_overview(self, db: Database, user: DbRow | None) -> None:
+        err = dispatcher_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        calls = all_rows(
+            db,
+            """
+            SELECT p.*, u.name AS created_by_name, u.primary_agency AS created_by_agency
+            FROM panic_alerts p
+            JOIN users u ON u.id = p.officer_id
+            ORDER BY CASE p.status
+                WHEN 'active' THEN 0
+                WHEN 'staged' THEN 1
+                WHEN 'responding' THEN 2
+                WHEN 'on_scene' THEN 3
+                WHEN 'held' THEN 4
+                ELSE 5
+            END,
+            CASE p.priority WHEN 'critical' THEN 0 WHEN 'elevated' THEN 1 ELSE 2 END,
+            p.created_at DESC
+            LIMIT 140
+            """,
+        )
+        assignments = all_rows(
+            db,
+            """
+            SELECT a.*, unit.name AS unit_name, unit.roles AS unit_roles, unit.primary_agency AS unit_agency,
+                   dispatcher.name AS dispatcher_name
+            FROM dispatch_call_units a
+            JOIN users unit ON unit.id = a.unit_id
+            JOIN users dispatcher ON dispatcher.id = a.assigned_by
+            ORDER BY a.attached_at DESC
+            LIMIT 300
+            """,
+        )
+        notes = all_rows(
+            db,
+            """
+            SELECT n.*, author.name AS author_name
+            FROM dispatch_call_notes n
+            JOIN users author ON author.id = n.author_id
+            ORDER BY n.created_at DESC
+            LIMIT 300
+            """,
+        )
+        unit_rows = all_rows(
+            db,
+            """
+            SELECT id, civ_number, name, roles, primary_agency
+            FROM users
+            ORDER BY name
+            LIMIT 600
+            """,
+        )
+        units = [
+            dict(row)
+            for row in unit_rows
+            if has_any(row, "leo", "cid", "fireman", *FIRE_COMMAND_ROLES, "ems", "owner")
+        ]
+        active_statuses = {"active", "staged", "responding", "on_scene", "held"}
+        stats = {
+            "active": sum(1 for row in calls if row.get("status") in active_statuses),
+            "critical": sum(1 for row in calls if row.get("priority") == "critical" and row.get("status") in active_statuses),
+            "assigned_units": sum(1 for row in assignments if not row.get("detached_at")),
+            "police": sum(1 for row in calls if row.get("department") == "police" and row.get("status") in active_statuses),
+            "fire": sum(1 for row in calls if row.get("department") == "fire" and row.get("status") in active_statuses),
+            "ems": sum(1 for row in calls if row.get("department") == "ems" and row.get("status") in active_statuses),
+        }
+        self.send_json(
+            200,
+            {
+                "calls": [dict(row) for row in calls],
+                "assignments": [dict(row) for row in assignments],
+                "notes": [dict(row) for row in notes],
+                "units": units,
+                "stats": stats,
+            },
+        )
+
+    def api_dispatch_create_call(self, db: Database, user: DbRow | None) -> None:
+        err = dispatcher_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        missing = require_fields(payload, "department", "location", "note")
+        if missing:
+            self.error(400, missing)
+            return
+        department = str(payload.get("department") or "police").strip().lower()
+        if department not in ("police", "fire", "ems"):
+            self.error(400, "Invalid emergency department")
+            return
+        priority = str(payload.get("priority") or "standard").strip().lower()
+        if priority not in ("standard", "elevated", "critical"):
+            self.error(400, "Invalid call priority")
+            return
+        call_type = str(payload.get("call_type") or "911 Call").strip()[:80]
+        location = str(payload.get("location") or "").strip()[:180]
+        note = str(payload.get("note") or "").strip()[:1200]
+        caller_name = str(payload.get("caller_name") or "").strip()[:120]
+        if not location or not note:
+            self.error(400, "Location and initial call notes are required")
+            return
+        ts = now_iso()
+        created = db.execute(
+            """
+            INSERT INTO panic_alerts
+            (officer_id, department, caller_name, call_type, priority, location, note, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+            RETURNING id
+            """,
+            (user["id"], department, caller_name, call_type, priority, location, note, ts, ts),
+        ).fetchone()
+        alert_id = int(created["id"])
+        db.execute(
+            "INSERT INTO dispatch_call_notes (alert_id, author_id, note_type, body, created_at) VALUES (?, ?, ?, ?, ?)",
+            (alert_id, user["id"], "call intake", note, ts),
+        )
+        recipient_patterns = {
+            "police": ("%leo%", "%cid%", "%owner%"),
+            "fire": ("%fireman%", "%fire_chief%", "%deputy_chief%", "%fire_marshal%", "%owner%"),
+            "ems": ("%ems%", "%owner%", "%admin%"),
+        }[department]
+        recipients = all_rows(
+            db,
+            "SELECT id FROM users WHERE " + " OR ".join(["roles LIKE ?"] * len(recipient_patterns)),
+            recipient_patterns,
+        )
+        for recipient in recipients:
+            if recipient["id"] != user["id"]:
+                add_message(db, recipient["id"], f"CAD call #{alert_id}", f"{department.upper()} {priority} call: {call_type} at {location}. {note[:220]}", user["id"])
+        self.send_json(201, {"ok": True, "alert_id": alert_id})
+
+    def api_dispatch_update_call(self, db: Database, user: DbRow | None, alert_id: int) -> None:
+        err = dispatcher_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        call = one(db, "SELECT * FROM panic_alerts WHERE id = ?", (alert_id,))
+        if not call:
+            self.error(404, "CAD call not found")
+            return
+        status = str(payload.get("status") or call["status"]).strip().lower()
+        priority = str(payload.get("priority") or call["priority"] or "standard").strip().lower()
+        if status not in ("active", "staged", "responding", "on_scene", "held", "cleared", "closed"):
+            self.error(400, "Invalid call status")
+            return
+        if priority not in ("standard", "elevated", "critical"):
+            self.error(400, "Invalid call priority")
+            return
+        ts = now_iso()
+        resolved_at = ts if status in ("cleared", "closed") else None
+        db.execute(
+            "UPDATE panic_alerts SET status = ?, priority = ?, updated_at = ?, resolved_at = ? WHERE id = ?",
+            (status, priority, ts, resolved_at, alert_id),
+        )
+        body = str(payload.get("note") or "").strip()
+        if body:
+            db.execute(
+                "INSERT INTO dispatch_call_notes (alert_id, author_id, note_type, body, created_at) VALUES (?, ?, ?, ?, ?)",
+                (alert_id, user["id"], "status update", body[:1600], ts),
+            )
+            active_units = all_rows(
+                db,
+                "SELECT unit_id FROM dispatch_call_units WHERE alert_id = ? AND detached_at IS NULL",
+                (alert_id,),
+            )
+            for assigned in active_units:
+                if assigned["unit_id"] != user["id"]:
+                    add_message(db, assigned["unit_id"], f"CAD status #{alert_id}", f"{status}: {body[:220]}", user["id"])
+        self.send_json(200, {"ok": True, "id": alert_id, "status": status, "priority": priority})
+
+    def api_dispatch_attach_unit(self, db: Database, user: DbRow | None, alert_id: int) -> None:
+        err = dispatcher_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        call = one(db, "SELECT * FROM panic_alerts WHERE id = ?", (alert_id,))
+        if not call:
+            self.error(404, "CAD call not found")
+            return
+        try:
+            unit_id = int(payload.get("unit_id") or 0)
+        except (TypeError, ValueError):
+            self.error(400, "Invalid unit")
+            return
+        unit = one(db, "SELECT id, name, roles FROM users WHERE id = ?", (unit_id,))
+        if not unit or not has_any(unit, "leo", "cid", "fireman", *FIRE_COMMAND_ROLES, "ems", "owner"):
+            self.error(404, "Emergency unit not found")
+            return
+        status = str(payload.get("status") or "assigned").strip().lower()
+        if status not in ("assigned", "enroute", "on_scene", "staged", "cleared"):
+            self.error(400, "Invalid unit status")
+            return
+        notes = str(payload.get("notes") or "").strip()[:800]
+        existing = one(
+            db,
+            "SELECT id FROM dispatch_call_units WHERE alert_id = ? AND unit_id = ? AND detached_at IS NULL",
+            (alert_id, unit_id),
+        )
+        ts = now_iso()
+        if existing:
+            assignment_id = int(existing["id"])
+            db.execute(
+                "UPDATE dispatch_call_units SET status = ?, notes = ? WHERE id = ?",
+                (status, notes, assignment_id),
+            )
+        else:
+            created = db.execute(
+                """
+                INSERT INTO dispatch_call_units (alert_id, unit_id, assigned_by, status, notes, attached_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                RETURNING id
+                """,
+                (alert_id, unit_id, user["id"], status, notes, ts),
+            ).fetchone()
+            assignment_id = int(created["id"])
+        if call["status"] in ("active", "staged"):
+            db.execute("UPDATE panic_alerts SET status = 'responding', updated_at = ? WHERE id = ?", (ts, alert_id))
+        db.execute(
+            "INSERT INTO dispatch_call_notes (alert_id, author_id, note_type, body, created_at) VALUES (?, ?, ?, ?, ?)",
+            (alert_id, user["id"], "unit attached", f"{unit['name']} attached as {status}. {notes}".strip(), ts),
+        )
+        add_message(db, unit_id, f"Assigned CAD call #{alert_id}", f"Dispatch attached you to {call['department'].upper()} call at {call['location']}. {notes}", user["id"])
+        self.send_json(201, {"ok": True, "assignment_id": assignment_id})
+
+    def api_dispatch_update_assignment(self, db: Database, user: DbRow | None, assignment_id: int) -> None:
+        err = dispatcher_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        assignment = one(
+            db,
+            """
+            SELECT a.*, p.location, unit.name AS unit_name
+            FROM dispatch_call_units a
+            JOIN panic_alerts p ON p.id = a.alert_id
+            JOIN users unit ON unit.id = a.unit_id
+            WHERE a.id = ?
+            """,
+            (assignment_id,),
+        )
+        if not assignment:
+            self.error(404, "Unit assignment not found")
+            return
+        detach = bool(payload.get("detach"))
+        status = str(payload.get("status") or assignment["status"]).strip().lower()
+        if status not in ("assigned", "enroute", "on_scene", "staged", "cleared", "detached"):
+            self.error(400, "Invalid unit status")
+            return
+        if detach:
+            status = "detached"
+        notes = str(payload.get("notes") or assignment.get("notes") or "").strip()[:800]
+        ts = now_iso()
+        db.execute(
+            "UPDATE dispatch_call_units SET status = ?, notes = ?, detached_at = ? WHERE id = ?",
+            (status, notes, ts if detach else assignment.get("detached_at"), assignment_id),
+        )
+        note_type = "unit detached" if detach else "unit status"
+        db.execute(
+            "INSERT INTO dispatch_call_notes (alert_id, author_id, note_type, body, created_at) VALUES (?, ?, ?, ?, ?)",
+            (assignment["alert_id"], user["id"], note_type, f"{assignment['unit_name']} {status}. {notes}".strip(), ts),
+        )
+        self.send_json(200, {"ok": True, "assignment_id": assignment_id, "status": status})
+
+    def api_dispatch_add_note(self, db: Database, user: DbRow | None, alert_id: int) -> None:
+        err = dispatcher_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        call = one(db, "SELECT * FROM panic_alerts WHERE id = ?", (alert_id,))
+        if not call:
+            self.error(404, "CAD call not found")
+            return
+        body = str(payload.get("body") or "").strip()
+        if not body:
+            self.error(400, "Dispatch note is required")
+            return
+        note_type = str(payload.get("note_type") or "dispatch update").strip()[:60]
+        ts = now_iso()
+        db.execute(
+            "INSERT INTO dispatch_call_notes (alert_id, author_id, note_type, body, created_at) VALUES (?, ?, ?, ?, ?)",
+            (alert_id, user["id"], note_type, body[:2000], ts),
+        )
+        db.execute("UPDATE panic_alerts SET updated_at = ? WHERE id = ?", (ts, alert_id))
+        active_units = all_rows(
+            db,
+            "SELECT unit_id FROM dispatch_call_units WHERE alert_id = ? AND detached_at IS NULL",
+            (alert_id,),
+        )
+        for assigned in active_units:
+            if assigned["unit_id"] != user["id"]:
+                add_message(db, assigned["unit_id"], f"CAD note #{alert_id}", f"{note_type}: {body[:220]}", user["id"])
+        self.send_json(201, {"ok": True})
+
     def api_fire_overview(self, db: Database, user: DbRow | None) -> None:
         err = fire_required(user)
         if err:
@@ -4626,7 +5032,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         rows = all_rows(
             db,
             f"""
-            SELECT p.*, u.name AS officer_name, u.primary_agency
+            SELECT p.*, u.name AS officer_name, u.primary_agency,
+                   (SELECT COUNT(*) FROM dispatch_call_units a WHERE a.alert_id = p.id AND a.detached_at IS NULL) AS assigned_unit_count,
+                   (SELECT n.body FROM dispatch_call_notes n WHERE n.alert_id = p.id ORDER BY n.created_at DESC LIMIT 1) AS dispatch_last_note,
+                   (SELECT n.note_type FROM dispatch_call_notes n WHERE n.alert_id = p.id ORDER BY n.created_at DESC LIMIT 1) AS dispatch_last_note_type
             FROM panic_alerts p
             JOIN users u ON u.id = p.officer_id
             WHERE p.department IN ({placeholders})

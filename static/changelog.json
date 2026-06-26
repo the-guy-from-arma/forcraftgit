@@ -1,6 +1,22 @@
 {
-  "version": "0.0.26",
+  "version": "0.0.27",
   "entries": [
+    {
+      "date": "2026-06-25",
+      "version": "0.0.27",
+      "title": "Dispatch Control Center",
+      "added": [
+        "Added a Dispatch app for dispatcher and owner roles.",
+        "Dispatch now opens as a full control-center CAD dashboard with call queue, call intake, selected call controls, unit assignment, and scene notes.",
+        "Dispatchers can create CAD calls, attach and detach units, update call status and priority, and post notes for active scenes."
+      ],
+      "changed": [
+        "911/Panic calls now carry call type, priority, and updated timestamps for dispatcher tracking.",
+        "PWA cache versioning was bumped so installed devices load the Dispatch app."
+      ],
+      "fixed": [],
+      "removed": []
+    },
     {
       "date": "2026-06-25",
       "version": "0.0.26",

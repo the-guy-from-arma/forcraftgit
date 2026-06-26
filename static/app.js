@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.26";
+const OS_VERSION = "0.0.27";
 
 const state = {
   authMode: "login",
@@ -25,6 +25,8 @@ const state = {
   cidWarrantModalId: null,
   mdtProfileUserId: null,
   mdtProfileTab: "profile",
+  dispatchSelectedCallId: null,
+  dispatchFilter: "active",
   courtTab: "mine",
   contractsTab: "open",
   contractsInfoOpen: false,
@@ -49,6 +51,7 @@ const iconSvg = {
   message: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/></svg>',
   shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="M9 12l2 2 4-5"/></svg>',
   flame: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8.5 14.5A4.5 4.5 0 1 0 17 12c0-3-2-5-5-8-.5 3-2 4.5-3.5 6S6 12.7 8.5 14.5Z"/><path d="M12 22a4 4 0 0 0 4-4c0-1.8-1-3.3-3-5-.3 1.8-1.3 2.7-2.2 3.5-.8.8-1.3 1.5-1.3 2.5A2.5 2.5 0 0 0 12 22Z"/></svg>',
+  radio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 11h14v10H5z"/><path d="M8 11 15 3"/><circle cx="9" cy="16" r="1.5"/><path d="M13 15h3M13 18h3"/></svg>',
   target: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
   scroll: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 21h9a3 3 0 0 0 3-3V5a2 2 0 0 0-2-2H7a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3h1Z"/><path d="M8 21a3 3 0 0 1-3-3V7h13"/><path d="M9 11h6M9 15h5"/></svg>',
   settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V22a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 18l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1A2 2 0 1 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>',
@@ -69,6 +72,7 @@ const tileColors = {
   messages: "linear-gradient(145deg, #ffffff, #6d7779)",
   contracts: "linear-gradient(145deg, #ff5d7d, #4120a4)",
   changelog: "linear-gradient(145deg, #7ee7ff, #3158e8)",
+  dispatch: "linear-gradient(145deg, #58f0e6, #1e3248)",
   mdt: "linear-gradient(145deg, #28343c, #050709)",
   fire: "linear-gradient(145deg, #ff6b4a, #2d1b1b)",
   "fire-settings": "linear-gradient(145deg, #ffb15a, #5b1815)",
@@ -164,9 +168,15 @@ function render() {
       state.dmvTab = "license";
     }
   }
-  if (state.activeApp === "mdt" || state.activeApp === "fire") {
-    app.innerHTML = (state.activeApp === "fire" ? renderFireWorkspace() : renderMdtWorkspace()) + renderCarEntryRequiredModal();
-    state.activeApp === "fire" ? bindFireWorkspace() : bindMdtWorkspace();
+  if (state.activeApp === "mdt" || state.activeApp === "fire" || state.activeApp === "dispatch") {
+    app.innerHTML = (
+      state.activeApp === "fire"
+        ? renderFireWorkspace()
+        : state.activeApp === "dispatch"
+          ? renderDispatchWorkspace()
+          : renderMdtWorkspace()
+    ) + renderCarEntryRequiredModal();
+    state.activeApp === "fire" ? bindFireWorkspace() : state.activeApp === "dispatch" ? bindDispatchWorkspace() : bindMdtWorkspace();
     bindCarEntryRequiredModal();
     return;
   }
@@ -429,6 +439,7 @@ async function loadAppData(id) {
     messages: () => api("/api/messages"),
     contracts: () => api("/api/contracts"),
     changelog: () => api("/api/changelog"),
+    dispatch: () => api("/api/dispatch/overview"),
     mdt: async () => {
       const data = {
         charges: await api("/api/mdt/charges"),
@@ -478,6 +489,7 @@ function bindPanel() {
     business: bindBusiness,
     messages: bindMessages,
     contracts: bindContracts,
+    dispatch: bindDispatch,
     mdt: bindMdt,
     fire: bindFireMdt,
     "fire-settings": bindFireSettings,
@@ -2399,6 +2411,315 @@ function bindMdtWorkspace() {
   bindMdt();
 }
 
+function dispatchStatusClass(status) {
+  if (["cleared", "closed"].includes(status)) return "green";
+  if (["held", "staged"].includes(status)) return "amber";
+  if (["active", "responding", "on_scene"].includes(status)) return "red";
+  return "amber";
+}
+
+function dispatchPriorityClass(priority) {
+  if (priority === "critical") return "red";
+  if (priority === "elevated") return "amber";
+  return "green";
+}
+
+function dispatchCallAssignments(data, callId, includeDetached = false) {
+  return (data.assignments || []).filter((item) =>
+    String(item.alert_id) === String(callId) && (includeDetached || !item.detached_at)
+  );
+}
+
+function dispatchCallNotes(data, callId) {
+  return (data.notes || [])
+    .filter((item) => String(item.alert_id) === String(callId))
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+}
+
+function renderDispatchWorkspace() {
+  const data = state.cache.dispatch || {};
+  const calls = data.calls || [];
+  const stats = data.stats || { active: 0, critical: 0, assigned_units: 0, police: 0, fire: 0, ems: 0 };
+  const activeStatuses = ["active", "staged", "responding", "on_scene", "held"];
+  const visibleCalls = state.dispatchFilter === "all"
+    ? calls
+    : calls.filter((call) => activeStatuses.includes(call.status));
+  const selected = calls.find((call) => String(call.id) === String(state.dispatchSelectedCallId))
+    || visibleCalls[0]
+    || calls[0]
+    || null;
+  state.dispatchSelectedCallId = selected?.id || null;
+  const activeAssignments = selected ? dispatchCallAssignments(data, selected.id) : [];
+  const allAssignments = selected ? dispatchCallAssignments(data, selected.id, true) : [];
+  const notes = selected ? dispatchCallNotes(data, selected.id) : [];
+  const assignedUnitIds = new Set(activeAssignments.map((item) => String(item.unit_id)));
+  const availableUnits = (data.units || []).filter((unit) => !assignedUnitIds.has(String(unit.id)));
+  const callStatuses = ["active", "staged", "responding", "on_scene", "held", "cleared", "closed"];
+  const unitStatuses = ["assigned", "enroute", "on_scene", "staged", "cleared"];
+  const priorities = ["standard", "elevated", "critical"];
+  const departments = ["police", "fire", "ems"];
+  const callTypes = ["911 Call", "Traffic Stop", "Robbery", "Shots Fired", "Medical", "Fire", "Welfare Check", "Disturbance", "Officer Assist", "Other"];
+  return `
+    <section class="mdt-workspace dispatch-workspace">
+      <header class="mdt-topbar dispatch-topbar">
+        <div>
+          <p class="eyebrow">Dispatch control center</p>
+          <h1>CAD Dispatch</h1>
+          <p class="mdt-subtitle">911 intake / unit assignment / scene notes / status tracking</p>
+        </div>
+        <div class="mdt-top-actions">
+          <button class="ghost" data-refresh-dispatch>Refresh</button>
+          <button class="secondary" data-close-dispatch>Exit Dispatch</button>
+        </div>
+      </header>
+      <div class="mdt-stat-strip dispatch-stat-strip">
+        <div class="metric"><span>Active Calls</span><strong>${stats.active || 0}</strong></div>
+        <div class="metric"><span>Critical</span><strong>${stats.critical || 0}</strong></div>
+        <div class="metric"><span>Assigned Units</span><strong>${stats.assigned_units || 0}</strong></div>
+        <div class="metric"><span>Police</span><strong>${stats.police || 0}</strong></div>
+        <div class="metric"><span>Fire / EMS</span><strong>${(stats.fire || 0) + (stats.ems || 0)}</strong></div>
+      </div>
+      <div class="dispatch-layout">
+        <aside class="dispatch-queue">
+          <div class="dispatch-panel-head">
+            <div>
+              <p class="eyebrow">CAD queue</p>
+              <h2>Calls</h2>
+            </div>
+            <div class="dispatch-filter">
+              <button class="${state.dispatchFilter === "active" ? "active" : ""}" data-dispatch-filter="active">Active</button>
+              <button class="${state.dispatchFilter === "all" ? "active" : ""}" data-dispatch-filter="all">All</button>
+            </div>
+          </div>
+          <div class="dispatch-call-list">
+            ${visibleCalls.map((call) => {
+              const count = dispatchCallAssignments(data, call.id).length;
+              return `
+                <button type="button" class="dispatch-call-ticket ${String(call.id) === String(selected?.id) ? "active" : ""}" data-dispatch-call="${call.id}">
+                  <span class="dispatch-ticket-top"><strong>#${call.id} ${escapeHtml(call.call_type || "Emergency Call")}</strong><span class="pill ${dispatchPriorityClass(call.priority)}">${escapeHtml(call.priority || "standard")}</span></span>
+                  <span>${escapeHtml(call.location || "Unknown location")}</span>
+                  <small>${escapeHtml((call.department || "police").toUpperCase())} / ${escapeHtml(call.status || "active")} / ${count} units</small>
+                </button>
+              `;
+            }).join("") || `<div class="empty">No CAD calls in this queue</div>`}
+          </div>
+        </aside>
+        <main class="dispatch-main">
+          ${selected ? `
+            <section class="dispatch-call-command">
+              <div class="dispatch-call-hero">
+                <div>
+                  <p class="eyebrow">Selected call #${selected.id}</p>
+                  <h2>${escapeHtml(selected.call_type || "Emergency Call")}</h2>
+                  <p>${escapeHtml(selected.location || "Unknown location")}</p>
+                </div>
+                <div class="dispatch-hero-pills">
+                  <span class="pill ${dispatchPriorityClass(selected.priority)}">${escapeHtml(selected.priority || "standard")}</span>
+                  <span class="pill ${dispatchStatusClass(selected.status)}">${escapeHtml(selected.status || "active")}</span>
+                  <span class="pill">${escapeHtml((selected.department || "police").toUpperCase())}</span>
+                </div>
+              </div>
+              <div class="dispatch-call-grid">
+                <div class="metric"><span>Caller</span><strong>${escapeHtml(selected.caller_name || selected.created_by_name || "Unknown")}</strong></div>
+                <div class="metric"><span>Created</span><strong>${selected.created_at ? new Date(selected.created_at).toLocaleString() : "N/A"}</strong></div>
+                <div class="metric"><span>Last Update</span><strong>${selected.updated_at ? new Date(selected.updated_at).toLocaleString() : "N/A"}</strong></div>
+                <div class="metric"><span>Units Attached</span><strong>${activeAssignments.length}</strong></div>
+              </div>
+              <div class="dispatch-call-note">
+                <strong>Original intake</strong>
+                <p>${escapeHtml(selected.note || "No intake note")}</p>
+              </div>
+              <form id="dispatchCallStatusForm" class="dispatch-control-form" data-call-id="${selected.id}">
+                <label>Status<select name="status">${renderOptions(callStatuses, selected.status || "active")}</select></label>
+                <label>Priority<select name="priority">${renderOptions(priorities, selected.priority || "standard")}</select></label>
+                <label class="dispatch-wide">Update note<input name="note" placeholder="Optional status note for units and dispatch log" /></label>
+                <button class="primary" type="submit">Update Call</button>
+              </form>
+            </section>
+            <section class="dispatch-units-panel">
+              <div class="dispatch-panel-head">
+                <div>
+                  <p class="eyebrow">Unit control</p>
+                  <h2>Attached Units</h2>
+                </div>
+                <span class="pill">${activeAssignments.length} active</span>
+              </div>
+              <form id="dispatchAttachUnitForm" class="dispatch-attach-form" data-call-id="${selected.id}">
+                <label>Available unit<select name="unit_id" required>
+                  <option value="">Select unit</option>
+                  ${availableUnits.map((unit) => `<option value="${unit.id}">${escapeHtml(unit.name)} - ${escapeHtml(unit.primary_agency || "Emergency")} - CIV ${escapeHtml(unit.civ_number || "pending")}</option>`).join("")}
+                </select></label>
+                <label>Status<select name="status">${renderOptions(unitStatuses, "assigned")}</select></label>
+                <label class="dispatch-wide">Assignment notes<input name="notes" placeholder="Scene direction, staging, channel, or tasking" /></label>
+                <button class="primary" type="submit">Attach Unit</button>
+              </form>
+              <div class="dispatch-unit-list">
+                ${allAssignments.map((assignment) => `
+                  <article class="dispatch-unit-card ${assignment.detached_at ? "detached" : ""}">
+                    <div>
+                      <strong>${escapeHtml(assignment.unit_name)}</strong>
+                      <p>${escapeHtml(assignment.unit_agency || "Emergency unit")} / attached by ${escapeHtml(assignment.dispatcher_name || "Dispatch")}</p>
+                    </div>
+                    <form class="dispatch-unit-form" data-assignment-id="${assignment.id}">
+                      <select name="status" ${assignment.detached_at ? "disabled" : ""}>${renderOptions([...unitStatuses, "detached"], assignment.status || "assigned")}</select>
+                      <input name="notes" value="${escapeHtml(assignment.notes || "")}" placeholder="Unit notes" ${assignment.detached_at ? "disabled" : ""} />
+                      <button class="secondary" type="submit" ${assignment.detached_at ? "disabled" : ""}>Save</button>
+                      <button class="danger" type="button" data-detach-unit="${assignment.id}" ${assignment.detached_at ? "disabled" : ""}>Detach</button>
+                    </form>
+                  </article>
+                `).join("") || `<div class="empty">No units attached yet</div>`}
+              </div>
+            </section>
+          ` : `<div class="empty">Create or select a call to open dispatch controls</div>`}
+        </main>
+        <aside class="dispatch-tools">
+          <form id="dispatchCreateCallForm" class="dispatch-create-card">
+            <div>
+              <p class="eyebrow">Create call</p>
+              <h2>New CAD Call</h2>
+            </div>
+            <label>Department<select name="department">${renderOptions(departments, "police")}</select></label>
+            <label>Call type<select name="call_type">${renderOptions(callTypes, "911 Call")}</select></label>
+            <label>Priority<select name="priority">${renderOptions(priorities, "standard")}</select></label>
+            <label>Caller / RP source<input name="caller_name" placeholder="Caller, officer, or anonymous" /></label>
+            <label>Location<input name="location" placeholder="Street, postal, grid, landmark" required /></label>
+            <label>Intake notes<textarea name="note" rows="7" placeholder="What happened, suspect info, weapons, injuries, scene hazards, RP details" required></textarea></label>
+            <button class="primary" type="submit">Create Call</button>
+          </form>
+          ${selected ? `
+            <form id="dispatchNoteForm" class="dispatch-create-card dispatch-note-card" data-call-id="${selected.id}">
+              <div>
+                <p class="eyebrow">Scene updates</p>
+                <h2>Dispatch Notes</h2>
+              </div>
+              <label>Note type<select name="note_type">
+                <option>dispatch update</option>
+                <option>scene update</option>
+                <option>suspect info</option>
+                <option>unit instruction</option>
+                <option>crime scene</option>
+                <option>medical update</option>
+              </select></label>
+              <label>Note<textarea name="body" rows="6" placeholder="Update units with scene status, suspect details, perimeter, staging, hazards, or RP instructions" required></textarea></label>
+              <button class="primary" type="submit">Post Note</button>
+            </form>
+            <section class="dispatch-log">
+              <div class="dispatch-panel-head">
+                <div>
+                  <p class="eyebrow">Call log</p>
+                  <h2>Updates</h2>
+                </div>
+                <span class="pill">${notes.length}</span>
+              </div>
+              <div class="dispatch-note-list">
+                ${notes.map((note) => `
+                  <article>
+                    <div class="row tight"><strong>${escapeHtml(note.note_type)}</strong><span>${note.created_at ? new Date(note.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : ""}</span></div>
+                    <p>${escapeHtml(note.body)}</p>
+                    <small>${escapeHtml(note.author_name || "Dispatch")}</small>
+                  </article>
+                `).join("") || `<div class="empty">No dispatch notes yet</div>`}
+              </div>
+            </section>
+          ` : ""}
+        </aside>
+      </div>
+    </section>
+  `;
+}
+
+function bindDispatchWorkspace() {
+  $("[data-close-dispatch]")?.addEventListener("click", async () => {
+    state.activeApp = null;
+    await loadSession();
+  });
+  $("[data-refresh-dispatch]")?.addEventListener("click", async () => {
+    await loadAppData("dispatch");
+    render();
+  });
+  bindDispatch();
+}
+
+function bindDispatch() {
+  $$("[data-dispatch-filter]").forEach((button) => button.addEventListener("click", () => {
+    state.dispatchFilter = button.dataset.dispatchFilter;
+    render();
+  }));
+  $$("[data-dispatch-call]").forEach((button) => button.addEventListener("click", () => {
+    state.dispatchSelectedCallId = button.dataset.dispatchCall;
+    render();
+  }));
+  $("#dispatchCreateCallForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const result = await api("/api/dispatch/calls", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast(`CAD call #${result.alert_id} created`);
+      state.dispatchSelectedCallId = result.alert_id;
+      event.currentTarget.reset();
+      await loadAppData("dispatch");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $("#dispatchCallStatusForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api(`/api/dispatch/calls/${event.currentTarget.dataset.callId}`, { method: "PATCH", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast("Call updated");
+      await loadAppData("dispatch");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $("#dispatchAttachUnitForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api(`/api/dispatch/calls/${event.currentTarget.dataset.callId}/units`, { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast("Unit attached");
+      event.currentTarget.reset();
+      await loadAppData("dispatch");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $$(".dispatch-unit-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api(`/api/dispatch/assignments/${form.dataset.assignmentId}`, { method: "PATCH", body: Object.fromEntries(new FormData(form).entries()) });
+      toast("Unit updated");
+      await loadAppData("dispatch");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+  $$("[data-detach-unit]").forEach((button) => button.addEventListener("click", async () => {
+    try {
+      await api(`/api/dispatch/assignments/${button.dataset.detachUnit}`, { method: "PATCH", body: { detach: true } });
+      toast("Unit detached");
+      await loadAppData("dispatch");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+  $("#dispatchNoteForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api(`/api/dispatch/calls/${event.currentTarget.dataset.callId}/notes`, { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast("Dispatch note posted");
+      event.currentTarget.reset();
+      await loadAppData("dispatch");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+}
+
 function fireRigCode(name) {
   const parts = String(name || "Unit").trim().split(/\s+/);
   const prefix = (parts[0] || "Unit").slice(0, 3).toUpperCase();
@@ -2540,7 +2861,9 @@ function renderFireWorkspace() {
                 <span class="pill ${panicStatusClass(alert.status)}">${escapeHtml(alert.status)}</span>
               </div>
               <p>${escapeHtml(alert.note || "No notes supplied")}</p>
+              ${alert.dispatch_last_note ? `<div class="dispatch-card-note"><strong>${escapeHtml(alert.dispatch_last_note_type || "dispatch update")}</strong><p>${escapeHtml(alert.dispatch_last_note)}</p></div>` : ""}
               <p class="muted small">Reported by ${escapeHtml(alert.officer_name || "Unknown")} - ${new Date(alert.created_at).toLocaleString()}</p>
+              <p class="muted small">${Number(alert.assigned_unit_count || 0)} units attached</p>
               <div class="row">
                 ${alert.status !== "responding" && alert.status !== "cleared" ? `<button class="secondary" data-fire-alert="${alert.id}" data-fire-status="responding">Responding</button>` : ""}
                 ${alert.status !== "cleared" ? `<button class="primary" data-fire-alert="${alert.id}" data-fire-status="cleared">Clear</button>` : ""}
@@ -3772,6 +4095,8 @@ function renderPanic() {
           <div class="row"><h3>${escapeHtml(alert.officer_name)}</h3><span class="pill ${panicStatusClass(alert.status)}">${escapeHtml(alert.department || "police")} - ${escapeHtml(alert.status)}</span></div>
           <p>${escapeHtml(alert.location)}</p>
           <p class="muted small">${escapeHtml(alert.note)}</p>
+          ${alert.dispatch_last_note ? `<div class="dispatch-card-note"><strong>${escapeHtml(alert.dispatch_last_note_type || "dispatch update")}</strong><p>${escapeHtml(alert.dispatch_last_note)}</p></div>` : ""}
+          <p class="muted small">${Number(alert.assigned_unit_count || 0)} units attached</p>
           <p class="muted small">Activated ${new Date(alert.created_at).toLocaleString()}${alert.resolved_at ? ` - Cleared ${new Date(alert.resolved_at).toLocaleString()}` : ""}</p>
           <div class="row-actions">
             <button class="secondary" type="button" data-use-alert-report="${alert.id}">Write report</button>

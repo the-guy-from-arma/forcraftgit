@@ -1,8 +1,8 @@
-const CACHE = "rp-command-v26-os-footer";
+const CACHE = "rp-command-v27-dispatch-center";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.26-os-footer",
-  "/static/app.js?v=0.0.26-os-footer",
+  "/static/styles.css?v=0.0.27-dispatch-center",
+  "/static/app.js?v=0.0.27-dispatch-center",
   "/static/icons/icon.svg",
   "/manifest.webmanifest"
 ];
