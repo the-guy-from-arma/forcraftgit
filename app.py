@@ -288,6 +288,7 @@ def generate_record_number(db: Database, table: str, column: str, prefix: str) -
         ("cid_warrants", "warrant_number"),
         ("cid_internal_affairs", "ia_number"),
         ("cad_after_call_reports", "report_number"),
+        ("mdt_bolos", "bolo_number"),
         ("rp_contracts", "contract_number"),
         ("business_applications", "application_number"),
         ("businesses", "license_number"),
@@ -927,6 +928,24 @@ def ensure_schema() -> None:
                 FOREIGN KEY (involved_civ_id) REFERENCES users(id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS mdt_bolos (
+                id SERIAL PRIMARY KEY,
+                bolo_number TEXT NOT NULL UNIQUE,
+                created_by INTEGER NOT NULL,
+                target_name TEXT NOT NULL,
+                target_description TEXT NOT NULL DEFAULT '',
+                vehicle_description TEXT NOT NULL DEFAULT '',
+                plate TEXT NOT NULL DEFAULT '',
+                last_seen TEXT NOT NULL DEFAULT '',
+                caution_level TEXT NOT NULL DEFAULT 'standard',
+                reason TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                resolved_at TEXT,
+                FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS fire_rig_assignments (
                 id SERIAL PRIMARY KEY,
                 rig_name TEXT NOT NULL UNIQUE,
@@ -1118,6 +1137,27 @@ def ensure_migrations(db: Database) -> None:
     )
     db.execute(
         """
+        CREATE TABLE IF NOT EXISTS mdt_bolos (
+            id SERIAL PRIMARY KEY,
+            bolo_number TEXT NOT NULL UNIQUE,
+            created_by INTEGER NOT NULL,
+            target_name TEXT NOT NULL,
+            target_description TEXT NOT NULL DEFAULT '',
+            vehicle_description TEXT NOT NULL DEFAULT '',
+            plate TEXT NOT NULL DEFAULT '',
+            last_seen TEXT NOT NULL DEFAULT '',
+            caution_level TEXT NOT NULL DEFAULT 'standard',
+            reason TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            resolved_at TEXT,
+            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute(
+        """
         CREATE TABLE IF NOT EXISTS fire_rig_assignments (
             id SERIAL PRIMARY KEY,
             rig_name TEXT NOT NULL UNIQUE,
@@ -1159,6 +1199,8 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS cad_after_call_reports_officer_idx ON cad_after_call_reports (officer_id, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS cad_after_call_reports_alert_idx ON cad_after_call_reports (related_alert_id)")
     db.execute("CREATE INDEX IF NOT EXISTS cad_after_call_reports_disposition_idx ON cad_after_call_reports (disposition)")
+    db.execute("CREATE INDEX IF NOT EXISTS mdt_bolos_status_idx ON mdt_bolos (status, updated_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS mdt_bolos_created_by_idx ON mdt_bolos (created_by, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS department_applications_user_idx ON department_applications (user_id, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS department_applications_department_idx ON department_applications (department_key, status)")
     db.execute(
@@ -2073,6 +2115,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_mdt_reports(db, user)
                 elif path == "/api/mdt/reports" and method == "POST":
                     self.api_create_mdt_report(db, user)
+                elif path == "/api/mdt/bolos" and method == "GET":
+                    self.api_mdt_bolos(db, user)
+                elif path == "/api/mdt/bolos" and method == "POST":
+                    self.api_create_mdt_bolo(db, user)
+                elif path.startswith("/api/mdt/bolos/") and method == "PATCH":
+                    self.api_update_mdt_bolo(db, user, self.path_int(path, 3))
                 elif path == "/api/mdt/alerts" and method == "GET":
                     self.api_alerts(db, user)
                 elif path.startswith("/api/mdt/alerts/") and method == "PATCH":
@@ -4417,6 +4465,117 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 (ts, related_alert_id),
             )
         self.send_json(201, {"ok": True, "id": int(created["id"]), "report_number": created["report_number"], "disposition": disposition})
+
+    def api_mdt_bolos(self, db: Database, user: DbRow | None) -> None:
+        err = leo_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        active = all_rows(
+            db,
+            """
+            SELECT b.*, u.name AS officer_name, u.primary_agency AS officer_agency
+            FROM mdt_bolos b
+            JOIN users u ON u.id = b.created_by
+            WHERE b.status = 'active'
+            ORDER BY CASE b.caution_level WHEN 'armed' THEN 0 WHEN 'high' THEN 1 WHEN 'elevated' THEN 2 ELSE 3 END,
+                     b.updated_at DESC
+            LIMIT 100
+            """,
+        )
+        recent = all_rows(
+            db,
+            """
+            SELECT b.*, u.name AS officer_name, u.primary_agency AS officer_agency
+            FROM mdt_bolos b
+            JOIN users u ON u.id = b.created_by
+            WHERE b.status <> 'active'
+            ORDER BY b.updated_at DESC
+            LIMIT 40
+            """,
+        )
+        self.send_json(200, {"active": [dict(row) for row in active], "recent": [dict(row) for row in recent]})
+
+    def api_create_mdt_bolo(self, db: Database, user: DbRow | None) -> None:
+        err = leo_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        missing = require_fields(payload, "target_name", "reason")
+        if missing:
+            self.error(400, missing)
+            return
+        caution_level = str(payload.get("caution_level") or "standard").strip().lower()
+        if caution_level not in ("standard", "elevated", "high", "armed"):
+            self.error(400, "Invalid caution level")
+            return
+        target_name = str(payload.get("target_name") or "").strip()[:140]
+        reason = str(payload.get("reason") or "").strip()
+        if not target_name or not reason:
+            self.error(400, "Target name and BOLO reason are required")
+            return
+        ts = now_iso()
+        bolo_number = generate_record_number(db, "mdt_bolos", "bolo_number", "BOLO")
+        created = db.execute(
+            """
+            INSERT INTO mdt_bolos
+            (bolo_number, created_by, target_name, target_description, vehicle_description, plate, last_seen, caution_level, reason, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+            RETURNING id, bolo_number
+            """,
+            (
+                bolo_number,
+                user["id"],
+                target_name,
+                str(payload.get("target_description") or "").strip()[:800],
+                str(payload.get("vehicle_description") or "").strip()[:500],
+                str(payload.get("plate") or "").strip().upper()[:32],
+                str(payload.get("last_seen") or "").strip()[:240],
+                caution_level,
+                reason[:1600],
+                ts,
+                ts,
+            ),
+        ).fetchone()
+        recipients = all_rows(
+            db,
+            "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ? OR roles LIKE ? ORDER BY id LIMIT 160",
+            ("%leo%", "%cid%", "%owner%"),
+        )
+        notice = f"{user['name']} issued {created['bolo_number']} for {target_name}. Caution: {caution_level}. {reason[:220]}"
+        for recipient in recipients:
+            if recipient["id"] != user["id"]:
+                add_message(db, recipient["id"], "Active BOLO issued", notice, user["id"])
+        self.send_json(201, {"ok": True, "id": int(created["id"]), "bolo_number": created["bolo_number"]})
+
+    def api_update_mdt_bolo(self, db: Database, user: DbRow | None, bolo_id: int) -> None:
+        err = leo_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        status = str(payload.get("status") or "cleared").strip().lower()
+        if status not in ("active", "cleared", "cancelled", "expired"):
+            self.error(400, "Invalid BOLO status")
+            return
+        bolo = one(db, "SELECT * FROM mdt_bolos WHERE id = ?", (bolo_id,))
+        if not bolo:
+            self.error(404, "BOLO not found")
+            return
+        ts = now_iso()
+        resolved_at = None if status == "active" else ts
+        db.execute(
+            """
+            UPDATE mdt_bolos
+            SET status = ?, updated_at = ?, resolved_at = ?
+            WHERE id = ?
+            """,
+            (status, ts, resolved_at, bolo_id),
+        )
+        self.send_json(200, {"ok": True, "id": bolo_id, "status": status})
 
     def api_alerts(self, db: Database, user: DbRow | None) -> None:
         err = leo_required(user)

@@ -1,6 +1,24 @@
 {
-  "version": "0.0.23",
+  "version": "0.0.24",
   "entries": [
+    {
+      "date": "2026-06-25",
+      "version": "0.0.24",
+      "title": "MDT BOLO Board",
+      "added": [
+        "Added a separate BOLO tab inside the LEO/CID MDT for all active officer lookouts.",
+        "Officers can broadcast BOLOs with target details, vehicle notes, plate, last seen area, caution level, and reason.",
+        "The MDT watch panel now previews active BOLOs for faster officer awareness."
+      ],
+      "changed": [
+        "MDT stat strips now include active BOLO counts.",
+        "PWA cache versioning was bumped again so installed devices pull the System Update Lockdown screen and BOLO board after deployment."
+      ],
+      "fixed": [
+        "BOLOs now persist in the database and can be cleared or cancelled instead of living only as temporary screen content."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-06-25",
       "version": "0.0.23",

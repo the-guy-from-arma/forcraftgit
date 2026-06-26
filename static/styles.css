@@ -2181,6 +2181,10 @@ textarea:focus {
 }
 
 .mdt-stat-strip.cid-stat-strip {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.mdt-stat-strip.leo-stat-strip {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
@@ -2340,6 +2344,204 @@ textarea:focus {
 .mdt-code-card {
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.045);
+}
+
+.bolo-console {
+  display: grid;
+  gap: 14px;
+}
+
+.bolo-hero {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid rgba(239, 78, 99, 0.22);
+  border-radius: 6px;
+  background:
+    linear-gradient(135deg, rgba(34, 10, 18, 0.9), rgba(8, 14, 16, 0.94) 55%, rgba(16, 31, 28, 0.92)),
+    repeating-linear-gradient(90deg, rgba(239, 78, 99, 0.04) 0 1px, transparent 1px 72px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 26px 70px rgba(0, 0, 0, 0.36);
+}
+
+.bolo-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
+  transform: translateX(-110%);
+  animation: boloSweep 4.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes boloSweep {
+  0%,
+  45% {
+    transform: translateX(-110%);
+  }
+  72%,
+  100% {
+    transform: translateX(110%);
+  }
+}
+
+.bolo-hero h2,
+.bolo-intake-board h3 {
+  margin: 0;
+}
+
+.bolo-signal {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  min-width: 132px;
+  color: #ffd3d9;
+  font-weight: 1000;
+  letter-spacing: 0;
+}
+
+.bolo-signal span {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: #ef4e63;
+  box-shadow: 0 0 0 0 rgba(239, 78, 99, 0.55);
+  animation: pulseRing 1.5s ease-out infinite;
+}
+
+.bolo-grid {
+  display: grid;
+  grid-template-columns: minmax(330px, 0.88fr) minmax(420px, 1.12fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.bolo-intake-board {
+  border-color: rgba(239, 78, 99, 0.2);
+  background:
+    linear-gradient(180deg, rgba(20, 19, 22, 0.94), rgba(9, 13, 15, 0.94)),
+    repeating-linear-gradient(0deg, rgba(239, 78, 99, 0.035) 0 1px, transparent 1px 44px);
+}
+
+.bolo-active-board,
+.bolo-recent-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.bolo-card-list {
+  display: grid;
+  gap: 12px;
+}
+
+.bolo-card {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-left: 4px solid rgba(40, 209, 124, 0.75);
+  border-radius: 6px;
+  background:
+    linear-gradient(135deg, rgba(14, 20, 22, 0.96), rgba(7, 10, 12, 0.96)),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 54px);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.28);
+}
+
+.bolo-card.caution-elevated {
+  border-left-color: #ffc247;
+}
+
+.bolo-card.caution-high,
+.bolo-card.caution-armed {
+  border-left-color: #ef4e63;
+  background:
+    linear-gradient(135deg, rgba(28, 13, 18, 0.96), rgba(7, 10, 12, 0.96)),
+    repeating-linear-gradient(90deg, rgba(239, 78, 99, 0.045) 0 1px, transparent 1px 54px);
+}
+
+.bolo-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bolo-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.bolo-meta-grid div {
+  display: grid;
+  gap: 4px;
+  min-height: 68px;
+  padding: 10px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.bolo-meta-grid span,
+.bolo-recent-list span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.bolo-meta-grid strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.bolo-description,
+.bolo-reason {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.bolo-reason {
+  padding: 12px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.045);
+  color: rgba(239, 247, 245, 0.9);
+}
+
+.bolo-recent-panel {
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(16, 21, 24, 0.78);
+}
+
+.bolo-recent-list {
+  display: grid;
+  gap: 8px;
+}
+
+.bolo-recent-list article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.bolo-recent-list article > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.bolo-recent-list strong,
+.bolo-recent-list span {
+  overflow-wrap: anywhere;
 }
 
 .charge-warrant-form {
@@ -4086,6 +4288,11 @@ textarea:focus {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .mdt-stat-strip.cid-stat-strip,
+  .mdt-stat-strip.leo-stat-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .mdt-stat-strip .metric {
     min-height: 70px;
     padding: 9px;
@@ -4098,6 +4305,23 @@ textarea:focus {
 
   .mdt-return-grid {
     grid-template-columns: 1fr;
+  }
+
+  .bolo-hero,
+  .bolo-card-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .bolo-grid,
+  .bolo-meta-grid,
+  .bolo-recent-list article {
+    grid-template-columns: 1fr;
+  }
+
+  .bolo-signal {
+    justify-items: start;
+    min-width: 0;
   }
 
   .mdt-main {

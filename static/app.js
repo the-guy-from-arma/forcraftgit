@@ -432,6 +432,7 @@ async function loadAppData(id) {
         charges: await api("/api/mdt/charges"),
         alerts: await api("/api/mdt/alerts"),
         reports: await api("/api/mdt/reports"),
+        bolos: await api("/api/mdt/bolos"),
         cid: canAny("cid", "owner") ? await api("/api/cid/overview") : null,
         search: state.cache.mdt?.search || []
       };
@@ -2277,6 +2278,7 @@ function bindMdtLegacy() {
 function renderMdtWorkspace() {
   const charges = state.cache.mdt?.charges || {};
   const alerts = state.cache.mdt?.alerts?.alerts || [];
+  const activeBolos = state.cache.mdt?.bolos?.active || [];
   const cid = state.cache.mdt?.cid;
   const cidEnabled = canAny("cid", "owner");
   if (!cidEnabled && String(state.mdtTab || "").startsWith("cid-")) {
@@ -2292,6 +2294,7 @@ function renderMdtWorkspace() {
     ["cid-investigations", "Case Folders"],
     ["cid-warrants", "Warrant Ops"],
     ["cid-ia", "Internal Affairs"],
+    ["bolos", "BOLOs"],
     ["cad-reports", "Reports"],
     ["ticket", "Issue"],
     ["criminal", "Criminal"],
@@ -2299,6 +2302,7 @@ function renderMdtWorkspace() {
     ["panic", "Panic"],
   ] : [
     ["search", "NCIC / DMV"],
+    ["bolos", "BOLOs"],
     ["cad-reports", "Reports"],
     ["ticket", "Issue"],
     ["citations", "Citations"],
@@ -2320,16 +2324,18 @@ function renderMdtWorkspace() {
           <button class="secondary" data-close-mdt>Exit MDT</button>
         </div>
       </header>
-      <div class="mdt-stat-strip ${cidEnabled ? "cid-stat-strip" : ""}">
+      <div class="mdt-stat-strip ${cidEnabled ? "cid-stat-strip" : "leo-stat-strip"}">
         ${cidEnabled ? `
           <div class="metric"><span>Case folders</span><strong>${cid?.stats?.open_investigations || 0}</strong></div>
           <div class="metric"><span>Priority watch</span><strong>${priorityCases.length}</strong></div>
           <div class="metric"><span>Active warrants</span><strong>${cid?.stats?.active_warrants || 0}</strong></div>
           <div class="metric"><span>IA open</span><strong>${cid?.stats?.ia_open || 0}</strong></div>
+          <div class="metric"><span>Active BOLOs</span><strong>${activeBolos.length}</strong></div>
         ` : `
           <div class="metric"><span>Citations</span><strong>${(charges.citations || []).length}</strong></div>
           <div class="metric"><span>Criminal Codes</span><strong>${(charges.criminal_charges || []).length}</strong></div>
           <div class="metric"><span>Active Alerts</span><strong>${alerts.filter((alert) => alert.status === "active").length}</strong></div>
+          <div class="metric"><span>Active BOLOs</span><strong>${activeBolos.length}</strong></div>
         `}
       </div>
       <div class="mdt-layout">
@@ -2593,6 +2599,7 @@ function renderMdtContent() {
   if (state.mdtTab === "cid-investigations") return renderCidInvestigations();
   if (state.mdtTab === "cid-warrants") return renderCidWarrants();
   if (state.mdtTab === "cid-ia") return renderCidInternalAffairs();
+  if (state.mdtTab === "bolos") return renderBolos();
   if (state.mdtTab === "cad-reports") return renderCadReports();
   if (state.mdtTab === "ticket") return renderTicketWriter();
   if (state.mdtTab === "citations") return renderCodeSection("citation");
@@ -2628,6 +2635,7 @@ function renderCidCommandCenter() {
         <button type="button" data-mdt-tab="cid-investigations"><strong>Open Case Folder</strong><span>Create or update investigations</span></button>
         <button type="button" data-mdt-tab="cid-warrants"><strong>Warrant Operations</strong><span>Issue, serve, recall, track</span></button>
         <button type="button" data-mdt-tab="cid-ia"><strong>Internal Affairs</strong><span>Officer investigations and reviews</span></button>
+        <button type="button" data-mdt-tab="bolos"><strong>BOLO Board</strong><span>Broadcast active lookouts to all LEOs</span></button>
         <button type="button" data-mdt-tab="cad-reports"><strong>CAD Reports</strong><span>After-call narratives and dispositions</span></button>
         <button type="button" data-mdt-tab="search"><strong>NCIC / DMV</strong><span>Run target and vehicle returns</span></button>
       </div>
@@ -2688,6 +2696,7 @@ function renderCidCommandCenter() {
 function renderMdtSide() {
   const alerts = state.cache.mdt?.alerts?.alerts || [];
   const reports = state.cache.mdt?.reports?.reports || [];
+  const activeBolos = state.cache.mdt?.bolos?.active || [];
   const issued = state.cache.mdt?.search?.flatMap((person) => person.open_cases || []) || [];
   const cid = state.cache.mdt?.cid;
   const priorityCases = (cid?.investigations || []).filter((item) => ["critical", "elevated"].includes(item.priority));
@@ -2715,6 +2724,12 @@ function renderMdtSide() {
         </div>
       </div>
     ` : ""}
+    <div class="mdt-side-panel">
+      <h3>Active BOLOs</h3>
+      <div class="list compact-list">
+        ${activeBolos.slice(0, 5).map((bolo) => `<button class="cid-side-link danger-link" data-mdt-tab="bolos"><strong>${escapeHtml(bolo.bolo_number)}</strong><span>${escapeHtml(bolo.target_name)} / ${escapeHtml(bolo.caution_level)}</span></button>`).join("") || `<p class="muted small">No active BOLOs</p>`}
+      </div>
+    </div>
     <div class="mdt-side-panel">
       <h3>Watch</h3>
       <div class="list compact-list">
@@ -2746,9 +2761,16 @@ function reportDispositionClass(disposition) {
   return "green";
 }
 
+function boloCautionClass(level) {
+  if (["armed", "high"].includes(level)) return "red";
+  if (level === "elevated") return "amber";
+  return "green";
+}
+
 function mdtStatusClass(status) {
-  if (["Valid", "verified", "approved", "Active"].includes(status)) return "green";
-  if (["Suspended", "Revoked", "denied"].includes(status)) return "red";
+  const normalized = String(status || "").toLowerCase();
+  if (["valid", "verified", "approved", "active", "cleared", "served"].includes(normalized)) return "green";
+  if (["suspended", "revoked", "denied", "cancelled", "expired", "recalled"].includes(normalized)) return "red";
   return "amber";
 }
 
@@ -2783,6 +2805,16 @@ function syncCadReportAlert(form) {
   }
 }
 
+function syncBoloTarget(form) {
+  const select = form?.querySelector("[data-bolo-target]");
+  const input = form?.querySelector("[data-bolo-target-name]");
+  if (!select || !input) return;
+  const selectedName = select.selectedOptions[0]?.dataset.name || "";
+  if (selectedName) {
+    input.value = selectedName;
+  }
+}
+
 function syncChargeWarrantSubject(form) {
   const select = form?.querySelector("[data-charge-warrant-subject]");
   const hidden = form?.querySelector("[name='subject_name']");
@@ -2798,6 +2830,117 @@ function syncCidInvestigationTarget(form) {
   if (selectedName) {
     input.value = selectedName;
   }
+}
+
+function renderBolos() {
+  const data = state.cache.mdt?.bolos || {};
+  const active = data.active || [];
+  const recent = data.recent || [];
+  const civilians = getMdtCivilians();
+  const cautionOptions = ["standard", "elevated", "high", "armed"];
+  const highRisk = active.filter((bolo) => ["armed", "high"].includes(bolo.caution_level)).length;
+  return `
+    <div class="bolo-console">
+      <section class="bolo-hero">
+        <div>
+          <p class="eyebrow">All LEO broadcast</p>
+          <h2>BOLO Board</h2>
+          <p>${active.length} active / ${highRisk} high risk / ${recent.length} archived</p>
+        </div>
+        <div class="bolo-signal">
+          <span></span>
+          <strong>LIVE LOOKOUT</strong>
+        </div>
+      </section>
+      <div class="bolo-grid">
+        <form id="boloForm" class="cid-intake-board bolo-intake-board">
+          <div class="cid-intake-head">
+            <div>
+              <p class="eyebrow">BOLO intake</p>
+              <h3>Issue Active BOLO</h3>
+              <p>Visible to every LEO MDT until cleared or cancelled.</p>
+            </div>
+            <span class="pill red">Broadcast</span>
+          </div>
+          <div class="cid-intake-grid">
+            <label class="cid-field-wide">Known profile<select name="target_civ_id" data-bolo-target>
+              <option value="">Unknown / alias / non-civilian target</option>
+              ${civilians.map((person) => `<option value="${person.id}" data-name="${escapeHtml(person.name)}">${escapeHtml(person.name)} - CIV ${escapeHtml(person.civ_number || "pending")} - ${escapeHtml(person.license_status || "No DMV")}</option>`).join("")}
+            </select></label>
+            <label>Target name<input name="target_name" data-bolo-target-name placeholder="Name, alias, unit, or organization" required /></label>
+            <label>Caution level<select name="caution_level">${renderOptions(cautionOptions, "standard")}</select></label>
+            <label>Last seen<input name="last_seen" placeholder="Area, postal, road, landmark, time" /></label>
+            <label>Plate<input name="plate" placeholder="Optional plate" /></label>
+            <label class="cid-field-wide">Target description<input name="target_description" placeholder="Clothing, build, known weapons, direction of travel" /></label>
+            <label class="cid-field-wide">Vehicle description<input name="vehicle_description" placeholder="Make, model, color, damage, occupants, direction" /></label>
+          </div>
+          <label class="cid-summary-field">Probable reason / officer safety note<textarea name="reason" required rows="8" placeholder="Facts supporting the lookout, officer safety notes, charges suspected, and instructions for contact"></textarea></label>
+          <div class="cid-intake-actions">
+            <div>
+              <span>Issuing officer</span>
+              <strong>${escapeHtml(state.session?.user?.name || "Officer")}</strong>
+            </div>
+            <button class="primary" type="submit">Broadcast BOLO</button>
+          </div>
+        </form>
+        <section class="bolo-active-board">
+          <div class="mdt-section-head">
+            <div>
+              <p class="eyebrow">Active lookouts</p>
+              <h2>Officer BOLO Feed</h2>
+            </div>
+            <span class="pill red">${active.length} active</span>
+          </div>
+          <div class="bolo-card-list">
+            ${active.map((bolo) => `
+              <article class="bolo-card caution-${escapeHtml(bolo.caution_level)}">
+                <div class="bolo-card-head">
+                  <div>
+                    <p class="eyebrow">${escapeHtml(bolo.bolo_number)}</p>
+                    <h3>${escapeHtml(bolo.target_name)}</h3>
+                    <p class="muted small">Issued by ${escapeHtml(bolo.officer_name || "Unknown")} / ${bolo.created_at ? new Date(bolo.created_at).toLocaleString() : "N/A"}</p>
+                  </div>
+                  <span class="pill ${boloCautionClass(bolo.caution_level)}">${escapeHtml(bolo.caution_level)}</span>
+                </div>
+                <div class="bolo-meta-grid">
+                  <div><span>Last seen</span><strong>${escapeHtml(bolo.last_seen || "Unknown")}</strong></div>
+                  <div><span>Plate</span><strong>${escapeHtml(bolo.plate || "Not listed")}</strong></div>
+                  <div><span>Vehicle</span><strong>${escapeHtml(bolo.vehicle_description || "Not listed")}</strong></div>
+                  <div><span>Status</span><strong>${escapeHtml(bolo.status)}</strong></div>
+                </div>
+                ${bolo.target_description ? `<p class="bolo-description">${escapeHtml(bolo.target_description)}</p>` : ""}
+                <p class="bolo-reason">${escapeHtml(bolo.reason)}</p>
+                <div class="row-actions">
+                  <button class="primary" type="button" data-bolo-status="${bolo.id}" data-status="cleared">Mark cleared</button>
+                  <button class="secondary" type="button" data-bolo-status="${bolo.id}" data-status="cancelled">Cancel</button>
+                </div>
+              </article>
+            `).join("") || `<div class="empty">No active BOLOs</div>`}
+          </div>
+        </section>
+      </div>
+      <section class="bolo-recent-panel">
+        <div class="mdt-section-head">
+          <div>
+            <p class="eyebrow">BOLO archive</p>
+            <h2>Recently Closed</h2>
+          </div>
+          <span class="pill">${recent.length} records</span>
+        </div>
+        <div class="bolo-recent-list">
+          ${recent.map((bolo) => `
+            <article>
+              <div>
+                <strong>${escapeHtml(bolo.bolo_number)} - ${escapeHtml(bolo.target_name)}</strong>
+                <span>${escapeHtml(bolo.reason)}</span>
+              </div>
+              <span class="pill ${mdtStatusClass(bolo.status)}">${escapeHtml(bolo.status)}</span>
+            </article>
+          `).join("") || `<div class="empty">No closed BOLO records yet</div>`}
+        </div>
+      </section>
+    </div>
+  `;
 }
 
 function renderCadReports() {
@@ -3793,6 +3936,35 @@ function bindMdt() {
       toast(error.message);
     }
   });
+  $("#boloForm [data-bolo-target]")?.addEventListener("change", (event) => {
+    syncBoloTarget(event.currentTarget.closest("form"));
+  });
+  $("#boloForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      syncBoloTarget(event.currentTarget);
+      const result = await api("/api/mdt/bolos", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast(`BOLO ${result.bolo_number} broadcast`);
+      event.currentTarget.reset();
+      await loadAppData("mdt");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $$("[data-bolo-status]").forEach((button) => button.addEventListener("click", async () => {
+    try {
+      await api(`/api/mdt/bolos/${button.dataset.boloStatus}`, {
+        method: "PATCH",
+        body: { status: button.dataset.status },
+      });
+      toast(`BOLO ${button.dataset.status}`);
+      await loadAppData("mdt");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
   $("#mdtSearch")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const q = new FormData(event.currentTarget).get("q");
