@@ -2,6 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
+const OS_VERSION = "0.0.26";
 
 const state = {
   authMode: "login",
@@ -140,6 +141,7 @@ function phone(content) {
           <span class="status-icons"><span class="signal"></span><span>5G</span><span class="battery"></span></span>
         </div>
         ${content}
+        <footer class="os-version">RP OS ${OS_VERSION}</footer>
       </div>
     </section>
   `;
@@ -432,7 +434,7 @@ async function loadAppData(id) {
         charges: await api("/api/mdt/charges"),
         alerts: await api("/api/mdt/alerts"),
         reports: await api("/api/mdt/reports"),
-        bolos: await api("/api/mdt/bolos"),
+        bolos: await optionalApi("/api/mdt/bolos", { active: [], recent: [] }),
         cid: canAny("cid", "owner") ? await api("/api/cid/overview") : null,
         search: state.cache.mdt?.search || []
       };
@@ -503,6 +505,15 @@ function updateLockdownMessage() {
 
 function appAvailable(id) {
   return Boolean((state.session?.apps || []).find((item) => item.id === id && item.enabled));
+}
+
+async function optionalApi(path, fallback) {
+  try {
+    return await api(path);
+  } catch (error) {
+    console.warn(`Optional request failed: ${path}`, error);
+    return fallback;
+  }
 }
 
 function normalizedRole(role) {

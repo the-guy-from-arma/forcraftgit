@@ -1,8 +1,8 @@
-const CACHE = "rp-command-v24-bolo-lockdown";
+const CACHE = "rp-command-v26-os-footer";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.24-bolo-lockdown",
-  "/static/app.js?v=0.0.24-bolo-lockdown",
+  "/static/styles.css?v=0.0.26-os-footer",
+  "/static/app.js?v=0.0.26-os-footer",
   "/static/icons/icon.svg",
   "/manifest.webmanifest"
 ];

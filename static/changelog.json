@@ -1,6 +1,33 @@
 {
-  "version": "0.0.24",
+  "version": "0.0.26",
   "entries": [
+    {
+      "date": "2026-06-25",
+      "version": "0.0.26",
+      "title": "Tiny OS Version Footer",
+      "added": [
+        "Added a small RP OS version footer to the phone-style PWA shell."
+      ],
+      "changed": [
+        "PWA cache versioning was bumped so installed devices load the footer update."
+      ],
+      "fixed": [],
+      "removed": []
+    },
+    {
+      "date": "2026-06-25",
+      "version": "0.0.25",
+      "title": "MDT BOLO Load Guard",
+      "added": [],
+      "changed": [
+        "MDT data loading now treats the BOLO feed as optional during startup so the rest of the MDT can still render if Railway is not serving the new BOLO endpoint yet.",
+        "PWA cache versioning was bumped again to force installed devices to request the newest MDT JavaScript."
+      ],
+      "fixed": [
+        "A missing or stale BOLO API route can no longer block the MDT screen from loading its updated navigation."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-06-25",
       "version": "0.0.24",
