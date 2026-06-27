@@ -9,17 +9,24 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/static/icons/icon.svg" />
-    <link rel="stylesheet" href="/static/styles.css?v=0.0.29" />
+    <link rel="stylesheet" href="/static/styles.css?v=0.0.30" />
     <title>RP Command</title>
   </head>
   <body>
     <main id="app" aria-live="polite">
-      <div class="boot-screen">
-        <div class="boot-mark">RP</div>
-        <div class="boot-line"></div>
+      <div class="boot-screen booting">
+        <div class="boot-brand">RP</div>
+        <div class="boot-orb" aria-hidden="true">
+          <span class="boot-orb-core"></span>
+          <span class="boot-orb-ring"></span>
+          <span class="boot-orb-ring"></span>
+        </div>
+        <p class="boot-title">Loading roleplay core...</p>
+        <p class="boot-subtitle">Syncing your account and loading modules.</p>
+        <div class="boot-progress"><span></span></div>
       </div>
     </main>
     <div id="toast" class="toast" role="status"></div>
-    <script src="/static/app.js?v=0.0.29" defer></script>
+    <script src="/static/app.js?v=0.0.30" defer></script>
   </body>
 </html>

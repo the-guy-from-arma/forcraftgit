@@ -1,6 +1,26 @@
 {
-  "version": "0.0.28",
+  "version": "0.0.30",
   "entries": [
+    {
+      "date": "2026-06-27",
+      "version": "0.0.30",
+      "title": "MDT Dispatch Rail and Callsign Fix",
+      "added": [
+        "Added a floating MDT quick rail with Dispatch, Messages, and Watch actions for officers.",
+        "Department users now get a required callsign popup so dispatch can identify and assign them.",
+        "Dispatch access now recognizes Sheriff, Police, State Police, Metro Police Chief, and State Police Commander roles."
+      ],
+      "changed": [
+        "Opening Dispatch or Messages from the MDT now returns officers back to the MDT when closed.",
+        "PWA cache versioning was bumped so installed devices load the fixed MDT and dispatch bundle."
+      ],
+      "fixed": [
+        "Fixed a JavaScript parse error in the dispatch NCIC lookup binding that could leave the app stuck on the loading screen.",
+        "Fixed the MDT workspace referencing an undefined command variable when opening the MDT.",
+        "Updated the service worker cache to stop serving the older boot loader and stale asset URLs."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-06-25",
       "version": "0.0.28",

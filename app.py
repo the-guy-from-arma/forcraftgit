@@ -334,6 +334,7 @@ BUSINESS_MAX_ACTIVE_PER_OWNER = 2
 FIRE_COMMAND_ROLES = ("fire_chief", "deputy_chief", "fire_marshal")
 FIRE_SERVICE_ROLES = ("fireman", "ems", *FIRE_COMMAND_ROLES)
 FIRE_RIG_NAMES = ("Engine 1", "Ladder 1", "Truck 1", "Rescue 1", "Battalion 1", "Battalion 2", "Battalion 3", "Battalion 4", "Battalion 5")
+LAW_SERVICE_ROLES = ("leo", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director")
 LAW_ENFORCEMENT_DEPARTMENT_KEYS = ("state_police", "metro_police", "sheriff", "cid", "iu")
 LAW_ENFORCEMENT_DEPARTMENT_CHOICES = ("Sheriffs Department", "Police Department", "State Police", "CID", "Interrogation Unit")
 LAW_ENFORCEMENT_COMMAND_ROLES = {
@@ -1769,7 +1770,7 @@ def contracts_required(user: DbRow | None) -> str | None:
 def leo_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
-    if not has_any(user, "leo", "cid", "cid_director", "iu", "iu_director", "owner"):
+    if not has_any(user, *LAW_SERVICE_ROLES, "owner"):
         return "Law enforcement access required"
     return None
 
@@ -1801,7 +1802,7 @@ def dispatcher_required(user: DbRow | None) -> str | None:
 def emergency_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
-    if not has_any(user, "leo", "cid", "cid_director", "iu", "iu_director", *FIRE_SERVICE_ROLES, "dispatcher", "owner"):
+    if not has_any(user, *LAW_SERVICE_ROLES, *FIRE_SERVICE_ROLES, "dispatcher", "owner"):
         return "Emergency services access required"
     return None
 
@@ -1810,7 +1811,7 @@ def emergency_departments_for(user: DbRow) -> list[str]:
     if has_any(user, "owner", "dispatcher"):
         return ["police", "fire", "ems"]
     departments: list[str] = []
-    if has_any(user, "leo", "cid", "cid_director", "iu", "iu_director"):
+    if has_any(user, *LAW_SERVICE_ROLES):
         departments.append("police")
     if has_any(user, "fireman", *FIRE_COMMAND_ROLES):
         departments.append("fire")
@@ -1847,7 +1848,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps: list[dict[str, Any]] = []
         if verified:
             apps.append({"id": "dmv", "label": "Driver License", "icon": "id-card", "enabled": True, "coming_soon": False, "hidden": False})
-        if has_any(user, "leo", "cid", "cid_director", "iu", "iu_director", "owner"):
+        if has_any(user, *LAW_SERVICE_ROLES, "owner"):
             apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "coming_soon": False, "hidden": False})
         if has_any(user, "owner"):
             apps.append({"id": "system", "label": "System", "icon": "settings", "enabled": True, "coming_soon": False, "hidden": False})
@@ -1872,7 +1873,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps.append({"id": "contracts", "label": "Contracts", "icon": "target", "enabled": True, "coming_soon": False, "hidden": False})
     if has_any(user, "dispatcher", "owner"):
         apps.append({"id": "dispatch", "label": "Dispatch", "icon": "radio", "enabled": True, "hidden": False})
-    if has_any(user, "leo", "cid", "cid_director", "iu", "iu_director", "owner"):
+    if has_any(user, *LAW_SERVICE_ROLES, "owner"):
         apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "hidden": False})
     if has_any(user, *FIRE_SERVICE_ROLES, "owner"):
         apps.append({"id": "fire", "label": "Fire MDT", "icon": "flame", "enabled": True, "hidden": False})
@@ -4459,7 +4460,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         created = cur.fetchone()
         recipient_patterns = {
-            "police": ("%leo%", "%cid%", "%iu%", "%iu_director%", "%dispatcher%", "%owner%"),
+            "police": ("%leo%", "%sheriff%", "%police%", "%metro_police_chief%", "%state_police%", "%state_police_commander%", "%cid%", "%cid_director%", "%iu%", "%iu_director%", "%dispatcher%", "%owner%"),
             "fire": ("%fireman%", "%fire_chief%", "%deputy_chief%", "%fire_marshal%", "%dispatcher%", "%owner%"),
             "ems": ("%ems%", "%dispatcher%", "%owner%", "%admin%"),
         }[department]
@@ -4694,10 +4695,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 ts,
             ),
         ).fetchone()
+        recipient_patterns = tuple(f"%{role}%" for role in LAW_SERVICE_ROLES) + ("%owner%",)
         recipients = all_rows(
             db,
-            "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ? OR roles LIKE ? OR roles LIKE ? OR roles LIKE ? ORDER BY id LIMIT 200",
-            ("%leo%", "%cid%", "%iu%", "%iu_director%", "%owner%"),
+            "SELECT id FROM users WHERE " + " OR ".join(["roles LIKE ?"] * len(recipient_patterns)) + " ORDER BY id LIMIT 200",
+            recipient_patterns,
         )
         notice = f"{user['name']} issued {created['bolo_number']} for {target_name}. Caution: {caution_level}. {reason[:220]}"
         for recipient in recipients:
@@ -4772,7 +4774,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not user:
             self.error(401, "Authentication required")
             return
-        can_view_dispatch = bool(has_any(user, "admin", "dispatcher", "leo", "cid", "cid_director", "iu", "iu_director", "fireman", *FIRE_COMMAND_ROLES, "ems", "owner"))
+        can_view_dispatch = bool(has_any(user, "admin", "dispatcher", *LAW_SERVICE_ROLES, *FIRE_SERVICE_ROLES, "owner"))
         if not can_view_dispatch:
             self.error(403, "Dispatch access required")
             return
@@ -4831,7 +4833,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         units = [
             dict(row)
             for row in unit_rows
-            if has_any(row, "leo", "cid", "iu", "iu_director", "fireman", *FIRE_COMMAND_ROLES, "ems", "owner")
+            if has_any(row, *LAW_SERVICE_ROLES, *FIRE_SERVICE_ROLES, "owner")
         ]
         active_statuses = {"active", "staged", "responding", "on_scene", "held"}
         stats = {
@@ -4896,7 +4898,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             (alert_id, user["id"], "call intake", note, ts),
         )
         recipient_patterns = {
-            "police": ("%leo%", "%cid%", "%iu%", "%iu_director%", "%dispatcher%", "%owner%"),
+            "police": ("%leo%", "%sheriff%", "%police%", "%metro_police_chief%", "%state_police%", "%state_police_commander%", "%cid%", "%cid_director%", "%iu%", "%iu_director%", "%dispatcher%", "%owner%"),
             "fire": ("%fireman%", "%fire_chief%", "%deputy_chief%", "%fire_marshal%", "%dispatcher%", "%owner%"),
             "ems": ("%ems%", "%dispatcher%", "%owner%", "%admin%"),
         }[department]
@@ -4968,7 +4970,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(400, "Invalid unit")
             return
         unit = one(db, "SELECT id, name, roles, callsign FROM users WHERE id = ?", (unit_id,))
-        if not unit or not has_any(unit, "leo", "cid", "iu", "iu_director", "fireman", *FIRE_COMMAND_ROLES, "ems", "owner"):
+        if not unit or not has_any(unit, *LAW_SERVICE_ROLES, *FIRE_SERVICE_ROLES, "owner"):
             self.error(404, "Emergency unit not found")
             return
         if not str(unit.get("callsign") or "").strip():

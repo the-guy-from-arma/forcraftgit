@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.28";
+const OS_VERSION = "0.0.30";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 
 const state = {
@@ -14,6 +14,7 @@ const state = {
   authMode: "login",
   session: null,
   activeApp: null,
+  returnToMdtOnClose: false,
   pendingArmaCode: new URL(window.location.href).searchParams.get("code") || "",
   dmvTab: "overview",
   jobsTab: "state_police",
@@ -52,6 +53,25 @@ const MDT_DISPATCH_ROLES = [
   "admin",
   "dispatcher",
   "owner",
+  "leo",
+  "cid",
+  "cid_director",
+  "iu",
+  "iu_director",
+  "fireman",
+  "fire_chief",
+  "deputy_chief",
+  "fire_marshal",
+  "ems",
+  "sheriff",
+  "police",
+  "metro_police_chief",
+  "state_police",
+  "state_police_commander",
+];
+
+const CALLSIGN_REQUIRED_ROLES = [
+  "dispatcher",
   "leo",
   "cid",
   "cid_director",
@@ -270,21 +290,21 @@ function render() {
         : state.activeApp === "dispatch"
           ? renderDispatchWorkspace()
           : renderMdtWorkspace()
-    ) + renderCarEntryRequiredModal();
+    ) + renderRequiredProfileModals();
     state.activeApp === "fire" ? bindFireWorkspace() : state.activeApp === "dispatch" ? bindDispatchWorkspace() : bindMdtWorkspace();
-    bindCarEntryRequiredModal();
+    bindRequiredProfileModals();
     return;
   }
   if (state.activeApp) {
-    app.innerHTML = phone(renderHome() + renderPanel(state.activeApp) + renderCarEntryRequiredModal());
+    app.innerHTML = phone(renderHome() + renderPanel(state.activeApp) + renderRequiredProfileModals());
     bindHome();
     bindPanel();
-    bindCarEntryRequiredModal();
+    bindRequiredProfileModals();
     return;
   }
-  app.innerHTML = phone(renderHome() + renderCarEntryRequiredModal());
+  app.innerHTML = phone(renderHome() + renderRequiredProfileModals());
   bindHome();
-  bindCarEntryRequiredModal();
+  bindRequiredProfileModals();
 }
 
 function renderAuth() {
@@ -368,6 +388,56 @@ function bindCarEntryRequiredModal() {
     try {
       await saveCarEntryCodeFromForm(event.currentTarget);
       toast("Car entry code saved");
+      await loadSession();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+}
+
+function userNeedsCallsign() {
+  if (isUpdateLockdown()) return false;
+  const user = state.session?.user;
+  if (!user) return false;
+  const roles = (user.roles || []).map(normalizedRole);
+  const hasDepartmentRole = roles.some((role) => CALLSIGN_REQUIRED_ROLES.includes(role));
+  return hasDepartmentRole && !String(user.callsign || "").trim();
+}
+
+function renderCallsignRequiredModal() {
+  if (!userNeedsCallsign()) return "";
+  const user = state.session?.user || {};
+  return `
+    <div class="modal-backdrop force-code-backdrop callsign-required-backdrop">
+      <section class="mdt-modal force-code-modal callsign-required-modal" role="dialog" aria-modal="true" aria-label="Callsign required">
+        <header>
+          <p class="eyebrow">Department radio identity</p>
+          <h2>Set Your Callsign</h2>
+        </header>
+        <div class="notice-body">
+          <p>Your account has department access. Dispatch needs a callsign before you can be reliably assigned to CAD calls.</p>
+          <p>Use the callsign your command staff expects to see on the dispatch board.</p>
+        </div>
+        <form id="forcedCallsignForm" class="form-grid">
+          <label>Callsign<input name="callsign" value="${escapeHtml(user.callsign || "")}" maxlength="24" pattern="[A-Za-z0-9_-]{2,24}" placeholder="UNIT-1, ALPHA-2, 2B-12" autocomplete="off" required autofocus /></label>
+          <button class="primary" type="submit">Save callsign</button>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+function renderRequiredProfileModals() {
+  return renderCarEntryRequiredModal() || renderCallsignRequiredModal();
+}
+
+function bindRequiredProfileModals() {
+  bindCarEntryRequiredModal();
+  $("#forcedCallsignForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await saveCallsignFromForm(event.currentTarget);
+      toast("Callsign saved");
       await loadSession();
     } catch (error) {
       toast(error.message);
@@ -565,7 +635,15 @@ async function loadAppData(id) {
 
 function bindPanel() {
   $("[data-close-panel]")?.addEventListener("click", async () => {
+    if (state.returnToMdtOnClose && state.activeApp === "messages") {
+      state.returnToMdtOnClose = false;
+      state.activeApp = "mdt";
+      await loadAppData("mdt");
+      render();
+      return;
+    }
     state.activeApp = null;
+    state.returnToMdtOnClose = false;
     await loadSession();
   });
   $("[data-refresh-panel]")?.addEventListener("click", async () => {
@@ -2493,7 +2571,7 @@ function renderMdtWorkspace() {
     ["panic", "Panic"],
   ];
   return `
-    <section class="mdt-workspace ${cidEnabled ? "cid-workspace" : ""}">
+    <section class="mdt-workspace ${mdtCommandEnabledNow ? "cid-workspace" : ""}">
       <header class="mdt-topbar">
         <div>
           <p class="eyebrow">${escapeHtml(state.session.user.primary_agency || (mdtCommandEnabledNow ? `${commandLabel} Command` : "Law Enforcement"))}</p>
@@ -2509,6 +2587,7 @@ function renderMdtWorkspace() {
           <button class="secondary" data-close-mdt>Exit MDT</button>
         </div>
       </header>
+      ${renderMdtQuickRail()}
       <div class="mdt-stat-strip ${mdtCommandEnabledNow ? "cid-stat-strip" : "leo-stat-strip"}">
         ${mdtCommandEnabledNow ? `
           <div class="metric"><span>Case folders</span><strong>${cid?.stats?.open_investigations || 0}</strong></div>
@@ -2543,9 +2622,34 @@ function renderMdtWorkspace() {
   `;
 }
 
+function renderMdtQuickRail() {
+  const unread = Number(state.session?.unread_messages || 0);
+  return `
+    <nav class="mdt-quick-rail" aria-label="MDT quick access">
+      ${canUseMdtDispatch() ? `
+        <button type="button" data-open-mdt-dispatch aria-label="Open dispatch">
+          ${iconSvg.radio}
+          <span>Dispatch</span>
+        </button>
+      ` : ""}
+      ${canUseMdtMessages() ? `
+        <button type="button" data-open-mdt-messages aria-label="Open messages">
+          ${iconSvg.message}
+          <span>Messages${unread ? `<b>${unread}</b>` : ""}</span>
+        </button>
+      ` : ""}
+      <button type="button" data-open-mdt-side aria-label="Open watch panel">
+        ${iconSvg.target}
+        <span>Watch</span>
+      </button>
+    </nav>
+  `;
+}
+
 function bindMdtWorkspace() {
   $("[data-close-mdt]")?.addEventListener("click", async () => {
     state.activeApp = null;
+    state.returnToMdtOnClose = false;
     state.mdtCatalogOpen = false;
     state.mdtNavOpen = false;
     state.mdtSideOpen = false;
@@ -2556,29 +2660,35 @@ function bindMdtWorkspace() {
       toast("You do not have permission to open Dispatch from MDT.");
       return;
     }
+    state.returnToMdtOnClose = true;
     state.activeApp = "dispatch";
+    state.mdtNavOpen = false;
+    state.mdtSideOpen = false;
     await loadAppData("dispatch");
     render();
-  });
+  }));
   $$("[data-open-mdt-messages]")?.forEach((button) => button.addEventListener("click", async () => {
     if (!canUseMdtMessages()) {
       toast("You must be verified to open Messages.");
       return;
     }
+    state.returnToMdtOnClose = true;
     state.activeApp = "messages";
+    state.mdtNavOpen = false;
+    state.mdtSideOpen = false;
     await loadAppData("messages");
     render();
-  });
-  $("[data-open-mdt-nav]")?.addEventListener("click", () => {
+  }));
+  $$("[data-open-mdt-nav]").forEach((button) => button.addEventListener("click", () => {
     state.mdtNavOpen = true;
     state.mdtSideOpen = false;
     render();
-  });
-  $("[data-open-mdt-side]")?.addEventListener("click", () => {
+  }));
+  $$("[data-open-mdt-side]").forEach((button) => button.addEventListener("click", () => {
     state.mdtSideOpen = true;
     state.mdtNavOpen = false;
     render();
-  });
+  }));
   $$("[data-close-mdt-drawers]").forEach((button) => button.addEventListener("click", () => {
     state.mdtNavOpen = false;
     state.mdtSideOpen = false;
@@ -2955,6 +3065,14 @@ function renderDispatchWorkspace() {
 
 function bindDispatchWorkspace() {
   $("[data-close-dispatch]")?.addEventListener("click", async () => {
+    if (state.returnToMdtOnClose) {
+      state.returnToMdtOnClose = false;
+      state.activeApp = "mdt";
+      state.dispatchPastOpen = false;
+      await loadAppData("mdt");
+      render();
+      return;
+    }
     state.activeApp = null;
     state.dispatchPastOpen = false;
     await loadSession();
@@ -3056,7 +3174,7 @@ function bindDispatch() {
   }));
   $$("[data-dispatch-ncic-lookup]")?.forEach((button) => button.addEventListener("click", async () => {
     await runDispatchNcicQuery(button.dataset.dispatchNcicQuery);
-  });
+  }));
   $$(".dispatch-unit-form").forEach((form) => form.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
@@ -5203,7 +5321,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.30").catch(() => {}));
 }
 
 bootApp();

@@ -1,8 +1,8 @@
-const CACHE = "rp-command-v28-dispatch-center";
+const CACHE = "rp-command-v30-mdt-dispatch";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.28-dispatch-center",
-  "/static/app.js?v=0.0.28-dispatch-center",
+  "/static/styles.css?v=0.0.30",
+  "/static/app.js?v=0.0.30",
   "/static/icons/icon.svg",
   "/manifest.webmanifest"
 ];
@@ -33,7 +33,7 @@ self.addEventListener("fetch", (event) => {
       })
       .catch(() =>
         caches.match(event.request).then((cached) =>
-          cached || caches.match("/")
+          cached || (event.request.mode === "navigate" ? caches.match("/") : new Response("", { status: 503 }))
         )
       )
   );
