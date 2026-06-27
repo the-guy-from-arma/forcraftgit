@@ -2437,6 +2437,13 @@ textarea:focus {
   align-items: end;
 }
 
+.dispatch-hero-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
 .dispatch-call-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

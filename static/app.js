@@ -26,6 +26,8 @@ const state = {
   mdtProfileUserId: null,
   mdtProfileTab: "profile",
   dispatchSelectedCallId: null,
+  dispatchNcicResults: [],
+  dispatchNcicQuery: "",
   dispatchFilter: "active",
   dispatchPastOpen: false,
   courtTab: "mine",
@@ -39,6 +41,27 @@ const state = {
   dmvCountdownRefreshing: false,
   cache: {},
 };
+
+const MDT_DISPATCH_ROLES = [
+  "admin",
+  "dispatcher",
+  "owner",
+  "leo",
+  "cid",
+  "cid_director",
+  "iu",
+  "iu_director",
+  "fireman",
+  "fire_chief",
+  "deputy_chief",
+  "fire_marshal",
+  "ems",
+  "sheriff",
+  "police",
+  "metro_police_chief",
+  "state_police",
+  "state_police_commander",
+];
 
 const iconSvg = {
   "id-card": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="12" r="2"/><path d="M14 10h4M14 14h4M7 16c.6-1 3.4-1 4 0"/></svg>',
@@ -447,7 +470,7 @@ async function loadAppData(id) {
         alerts: await api("/api/mdt/alerts"),
         reports: await api("/api/mdt/reports"),
         bolos: await optionalApi("/api/mdt/bolos", { active: [], recent: [] }),
-        cid: canAny("cid", "owner") ? await api("/api/cid/overview") : null,
+        cid: mdtCommandEnabled() ? await api("/api/cid/overview") : null,
         search: state.cache.mdt?.search || []
       };
       if (data.cid && state.mdtTab === "search" && !data.search.length) {
@@ -508,6 +531,30 @@ function canAny(...roles) {
   return roles.some((role) => can(role));
 }
 
+function canUseMdtDispatch() {
+  return canAny(...MDT_DISPATCH_ROLES);
+}
+
+function canUseMdtMessages() {
+  return Boolean(state.session?.user?.verified) || can("admin") || can("owner");
+}
+
+function isIUUser() {
+  return canAny("iu", "iu_director");
+}
+
+function mdtCommandEnabled() {
+  return canAny("cid", "cid_director", "iu", "iu_director", "owner");
+}
+
+function mdtCommandLabel() {
+  if (canAny("iu_director")) return "IU Director";
+  if (canAny("iu")) return "IU";
+  if (canAny("cid_director")) return "CID Director";
+  if (canAny("cid", "owner")) return "CID";
+  return "LEO";
+}
+
 function isUpdateLockdown() {
   return Boolean(state.session?.system?.update_lockdown_enabled);
 }
@@ -558,6 +605,7 @@ function renderProfile() {
   const nameChange = data.name_change || { locked: false, used: 0, limit: 3, remaining: 3, window_days: 3 };
   const nameChangeBlocked = nameChange.locked || Number(nameChange.remaining || 0) <= 0;
   const nameChangeLabel = nameChange.locked ? "locked" : `${nameChange.remaining}/${nameChange.limit} left`;
+  const canSetCallsign = canAny("owner", "admin", "leo", "cid", "iu", "iu_director", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "fireman", "ems", "dispatcher", "fire_chief", "deputy_chief", "fire_marshal");
   return `
     <div class="stack profile-app">
       <div class="profile-hero">
@@ -575,6 +623,7 @@ function renderProfile() {
         <div><span>Status</span><strong>${escapeHtml(user.verified ? "Verified civilian" : "Awaiting verification")}</strong></div>
         <div><span>Registered Arma ID</span><strong>${escapeHtml(user.registered_arma_id || user.arma_id || "Not attached")}</strong></div>
         <div><span>Car Entry Code</span><strong>${escapeHtml(user.car_entry_code || "Required")}</strong></div>
+        ${canSetCallsign ? `<div><span>Callsign</span><strong>${escapeHtml(user.callsign || "Not set")}</strong></div>` : ""}
         <div><span>Live Link</span><strong>${escapeHtml(link ? "Attached" : "Not attached")}</strong></div>
       </div>
       <section class="profile-link-card">
@@ -591,6 +640,22 @@ function renderProfile() {
           <button class="secondary" type="submit">Save car entry code</button>
         </form>
       </section>
+      ${canSetCallsign ? `
+        <section class="profile-link-card">
+          <div class="row">
+            <div>
+              <p class="eyebrow">Radio identity</p>
+              <h3>Department Callsign</h3>
+              <p class="muted small">Dispatch will use this handle for quick unit tracking and unit checks.</p>
+            </div>
+            <span class="pill ${user.callsign ? "green" : "red"}">${user.callsign ? "set" : "missing"}</span>
+          </div>
+          <form id="callsignForm" class="form-grid">
+            <label>Callsign<input name="callsign" value="${escapeHtml(user.callsign || "")}" maxlength="24" pattern="[A-Za-z0-9_-]{2,24}" placeholder="UNIT-1, ALPHA-2, etc" required /></label>
+            <button class="secondary" type="submit">Save callsign</button>
+          </form>
+        </section>
+      ` : ""}
       <section class="profile-link-card character-manager">
         <div class="row">
           <div>
@@ -686,12 +751,33 @@ async function saveCarEntryCodeFromForm(form) {
   return result;
 }
 
+async function saveCallsignFromForm(form) {
+  const payload = Object.fromEntries(new FormData(form).entries());
+  const result = await api("/api/profile/callsign", { method: "POST", body: payload });
+  state.session.user = result.user;
+  if (state.cache.profile?.user) {
+    state.cache.profile.user = { ...state.cache.profile.user, ...result.user };
+  }
+  return result;
+}
+
 function bindProfile() {
   $("#carEntryCodeForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
       await saveCarEntryCodeFromForm(event.currentTarget);
       toast("Car entry code saved");
+      await loadAppData("profile");
+      await loadSession();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $("#callsignForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await saveCallsignFromForm(event.currentTarget);
+      toast("Callsign saved");
       await loadAppData("profile");
       await loadSession();
     } catch (error) {
@@ -1032,7 +1118,7 @@ function bindDmv() {
   });
 }
 
-const lawEnforcementDepartmentChoices = ["Sheriffs Department", "Police Department", "State Police", "CID"];
+const lawEnforcementDepartmentChoices = ["Sheriffs Department", "Police Department", "State Police", "CID", "Interrogation Unit"];
 const lawEnforcementApplicationFields = [
   { key: "in_game_name", label: "What is your in-game name?", kind: "text", min: 2, max: 120, placeholder: "Your RP character name" },
   { key: "discord_name", label: "Discord Name", kind: "text", min: 2, max: 120, placeholder: "Discord username" },
@@ -1057,6 +1143,7 @@ function departmentChoiceForPosting(posting) {
     metro_police: "Police Department",
     state_police: "State Police",
     cid: "CID",
+    iu: "Interrogation Unit",
   };
   return map[posting?.key] || "";
 }
@@ -2071,7 +2158,7 @@ function renderCourtRules() {
 
 function renderCourt() {
   const data = state.cache.court?.mine || {};
-  const isOfficer = canAny("leo", "cid", "owner");
+  const isOfficer = canAny("leo", "cid", "cid_director", "iu", "iu_director", "owner");
   const isJudge = canAny("judge", "owner");
   const tabs = [
     ["defendant-active", "Active"],
@@ -2304,16 +2391,17 @@ function renderMdtWorkspace() {
   const alerts = state.cache.mdt?.alerts?.alerts || [];
   const activeBolos = state.cache.mdt?.bolos?.active || [];
   const cid = state.cache.mdt?.cid;
-  const cidEnabled = canAny("cid", "owner");
-  if (!cidEnabled && String(state.mdtTab || "").startsWith("cid-")) {
+  const mdtCommandEnabledNow = mdtCommandEnabled();
+  const commandLabel = mdtCommandLabel();
+  if (!mdtCommandEnabledNow && String(state.mdtTab || "").startsWith("cid-")) {
     state.mdtTab = "search";
   }
   const priorityCases = (cid?.investigations || []).filter((item) => ["critical", "elevated"].includes(item.priority));
-  const cidWarrantModal = cidEnabled && state.cidWarrantModalId
+  const cidWarrantModal = mdtCommandEnabledNow && state.cidWarrantModalId
     ? renderCidWarrantModal((cid?.warrants || []).find((item) => String(item.id) === String(state.cidWarrantModalId)))
     : "";
-  const navItems = cidEnabled ? [
-    ["cid-command", "CID Command"],
+  const navItems = mdtCommandEnabledNow ? [
+    ["cid-command", `${commandLabel} Command`],
     ["search", "NCIC / DMV"],
     ["cid-investigations", "Case Folders"],
     ["cid-warrants", "Warrant Ops"],
@@ -2337,19 +2425,21 @@ function renderMdtWorkspace() {
     <section class="mdt-workspace ${cidEnabled ? "cid-workspace" : ""}">
       <header class="mdt-topbar">
         <div>
-          <p class="eyebrow">${escapeHtml(state.session.user.primary_agency || (cidEnabled ? "CID Command" : "Law Enforcement"))}</p>
-          <h1>${cidEnabled ? "CID Command MDT" : "Mobile Data Terminal"}</h1>
-          ${cidEnabled ? `<p class="mdt-subtitle">Investigations / warrants / intelligence / internal affairs</p>` : ""}
+          <p class="eyebrow">${escapeHtml(state.session.user.primary_agency || (mdtCommandEnabledNow ? `${commandLabel} Command` : "Law Enforcement"))}</p>
+          <h1>${mdtCommandEnabledNow ? `${commandLabel} Command MDT` : "Mobile Data Terminal"}</h1>
+          ${mdtCommandEnabledNow ? `<p class="mdt-subtitle">Investigations / warrants / intelligence / internal affairs</p>` : ""}
         </div>
         <div class="mdt-top-actions">
+          ${canUseMdtDispatch() ? `<button class="ghost mdt-mobile-action" data-open-mdt-dispatch>Dispatch</button>` : ""}
           <button class="ghost mdt-mobile-action" data-open-mdt-nav>Menu</button>
           <button class="ghost mdt-mobile-action" data-open-mdt-side>Watch</button>
+          ${canUseMdtMessages() ? `<button class="ghost mdt-mobile-action" data-open-mdt-messages>Messages</button>` : ""}
           <button class="ghost" data-refresh-mdt>Refresh</button>
           <button class="secondary" data-close-mdt>Exit MDT</button>
         </div>
       </header>
-      <div class="mdt-stat-strip ${cidEnabled ? "cid-stat-strip" : "leo-stat-strip"}">
-        ${cidEnabled ? `
+      <div class="mdt-stat-strip ${mdtCommandEnabledNow ? "cid-stat-strip" : "leo-stat-strip"}">
+        ${mdtCommandEnabledNow ? `
           <div class="metric"><span>Case folders</span><strong>${cid?.stats?.open_investigations || 0}</strong></div>
           <div class="metric"><span>Priority watch</span><strong>${priorityCases.length}</strong></div>
           <div class="metric"><span>Active warrants</span><strong>${cid?.stats?.active_warrants || 0}</strong></div>
@@ -2389,6 +2479,24 @@ function bindMdtWorkspace() {
     state.mdtNavOpen = false;
     state.mdtSideOpen = false;
     await loadSession();
+  });
+  $$("[data-open-mdt-dispatch]")?.forEach((button) => button.addEventListener("click", async () => {
+    if (!canUseMdtDispatch()) {
+      toast("You do not have permission to open Dispatch from MDT.");
+      return;
+    }
+    state.activeApp = "dispatch";
+    await loadAppData("dispatch");
+    render();
+  });
+  $$("[data-open-mdt-messages]")?.forEach((button) => button.addEventListener("click", async () => {
+    if (!canUseMdtMessages()) {
+      toast("You must be verified to open Messages.");
+      return;
+    }
+    state.activeApp = "messages";
+    await loadAppData("messages");
+    render();
   });
   $("[data-open-mdt-nav]")?.addEventListener("click", () => {
     state.mdtNavOpen = true;
@@ -2437,9 +2545,27 @@ function dispatchCallNotes(data, callId) {
     .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 }
 
+async function runDispatchNcicQuery(rawQuery) {
+  const query = String(rawQuery || "").trim();
+  if (!query) {
+    toast("No caller details available to lookup.");
+    return;
+  }
+  state.dispatchNcicQuery = query;
+  try {
+    const result = await api(`/api/mdt/search?q=${encodeURIComponent(query)}`);
+    state.dispatchNcicResults = result.results || [];
+    render();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
 function renderDispatchWorkspace() {
   const data = state.cache.dispatch || {};
   const calls = data.calls || [];
+  const canManageDispatch = Boolean(data.can_manage_dispatch);
+  const ncicResults = state.dispatchNcicResults || [];
   const stats = data.stats || { active: 0, critical: 0, assigned_units: 0, police: 0, fire: 0, ems: 0 };
   const activeStatuses = ["active", "staged", "responding", "on_scene", "held"];
   const activeCalls = calls.filter((call) => activeStatuses.includes(call.status));
@@ -2563,10 +2689,13 @@ function renderDispatchWorkspace() {
                   <h2>${escapeHtml(selected.call_type || "Emergency Call")}</h2>
                   <p>${escapeHtml(selected.location || "Unknown location")}</p>
                 </div>
-                <div class="dispatch-hero-pills">
+              <div class="dispatch-hero-pills">
                   <span class="pill ${dispatchPriorityClass(selected.priority)}">${escapeHtml(selected.priority || "standard")}</span>
                   <span class="pill ${dispatchStatusClass(selected.status)}">${escapeHtml(selected.status || "active")}</span>
                   <span class="pill">${escapeHtml((selected.department || "police").toUpperCase())}</span>
+                </div>
+                <div class="dispatch-hero-actions">
+                  ${selected.caller_name ? `<button class="secondary" type="button" data-dispatch-ncic-lookup="${escapeHtml(String(selected.id))}" data-dispatch-ncic-query="${escapeHtml(selected.caller_name)}">Lookup caller in NCIC</button>` : ""}
                 </div>
               </div>
               <div class="dispatch-call-grid">
@@ -2579,12 +2708,16 @@ function renderDispatchWorkspace() {
                 <strong>Original intake</strong>
                 <p>${escapeHtml(selected.note || "No intake note")}</p>
               </div>
-              <form id="dispatchCallStatusForm" class="dispatch-control-form" data-call-id="${selected.id}">
-                <label>Status<select name="status">${renderOptions(callStatuses, selected.status || "active")}</select></label>
-                <label>Priority<select name="priority">${renderOptions(priorities, selected.priority || "standard")}</select></label>
-                <label class="dispatch-wide">Update note<input name="note" placeholder="Optional status note for units and dispatch log" /></label>
-                <button class="primary" type="submit">Update Call</button>
-              </form>
+              ${canManageDispatch ? `
+                <form id="dispatchCallStatusForm" class="dispatch-control-form" data-call-id="${selected.id}">
+                  <label>Status<select name="status">${renderOptions(callStatuses, selected.status || "active")}</select></label>
+                  <label>Priority<select name="priority">${renderOptions(priorities, selected.priority || "standard")}</select></label>
+                  <label class="dispatch-wide">Update note<input name="note" placeholder="Optional status note for units and dispatch log" /></label>
+                  <button class="primary" type="submit">Update Call</button>
+                </form>
+              ` : `
+                <div class="empty">Dispatch staff only. Ask dispatcher for status updates.</div>
+              `}
             </section>
             <section class="dispatch-units-panel">
               <div class="dispatch-panel-head">
@@ -2594,65 +2727,135 @@ function renderDispatchWorkspace() {
                 </div>
                 <span class="pill">${activeAssignments.length} active</span>
               </div>
-              <form id="dispatchAttachUnitForm" class="dispatch-attach-form" data-call-id="${selected.id}">
-                <label>Available unit<select name="unit_id" required>
-                  <option value="">Select unit</option>
-                  ${availableUnits.map((unit) => `<option value="${unit.id}">${escapeHtml(unit.name)} - ${escapeHtml(unit.primary_agency || "Emergency")} - CIV ${escapeHtml(unit.civ_number || "pending")}</option>`).join("")}
-                </select></label>
-                <label>Status<select name="status">${renderOptions(unitStatuses, "assigned")}</select></label>
-                <label class="dispatch-wide">Assignment notes<input name="notes" placeholder="Scene direction, staging, channel, or tasking" /></label>
-                <button class="primary" type="submit">Attach Unit</button>
-              </form>
+                ${canManageDispatch ? `
+                <form id="dispatchAttachUnitForm" class="dispatch-attach-form" data-call-id="${selected.id}">
+                  <label>Available unit<select name="unit_id" required>
+                    <option value="">Select unit</option>
+                    ${availableUnits.map((unit) => `
+                      <option value="${unit.id}" ${unit.callsign ? "" : "disabled"}>
+                        ${escapeHtml(unit.name)} - ${escapeHtml(unit.primary_agency || "Emergency")} - CIV ${escapeHtml(unit.civ_number || "pending")} ${unit.callsign ? ` / ${escapeHtml(unit.callsign)}` : "/ Missing callsign"}
+                      </option>
+                    `).join("")}
+                  </select></label>
+                  <label>Status<select name="status">${renderOptions(unitStatuses, "assigned")}</select></label>
+                  <label class="dispatch-wide">Assignment notes<input name="notes" placeholder="Scene direction, staging, channel, or tasking" /></label>
+                  <button class="primary" type="submit">Attach Unit</button>
+                </form>
+                <section class="dispatch-quick-panel">
+                  <p class="muted small">Quick assign active units (one click)</p>
+                  <div class="row">
+                    ${availableUnits.filter((unit) => unit.callsign).map((unit) => `
+                      <button type="button" class="secondary compact-action" data-dispatch-quick-attach="${selected.id}" data-unit-id="${unit.id}">
+                        Attach ${escapeHtml(unit.callsign || unit.name)} (${escapeHtml(unit.name)})
+                      </button>
+                    `).join("") || `<span class="muted small">No callable units available (callsign required)</span>`}
+                  </div>
+                </section>
+              ` : `
+                <div class="empty">Only dispatch staff can assign units.</div>
+              `}
               <div class="dispatch-unit-list">
                 ${allAssignments.map((assignment) => `
                   <article class="dispatch-unit-card ${assignment.detached_at ? "detached" : ""}">
                     <div>
-                      <strong>${escapeHtml(assignment.unit_name)}</strong>
+                      <strong>${escapeHtml(assignment.unit_name)}${assignment.unit_callsign ? ` (${escapeHtml(assignment.unit_callsign)})` : ""}</strong>
                       <p>${escapeHtml(assignment.unit_agency || "Emergency unit")} / attached by ${escapeHtml(assignment.dispatcher_name || "Dispatch")}</p>
                     </div>
-                    <form class="dispatch-unit-form" data-assignment-id="${assignment.id}">
-                      <select name="status" ${assignment.detached_at ? "disabled" : ""}>${renderOptions([...unitStatuses, "detached"], assignment.status || "assigned")}</select>
-                      <input name="notes" value="${escapeHtml(assignment.notes || "")}" placeholder="Unit notes" ${assignment.detached_at ? "disabled" : ""} />
-                      <button class="secondary" type="submit" ${assignment.detached_at ? "disabled" : ""}>Save</button>
-                      <button class="danger" type="button" data-detach-unit="${assignment.id}" ${assignment.detached_at ? "disabled" : ""}>Detach</button>
-                    </form>
+                    ${canManageDispatch ? `
+                      <form class="dispatch-unit-form" data-assignment-id="${assignment.id}">
+                        <select name="status" ${assignment.detached_at ? "disabled" : ""}>${renderOptions([...unitStatuses, "detached"], assignment.status || "assigned")}</select>
+                        <input name="notes" value="${escapeHtml(assignment.notes || "")}" placeholder="Unit notes" ${assignment.detached_at ? "disabled" : ""} />
+                        <button class="secondary" type="submit" ${assignment.detached_at ? "disabled" : ""}>Save</button>
+                        <button class="danger" type="button" data-detach-unit="${assignment.id}" ${assignment.detached_at ? "disabled" : ""}>Detach</button>
+                      </form>
+                    ` : `
+                      <p class="muted small">Status: ${escapeHtml(assignment.status || "assigned")} / Notes: ${escapeHtml(assignment.notes || "N/A")}</p>
+                    `}
                   </article>
                 `).join("") || `<div class="empty">No units attached yet</div>`}
+                ${canManageDispatch ? "" : `<p class="muted small">Dispatch staff-only controls are locked.</p>`}
               </div>
             </section>
           ` : `<div class="empty">Create or select a call to open dispatch controls</div>`}
         </main>
         <aside class="dispatch-tools">
-          <form id="dispatchCreateCallForm" class="dispatch-create-card">
-            <div>
-              <p class="eyebrow">Create call</p>
-              <h2>New CAD Call</h2>
-            </div>
-            <label>Department<select name="department">${renderOptions(departments, "police")}</select></label>
-            <label>Call type<select name="call_type">${renderOptions(callTypes, "911 Call")}</select></label>
-            <label>Priority<select name="priority">${renderOptions(priorities, "standard")}</select></label>
-            <label>Caller / RP source<input name="caller_name" placeholder="Caller, officer, or anonymous" /></label>
-            <label>Location<input name="location" placeholder="Street, postal, grid, landmark" required /></label>
-            <label>Intake notes<textarea name="note" rows="7" placeholder="What happened, suspect info, weapons, injuries, scene hazards, RP details" required></textarea></label>
-            <button class="primary" type="submit">Create Call</button>
-          </form>
-          ${selected ? `
-            <form id="dispatchNoteForm" class="dispatch-create-card dispatch-note-card" data-call-id="${selected.id}">
+          ${canManageDispatch ? `
+            <form id="dispatchCreateCallForm" class="dispatch-create-card">
               <div>
-                <p class="eyebrow">Scene updates</p>
-                <h2>Dispatch Notes</h2>
+                <p class="eyebrow">Create call</p>
+                <h2>New CAD Call</h2>
               </div>
-              <label>Note type<select name="note_type">
-                <option>dispatch update</option>
-                <option>scene update</option>
-                <option>suspect info</option>
-                <option>unit instruction</option>
-                <option>crime scene</option>
-                <option>medical update</option>
-              </select></label>
-              <label>Note<textarea name="body" rows="6" placeholder="Update units with scene status, suspect details, perimeter, staging, hazards, or RP instructions" required></textarea></label>
-              <button class="primary" type="submit">Post Note</button>
+              <label>Department<select name="department">${renderOptions(departments, "police")}</select></label>
+              <label>Call type<select name="call_type">${renderOptions(callTypes, "911 Call")}</select></label>
+              <label>Priority<select name="priority">${renderOptions(priorities, "standard")}</select></label>
+              <label>Caller / RP source<input name="caller_name" placeholder="Caller, officer, or anonymous" /></label>
+              <label>Location<input name="location" placeholder="Street, postal, grid, landmark" required /></label>
+              <label>Intake notes<textarea name="note" rows="7" placeholder="What happened, suspect info, weapons, injuries, scene hazards, RP details" required></textarea></label>
+              <button class="primary" type="submit">Create Call</button>
             </form>
+          ` : `
+            <section class="dispatch-create-card">
+              <div>
+                <p class="eyebrow">Create call</p>
+                <h2>New CAD Call</h2>
+              </div>
+              <div class="empty">Dispatch staff only to open new CAD calls.</div>
+            </section>
+          `}
+          <form id="dispatchNcicSearchForm" class="dispatch-create-card">
+            <div>
+              <p class="eyebrow">NCIC / DMV check</p>
+              <h2>Run Lookup</h2>
+            </div>
+            <label>Find person by name, civ, email, or plate<input name="q" value="${escapeHtml(state.dispatchNcicQuery)}" placeholder="Search civilian name, civ, email, plate" /></label>
+            <button class="secondary" type="submit">Search</button>
+          </form>
+          <section class="dispatch-log">
+            <div class="dispatch-panel-head">
+              <div>
+                <p class="eyebrow">NCIC results</p>
+                <h2>Latest hits</h2>
+              </div>
+              <span class="pill">${ncicResults.length}</span>
+            </div>
+            <div class="dispatch-note-list">
+              ${ncicResults.map((item) => `
+                <article>
+                  <div class="row tight"><strong>${escapeHtml(item.name || "Unknown")}</strong><span>${escapeHtml(item.civ_number || "CIV pending")}</span></div>
+                  <p>${escapeHtml(item.callsign ? `Callsign ${item.callsign}` : "No callsign set")} / ${escapeHtml(item.primary_agency || "Civilian")}</p>
+                  <p>${escapeHtml(item.license_status || "No DMV record")} | Plate ${escapeHtml((item.vehicles?.[0] && item.vehicles[0].plate) || item.plate || "N/A")}</p>
+                  <p class="muted small">${escapeHtml(item.email || "No email")} / Car code ${escapeHtml(item.car_entry_code || "N/A")}</p>
+                </article>
+              `).join("") || `<div class="empty">No NCIC hits yet</div>`}
+            </div>
+          </section>
+          ${selected ? `
+            ${canManageDispatch ? `
+              <form id="dispatchNoteForm" class="dispatch-create-card dispatch-note-card" data-call-id="${selected.id}">
+                <div>
+                  <p class="eyebrow">Scene updates</p>
+                  <h2>Dispatch Notes</h2>
+                </div>
+                <label>Note type<select name="note_type">
+                  <option>dispatch update</option>
+                  <option>scene update</option>
+                  <option>suspect info</option>
+                  <option>unit instruction</option>
+                  <option>crime scene</option>
+                  <option>medical update</option>
+                </select></label>
+                <label>Note<textarea name="body" rows="6" placeholder="Update units with scene status, suspect details, perimeter, staging, hazards, or RP instructions" required></textarea></label>
+                <button class="primary" type="submit">Post Note</button>
+              </form>
+            ` : `
+              <section class="dispatch-create-card dispatch-note-card">
+                <div>
+                  <p class="eyebrow">Scene updates</p>
+                  <h2>Dispatch Notes</h2>
+                </div>
+                <div class="empty">Notes are read-only for dispatch staff only.</div>
+              </section>
+            `}
             <section class="dispatch-log">
               <div class="dispatch-panel-head">
                 <div>
@@ -2694,9 +2897,22 @@ function bindDispatchWorkspace() {
 
 function bindDispatch() {
   $("[data-open-dispatch-past]")?.addEventListener("click", (event) => {
-    if (event.currentTarget?.disabled) return;
+  if (event.currentTarget?.disabled) return;
     state.dispatchPastOpen = true;
     render();
+  });
+  $("#dispatchNcicSearchForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const payload = Object.fromEntries(new FormData(form).entries());
+    state.dispatchNcicQuery = String(payload.q || "").trim();
+    try {
+      const result = await api(`/api/mdt/search?q=${encodeURIComponent(state.dispatchNcicQuery)}`);
+      state.dispatchNcicResults = result.results || [];
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
   });
   $$("[data-close-dispatch-past]").forEach((button) => button.addEventListener("click", (event) => {
     if (event.currentTarget.classList?.contains("modal-backdrop") && event.target !== event.currentTarget) return;
@@ -2747,6 +2963,28 @@ function bindDispatch() {
     } catch (error) {
       toast(error.message);
     }
+  });
+  $$("[data-dispatch-quick-attach]")?.forEach((button) => button.addEventListener("click", async () => {
+    const unitId = button.dataset.unitId;
+    const callId = button.dataset.dispatchQuickAttach;
+    if (!unitId || !callId) return;
+    try {
+      await api(`/api/dispatch/calls/${callId}/units`, {
+        method: "POST",
+        body: {
+          unit_id: unitId,
+          status: "assigned",
+        },
+      });
+      toast("Unit attached");
+      await loadAppData("dispatch");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+  $$("[data-dispatch-ncic-lookup]")?.forEach((button) => button.addEventListener("click", async () => {
+    await runDispatchNcicQuery(button.dataset.dispatchNcicQuery);
   });
   $$(".dispatch-unit-form").forEach((form) => form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -3007,6 +3245,7 @@ function renderMdtContent() {
 
 function renderCidCommandCenter() {
   const cid = state.cache.mdt?.cid || {};
+  const commandLabel = mdtCommandLabel();
   const cases = cid.investigations || [];
   const warrants = cid.warrants || [];
   const iaCases = cid.ia_cases || [];
@@ -3019,7 +3258,7 @@ function renderCidCommandCenter() {
     <div class="cid-command-center">
       <section class="cid-command-hero">
         <div>
-          <p class="eyebrow">CID operations center</p>
+          <p class="eyebrow">${escapeHtml(`${commandLabel} Operations Center`)}</p>
           <h2>Command Overview</h2>
           <p>Case intelligence, warrant operations, internal affairs, and target tracking are consolidated here.</p>
         </div>
@@ -3091,6 +3330,7 @@ function renderCidCommandCenter() {
 }
 
 function renderMdtSide() {
+  const commandLabel = mdtCommandLabel();
   const alerts = state.cache.mdt?.alerts?.alerts || [];
   const reports = state.cache.mdt?.reports?.reports || [];
   const activeBolos = state.cache.mdt?.bolos?.active || [];
@@ -3098,10 +3338,19 @@ function renderMdtSide() {
   const cid = state.cache.mdt?.cid;
   const priorityCases = (cid?.investigations || []).filter((item) => ["critical", "elevated"].includes(item.priority));
   const activeWarrants = (cid?.warrants || []).filter((item) => item.status === "active");
+  const canOpenDispatch = canUseMdtDispatch();
+  const canOpenMessages = canUseMdtMessages();
   return `
+    <div class="mdt-side-panel">
+      <h3>Quick Access</h3>
+      <div class="list compact-list">
+        ${canOpenDispatch ? `<button class="secondary" type="button" data-open-mdt-dispatch>Dispatch CAD</button>` : `<p class="muted small">Dispatch unavailable</p>`}
+        ${canOpenMessages ? `<button class="secondary" type="button" data-open-mdt-messages>Messages</button>` : `<p class="muted small">Messages unavailable</p>`}
+      </div>
+    </div>
     ${cid ? `
       <div class="mdt-side-panel cid-side-panel">
-        <h3>CID Command Tracker</h3>
+        <h3>${escapeHtml(`${commandLabel} Command Tracker`)}</h3>
         <div class="list compact-list">
           <div class="row"><span>Open cases</span><strong>${cid.stats.open_investigations}</strong></div>
           <div class="row"><span>Active warrants</span><strong>${cid.stats.active_warrants}</strong></div>
@@ -4622,7 +4871,7 @@ function renderSystem() {
   `;
 }
 
-const roleOptions = ["civ", "owner", "admin", "leo", "judge", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "business_owner", "business_registrar", "city_hall", "economy_manager"];
+const roleOptions = ["civ", "owner", "admin", "leo", "judge", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "business_owner", "business_registrar", "city_hall", "economy_manager"];
 
 function renderAdminUsers(users) {
   if (!users.length) return `<div class="empty">No accounts yet</div>`;

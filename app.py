@@ -142,8 +142,18 @@ ROLE_ALIASES = {
     "police chief": "metro_police_chief",
     "state police commander": "state_police_commander",
     "state-police-commander": "state_police_commander",
+    "interrogation unit": "iu",
+    "interrogation_unit": "iu",
+    "interrogationunit": "iu",
+    "iu": "iu",
     "cid director": "cid_director",
     "cid-director": "cid_director",
+    "iu director": "iu_director",
+    "iu_director": "iu_director",
+    "iu-director": "iu_director",
+    "interrogation_unit_director": "iu_director",
+    "interrogation-unit-director": "iu_director",
+    "interrogation unit director": "iu_director",
 }
 
 
@@ -238,6 +248,8 @@ def public_user(user: DbRow) -> dict[str, Any]:
         "primary_agency": user["primary_agency"],
         "car_entry_code": user.get("car_entry_code") or "",
         "car_entry_code_required": not bool(str(user.get("car_entry_code") or "").strip()),
+        "callsign": user.get("callsign") or "",
+        "callsign_required": not bool(str(user.get("callsign") or "").strip()),
         "bank_balance": round(float(user["bank_balance"] or 0), 2),
         "cash_balance": round(float(user["cash_balance"] or 0), 2),
         "active_character_id": user.get("active_character_id"),
@@ -271,6 +283,18 @@ def clean_car_entry_code(value: Any) -> str:
     if any(character not in allowed for character in code):
         raise ValueError("Car entry code can only use letters, numbers, dashes, or underscores")
     return code
+
+
+def clean_callsign(value: Any) -> str:
+    callsign = str(value or "").strip().upper()
+    if not callsign:
+        raise ValueError("Callsign is required")
+    if len(callsign) < 2 or len(callsign) > 24:
+        raise ValueError("Callsign must be 2-24 characters")
+    allowed = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+    if any(character not in allowed for character in callsign):
+        raise ValueError("Callsign can only use letters, numbers, dashes, or underscores")
+    return callsign
 
 
 def generate_vehicle_vin(db: Database) -> str:
@@ -310,12 +334,13 @@ BUSINESS_MAX_ACTIVE_PER_OWNER = 2
 FIRE_COMMAND_ROLES = ("fire_chief", "deputy_chief", "fire_marshal")
 FIRE_SERVICE_ROLES = ("fireman", "ems", *FIRE_COMMAND_ROLES)
 FIRE_RIG_NAMES = ("Engine 1", "Ladder 1", "Truck 1", "Rescue 1", "Battalion 1", "Battalion 2", "Battalion 3", "Battalion 4", "Battalion 5")
-LAW_ENFORCEMENT_DEPARTMENT_KEYS = ("state_police", "metro_police", "sheriff", "cid")
-LAW_ENFORCEMENT_DEPARTMENT_CHOICES = ("Sheriffs Department", "Police Department", "State Police", "CID")
+LAW_ENFORCEMENT_DEPARTMENT_KEYS = ("state_police", "metro_police", "sheriff", "cid", "iu")
+LAW_ENFORCEMENT_DEPARTMENT_CHOICES = ("Sheriffs Department", "Police Department", "State Police", "CID", "Interrogation Unit")
 LAW_ENFORCEMENT_COMMAND_ROLES = {
     "metro_police": ("metro_police_chief",),
     "state_police": ("state_police_commander",),
     "cid": ("cid_director",),
+    "iu": ("iu_director",),
 }
 LAW_ENFORCEMENT_APPLICATION_FIELDS = (
     {"key": "in_game_name", "label": "What is your in-game name?", "kind": "text", "min": 2, "max": 120},
@@ -378,6 +403,17 @@ DEPARTMENT_POSTINGS = (
         "badge": "Investigator Applicant",
         "schedule": "Investigations, surveillance, warrants, internal affairs support, and case files.",
         "requirements": "Prior LEO experience preferred, detailed writing, evidence handling, and command approval.",
+    },
+    {
+        "key": "iu",
+        "label": "Interrogation Unit",
+        "division": "Interrogation Unit",
+        "role_key": "iu",
+        "form_type": "law_enforcement",
+        "command_roles": LAW_ENFORCEMENT_COMMAND_ROLES["iu"],
+        "badge": "Interrogator Applicant",
+        "schedule": "Interrogations, intelligence debriefs, criminal interviews, and case support across CID-led operations.",
+        "requirements": "Command approval required. Detail retention, lawful interviewing standards, and chain-of-command compliance.",
     },
     {
         "key": "fire",
@@ -513,6 +549,7 @@ def ensure_schema() -> None:
                 name TEXT NOT NULL,
                 email TEXT NOT NULL UNIQUE,
                 arma_id TEXT,
+                callsign TEXT NOT NULL DEFAULT '',
                 car_entry_code TEXT NOT NULL DEFAULT '',
                 password_hash TEXT NOT NULL,
                 verified INTEGER NOT NULL DEFAULT 0,
@@ -1093,6 +1130,7 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS civ_number TEXT")
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS arma_id TEXT")
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS car_entry_code TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS callsign TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS active_character_id INTEGER")
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS name_change_locked INTEGER NOT NULL DEFAULT 0")
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS name_change_unlocked_at TEXT")
@@ -1731,7 +1769,7 @@ def contracts_required(user: DbRow | None) -> str | None:
 def leo_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
-    if not has_any(user, "leo", "cid", "owner"):
+    if not has_any(user, "leo", "cid", "cid_director", "iu", "iu_director", "owner"):
         return "Law enforcement access required"
     return None
 
@@ -1763,7 +1801,7 @@ def dispatcher_required(user: DbRow | None) -> str | None:
 def emergency_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
-    if not has_any(user, "leo", "cid", *FIRE_SERVICE_ROLES, "dispatcher", "owner"):
+    if not has_any(user, "leo", "cid", "cid_director", "iu", "iu_director", *FIRE_SERVICE_ROLES, "dispatcher", "owner"):
         return "Emergency services access required"
     return None
 
@@ -1772,7 +1810,7 @@ def emergency_departments_for(user: DbRow) -> list[str]:
     if has_any(user, "owner", "dispatcher"):
         return ["police", "fire", "ems"]
     departments: list[str] = []
-    if has_any(user, "leo", "cid"):
+    if has_any(user, "leo", "cid", "cid_director", "iu", "iu_director"):
         departments.append("police")
     if has_any(user, "fireman", *FIRE_COMMAND_ROLES):
         departments.append("fire")
@@ -1784,7 +1822,7 @@ def emergency_departments_for(user: DbRow) -> list[str]:
 def cid_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
-    if not has_any(user, "cid", "owner"):
+    if not has_any(user, "cid", "cid_director", "iu", "iu_director", "owner"):
         return "CID access required"
     return None
 
@@ -1809,7 +1847,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps: list[dict[str, Any]] = []
         if verified:
             apps.append({"id": "dmv", "label": "Driver License", "icon": "id-card", "enabled": True, "coming_soon": False, "hidden": False})
-        if has_any(user, "leo", "cid", "owner"):
+        if has_any(user, "leo", "cid", "cid_director", "iu", "iu_director", "owner"):
             apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "coming_soon": False, "hidden": False})
         if has_any(user, "owner"):
             apps.append({"id": "system", "label": "System", "icon": "settings", "enabled": True, "coming_soon": False, "hidden": False})
@@ -1834,7 +1872,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps.append({"id": "contracts", "label": "Contracts", "icon": "target", "enabled": True, "coming_soon": False, "hidden": False})
     if has_any(user, "dispatcher", "owner"):
         apps.append({"id": "dispatch", "label": "Dispatch", "icon": "radio", "enabled": True, "hidden": False})
-    if has_any(user, "leo", "cid", "owner"):
+    if has_any(user, "leo", "cid", "cid_director", "iu", "iu_director", "owner"):
         apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "hidden": False})
     if has_any(user, *FIRE_SERVICE_ROLES, "owner"):
         apps.append({"id": "fire", "label": "Fire MDT", "icon": "flame", "enabled": True, "hidden": False})
@@ -2106,6 +2144,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_profile(db, user)
                 elif path == "/api/profile/car-entry-code" and method == "POST":
                     self.api_profile_update_car_entry_code(db, user)
+                elif path == "/api/profile/callsign" and method == "POST":
+                    self.api_profile_update_callsign(db, user)
                 elif path == "/api/profile/name" and method == "POST":
                     self.api_profile_change_name(db, user)
                 elif path == "/api/profile/characters" and method == "POST":
@@ -2474,6 +2514,24 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("UPDATE users SET car_entry_code = ? WHERE id = ?", (code, user["id"]))
         updated = one(db, "SELECT * FROM users WHERE id = ?", (user["id"],))
         self.send_json(200, {"ok": True, "user": public_user(updated), "car_entry_code": code})
+
+    def api_profile_update_callsign(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        roles = roles_for(user)
+        if set(roles) == {"civ"}:
+            self.error(403, "You must be assigned to a department role to set a callsign")
+            return
+        payload = self.read_json()
+        callsign = payload.get("callsign")
+        if callsign is None:
+            self.error(400, "Callsign is required")
+            return
+        callsign = clean_callsign(callsign)
+        db.execute("UPDATE users SET callsign = ? WHERE id = ?", (callsign, user["id"]))
+        updated = one(db, "SELECT * FROM users WHERE id = ?", (user["id"],))
+        self.send_json(200, {"ok": True, "user": public_user(updated), "callsign": callsign})
 
     def api_profile_activate_character(self, db: Database, user: DbRow | None, character_id: int) -> None:
         if not user:
@@ -3936,7 +3994,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         officer_active: list[DbRow] = []
         officer_previous: list[DbRow] = []
-        if has_any(user, "leo", "cid", "owner"):
+        if has_any(user, "leo", "cid", "cid_director", "iu", "iu_director", "owner"):
             officer_active = all_rows(
                 db,
                 f"{base_select} WHERE c.officer_id = ? AND {case_status_clause(True)} ORDER BY c.created_at DESC",
@@ -4068,7 +4126,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"ok": True})
 
     def api_mdt_search(self, db: Database, user: DbRow | None, query: dict[str, list[str]]) -> None:
-        err = leo_required(user)
+        err = emergency_required(user)
         if err:
             self.error(403 if user else 401, err)
             return
@@ -4080,7 +4138,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         rows = all_rows(
             db,
             """
-            SELECT u.id, u.civ_number, u.name, u.email, u.verified, u.roles, u.car_entry_code, d.license_status, d.license_class, d.vehicle_make,
+            SELECT u.id, u.civ_number, u.name, u.email, u.verified, u.roles, u.car_entry_code, u.callsign, d.license_status, d.license_class, d.vehicle_make,
                    d.vehicle_model, d.vehicle_color, d.plate, d.registration_status, d.insurance_status
             FROM users u
             LEFT JOIN dmv_records d ON d.user_id = u.id
@@ -4401,7 +4459,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         created = cur.fetchone()
         recipient_patterns = {
-            "police": ("%leo%", "%cid%", "%dispatcher%", "%owner%"),
+            "police": ("%leo%", "%cid%", "%iu%", "%iu_director%", "%dispatcher%", "%owner%"),
             "fire": ("%fireman%", "%fire_chief%", "%deputy_chief%", "%fire_marshal%", "%dispatcher%", "%owner%"),
             "ems": ("%ems%", "%dispatcher%", "%owner%", "%admin%"),
         }[department]
@@ -4423,7 +4481,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403 if user else 401, err)
             return
         assert user is not None
-        can_review_all = has_any(user, "owner", "cid")
+        can_review_all = has_any(user, "owner", "cid", "cid_director", "iu", "iu_director")
         report_where = "" if can_review_all else "WHERE r.officer_id = ?"
         report_params: tuple[Any, ...] = () if can_review_all else (user["id"],)
         reports = all_rows(
@@ -4638,8 +4696,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         ).fetchone()
         recipients = all_rows(
             db,
-            "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ? OR roles LIKE ? ORDER BY id LIMIT 160",
-            ("%leo%", "%cid%", "%owner%"),
+            "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ? OR roles LIKE ? OR roles LIKE ? OR roles LIKE ? ORDER BY id LIMIT 200",
+            ("%leo%", "%cid%", "%iu%", "%iu_director%", "%owner%"),
         )
         notice = f"{user['name']} issued {created['bolo_number']} for {target_name}. Caution: {caution_level}. {reason[:220]}"
         for recipient in recipients:
@@ -4711,9 +4769,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"ok": True})
 
     def api_dispatch_overview(self, db: Database, user: DbRow | None) -> None:
-        err = dispatcher_required(user)
-        if err:
-            self.error(403 if user else 401, err)
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        can_view_dispatch = bool(has_any(user, "admin", "dispatcher", "leo", "cid", "cid_director", "iu", "iu_director", "fireman", *FIRE_COMMAND_ROLES, "ems", "owner"))
+        if not can_view_dispatch:
+            self.error(403, "Dispatch access required")
             return
         calls = all_rows(
             db,
@@ -4737,7 +4798,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         assignments = all_rows(
             db,
             """
-            SELECT a.*, unit.name AS unit_name, unit.roles AS unit_roles, unit.primary_agency AS unit_agency,
+            SELECT a.*, unit.name AS unit_name, unit.roles AS unit_roles, unit.primary_agency AS unit_agency, unit.callsign AS unit_callsign,
                    dispatcher.name AS dispatcher_name
             FROM dispatch_call_units a
             JOIN users unit ON unit.id = a.unit_id
@@ -4759,16 +4820,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         unit_rows = all_rows(
             db,
             """
-            SELECT id, civ_number, name, roles, primary_agency
+            SELECT id, civ_number, name, roles, primary_agency, callsign, verified
             FROM users
+            WHERE verified = 1 OR id IN (SELECT id FROM users WHERE roles LIKE ?)
             ORDER BY name
             LIMIT 600
             """,
+            ("%owner%",),
         )
         units = [
             dict(row)
             for row in unit_rows
-            if has_any(row, "leo", "cid", "fireman", *FIRE_COMMAND_ROLES, "ems", "owner")
+            if has_any(row, "leo", "cid", "iu", "iu_director", "fireman", *FIRE_COMMAND_ROLES, "ems", "owner")
         ]
         active_statuses = {"active", "staged", "responding", "on_scene", "held"}
         stats = {
@@ -4787,6 +4850,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "notes": [dict(row) for row in notes],
                 "units": units,
                 "stats": stats,
+                "can_manage_dispatch": bool(has_any(user, "owner", "dispatcher")),
             },
         )
 
@@ -4832,9 +4896,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             (alert_id, user["id"], "call intake", note, ts),
         )
         recipient_patterns = {
-            "police": ("%leo%", "%cid%", "%owner%"),
-            "fire": ("%fireman%", "%fire_chief%", "%deputy_chief%", "%fire_marshal%", "%owner%"),
-            "ems": ("%ems%", "%owner%", "%admin%"),
+            "police": ("%leo%", "%cid%", "%iu%", "%iu_director%", "%dispatcher%", "%owner%"),
+            "fire": ("%fireman%", "%fire_chief%", "%deputy_chief%", "%fire_marshal%", "%dispatcher%", "%owner%"),
+            "ems": ("%ems%", "%dispatcher%", "%owner%", "%admin%"),
         }[department]
         recipients = all_rows(
             db,
@@ -4903,9 +4967,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             self.error(400, "Invalid unit")
             return
-        unit = one(db, "SELECT id, name, roles FROM users WHERE id = ?", (unit_id,))
-        if not unit or not has_any(unit, "leo", "cid", "fireman", *FIRE_COMMAND_ROLES, "ems", "owner"):
+        unit = one(db, "SELECT id, name, roles, callsign FROM users WHERE id = ?", (unit_id,))
+        if not unit or not has_any(unit, "leo", "cid", "iu", "iu_director", "fireman", *FIRE_COMMAND_ROLES, "ems", "owner"):
             self.error(404, "Emergency unit not found")
+            return
+        if not str(unit.get("callsign") or "").strip():
+            self.error(400, "Unit callsign is required before dispatch assignment. Update your callsign in profile.")
             return
         status = str(payload.get("status") or "assigned").strip().lower()
         if status not in ("assigned", "enroute", "on_scene", "staged", "cleared"):
@@ -4940,7 +5007,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "INSERT INTO dispatch_call_notes (alert_id, author_id, note_type, body, created_at) VALUES (?, ?, ?, ?, ?)",
             (alert_id, user["id"], "unit attached", f"{unit['name']} attached as {status}. {notes}".strip(), ts),
         )
-        add_message(db, unit_id, f"Assigned CAD call #{alert_id}", f"Dispatch attached you to {call['department'].upper()} call at {call['location']}. {notes}", user["id"])
+        add_message(
+            db,
+            unit_id,
+            f"Assigned CAD call #{alert_id}",
+            f"Dispatch attached {unit['name']} (Callsign {unit['callsign']}) to {call['department'].upper()} call at {call['location']}. {notes}".strip(),
+            user["id"],
+        )
         self.send_json(201, {"ok": True, "assignment_id": assignment_id})
 
     def api_dispatch_update_assignment(self, db: Database, user: DbRow | None, assignment_id: int) -> None:
@@ -5580,9 +5653,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 return
         verified = 1 if bool(payload.get("verified", target["verified"])) else 0
         agency = str(payload.get("primary_agency") or target["primary_agency"] or "").strip()[:80] or None
+        callsign = payload.get("callsign")
+        if callsign is not None and str(callsign).strip():
+            callsign = clean_callsign(callsign)
+        elif callsign is not None:
+            callsign = ""
         db.execute(
-            "UPDATE users SET verified = ?, roles = ?, primary_agency = ? WHERE id = ?",
-            (verified, json.dumps(cleaned), agency, target_id),
+            "UPDATE users SET verified = ?, roles = ?, primary_agency = ?, callsign = ? WHERE id = ?",
+            (verified, json.dumps(cleaned), agency, callsign if callsign is not None else target.get("callsign", ""), target_id),
         )
         if next_password:
             db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(next_password), target_id))
