@@ -3,8 +3,14 @@ const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selec
 const app = $("#app");
 const toastEl = $("#toast");
 const OS_VERSION = "0.0.28";
+const SESSION_BOOT_TIMEOUT_MS = 14000;
 
 const state = {
+  boot: {
+    status: "starting",
+    attempt: 0,
+    lastError: "",
+  },
   authMode: "login",
   session: null,
   activeApp: null,
@@ -137,12 +143,28 @@ function toast(message) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
+  const timeoutMs = options.timeoutMs ?? 0;
+  const requestInit = {
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
-    body: options.body && typeof options.body !== "string" ? JSON.stringify(options.body) : options.body,
+  };
+  if (requestInit.body && typeof requestInit.body !== "string") {
+    requestInit.body = JSON.stringify(requestInit.body);
+  }
+  let timeoutId = null;
+  let controller = null;
+  if (timeoutMs > 0) {
+    controller = new AbortController();
+    requestInit.signal = controller.signal;
+    timeoutId = setTimeout(() => {
+      controller.abort("Request timed out");
+    }, timeoutMs);
+  }
+  const response = await fetch(path, {
+    ...requestInit,
   });
+  clearTimeout(timeoutId);
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(data.error || "Request failed");
@@ -151,12 +173,61 @@ async function api(path, options = {}) {
 }
 
 async function loadSession() {
-  state.session = await api("/api/session");
+  state.session = await api("/api/session", { timeoutMs: SESSION_BOOT_TIMEOUT_MS });
   if (state.session?.user && state.pendingArmaCode && !state.activeApp) {
     state.activeApp = "profile";
     await loadAppData("profile");
   }
   render();
+}
+
+function renderBootScreen() {
+  const connecting = state.boot.status === "connecting";
+  const attempting = state.boot.attempt || 1;
+  return phone(`
+    <section class="boot-screen ${connecting ? "booting" : ""}">
+      <div class="boot-brand">RP</div>
+      <div class="boot-orb" aria-hidden="true">
+        <span class="boot-orb-core"></span>
+        <span class="boot-orb-ring"></span>
+        <span class="boot-orb-ring"></span>
+      </div>
+      <p class="boot-title">${connecting ? "Loading roleplay core..." : "Cannot contact server"}</p>
+      <p class="boot-subtitle">
+        ${connecting ? "Syncing your account and loading modules. This usually takes just a second." : escapeHtml(state.boot.lastError || "Server response could not be loaded right now.")}
+      </p>
+      <div class="boot-progress">
+        <span></span>
+      </div>
+      <p class="boot-meta">Connection attempt ${attempting} - RP OS ${OS_VERSION}</p>
+      ${connecting ? `<p class="boot-note">If this persists, check your API host and network connection, then retry.</p>` : `<button class="primary" data-retry-boot>Retry</button>`}
+      ${state.boot.lastError ? `<p class="boot-error">${escapeHtml(state.boot.lastError)}</p>` : ""}
+    </section>
+  `);
+}
+
+function bindBoot() {
+  if (state.boot.status === "connected") return;
+  $$("[data-retry-boot]").forEach((button) => {
+    button.addEventListener("click", () => bootApp());
+  });
+}
+
+async function bootApp() {
+  state.boot.attempt += 1;
+  state.boot.status = "connecting";
+  state.boot.lastError = "";
+  app.innerHTML = renderBootScreen();
+  bindBoot();
+  try {
+    await loadSession();
+    state.boot.status = "connected";
+  } catch (error) {
+    state.boot.status = "failed";
+    state.boot.lastError = error.name === "AbortError" ? `Session request timed out after ${Math.round(SESSION_BOOT_TIMEOUT_MS / 1000)} seconds.` : error.message || "Unable to reach the API.";
+    app.innerHTML = renderBootScreen();
+    bindBoot();
+  }
 }
 
 function phone(content) {
@@ -5135,9 +5206,7 @@ if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js").catch(() => {}));
 }
 
-loadSession().catch((error) => {
-  app.innerHTML = phone(`<section class="auth-card"><h1>RP Command</h1><p>${escapeHtml(error.message)}</p></section>`);
-});
+bootApp();
 
 setInterval(heartbeat, 60_000);
 setTimeout(heartbeat, 4_000);
