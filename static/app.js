@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.30";
+const OS_VERSION = "0.0.33";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 
 const state = {
@@ -37,6 +37,7 @@ const state = {
   dispatchNcicQuery: "",
   dispatchFilter: "active",
   dispatchPastOpen: false,
+  dispatchViewingPastCall: false,
   courtTab: "mine",
   contractsTab: "open",
   contractsInfoOpen: false,
@@ -98,6 +99,7 @@ const iconSvg = {
   bank: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m3 10 9-6 9 6Z"/><path d="M5 10v9M9 10v9M15 10v9M19 10v9M3 19h18"/></svg>',
   store: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 10h16l-1-5H5Z"/><path d="M5 10v10h14V10"/><path d="M8 20v-6h8v6"/><path d="M4 10c0 2 3 2 4 0 1 2 5 2 6 0 1 2 4 2 6 0"/></svg>',
   user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/><path d="M16 11l2 2 4-5"/></svg>',
+  map: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3Z"/><path d="M9 3v15M15 6v15"/><path d="M6 10h2M16 10h2M11 14h2"/></svg>',
   message: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/></svg>',
   shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="M9 12l2 2 4-5"/></svg>',
   flame: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8.5 14.5A4.5 4.5 0 1 0 17 12c0-3-2-5-5-8-.5 3-2 4.5-3.5 6S6 12.7 8.5 14.5Z"/><path d="M12 22a4 4 0 0 0 4-4c0-1.8-1-3.3-3-5-.3 1.8-1.3 2.7-2.2 3.5-.8.8-1.3 1.5-1.3 2.5A2.5 2.5 0 0 0 12 22Z"/></svg>',
@@ -112,6 +114,7 @@ const iconSvg = {
 
 const tileColors = {
   profile: "linear-gradient(145deg, #7ee7ff, #276a88)",
+  "getting-started": "linear-gradient(145deg, #ffe36d, #1d8b7d)",
   dmv: "linear-gradient(145deg, #4ecdc4, #1b6d69)",
   jobs: "linear-gradient(145deg, #f7b733, #704811)",
   court: "linear-gradient(145deg, #b78cff, #4f3175)",
@@ -545,6 +548,7 @@ function bindHome() {
 function renderPanel(id) {
   const titles = {
     profile: "Profile",
+    "getting-started": "Getting Started",
     dmv: "DMV",
     jobs: "Jobs",
     court: "Court",
@@ -563,6 +567,7 @@ function renderPanel(id) {
   };
   const body = {
     profile: renderProfile,
+    "getting-started": renderGettingStarted,
     dmv: renderDmv,
     jobs: renderJobs,
     court: renderCourt,
@@ -986,6 +991,81 @@ function bindProfile() {
       toast(error.message);
     }
   });
+}
+
+function renderGettingStarted() {
+  const steps = [
+    {
+      number: "01",
+      title: "Spawn In & Get a Vehicle",
+      location: "Airport / Used Car Dealership",
+      image: "/static/getting-started/used-cars.jpg",
+      body: "When you first join the server, you spawn at the airport. Your first priority should be getting transportation. Head to the used car dealership and buy a vehicle as soon as possible so you can move around the city, take jobs, and start making money.",
+      note: "Make sure your character is created in the online CAD profile system.",
+    },
+    {
+      number: "02",
+      title: "Military Base Fishing",
+      location: "Military Base / Dirty Pond",
+      image: "/static/getting-started/dirty-pond.jpg",
+      body: "Go to the Military Base on the map and head to the pond area called the Dirty Pond. In this spot you can go into the water, collect sticks, and sell them to make early money.",
+      note: "This is a starter grind spot and works best once you have a vehicle.",
+    },
+    {
+      number: "03",
+      title: "Visit the Bag Store",
+      location: "Bag Store near Police Station",
+      image: "/static/getting-started/bag-store.jpg",
+      body: "After getting your vehicle, head to the Bag Store and buy bags. Bags increase inventory space, which lets you carry more items while looting, working, or grinding money.",
+      note: "More bag space means fewer trips back and forth.",
+    },
+    {
+      number: "04",
+      title: "Buy Your IL License",
+      location: "Town Hall",
+      image: "/static/getting-started/townhall.jpg",
+      body: "Go to Town Hall and buy your IL license. This license is used for mining so you can start progressing toward better money routes.",
+      note: "Do this before going all-in on mining.",
+    },
+    {
+      number: "05",
+      title: "Start Mining",
+      location: "Mining Area / Hardware Store",
+      image: "/static/getting-started/hardware-store.jpg",
+      body: "Go to the mining area on the map where the ore is located in the middle of the castle. The ore you want is iron. To mine it, buy the required tool from the hardware store for 7.5k.",
+      note: "Buy the tool first, then head to the iron mining location.",
+    },
+  ];
+  return `
+    <div class="getting-started-app">
+      <section class="getting-started-hero">
+        <div>
+          <p class="eyebrow">Civilian starter guide</p>
+          <h3>Getting Started</h3>
+          <p>Follow this route after spawning to get mobile, expand inventory space, unlock mining, and begin earning money.</p>
+        </div>
+        <a class="secondary" href="https://forcraftrp.up.railway.app/" target="_blank" rel="noopener">Open CAD</a>
+      </section>
+      <div class="starter-route">
+        ${steps.map((step) => `
+          <article class="starter-step-card">
+            <img src="${step.image}" alt="${escapeHtml(step.location)} map location" loading="lazy" />
+            <div class="starter-step-body">
+              <div class="starter-step-head">
+                <span>${step.number}</span>
+                <div>
+                  <h3>${escapeHtml(step.title)}</h3>
+                  <p>${escapeHtml(step.location)}</p>
+                </div>
+              </div>
+              <p>${escapeHtml(step.body)}</p>
+              <div class="starter-note">${escapeHtml(step.note)}</div>
+            </div>
+          </article>
+        `).join("")}
+      </div>
+    </div>
+  `;
 }
 
 function isPendingLicenseApplication(item) {
@@ -2752,18 +2832,35 @@ function renderDispatchWorkspace() {
   const activeCalls = calls.filter((call) => activeStatuses.includes(call.status));
   const pastCalls = calls.filter((call) => !activeStatuses.includes(call.status));
   const visibleCalls = activeCalls;
-  const selected = calls.find((call) => String(call.id) === String(state.dispatchSelectedCallId))
-    || visibleCalls[0]
-    || null;
+  const selectedCandidate = calls.find((call) => String(call.id) === String(state.dispatchSelectedCallId));
+  const selectedCandidateIsActive = selectedCandidate && activeStatuses.includes(selectedCandidate.status);
+  const selected = state.dispatchViewingPastCall && selectedCandidate
+    ? selectedCandidate
+    : selectedCandidateIsActive
+      ? selectedCandidate
+      : visibleCalls[0] || null;
+  if (selected && !activeStatuses.includes(selected.status)) {
+    state.dispatchViewingPastCall = true;
+  } else if (selected) {
+    state.dispatchViewingPastCall = false;
+  }
   state.dispatchSelectedCallId = selected?.id || null;
   const activeAssignments = selected ? dispatchCallAssignments(data, selected.id) : [];
   const allAssignments = selected ? dispatchCallAssignments(data, selected.id, true) : [];
   const notes = selected ? dispatchCallNotes(data, selected.id) : [];
   const assignedUnitIds = new Set(activeAssignments.map((item) => String(item.unit_id)));
   const availableUnits = (data.units || []).filter((unit) => !assignedUnitIds.has(String(unit.id)));
-  const callStatuses = ["active", "staged", "responding", "on_scene", "held", "cleared", "closed"];
   const unitStatuses = ["assigned", "enroute", "on_scene", "staged", "cleared"];
   const priorities = ["standard", "elevated", "critical"];
+  const callActionButtons = [
+    ["active", "Reopen"],
+    ["staged", "Stage"],
+    ["responding", "Responding"],
+    ["on_scene", "On Scene"],
+    ["held", "Hold"],
+    ["cleared", "Clear"],
+    ["closed", "Close Ticket"],
+  ];
   const departments = ["police", "fire", "ems"];
   const callTypes = ["911 Call", "Traffic Stop", "Robbery", "Shots Fired", "Medical", "Fire", "Welfare Check", "Disturbance", "Officer Assist", "Other"];
   const pastCallsMarkup = pastCalls.map((call) => {
@@ -2890,12 +2987,29 @@ function renderDispatchWorkspace() {
                 <p>${escapeHtml(selected.note || "No intake note")}</p>
               </div>
               ${canManageDispatch ? `
-                <form id="dispatchCallStatusForm" class="dispatch-control-form" data-call-id="${selected.id}">
-                  <label>Status<select name="status">${renderOptions(callStatuses, selected.status || "active")}</select></label>
-                  <label>Priority<select name="priority">${renderOptions(priorities, selected.priority || "standard")}</select></label>
-                  <label class="dispatch-wide">Update note<input name="note" placeholder="Optional status note for units and dispatch log" /></label>
-                  <button class="primary" type="submit">Update Call</button>
-                </form>
+                <section class="dispatch-call-action-panel" data-call-id="${selected.id}">
+                  <label class="dispatch-wide">Update note<input data-dispatch-update-note placeholder="Optional status note for units and dispatch log" /></label>
+                  <div class="dispatch-action-row">
+                    <span>Status</span>
+                    <div class="dispatch-action-buttons">
+                      ${callActionButtons.map(([status, label]) => `
+                        <button class="${status === "closed" ? "danger" : status === selected.status ? "primary" : "secondary"}" type="button" data-dispatch-call-status="${status}" data-call-id="${selected.id}">
+                          ${label}
+                        </button>
+                      `).join("")}
+                    </div>
+                  </div>
+                  <div class="dispatch-action-row">
+                    <span>Priority</span>
+                    <div class="dispatch-action-buttons priority-buttons">
+                      ${priorities.map((priority) => `
+                        <button class="${priority === selected.priority ? "primary" : "secondary"} ${priority === "critical" ? "priority-critical" : ""}" type="button" data-dispatch-call-priority="${priority}" data-call-id="${selected.id}">
+                          ${priority}
+                        </button>
+                      `).join("")}
+                    </div>
+                  </div>
+                </section>
               ` : `
                 <div class="empty">Dispatch staff only. Ask dispatcher for status updates.</div>
               `}
@@ -3111,10 +3225,12 @@ function bindDispatch() {
   $$("[data-open-dispatch-past-call]").forEach((button) => button.addEventListener("click", () => {
     state.dispatchSelectedCallId = button.dataset.openDispatchPastCall;
     state.dispatchPastOpen = false;
+    state.dispatchViewingPastCall = true;
     render();
   }));
   $$("[data-dispatch-call]").forEach((button) => button.addEventListener("click", () => {
     state.dispatchSelectedCallId = button.dataset.dispatchCall;
+    state.dispatchViewingPastCall = false;
     render();
   }));
   $("#dispatchCreateCallForm")?.addEventListener("submit", async (event) => {
@@ -3123,6 +3239,7 @@ function bindDispatch() {
       const result = await api("/api/dispatch/calls", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
       toast(`CAD call #${result.alert_id} created`);
       state.dispatchSelectedCallId = result.alert_id;
+      state.dispatchViewingPastCall = false;
       event.currentTarget.reset();
       await loadAppData("dispatch");
       render();
@@ -3130,17 +3247,53 @@ function bindDispatch() {
       toast(error.message);
     }
   });
-  $("#dispatchCallStatusForm")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
+  $$("[data-dispatch-call-status]").forEach((button) => button.addEventListener("click", async () => {
+    const status = button.dataset.dispatchCallStatus;
+    const callId = button.dataset.callId;
+    const panel = button.closest(".dispatch-call-action-panel");
+    const noteInput = panel?.querySelector("[data-dispatch-update-note]");
+    const note = String(noteInput?.value || "").trim();
     try {
-      await api(`/api/dispatch/calls/${event.currentTarget.dataset.callId}`, { method: "PATCH", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
-      toast("Call updated");
+      await api(`/api/dispatch/calls/${callId}`, {
+        method: "PATCH",
+        body: {
+          status,
+          note: note || (status === "closed" ? "Ticket closed from dispatch dashboard." : ""),
+        },
+      });
+      if (["closed", "cleared"].includes(status)) {
+        state.dispatchSelectedCallId = null;
+        state.dispatchViewingPastCall = false;
+      } else {
+        state.dispatchSelectedCallId = callId;
+        state.dispatchViewingPastCall = false;
+      }
+      toast(status === "closed" ? "Ticket closed" : "Call updated");
       await loadAppData("dispatch");
       render();
     } catch (error) {
       toast(error.message);
     }
-  });
+  }));
+  $$("[data-dispatch-call-priority]").forEach((button) => button.addEventListener("click", async () => {
+    const priority = button.dataset.dispatchCallPriority;
+    const callId = button.dataset.callId;
+    const panel = button.closest(".dispatch-call-action-panel");
+    const noteInput = panel?.querySelector("[data-dispatch-update-note]");
+    const note = String(noteInput?.value || "").trim();
+    try {
+      await api(`/api/dispatch/calls/${callId}`, {
+        method: "PATCH",
+        body: { priority, note },
+      });
+      state.dispatchSelectedCallId = callId;
+      toast("Priority updated");
+      await loadAppData("dispatch");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
   $("#dispatchAttachUnitForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
@@ -5321,7 +5474,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.30").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.33").catch(() => {}));
 }
 
 bootApp();

@@ -1,6 +1,53 @@
 {
-  "version": "0.0.30",
+  "version": "0.0.33",
   "entries": [
+    {
+      "date": "2026-06-27",
+      "version": "0.0.33",
+      "title": "Civilian Getting Started Guide",
+      "added": [
+        "Added a Getting Started phone app icon for civilians.",
+        "Getting Started includes starter route steps for buying a used car, Dirty Pond money grinding, bag upgrades, Town Hall IL license, and mining prep.",
+        "Added map screenshots for Used Cars, Dirty Pond, Bag Store, Town Hall, and Hardware Store."
+      ],
+      "changed": [
+        "PWA cache versioning was bumped so installed devices load the new guide and map assets."
+      ],
+      "fixed": [],
+      "removed": []
+    },
+    {
+      "date": "2026-06-27",
+      "version": "0.0.32",
+      "title": "MDT Quick Rail Placement",
+      "added": [],
+      "changed": [
+        "MDT quick action buttons now stay mobile-only as a bottom action strip."
+      ],
+      "fixed": [
+        "Fixed the floating Dispatch/Messages/Watch rail covering the desktop MDT watch panel.",
+        "Updated PWA cache versioning so installed devices load the corrected rail placement."
+      ],
+      "removed": []
+    },
+    {
+      "date": "2026-06-27",
+      "version": "0.0.31",
+      "title": "Dispatch Button Controls",
+      "added": [
+        "Dispatch selected-call updates now use direct status buttons instead of status dropdowns.",
+        "Added a Close Ticket button that closes the CAD call and moves it off the active dashboard into Past Calls."
+      ],
+      "changed": [
+        "Dispatch priority updates now use button controls for standard, elevated, and critical priority.",
+        "Closed or cleared calls no longer remain pinned as the selected active dashboard call unless opened from Past Calls."
+      ],
+      "fixed": [
+        "Fixed closed dispatch tickets staying visible in the main active call workspace after status changes.",
+        "Updated PWA cache versioning so installed devices load the new dispatch controls."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-06-27",
       "version": "0.0.30",

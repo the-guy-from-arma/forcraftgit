@@ -1,9 +1,14 @@
-const CACHE = "rp-command-v30-mdt-dispatch";
+const CACHE = "rp-command-v33-getting-started";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.30",
-  "/static/app.js?v=0.0.30",
+  "/static/styles.css?v=0.0.33",
+  "/static/app.js?v=0.0.33",
   "/static/icons/icon.svg",
+  "/static/getting-started/used-cars.jpg",
+  "/static/getting-started/dirty-pond.jpg",
+  "/static/getting-started/bag-store.jpg",
+  "/static/getting-started/townhall.jpg",
+  "/static/getting-started/hardware-store.jpg",
   "/manifest.webmanifest"
 ];
 

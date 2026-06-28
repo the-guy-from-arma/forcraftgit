@@ -1855,6 +1855,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         return apps
     base = [
         ("profile", "Profile", "user", True, False),
+        ("getting-started", "Getting Started", "map", True, False),
         ("dmv", "DMV", "id-card", verified, False),
         ("jobs", "JOB", "briefcase", True, False),
         ("court", "COURT", "gavel", verified, False),
