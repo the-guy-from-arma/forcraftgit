@@ -1,8 +1,8 @@
-const CACHE = "rp-command-v33-getting-started";
+const CACHE = "rp-command-v35-admin-search";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.33",
-  "/static/app.js?v=0.0.33",
+  "/static/styles.css?v=0.0.35",
+  "/static/app.js?v=0.0.35",
   "/static/icons/icon.svg",
   "/static/getting-started/used-cars.jpg",
   "/static/getting-started/dirty-pond.jpg",

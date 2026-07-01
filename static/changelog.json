@@ -1,6 +1,38 @@
 {
-  "version": "0.0.33",
+  "version": "0.0.35",
   "entries": [
+    {
+      "date": "2026-07-01",
+      "version": "0.0.35",
+      "title": "Admin Account Search",
+      "added": [
+        "Added a live account search bar to the Admin Users panel.",
+        "Admins and owners can search accounts by name, email, CIV number, Arma ID, car entry code, callsign, agency, active character, role, or verification status."
+      ],
+      "changed": [
+        "Admin account results now show a live match count and can be cleared with one button."
+      ],
+      "fixed": [],
+      "removed": []
+    },
+    {
+      "date": "2026-06-30",
+      "version": "0.0.34",
+      "title": "Faircroft Treasury and Bank Opening",
+      "added": [
+        "Added a Faircroft Treasury phone app for verified users.",
+        "Players can submit server wipe compensation requests with screenshot proof uploads.",
+        "Players without proof can check the no-proof bypass to request the standard $75,000 stimulus check.",
+        "Owner/admin review tools can approve Treasury requests and deposit approved funds directly into the player bank.",
+        "Bank now includes owner/admin Treasury deposit controls and a compensation ledger showing who has been paid."
+      ],
+      "changed": [
+        "Bank is now unlocked for verified users instead of being marked coming soon.",
+        "Treasury deposits now create bank transaction records and player messages for tracking."
+      ],
+      "fixed": [],
+      "removed": []
+    },
     {
       "date": "2026-06-27",
       "version": "0.0.33",

@@ -31,6 +31,10 @@ ARMA_BRIDGE_API_KEY = os.environ.get("ARMA_BRIDGE_API_KEY", "").strip()
 ARMA_LINK_CODE_TTL_MINUTES = int(os.environ.get("ARMA_LINK_CODE_TTL_MINUTES", "30"))
 NAME_CHANGE_LIMIT = 3
 NAME_CHANGE_WINDOW_DAYS = 3
+TREASURY_STIMULUS_AMOUNT = 75000.00
+TREASURY_MAX_REQUEST_AMOUNT = 10_000_000.00
+TREASURY_MAX_PROOFS = 4
+TREASURY_MAX_PROOF_CHARS = 1_800_000
 
 
 def now_iso() -> str:
@@ -317,6 +321,7 @@ def generate_record_number(db: Database, table: str, column: str, prefix: str) -
         ("business_applications", "application_number"),
         ("businesses", "license_number"),
         ("department_applications", "application_number"),
+        ("treasury_requests", "request_number"),
     }
     if (table, column) not in allowed:
         raise ValueError("Invalid record number target")
@@ -811,6 +816,26 @@ def ensure_schema() -> None:
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (counterparty_id) REFERENCES users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS treasury_requests (
+                id SERIAL PRIMARY KEY,
+                request_number TEXT NOT NULL UNIQUE,
+                user_id INTEGER NOT NULL,
+                request_type TEXT NOT NULL DEFAULT 'stimulus',
+                requested_amount NUMERIC(12,2) NOT NULL DEFAULT 75000,
+                approved_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'submitted',
+                reason TEXT NOT NULL DEFAULT '',
+                proof_images TEXT NOT NULL DEFAULT '[]',
+                proof_bypass INTEGER NOT NULL DEFAULT 0,
+                reviewer_id INTEGER,
+                reviewer_notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                decided_at TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (reviewer_id) REFERENCES users(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS properties (
@@ -1311,6 +1336,31 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS mdt_bolos_created_by_idx ON mdt_bolos (created_by, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS department_applications_user_idx ON department_applications (user_id, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS department_applications_department_idx ON department_applications (department_key, status)")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS treasury_requests (
+            id SERIAL PRIMARY KEY,
+            request_number TEXT NOT NULL UNIQUE,
+            user_id INTEGER NOT NULL,
+            request_type TEXT NOT NULL DEFAULT 'stimulus',
+            requested_amount NUMERIC(12,2) NOT NULL DEFAULT 75000,
+            approved_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'submitted',
+            reason TEXT NOT NULL DEFAULT '',
+            proof_images TEXT NOT NULL DEFAULT '[]',
+            proof_bypass INTEGER NOT NULL DEFAULT 0,
+            reviewer_id INTEGER,
+            reviewer_notes TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            decided_at TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (reviewer_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS treasury_requests_user_idx ON treasury_requests (user_id, created_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS treasury_requests_status_idx ON treasury_requests (status, updated_at)")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS cid_internal_affairs_notes (
@@ -1862,7 +1912,8 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         ("business", "Business", "store", business_enabled, False),
         ("properties", "PROPERTIES", "home", False, True),
         ("cash", "CASH APP", "send", False, True),
-        ("bank", "BANK", "bank", False, True),
+        ("bank", "BANK", "bank", verified, False),
+        ("treasury", "Faircroft Treasury", "treasury", verified, False),
         ("messages", "Messages", "message", verified, False),
         ("changelog", "Changelog", "scroll", True, False),
     ]
@@ -1906,6 +1957,84 @@ def add_transaction(
         "INSERT INTO transactions (user_id, type, amount, description, counterparty_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
         (user_id, kind, amount, description, counterparty_id, now_iso()),
     )
+
+
+def clean_treasury_amount(value: Any, default: float | None = None) -> float:
+    if value in (None, "") and default is not None:
+        amount = default
+    else:
+        amount = float(value)
+    amount = round(amount, 2)
+    if amount <= 0:
+        raise ValueError("Treasury amount must be greater than zero")
+    if amount > TREASURY_MAX_REQUEST_AMOUNT:
+        raise ValueError("Treasury amount is above the server compensation limit")
+    return amount
+
+
+def clean_treasury_proofs(raw: Any) -> list[dict[str, str]]:
+    if raw in (None, ""):
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("Proof uploads must be sent as a list")
+    proofs: list[dict[str, str]] = []
+    total_chars = 0
+    allowed_prefixes = {
+        "data:image/png;base64,": "image/png",
+        "data:image/jpeg;base64,": "image/jpeg",
+        "data:image/jpg;base64,": "image/jpeg",
+        "data:image/webp;base64,": "image/webp",
+    }
+    for index, item in enumerate(raw[:TREASURY_MAX_PROOFS], start=1):
+        if isinstance(item, str):
+            name = f"proof-{index}"
+            data_url = item.strip()
+        elif isinstance(item, dict):
+            name = str(item.get("name") or f"proof-{index}").strip()[:120]
+            data_url = str(item.get("data_url") or item.get("dataUrl") or "").strip()
+        else:
+            continue
+        if not data_url:
+            continue
+        mime_type = ""
+        for prefix, candidate in allowed_prefixes.items():
+            if data_url.startswith(prefix):
+                mime_type = candidate
+                break
+        if not mime_type:
+            raise ValueError("Proof uploads must be PNG, JPG, or WEBP images")
+        if len(data_url) > TREASURY_MAX_PROOF_CHARS:
+            raise ValueError("One proof image is too large. Upload a smaller screenshot.")
+        total_chars += len(data_url)
+        if total_chars > TREASURY_MAX_PROOF_CHARS * TREASURY_MAX_PROOFS:
+            raise ValueError("Too much proof data uploaded. Keep it to four compressed screenshots.")
+        proofs.append({"name": name or f"proof-{index}", "type": mime_type, "data_url": data_url})
+    return proofs
+
+
+def treasury_row_payload(row: DbRow, include_proofs: bool = True) -> dict[str, Any]:
+    item = dict(row)
+    item["requested_amount"] = round(float(item.get("requested_amount") or 0), 2)
+    item["approved_amount"] = round(float(item.get("approved_amount") or 0), 2)
+    item["proof_bypass"] = bool(item.get("proof_bypass", 0))
+    try:
+        proofs = json.loads(str(item.get("proof_images") or "[]"))
+    except json.JSONDecodeError:
+        proofs = []
+    clean_proofs = [proof for proof in proofs if isinstance(proof, dict)]
+    item["proof_count"] = len(clean_proofs)
+    if include_proofs:
+        item["proof_images"] = clean_proofs
+    else:
+        item["proof_images"] = [
+            {"name": proof.get("name", "proof"), "type": proof.get("type", "image")}
+            for proof in clean_proofs
+        ]
+    return item
+
+
+def human_request_type(value: Any) -> str:
+    return str(value or "treasury request").replace("_", " ").title()
 
 
 ACTIVE_CASE_STATUSES = ("issued", "contested", "reviewed", "reduced")
@@ -2172,8 +2301,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_bank(db, user)
                 elif path == "/api/bank/collect" and method == "POST":
                     self.api_collect_bank(db, user)
+                elif path == "/api/bank/treasury-adjust" and method == "POST":
+                    self.api_bank_treasury_adjust(db, user)
                 elif path == "/api/cash/transfer" and method == "POST":
                     self.api_cash_transfer(db, user)
+                elif path == "/api/treasury" and method == "GET":
+                    self.api_treasury(db, user)
+                elif path == "/api/treasury" and method == "POST":
+                    self.api_create_treasury_request(db, user)
+                elif path.startswith("/api/treasury/requests/") and method == "PATCH":
+                    self.api_review_treasury_request(db, user, self.path_int(path, 3))
                 elif path == "/api/dmv/me" and method == "GET":
                     self.api_dmv_me(db, user)
                 elif path == "/api/dmv/me" and method == "PATCH":
@@ -3026,19 +3163,228 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 30",
             (user["id"],),
         )
-        self.send_json(
-            200,
-            {
-                "balance": round(float(user["bank_balance"] or 0), 2),
-                "cash": round(float(user["cash_balance"] or 0), 2),
-                "income": income_snapshot(db, user),
-                "transactions": [dict(row) for row in transactions],
-            },
-        )
+        payload: dict[str, Any] = {
+            "balance": round(float(user["bank_balance"] or 0), 2),
+            "cash": round(float(user["cash_balance"] or 0), 2),
+            "income": income_snapshot(db, user),
+            "transactions": [dict(row) for row in transactions],
+            "can_manage_treasury": admin_required(user) is None,
+        }
+        if payload["can_manage_treasury"]:
+            recent = all_rows(
+                db,
+                """
+                SELECT tr.*, target.name AS user_name, target.civ_number AS user_civ_number, reviewer.name AS reviewer_name
+                FROM treasury_requests tr
+                JOIN users target ON target.id = tr.user_id
+                LEFT JOIN users reviewer ON reviewer.id = tr.reviewer_id
+                WHERE tr.status = 'paid'
+                ORDER BY COALESCE(tr.decided_at, tr.updated_at) DESC
+                LIMIT 40
+                """,
+            )
+            staff_users = all_rows(
+                db,
+                "SELECT id, civ_number, name, email, bank_balance FROM users ORDER BY name LIMIT 500",
+            )
+            stats = {
+                "paid_count": one(db, "SELECT COUNT(*) AS count FROM treasury_requests WHERE status = 'paid'")["count"],
+                "pending_count": one(db, "SELECT COUNT(*) AS count FROM treasury_requests WHERE status = 'submitted'")["count"],
+                "paid_total": round(float((one(db, "SELECT COALESCE(SUM(approved_amount), 0) AS total FROM treasury_requests WHERE status = 'paid'") or {}).get("total") or 0), 2),
+            }
+            payload.update(
+                {
+                    "treasury_recent": [treasury_row_payload(row, include_proofs=False) for row in recent],
+                    "treasury_users": [dict(row) for row in staff_users],
+                    "treasury_stats": stats,
+                }
+            )
+        self.send_json(200, payload)
 
     def api_collect_bank(self, db: Database, user: DbRow | None) -> None:
         self.error(410, "Passive income collection has been removed from this server.")
         return
+
+    def api_bank_treasury_adjust(self, db: Database, user: DbRow | None) -> None:
+        err = admin_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        missing = require_fields(payload, "user_id", "amount", "reason")
+        if missing:
+            self.error(400, missing)
+            return
+        target = one(db, "SELECT id, name FROM users WHERE id = ?", (int(payload["user_id"]),))
+        if not target:
+            self.error(404, "Treasury recipient not found")
+            return
+        amount = clean_treasury_amount(payload.get("amount"))
+        reason = str(payload.get("reason") or "Manual Faircroft Treasury compensation").strip()[:500]
+        ts = now_iso()
+        request_number = generate_record_number(db, "treasury_requests", "request_number", "TRS")
+        db.execute(
+            """
+            INSERT INTO treasury_requests
+            (request_number, user_id, request_type, requested_amount, approved_amount, status, reason, proof_images, proof_bypass, reviewer_id, reviewer_notes, created_at, updated_at, decided_at)
+            VALUES (?, ?, 'staff_adjustment', ?, ?, 'paid', ?, '[]', 1, ?, ?, ?, ?, ?)
+            """,
+            (request_number, target["id"], amount, amount, reason, user["id"], reason, ts, ts, ts),
+        )
+        db.execute("UPDATE users SET bank_balance = bank_balance + ? WHERE id = ?", (amount, target["id"]))
+        add_transaction(db, target["id"], "treasury_compensation", amount, f"Faircroft Treasury {request_number}: {reason}", user["id"])
+        add_message(db, target["id"], "Faircroft Treasury deposit", f"Treasury added {amount:,.2f} to your bank. Reason: {reason}", user["id"])
+        self.send_json(201, {"ok": True, "request_number": request_number})
+
+    def api_treasury(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        mine = all_rows(
+            db,
+            """
+            SELECT tr.*, reviewer.name AS reviewer_name
+            FROM treasury_requests tr
+            LEFT JOIN users reviewer ON reviewer.id = tr.reviewer_id
+            WHERE tr.user_id = ?
+            ORDER BY tr.created_at DESC
+            LIMIT 30
+            """,
+            (user["id"],),
+        )
+        payload: dict[str, Any] = {
+            "stimulus_amount": TREASURY_STIMULUS_AMOUNT,
+            "max_proofs": TREASURY_MAX_PROOFS,
+            "my_requests": [treasury_row_payload(row, include_proofs=row.get("status") == "submitted") for row in mine],
+            "can_review": admin_required(user) is None,
+        }
+        if payload["can_review"]:
+            queue = all_rows(
+                db,
+                """
+                SELECT tr.*, target.name AS user_name, target.email AS user_email, target.civ_number AS user_civ_number,
+                       target.bank_balance AS user_bank_balance, reviewer.name AS reviewer_name
+                FROM treasury_requests tr
+                JOIN users target ON target.id = tr.user_id
+                LEFT JOIN users reviewer ON reviewer.id = tr.reviewer_id
+                ORDER BY CASE tr.status WHEN 'submitted' THEN 0 WHEN 'paid' THEN 1 ELSE 2 END, tr.updated_at DESC
+                LIMIT 80
+                """,
+            )
+            users = all_rows(db, "SELECT id, civ_number, name, email, bank_balance FROM users ORDER BY name LIMIT 500")
+            payload.update(
+                {
+                    "review_queue": [treasury_row_payload(row, include_proofs=row.get("status") == "submitted") for row in queue],
+                    "users": [dict(row) for row in users],
+                }
+            )
+        self.send_json(200, payload)
+
+    def api_create_treasury_request(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        request_type = str(payload.get("request_type") or "stimulus").strip().lower()
+        if request_type not in ("stimulus", "wipe_compensation"):
+            self.error(400, "Treasury request type is not supported")
+            return
+        proofs = clean_treasury_proofs(payload.get("proof_images"))
+        proof_bypass = str(payload.get("proof_bypass", "")).lower() in ("1", "true", "yes", "on")
+        if proof_bypass and not proofs:
+            request_type = "stimulus"
+            amount = TREASURY_STIMULUS_AMOUNT
+        elif not proofs:
+            self.error(400, "Upload screenshot proof, or check the no-proof stimulus request box for the standard $75,000 stimulus.")
+            return
+        elif request_type == "stimulus":
+            amount = TREASURY_STIMULUS_AMOUNT
+        else:
+            amount = clean_treasury_amount(payload.get("requested_amount"))
+        reason = str(payload.get("reason") or "").strip()[:1200]
+        if not reason:
+            reason = "No proof available - requesting standard Faircroft stimulus." if proof_bypass else "Server wipe compensation request with balance proof."
+        ts = now_iso()
+        created = db.execute(
+            """
+            INSERT INTO treasury_requests
+            (request_number, user_id, request_type, requested_amount, status, reason, proof_images, proof_bypass, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'submitted', ?, ?, ?, ?, ?)
+            RETURNING id, request_number
+            """,
+            (
+                generate_record_number(db, "treasury_requests", "request_number", "TRS"),
+                user["id"],
+                request_type,
+                amount,
+                reason,
+                json.dumps(proofs, separators=(",", ":")),
+                1 if proof_bypass else 0,
+                ts,
+                ts,
+            ),
+        ).fetchone()
+        add_message(db, user["id"], "Treasury request filed", f"Faircroft Treasury received request {created['request_number']}.", None)
+        staff = all_rows(
+            db,
+            "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ? ORDER BY id LIMIT 120",
+            ('%"owner"%', '%"admin"%'),
+        )
+        for row in staff:
+            if row["id"] != user["id"]:
+                add_message(db, row["id"], "Treasury request pending", f"{user['name']} filed Treasury request {created['request_number']} for {amount:,.2f}.", user["id"])
+        self.send_json(201, {"ok": True, "id": int(created["id"]), "request_number": created["request_number"]})
+
+    def api_review_treasury_request(self, db: Database, user: DbRow | None, request_id: int) -> None:
+        err = admin_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        request = one(db, "SELECT * FROM treasury_requests WHERE id = ?", (request_id,))
+        if not request:
+            self.error(404, "Treasury request not found")
+            return
+        payload = self.read_json()
+        status = str(payload.get("status") or payload.get("action") or "").strip().lower()
+        notes = str(payload.get("reviewer_notes") or payload.get("notes") or "").strip()[:1200]
+        ts = now_iso()
+        if status in ("approve", "approved", "pay", "paid"):
+            if request["status"] == "paid":
+                self.error(409, "This Treasury request has already been paid")
+                return
+            amount = clean_treasury_amount(payload.get("approved_amount"), float(request["requested_amount"] or TREASURY_STIMULUS_AMOUNT))
+            db.execute("UPDATE users SET bank_balance = bank_balance + ? WHERE id = ?", (amount, request["user_id"]))
+            description = notes or f"{human_request_type(request['request_type'])} approved"
+            add_transaction(db, request["user_id"], "treasury_compensation", amount, f"Faircroft Treasury {request['request_number']}: {description}", user["id"])
+            db.execute(
+                """
+                UPDATE treasury_requests
+                SET status = 'paid', approved_amount = ?, reviewer_id = ?, reviewer_notes = ?, updated_at = ?, decided_at = ?
+                WHERE id = ?
+                """,
+                (amount, user["id"], notes, ts, ts, request_id),
+            )
+            add_message(db, request["user_id"], "Faircroft Treasury approved", f"Request {request['request_number']} was approved and {amount:,.2f} was deposited into your bank.", user["id"])
+            self.send_json(200, {"ok": True, "status": "paid", "approved_amount": amount})
+            return
+        if status in ("deny", "denied"):
+            if request["status"] == "paid":
+                self.error(409, "Paid Treasury requests cannot be denied")
+                return
+            db.execute(
+                """
+                UPDATE treasury_requests
+                SET status = 'denied', approved_amount = 0, reviewer_id = ?, reviewer_notes = ?, updated_at = ?, decided_at = ?
+                WHERE id = ?
+                """,
+                (user["id"], notes, ts, ts, request_id),
+            )
+            add_message(db, request["user_id"], "Faircroft Treasury denied", f"Request {request['request_number']} was denied. {notes}".strip(), user["id"])
+            self.send_json(200, {"ok": True, "status": "denied"})
+            return
+        self.error(400, "Treasury review status must be approve or deny")
 
     def api_cash_transfer(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)

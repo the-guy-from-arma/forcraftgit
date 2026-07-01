@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.33";
+const OS_VERSION = "0.0.35";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 
 const state = {
@@ -43,7 +43,9 @@ const state = {
   contractsInfoOpen: false,
   contractProofId: null,
   businessTab: "apply",
+  treasuryProofs: [],
   adminTab: "users",
+  adminSearch: "",
   adminAccountId: null,
   dmvCountdownTimer: null,
   dmvCountdownRefreshing: false,
@@ -97,6 +99,7 @@ const iconSvg = {
   home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/></svg>',
   send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>',
   bank: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m3 10 9-6 9 6Z"/><path d="M5 10v9M9 10v9M15 10v9M19 10v9M3 19h18"/></svg>',
+  treasury: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="M5 10v8M9 12v6M15 12v6M19 10v8M3 18h18"/><path d="M12 7v4"/></svg>',
   store: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 10h16l-1-5H5Z"/><path d="M5 10v10h14V10"/><path d="M8 20v-6h8v6"/><path d="M4 10c0 2 3 2 4 0 1 2 5 2 6 0 1 2 4 2 6 0"/></svg>',
   user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/><path d="M16 11l2 2 4-5"/></svg>',
   map: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3Z"/><path d="M9 3v15M15 6v15"/><path d="M6 10h2M16 10h2M11 14h2"/></svg>',
@@ -121,6 +124,7 @@ const tileColors = {
   properties: "linear-gradient(145deg, #28d17c, #17623d)",
   cash: "linear-gradient(145deg, #f15f79, #7a1e31)",
   bank: "linear-gradient(145deg, #5c9cff, #21497e)",
+  treasury: "linear-gradient(145deg, #f8d572, #0f806f)",
   business: "linear-gradient(145deg, #58e6a5, #2457a8)",
   messages: "linear-gradient(145deg, #ffffff, #6d7779)",
   contracts: "linear-gradient(145deg, #ff5d7d, #4120a4)",
@@ -555,6 +559,7 @@ function renderPanel(id) {
     properties: "Properties",
     cash: "Cash App",
     bank: "Bank",
+    treasury: "Faircroft Treasury",
     business: "Business",
     messages: "Messages",
     contracts: "Contracts",
@@ -574,6 +579,7 @@ function renderPanel(id) {
     properties: renderProperties,
     cash: renderCash,
     bank: renderBank,
+    treasury: renderTreasury,
     business: renderBusiness,
     messages: renderMessages,
     contracts: renderContracts,
@@ -605,6 +611,7 @@ async function loadAppData(id) {
     court: async () => ({ mine: await api("/api/court/my-cases") }),
     properties: () => api("/api/properties"),
     bank: () => api("/api/bank"),
+    treasury: () => api("/api/treasury"),
     business: () => api("/api/business"),
     messages: () => api("/api/messages"),
     contracts: () => api("/api/contracts"),
@@ -664,6 +671,7 @@ function bindPanel() {
     properties: bindProperties,
     cash: bindCash,
     bank: bindBank,
+    treasury: bindTreasury,
     business: bindBusiness,
     messages: bindMessages,
     contracts: bindContracts,
@@ -1576,21 +1584,313 @@ function bindJobs() {
   });
 }
 
+function treasuryStatusClass(status) {
+  if (status === "paid") return "green";
+  if (status === "denied") return "red";
+  return "amber";
+}
+
+function treasuryTypeLabel(value) {
+  return humanLabel(value || "treasury_request");
+}
+
+function renderTreasuryProofs(proofs = [], options = {}) {
+  if (!proofs.length) return `<div class="empty">No proof images attached</div>`;
+  const removable = Boolean(options.removable);
+  return `
+    <div class="treasury-proof-grid">
+      ${proofs.map((proof, index) => `
+        <div class="treasury-proof-thumb">
+          ${proof.data_url ? `<img src="${escapeHtml(proof.data_url)}" alt="${escapeHtml(proof.name || "Treasury proof")}" loading="lazy" />` : `<div class="treasury-proof-placeholder">${iconSvg["id-card"]}</div>`}
+          <span>${escapeHtml(proof.name || `proof-${index + 1}`)}</span>
+          ${removable ? `<button type="button" class="icon-action mini" data-remove-treasury-proof="${index}" aria-label="Remove proof">${iconSvg.back}</button>` : ""}
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderTreasuryRequestCard(item, staff = false) {
+  const proofs = item.proof_images || [];
+  const title = staff ? `${item.user_name || "Civilian"} / CIV ${item.user_civ_number || "pending"}` : treasuryTypeLabel(item.request_type);
+  return `
+    <article class="treasury-request-card ${item.status === "submitted" ? "pending" : ""}">
+      <div class="row tight">
+        <div>
+          <p class="eyebrow">${escapeHtml(item.request_number || "TRS-pending")}</p>
+          <h3>${escapeHtml(title)}</h3>
+        </div>
+        <span class="pill ${treasuryStatusClass(item.status)}">${escapeHtml(item.status || "submitted")}</span>
+      </div>
+      <div class="treasury-request-metrics">
+        <div><span>Requested</span><strong>${money(item.requested_amount)}</strong></div>
+        <div><span>Approved</span><strong>${money(item.approved_amount)}</strong></div>
+        <div><span>Proof</span><strong>${item.proof_bypass ? "Bypass" : `${item.proof_count || proofs.length || 0} files`}</strong></div>
+      </div>
+      <p class="muted small">${escapeHtml(item.reason || "No request notes provided")}</p>
+      ${item.reviewer_notes ? `<p class="small">Review: ${escapeHtml(item.reviewer_notes)}</p>` : ""}
+      ${proofs.length ? renderTreasuryProofs(proofs) : ""}
+      ${staff && item.status === "submitted" ? `
+        <form class="treasury-review-form form-grid" data-request-id="${item.id}">
+          <label>Approved amount<input name="approved_amount" type="number" min="1" step="0.01" value="${escapeHtml(item.requested_amount || 75000)}" /></label>
+          <label>Review notes<textarea name="reviewer_notes" maxlength="1200" placeholder="Reason for approval, denial, or adjusted amount"></textarea></label>
+          <div class="row">
+            <button class="primary" type="submit" data-treasury-action="paid">Approve and deposit</button>
+            <button class="danger" type="submit" data-treasury-action="denied">Deny</button>
+          </div>
+        </form>
+      ` : ""}
+    </article>
+  `;
+}
+
+function renderTreasury() {
+  const data = state.cache.treasury;
+  if (!data) return `<div class="empty">Treasury loading</div>`;
+  const stimulus = Number(data.stimulus_amount || 75000);
+  const proofs = state.treasuryProofs || [];
+  return `
+    <div class="stack treasury-app">
+      <section class="treasury-hero">
+        <div>
+          <p class="eyebrow">Faircroft Treasury</p>
+          <h3>Stimulus and wipe compensation</h3>
+          <p>File a server wipe compensation request with screenshot proof, or use the no-proof option for the standard ${money(stimulus)} stimulus check.</p>
+        </div>
+        <span class="treasury-seal">${iconSvg.treasury}</span>
+      </section>
+      <form id="treasuryRequestForm" class="treasury-form">
+        <div class="grid-2">
+          <label>Request type
+            <select name="request_type">
+              <option value="wipe_compensation">Server wipe compensation</option>
+              <option value="stimulus">Stimulus check</option>
+            </select>
+          </label>
+          <label>Requested amount<input name="requested_amount" type="number" min="1" step="0.01" value="${escapeHtml(stimulus)}" /></label>
+        </div>
+        <label>Request notes<textarea name="reason" maxlength="1200" placeholder="Explain what was lost, old balance, wipe date, or why you need stimulus review"></textarea></label>
+        <label class="check-row treasury-bypass"><input type="checkbox" name="proof_bypass" /> No proof available - request standard ${money(stimulus)} stimulus check</label>
+        <div class="treasury-dropzone" data-treasury-dropzone>
+          <input type="file" accept="image/png,image/jpeg,image/webp" multiple data-treasury-file-input />
+          <strong>Drop screenshots here</strong>
+          <span>Balance proof, old bank screen, inventory loss, or wipe evidence. Up to ${Number(data.max_proofs || 4)} images.</span>
+        </div>
+        ${renderTreasuryProofs(proofs, { removable: true })}
+        <button class="primary" type="submit">Submit Treasury request</button>
+      </form>
+      <section class="treasury-section">
+        <div class="row">
+          <div>
+            <p class="eyebrow">Your ledger</p>
+            <h3>Request history</h3>
+          </div>
+          <span class="pill">${(data.my_requests || []).length}</span>
+        </div>
+        <div class="treasury-request-list">
+          ${(data.my_requests || []).map((item) => renderTreasuryRequestCard(item)).join("") || `<div class="empty">No Treasury requests filed yet</div>`}
+        </div>
+      </section>
+      ${data.can_review ? `
+        <section class="treasury-section staff">
+          <div class="row">
+            <div>
+              <p class="eyebrow">Owner/admin review</p>
+              <h3>Compensation queue</h3>
+            </div>
+            <span class="pill amber">${(data.review_queue || []).filter((item) => item.status === "submitted").length} pending</span>
+          </div>
+          <div class="treasury-request-list">
+            ${(data.review_queue || []).map((item) => renderTreasuryRequestCard(item, true)).join("") || `<div class="empty">No Treasury requests to review</div>`}
+          </div>
+        </section>
+      ` : ""}
+    </div>
+  `;
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Could not read proof image"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function encodeTreasuryProof(file) {
+  if (!file.type.startsWith("image/")) {
+    throw new Error("Treasury proof must be an image");
+  }
+  const original = await readFileAsDataUrl(file);
+  return new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => {
+      const maxSide = 1280;
+      const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(image.width * scale));
+      canvas.height = Math.max(1, Math.round(image.height * scale));
+      const context = canvas.getContext("2d");
+      if (!context) {
+        resolve({ name: file.name, type: file.type, data_url: original });
+        return;
+      }
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      resolve({ name: file.name, type: "image/jpeg", data_url: canvas.toDataURL("image/jpeg", 0.74) });
+    };
+    image.onerror = () => resolve({ name: file.name, type: file.type, data_url: original });
+    image.src = original;
+  });
+}
+
+async function addTreasuryProofFiles(files) {
+  const maxProofs = Number(state.cache.treasury?.max_proofs || 4);
+  const selected = Array.from(files || []).slice(0, Math.max(0, maxProofs - state.treasuryProofs.length));
+  if (!selected.length) {
+    toast(`Maximum ${maxProofs} proof images`);
+    return;
+  }
+  const encoded = [];
+  for (const file of selected) {
+    encoded.push(await encodeTreasuryProof(file));
+  }
+  state.treasuryProofs = [...state.treasuryProofs, ...encoded].slice(0, maxProofs);
+  render();
+}
+
+function bindTreasury() {
+  const dropzone = $("[data-treasury-dropzone]");
+  const input = $("[data-treasury-file-input]");
+  input?.addEventListener("change", async () => {
+    try {
+      await addTreasuryProofFiles(input.files);
+      input.value = "";
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  dropzone?.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    dropzone.classList.add("dragging");
+  });
+  dropzone?.addEventListener("dragleave", () => dropzone.classList.remove("dragging"));
+  dropzone?.addEventListener("drop", async (event) => {
+    event.preventDefault();
+    dropzone.classList.remove("dragging");
+    try {
+      await addTreasuryProofFiles(event.dataTransfer.files);
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $$("[data-remove-treasury-proof]").forEach((button) => button.addEventListener("click", () => {
+    state.treasuryProofs.splice(Number(button.dataset.removeTreasuryProof), 1);
+    render();
+  }));
+  $("#treasuryRequestForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    try {
+      await api("/api/treasury", {
+        method: "POST",
+        body: {
+          request_type: formData.get("request_type"),
+          requested_amount: formData.get("requested_amount"),
+          reason: formData.get("reason"),
+          proof_bypass: formData.get("proof_bypass") === "on",
+          proof_images: state.treasuryProofs,
+        },
+      });
+      state.treasuryProofs = [];
+      toast("Treasury request submitted");
+      await loadAppData("treasury");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $$(".treasury-review-form").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const action = event.submitter?.dataset.treasuryAction || "paid";
+      const formData = new FormData(form);
+      try {
+        await api(`/api/treasury/requests/${form.dataset.requestId}`, {
+          method: "PATCH",
+          body: {
+            status: action,
+            approved_amount: formData.get("approved_amount"),
+            reviewer_notes: formData.get("reviewer_notes"),
+          },
+        });
+        toast(action === "paid" ? "Comp deposited" : "Treasury request denied");
+        await loadAppData("treasury");
+        await loadSession();
+        render();
+      } catch (error) {
+        toast(error.message);
+      }
+    });
+  });
+}
+
 function renderBank() {
   const data = state.cache.bank;
   if (!data) return `<div class="empty">Bank loading</div>`;
+  const canManageTreasury = Boolean(data.can_manage_treasury);
   return `
-    <div class="stack">
-      <div class="card">
-        <p class="eyebrow">Available balance</p>
-        <div class="money">${money(data.balance)}</div>
-        <p class="muted small">Passive income has been removed from this server.</p>
-      </div>
+    <div class="stack bank-app">
+      <section class="bank-hero">
+        <div>
+          <p class="eyebrow">Faircroft Bank</p>
+          <h3>${money(data.balance)}</h3>
+          <p>Account balance, deposits, and Treasury compensation activity.</p>
+        </div>
+        <span>${iconSvg.bank}</span>
+      </section>
       <div class="grid-2">
         <div class="metric"><span>Cash wallet</span><strong>${money(data.cash)}</strong></div>
         <div class="metric"><span>Server time</span><strong>${minutes(data.income.presence_seconds_today)}m</strong></div>
       </div>
-      <div class="card">
+      ${canManageTreasury ? `
+        <section class="treasury-section bank-treasury-admin">
+          <div class="row">
+            <div>
+              <p class="eyebrow">Treasury ledger</p>
+              <h3>Compensation controls</h3>
+            </div>
+            <span class="pill green">${money(data.treasury_stats?.paid_total || 0)} paid</span>
+          </div>
+          <div class="grid-2">
+            <div class="metric"><span>Pending requests</span><strong>${data.treasury_stats?.pending_count || 0}</strong></div>
+            <div class="metric"><span>Players paid</span><strong>${data.treasury_stats?.paid_count || 0}</strong></div>
+          </div>
+          <form id="bankTreasuryAdjustForm" class="form-grid treasury-bank-form">
+            <label>Recipient
+              <select name="user_id" required>
+                <option value="">Select player account</option>
+                ${(data.treasury_users || []).map((item) => `<option value="${item.id}">${escapeHtml(item.name)} / CIV ${escapeHtml(item.civ_number || "pending")} / ${money(item.bank_balance)}</option>`).join("")}
+              </select>
+            </label>
+            <label>Amount<input name="amount" type="number" min="1" step="0.01" value="75000" required /></label>
+            <label>Comp reason<textarea name="reason" maxlength="500" required placeholder="Server wipe comp, admin-approved balance restore, event payout"></textarea></label>
+            <button class="primary" type="submit">Add Treasury deposit</button>
+          </form>
+          <div class="treasury-ledger-list">
+            ${(data.treasury_recent || []).map((item) => `
+              <div class="treasury-ledger-row">
+                <div>
+                  <strong>${escapeHtml(item.user_name || "Civilian")}</strong>
+                  <span>${escapeHtml(item.request_number)} / ${treasuryTypeLabel(item.request_type)}</span>
+                </div>
+                <strong>${money(item.approved_amount)}</strong>
+              </div>
+            `).join("") || `<div class="empty">No compensation deposits yet</div>`}
+          </div>
+        </section>
+      ` : ""}
+      <div class="card bank-activity-card">
         <h3>Activity</h3>
         <div class="list">${(data.transactions || []).map((tx) => `
           <div class="row"><span>${escapeHtml(tx.description)}</span><strong>${money(tx.amount)}</strong></div>
@@ -1601,6 +1901,18 @@ function renderBank() {
 }
 
 function bindBank() {
+  $("#bankTreasuryAdjustForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api("/api/bank/treasury-adjust", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast("Treasury deposit added");
+      await loadAppData("bank");
+      await loadSession();
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
 }
 
 function renderCash() {
@@ -5215,10 +5527,38 @@ function renderSystem() {
 
 const roleOptions = ["civ", "owner", "admin", "leo", "judge", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "business_owner", "business_registrar", "city_hall", "economy_manager"];
 
+function adminUserSearchText(user) {
+  return [
+    user.name,
+    user.email,
+    user.civ_number,
+    user.arma_id,
+    user.car_entry_code,
+    user.callsign,
+    user.primary_agency,
+    user.active_character_name,
+    ...(user.roles || []),
+    user.verified ? "verified" : "pending unverified",
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
 function renderAdminUsers(users) {
   if (!users.length) return `<div class="empty">No accounts yet</div>`;
-  return `<div class="list admin-account-list">${users.map((user) => `
-    <article class="user-card compact-user-card">
+  const query = String(state.adminSearch || "").trim().toLowerCase();
+  const matches = users.filter((user) => !query || adminUserSearchText(user).includes(query));
+  return `
+    <section class="admin-account-search">
+      <label>Search accounts<input data-admin-account-search value="${escapeHtml(state.adminSearch)}" placeholder="Name, email, CIV, Arma ID, callsign, role" autocomplete="off" /></label>
+      <div class="admin-search-meta">
+        <span data-admin-search-count>${matches.length} of ${users.length} accounts</span>
+        <button class="secondary compact-action" type="button" data-clear-admin-search ${state.adminSearch ? "" : "disabled"}>Clear</button>
+      </div>
+    </section>
+    <div class="list admin-account-list">${users.map((user) => {
+      const haystack = adminUserSearchText(user);
+      const hidden = query && !haystack.includes(query);
+      return `
+    <article class="user-card compact-user-card ${hidden ? "search-hidden" : ""}" data-admin-user-card data-admin-search="${escapeHtml(haystack)}">
       <div class="account-main">
         <div class="account-avatar">${escapeHtml((user.name || "?").slice(0, 1).toUpperCase())}</div>
         <div>
@@ -5229,7 +5569,10 @@ function renderAdminUsers(users) {
       </div>
       <button class="secondary compact-action" type="button" data-open-admin-account="${user.id}">Account</button>
     </article>
-  `).join("")}</div>`;
+  `;
+    }).join("")}</div>
+    <div class="empty ${matches.length ? "search-hidden" : ""}" data-admin-search-empty>No accounts match that search</div>
+  `;
 }
 
 function renderAdminAccountModal(user) {
@@ -5356,7 +5699,36 @@ function bindSystem() {
   });
 }
 
+function applyAdminUserSearch() {
+  const query = String(state.adminSearch || "").trim().toLowerCase();
+  const cards = $$("[data-admin-user-card]");
+  let visible = 0;
+  cards.forEach((card) => {
+    const match = !query || String(card.dataset.adminSearch || "").includes(query);
+    card.classList.toggle("search-hidden", !match);
+    if (match) visible += 1;
+  });
+  const count = $("[data-admin-search-count]");
+  if (count) count.textContent = `${visible} of ${cards.length} accounts`;
+  const empty = $("[data-admin-search-empty]");
+  empty?.classList.toggle("search-hidden", visible > 0);
+  $("[data-clear-admin-search]")?.toggleAttribute("disabled", !query);
+}
+
 function bindAdmin() {
+  const searchInput = $("[data-admin-account-search]");
+  searchInput?.addEventListener("input", (event) => {
+    state.adminSearch = event.currentTarget.value;
+    applyAdminUserSearch();
+  });
+  $("[data-clear-admin-search]")?.addEventListener("click", () => {
+    state.adminSearch = "";
+    if (searchInput) {
+      searchInput.value = "";
+      searchInput.focus();
+    }
+    applyAdminUserSearch();
+  });
   $$("[data-admin-tab]").forEach((button) => button.addEventListener("click", () => {
     state.adminTab = button.dataset.adminTab;
     state.adminAccountId = null;
@@ -5474,7 +5846,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.33").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.35").catch(() => {}));
 }
 
 bootApp();
