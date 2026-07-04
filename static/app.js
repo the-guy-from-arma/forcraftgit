@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.35";
+const OS_VERSION = "0.0.38";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 
 const state = {
@@ -43,8 +43,10 @@ const state = {
   contractsInfoOpen: false,
   contractProofId: null,
   businessTab: "apply",
+  businessReviewFilter: "active",
   treasuryProofs: [],
   adminTab: "users",
+  adminApplicationFilter: "active",
   adminSearch: "",
   adminAccountId: null,
   dmvCountdownTimer: null,
@@ -167,6 +169,25 @@ function toast(message) {
   toastEl.classList.add("show");
   clearTimeout(toastEl.timer);
   toastEl.timer = setTimeout(() => toastEl.classList.remove("show"), 2600);
+}
+
+async function copyToClipboard(value) {
+  const text = String(value || "");
+  if (!text) return false;
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return true;
+  }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.opacity = "0";
+  document.body.appendChild(area);
+  area.select();
+  const copied = document.execCommand("copy");
+  area.remove();
+  return copied;
 }
 
 async function api(path, options = {}) {
@@ -333,6 +354,7 @@ function renderAuth() {
         ${register ? `<label>Name<input name="name" autocomplete="name" required /></label>` : ""}
         ${register ? `<label>Arma ID<input name="arma_id" autocomplete="off" required /></label>` : ""}
         ${register ? `<label>Car entry code<input name="car_entry_code" autocomplete="off" maxlength="32" pattern="[A-Za-z0-9_-]{2,32}" placeholder="In-game vehicle access code" required /></label>` : ""}
+        ${register ? `<label>Referral code <span class="muted small">optional</span><input name="referral_code" autocomplete="off" maxlength="16" placeholder="Friend's referral code" /></label>` : ""}
         <label>Email<input name="email" type="email" autocomplete="email" required /></label>
         <label>Password<input name="password" type="password" autocomplete="${register ? "new-password" : "current-password"}" minlength="6" required /></label>
         <button class="primary" type="submit">${register ? "Create civilian" : "Unlock phone"}</button>
@@ -634,7 +656,13 @@ async function loadAppData(id) {
     fire: () => api("/api/fire/overview"),
     "fire-settings": () => api("/api/fire/overview"),
     system: () => api("/api/system/settings"),
-    admin: async () => ({ overview: await api("/api/admin/overview"), users: await api("/api/admin/users"), jobs: await api("/api/admin/jobs") }),
+    admin: async () => ({
+      overview: await api("/api/admin/overview"),
+      users: await api("/api/admin/users"),
+      referrals: await api("/api/admin/referrals"),
+      applications: await api("/api/admin/department-applications"),
+      jobs: await api("/api/admin/jobs"),
+    }),
   };
   if (loaders[id]) {
     try {
@@ -767,6 +795,7 @@ function renderProfile() {
   const nameChange = data.name_change || { locked: false, used: 0, limit: 3, remaining: 3, window_days: 3 };
   const nameChangeBlocked = nameChange.locked || Number(nameChange.remaining || 0) <= 0;
   const nameChangeLabel = nameChange.locked ? "locked" : `${nameChange.remaining}/${nameChange.limit} left`;
+  const referrals = data.referrals || { code: user.referral_code || "", bonus_amount: 50000, count: 0, total_bonus: 0, pending_count: 0, pending_total: 0, recent: [] };
   const canSetCallsign = canAny("owner", "admin", "leo", "cid", "iu", "iu_director", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "fireman", "ems", "dispatcher", "fire_chief", "deputy_chief", "fire_marshal");
   return `
     <div class="stack profile-app">
@@ -786,8 +815,42 @@ function renderProfile() {
         <div><span>Registered Arma ID</span><strong>${escapeHtml(user.registered_arma_id || user.arma_id || "Not attached")}</strong></div>
         <div><span>Car Entry Code</span><strong>${escapeHtml(user.car_entry_code || "Required")}</strong></div>
         ${canSetCallsign ? `<div><span>Callsign</span><strong>${escapeHtml(user.callsign || "Not set")}</strong></div>` : ""}
+        <div><span>Referral Code</span><strong>${escapeHtml(referrals.code || "Generating")}</strong></div>
         <div><span>Live Link</span><strong>${escapeHtml(link ? "Attached" : "Not attached")}</strong></div>
       </div>
+      <section class="profile-link-card referral-card">
+        <div class="row">
+          <div>
+            <p class="eyebrow">Referral program</p>
+            <h3>${money(referrals.bonus_amount || 50000)} cash ticket</h3>
+            <p class="muted small">Share your code with a new player. When they register with it, a cash ticket is created and an admin must deposit it manually.</p>
+          </div>
+          <span class="pill ${Number(referrals.pending_count || 0) ? "amber" : "green"}">${Number(referrals.pending_count || 0)} pending</span>
+        </div>
+        <div class="referral-copy-grid">
+          <div class="referral-code-box">
+            <span>Your code</span>
+            <strong>${escapeHtml(referrals.code || "Generating")}</strong>
+          </div>
+          <button class="secondary" type="button" data-copy-referral="${escapeHtml(referrals.code || "")}" ${referrals.code ? "" : "disabled"}>Copy code</button>
+        </div>
+        <div class="profile-grid compact">
+          <div><span>Deposited</span><strong>${money(referrals.total_bonus || 0)}</strong></div>
+          <div><span>Pending tickets</span><strong>${money(referrals.pending_total || 0)}</strong></div>
+          <div><span>Referral count</span><strong>${Number(referrals.count || 0)}</strong></div>
+          ${referrals.referred_by ? `<div><span>You were referred by</span><strong>${escapeHtml(referrals.referred_by.name || "Another player")}</strong></div>` : ""}
+        </div>
+        ${(referrals.recent || []).length ? `
+          <div class="referral-recent">
+            ${(referrals.recent || []).map((item) => `
+              <div class="row">
+                <span>${escapeHtml(item.referred_name || "New civilian")} / ${escapeHtml(item.status || "pending")}</span>
+                <strong>${money(item.bonus_amount)}</strong>
+              </div>
+            `).join("")}
+          </div>
+        ` : ""}
+      </section>
       <section class="profile-link-card">
         <div class="row">
           <div>
@@ -924,6 +987,14 @@ async function saveCallsignFromForm(form) {
 }
 
 function bindProfile() {
+  $$("[data-copy-referral]").forEach((button) => button.addEventListener("click", async () => {
+    try {
+      await copyToClipboard(button.dataset.copyReferral);
+      toast("Referral code copied");
+    } catch {
+      toast("Could not copy referral code");
+    }
+  }));
   $("#carEntryCodeForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
@@ -2223,9 +2294,56 @@ function renderBusinessLicenses(data) {
 
 function renderBusinessReview(data) {
   const queue = data.review_queue || [];
+  const groups = {
+    active: queue,
+    submitted: queue.filter((item) => item.status === "submitted"),
+    under_review: queue.filter((item) => item.status === "under_review"),
+    interview_requested: queue.filter((item) => item.status === "interview_requested"),
+  };
+  if (!groups[state.businessReviewFilter]) state.businessReviewFilter = "active";
+  const rows = groups[state.businessReviewFilter] || [];
+  const filters = [
+    ["active", "Active Queue", queue.length],
+    ["submitted", "New", groups.submitted.length],
+    ["under_review", "Review", groups.under_review.length],
+    ["interview_requested", "Interview", groups.interview_requested.length],
+  ];
   return `
-    <div class="list">
-      ${queue.map((item) => renderBusinessApplicationCard(item, true, data)).join("") || `<div class="empty">No applications are waiting on review</div>`}
+    <section class="business-review-board">
+      <div class="business-review-filter">
+        ${filters.map(([id, label, count]) => `
+          <button class="${state.businessReviewFilter === id ? "active" : ""}" type="button" data-business-review-filter="${id}">
+            <span>${escapeHtml(label)}</span>
+            <strong>${count}</strong>
+          </button>
+        `).join("")}
+      </div>
+      <div class="business-review-list">
+        ${rows.map((item) => renderBusinessApplicationCard(item, true, data)).join("") || `<div class="empty">No applications in this folder</div>`}
+      </div>
+      ${(data.recent_reviews || []).length ? `
+        <details class="business-review-history">
+          <summary>Recent registry actions</summary>
+          ${renderBusinessRecentReviews(data.recent_reviews || [])}
+        </details>
+      ` : ""}
+    </section>
+  `;
+}
+
+function renderBusinessRecentReviews(rows) {
+  return `
+    <div class="business-review-actions">
+      ${rows.slice(0, 18).map((row) => `
+        <article class="business-review-action">
+          <div>
+            <p class="eyebrow">${escapeHtml(row.application_number || "")}</p>
+            <strong>${escapeHtml(row.business_name || "Business application")}</strong>
+            <p>${escapeHtml(row.notes || "No review notes recorded")}</p>
+          </div>
+          <span class="pill ${businessStatusClass(row.action)}">${humanLabel(row.action)}</span>
+        </article>
+      `).join("")}
     </div>
   `;
 }
@@ -2243,7 +2361,64 @@ function renderBusinessRegistry(data) {
   `;
 }
 
+function renderBusinessApplicationReviewFolder(item, data) {
+  return `
+    <article class="business-card business-application-folder">
+      <details>
+        <summary>
+          <div class="row tight">
+            <div>
+              <p class="eyebrow">${escapeHtml(item.application_number)}</p>
+              <h3>${escapeHtml(item.business_name)}</h3>
+              <p class="muted small">${escapeHtml(item.applicant_name || item.owner_name)} / ${humanLabel(item.license_category)} / ${escapeHtml(item.location)}</p>
+            </div>
+            <span class="pill ${businessStatusClass(item.status)}">${humanLabel(item.status)}</span>
+          </div>
+          <div class="business-folder-strip">
+            <span>${escapeHtml(item.business_type)}</span>
+            <span>${money(item.startup_budget)}</span>
+            <span>${escapeHtml(item.applicant_civ_number || "CIV pending")}</span>
+            <span>${escapeHtml(item.reviewer_name || "Unassigned")}</span>
+          </div>
+        </summary>
+        <div class="business-folder-body">
+          ${renderBusinessApplicationTracker(item)}
+          <div class="business-meta">
+            <div><span>Type</span><strong>${escapeHtml(item.business_type)}</strong></div>
+            <div><span>Budget</span><strong>${money(item.startup_budget)}</strong></div>
+            <div><span>Employees</span><strong>${item.planned_employees}</strong></div>
+            <div><span>Reviewer</span><strong>${escapeHtml(item.reviewer_name || "Unassigned")}</strong></div>
+          </div>
+          <div class="business-brief"><span>Plan</span><p>${escapeHtml(item.description)}</p></div>
+          <div class="business-brief"><span>Funding</span><p>${escapeHtml(item.funding_source)}</p></div>
+          ${item.reviewer_notes ? `<p class="muted small">Review notes: ${escapeHtml(item.reviewer_notes)}</p>` : ""}
+          ${item.interview_notes ? `<p class="muted small">Interview: ${escapeHtml(item.interview_notes)}</p>` : ""}
+          <form class="business-review-form form-grid" data-application-id="${item.id}">
+            <div class="grid-2">
+              <label>Decision<select name="status">
+                <option value="under_review" ${item.status === "under_review" ? "selected" : ""}>Under Review</option>
+                <option value="interview_requested" ${item.status === "interview_requested" ? "selected" : ""}>Interview Requested</option>
+                <option value="approved">Approve and Issue License</option>
+                <option value="denied">Deny</option>
+              </select></label>
+              <label>License category<select name="license_category">${businessCategoryOptions(data.categories, item.license_category)}</select></label>
+            </div>
+            <div class="grid-2">
+              <label>Weekly tax<input name="weekly_tax" type="number" min="0" step="0.01" placeholder="Auto if blank" /></label>
+              <label>Activity minutes/week<input name="activity_requirement_minutes" type="number" min="0" value="120" /></label>
+            </div>
+            <label>Review notes<textarea name="reviewer_notes" maxlength="1200">${escapeHtml(item.reviewer_notes || "")}</textarea></label>
+            <label>Interview notes<textarea name="interview_notes" maxlength="1000">${escapeHtml(item.interview_notes || "")}</textarea></label>
+            <button class="primary" type="submit">Save decision</button>
+          </form>
+        </div>
+      </details>
+    </article>
+  `;
+}
+
 function renderBusinessApplicationCard(item, review, data) {
+  if (review) return renderBusinessApplicationReviewFolder(item, data);
   return `
     <article class="business-card">
       <div class="row tight">
@@ -2376,6 +2551,10 @@ function renderBusinessLedger(title, rows, type) {
 function bindBusiness() {
   $$("[data-business-tab]").forEach((button) => button.addEventListener("click", () => {
     state.businessTab = button.dataset.businessTab;
+    render();
+  }));
+  $$("[data-business-review-filter]").forEach((button) => button.addEventListener("click", () => {
+    state.businessReviewFilter = button.dataset.businessReviewFilter;
     render();
   }));
   $("#businessApplicationForm")?.addEventListener("submit", async (event) => {
@@ -5439,18 +5618,28 @@ function renderAdmin() {
   const data = state.cache.admin;
   if (!data) return `<div class="empty">Admin loading</div>`;
   const accountModal = state.adminAccountId ? renderAdminAccountModal(data.users.users.find((user) => String(user.id) === String(state.adminAccountId))) : "";
+  const pendingReferrals = data.referrals?.stats?.pending || data.overview.stats.pending_referrals || 0;
+  const applicationStats = data.applications?.stats || {};
+  const activeApplications = applicationStats.active || data.overview.stats.department_applications || 0;
+  const body = state.adminTab === "referrals"
+    ? renderAdminReferrals(data.referrals || { stats: {}, referrals: [] })
+    : state.adminTab === "applications"
+      ? renderAdminDepartmentApplications(data.applications || { stats: {}, applications: [] })
+      : renderAdminUsers(data.users.users);
   return `
     <div class="stack">
       <div class="grid-2">
         <div class="metric"><span>Users</span><strong>${data.overview.stats.users}</strong></div>
         <div class="metric"><span>Unverified</span><strong>${data.overview.stats.unverified}</strong></div>
-        <div class="metric"><span>Applications</span><strong>${data.overview.stats.department_applications || 0}</strong></div>
-        <div class="metric"><span>Open cases</span><strong>${data.overview.stats.open_cases}</strong></div>
+        <div class="metric"><span>Job applications</span><strong>${activeApplications}</strong></div>
+        <div class="metric"><span>Referral tickets</span><strong>${pendingReferrals}</strong></div>
       </div>
       <div class="segmented">
         <button class="${state.adminTab === "users" ? "active" : ""}" data-admin-tab="users">Users</button>
+        <button class="${state.adminTab === "applications" ? "active" : ""}" data-admin-tab="applications">Job Apps</button>
+        <button class="${state.adminTab === "referrals" ? "active" : ""}" data-admin-tab="referrals">Referral Tickets</button>
       </div>
-      ${renderAdminUsers(data.users.users)}
+      ${body}
     </div>
     ${accountModal}
   `;
@@ -5535,11 +5724,167 @@ function adminUserSearchText(user) {
     user.arma_id,
     user.car_entry_code,
     user.callsign,
+    user.referral_code,
     user.primary_agency,
     user.active_character_name,
     ...(user.roles || []),
     user.verified ? "verified" : "pending unverified",
   ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function parseDepartmentApplicationPacket(statement) {
+  try {
+    const packet = JSON.parse(statement || "{}");
+    return Array.isArray(packet.answers) ? packet : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function renderDepartmentApplicationPacket(item) {
+  const packet = parseDepartmentApplicationPacket(item.statement);
+  if (!packet) {
+    return `
+      <details class="admin-application-packet">
+        <summary>Application statement</summary>
+        <p>${escapeHtml(item.statement || "No statement recorded")}</p>
+      </details>
+    `;
+  }
+  return `
+    <details class="admin-application-packet">
+      <summary>Application packet</summary>
+      <div class="admin-packet-answers">
+        ${packet.answers.map((answer) => `
+          <div>
+            <span>${escapeHtml(answer.question)}</span>
+            <p>${escapeHtml(answer.answer)}</p>
+          </div>
+        `).join("")}
+      </div>
+    </details>
+  `;
+}
+
+function renderAdminDepartmentApplications(data) {
+  const rows = data.applications || [];
+  const groups = {
+    active: rows.filter((item) => !["approved", "denied", "withdrawn", "closed"].includes(item.status)),
+    approved: rows.filter((item) => item.status === "approved"),
+    denied: rows.filter((item) => item.status === "denied"),
+    closed: rows.filter((item) => ["withdrawn", "closed"].includes(item.status)),
+  };
+  if (!groups[state.adminApplicationFilter]) state.adminApplicationFilter = "active";
+  const visible = groups[state.adminApplicationFilter] || [];
+  const filters = [
+    ["active", "Active", groups.active.length],
+    ["approved", "Approved", groups.approved.length],
+    ["denied", "Denied", groups.denied.length],
+    ["closed", "Closed", groups.closed.length],
+  ];
+  return `
+    <section class="admin-application-board">
+      <div class="grid-2">
+        <div class="metric"><span>New</span><strong>${data.stats?.submitted || 0}</strong></div>
+        <div class="metric"><span>Under review</span><strong>${data.stats?.under_review || 0}</strong></div>
+        <div class="metric"><span>Approved</span><strong>${data.stats?.approved || 0}</strong></div>
+        <div class="metric"><span>Denied</span><strong>${data.stats?.denied || 0}</strong></div>
+      </div>
+      <div class="admin-application-filters">
+        ${filters.map(([id, label, count]) => `
+          <button class="${state.adminApplicationFilter === id ? "active" : ""}" type="button" data-admin-application-filter="${id}">
+            <span>${escapeHtml(label)}</span>
+            <strong>${count}</strong>
+          </button>
+        `).join("")}
+      </div>
+      <div class="admin-application-list">
+        ${visible.map(renderAdminDepartmentApplicationCard).join("") || `<div class="empty">No applications in this folder</div>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderAdminDepartmentApplicationCard(item) {
+  const isClosed = ["approved", "denied", "withdrawn", "closed"].includes(item.status);
+  return `
+    <article class="admin-application-card">
+      <div class="row tight">
+        <div>
+          <p class="eyebrow">${escapeHtml(item.application_number)}</p>
+          <h3>${escapeHtml(item.applicant_name || "Applicant")}</h3>
+          <p class="muted small">${escapeHtml(item.department_name)} / desired role ${escapeHtml(item.desired_role || "")}</p>
+        </div>
+        <span class="pill ${businessStatusClass(item.status)}">${humanLabel(item.status)}</span>
+      </div>
+      <div class="profile-grid compact">
+        <div><span>CIV</span><strong>${escapeHtml(item.applicant_civ_number || "pending")}</strong></div>
+        <div><span>Email</span><strong>${escapeHtml(item.applicant_email || "unknown")}</strong></div>
+        <div><span>Arma ID</span><strong>${escapeHtml(item.applicant_arma_id || "not provided")}</strong></div>
+        <div><span>Reviewer</span><strong>${escapeHtml(item.reviewer_name || "Unassigned")}</strong></div>
+      </div>
+      ${renderDepartmentApplicationPacket(item)}
+      ${item.reviewer_notes ? `<p class="muted small">Review notes: ${escapeHtml(item.reviewer_notes)}</p>` : ""}
+      <form class="admin-application-review-form" data-application-id="${item.id}">
+        <label>Review notes<textarea name="reviewer_notes" maxlength="1500" placeholder="Optional notes sent to the applicant">${escapeHtml(item.reviewer_notes || "")}</textarea></label>
+        <div class="admin-application-actions">
+          <button class="secondary" type="button" data-admin-application-status="under_review" ${item.status === "under_review" ? "disabled" : ""}>Mark Review</button>
+          <button class="primary" type="button" data-admin-application-status="approved" ${item.status === "approved" ? "disabled" : ""}>Approve</button>
+          <button class="danger" type="button" data-admin-application-status="denied" ${item.status === "denied" ? "disabled" : ""}>Deny</button>
+          <button class="secondary" type="button" data-admin-application-status="closed" ${isClosed ? "disabled" : ""}>Close</button>
+        </div>
+      </form>
+    </article>
+  `;
+}
+
+function renderAdminReferrals(data) {
+  const rows = data.referrals || [];
+  const pending = rows.filter((item) => item.status === "pending");
+  const deposited = rows.filter((item) => item.status === "deposited");
+  const renderCard = (item) => `
+    <article class="referral-ticket-card ${item.status === "pending" ? "pending" : "deposited"}">
+      <div class="row tight">
+        <div>
+          <p class="eyebrow">Referral ticket #${escapeHtml(item.id)}</p>
+          <h3>${escapeHtml(item.referrer_name || "Referrer")}</h3>
+          <p class="muted small">Code ${escapeHtml(item.code_used)} / new user ${escapeHtml(item.referred_name || "Civilian")} / CIV ${escapeHtml(item.referred_civ_number || "pending")}</p>
+        </div>
+        <span class="pill ${item.status === "pending" ? "amber" : "green"}">${escapeHtml(item.status)}</span>
+      </div>
+      <div class="profile-grid compact">
+        <div><span>Cash ticket</span><strong>${money(item.bonus_amount)}</strong></div>
+        <div><span>Created</span><strong>${new Date(item.created_at).toLocaleString()}</strong></div>
+        <div><span>Referrer CIV</span><strong>${escapeHtml(item.referrer_civ_number || "pending")}</strong></div>
+        <div><span>Deposited by</span><strong>${escapeHtml(item.deposited_by_name || "Not deposited")}</strong></div>
+      </div>
+      ${item.status === "pending" ? `
+        <form class="referral-deposit-form form-grid" data-referral-id="${item.id}">
+          <label>Deposit notes<textarea name="admin_notes" maxlength="800" placeholder="Optional note for the referral payout ledger"></textarea></label>
+          <button class="primary" type="submit">Deposit ${money(item.bonus_amount)}</button>
+        </form>
+      ` : item.admin_notes ? `<p class="muted small">Notes: ${escapeHtml(item.admin_notes)}</p>` : ""}
+    </article>
+  `;
+  return `
+    <section class="admin-referrals">
+      <div class="grid-2">
+        <div class="metric"><span>Pending tickets</span><strong>${pending.length}</strong></div>
+        <div class="metric"><span>Pending cash</span><strong>${money(data.stats?.pending_total || 0)}</strong></div>
+        <div class="metric"><span>Deposited tickets</span><strong>${deposited.length}</strong></div>
+        <div class="metric"><span>Deposited cash</span><strong>${money(data.stats?.deposited_total || 0)}</strong></div>
+      </div>
+      <div class="referral-ticket-list">
+        ${pending.map(renderCard).join("") || `<div class="empty">No pending referral tickets</div>`}
+      </div>
+      <details class="referral-history">
+        <summary>Deposited referral history</summary>
+        <div class="referral-ticket-list">
+          ${deposited.map(renderCard).join("") || `<div class="empty">No deposited referral tickets yet</div>`}
+        </div>
+      </details>
+    </section>
+  `;
 }
 
 function renderAdminUsers(users) {
@@ -5595,6 +5940,7 @@ function renderAdminAccountModal(user) {
           <div><span>CIV</span><strong>${escapeHtml(user.civ_number || "pending")}</strong></div>
           <div><span>Arma ID</span><strong>${escapeHtml(user.arma_id || "Not provided")}</strong></div>
           <div><span>Car Entry</span><strong>${escapeHtml(user.car_entry_code || "Required")}</strong></div>
+          <div><span>Referral</span><strong>${escapeHtml(user.referral_code || "Generating")}</strong></div>
           <div><span>Email</span><strong>${escapeHtml(user.email)}</strong></div>
           <div><span>Today</span><strong>${minutes(user.presence_seconds_today)}m</strong></div>
           <div><span>Characters</span><strong>${Number(user.character_count || 0)}</strong></div>
@@ -5729,10 +6075,48 @@ function bindAdmin() {
     }
     applyAdminUserSearch();
   });
+  $$(".referral-deposit-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api(`/api/admin/referrals/${form.dataset.referralId}/deposit`, {
+        method: "POST",
+        body: Object.fromEntries(new FormData(form).entries()),
+      });
+      toast("Referral cash deposited");
+      await loadAppData("admin");
+      await loadSession();
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
   $$("[data-admin-tab]").forEach((button) => button.addEventListener("click", () => {
     state.adminTab = button.dataset.adminTab;
     state.adminAccountId = null;
     render();
+  }));
+  $$("[data-admin-application-filter]").forEach((button) => button.addEventListener("click", () => {
+    state.adminApplicationFilter = button.dataset.adminApplicationFilter;
+    render();
+  }));
+  $$("[data-admin-application-status]").forEach((button) => button.addEventListener("click", async () => {
+    const form = button.closest(".admin-application-review-form");
+    if (!form) return;
+    try {
+      await api(`/api/admin/department-applications/${form.dataset.applicationId}`, {
+        method: "PATCH",
+        body: {
+          status: button.dataset.adminApplicationStatus,
+          reviewer_notes: new FormData(form).get("reviewer_notes") || "",
+        },
+      });
+      toast("Application updated");
+      await loadAppData("admin");
+      await loadSession();
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
   }));
   $$("[data-open-admin-account]").forEach((button) => button.addEventListener("click", () => {
     state.adminAccountId = button.dataset.openAdminAccount;
@@ -5846,7 +6230,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.35").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.38").catch(() => {}));
 }
 
 bootApp();

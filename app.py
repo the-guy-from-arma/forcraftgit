@@ -35,6 +35,7 @@ TREASURY_STIMULUS_AMOUNT = 75000.00
 TREASURY_MAX_REQUEST_AMOUNT = 10_000_000.00
 TREASURY_MAX_PROOFS = 4
 TREASURY_MAX_PROOF_CHARS = 1_800_000
+REFERRAL_BONUS_AMOUNT = 50000.00
 
 
 def now_iso() -> str:
@@ -258,6 +259,8 @@ def public_user(user: DbRow) -> dict[str, Any]:
         "cash_balance": round(float(user["cash_balance"] or 0), 2),
         "active_character_id": user.get("active_character_id"),
         "name_change_locked": bool(user.get("name_change_locked", 0)),
+        "referral_code": user.get("referral_code") or "",
+        "referred_by_user_id": user.get("referred_by_user_id"),
         "created_at": user["created_at"],
     }
 
@@ -275,6 +278,27 @@ def generate_civ_number(db: Database) -> str:
         if not one(db, "SELECT id FROM users WHERE civ_number = ?", (number,)):
             return number
     raise RuntimeError("Unable to generate unique civilian ID")
+
+
+def generate_referral_code(db: Database) -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    for _ in range(80):
+        code = "FC" + "".join(secrets.choice(alphabet) for _ in range(6))
+        if not one(db, "SELECT id FROM users WHERE referral_code = ?", (code,)):
+            return code
+    raise RuntimeError("Unable to generate unique referral code")
+
+
+def clean_referral_code(value: Any) -> str:
+    code = str(value or "").strip().upper().replace(" ", "").replace("-", "")
+    if not code:
+        return ""
+    if len(code) < 4 or len(code) > 16:
+        raise ValueError("Referral code is not valid")
+    allowed = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+    if any(character not in allowed for character in code):
+        raise ValueError("Referral code can only use letters and numbers")
+    return code
 
 
 def clean_car_entry_code(value: Any) -> str:
@@ -526,8 +550,8 @@ def clean_law_enforcement_application(payload: dict[str, Any], posting: dict[str
 def business_staff_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
-    if not has_any(user, "owner", "business_registrar", "city_hall", "economy_manager"):
-        return "Business registry access required"
+    if not has_any(user, "owner", "admin", "business_registrar", "city_hall", "economy_manager"):
+        return "Business registry or admin access required"
     return None
 
 
@@ -563,6 +587,8 @@ def ensure_schema() -> None:
                 primary_agency TEXT,
                 bank_balance NUMERIC(12,2) NOT NULL DEFAULT 0,
                 cash_balance NUMERIC(12,2) NOT NULL DEFAULT 250,
+                referral_code TEXT UNIQUE,
+                referred_by_user_id INTEGER,
                 active_character_id INTEGER,
                 name_change_locked INTEGER NOT NULL DEFAULT 0,
                 name_change_unlocked_at TEXT,
@@ -816,6 +842,23 @@ def ensure_schema() -> None:
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (counterparty_id) REFERENCES users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS referrals (
+                id SERIAL PRIMARY KEY,
+                referrer_id INTEGER NOT NULL,
+                referred_user_id INTEGER NOT NULL UNIQUE,
+                code_used TEXT NOT NULL,
+                bonus_amount NUMERIC(12,2) NOT NULL DEFAULT 50000,
+                status TEXT NOT NULL DEFAULT 'pending',
+                deposited_by INTEGER,
+                deposited_at TEXT,
+                admin_notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (referrer_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (referred_user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (deposited_by) REFERENCES users(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS treasury_requests (
@@ -1160,9 +1203,14 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS active_character_id INTEGER")
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS name_change_locked INTEGER NOT NULL DEFAULT 0")
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS name_change_unlocked_at TEXT")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code TEXT")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by_user_id INTEGER")
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_civ_number_unique ON users (civ_number)")
     for user in all_rows(db, "SELECT id FROM users WHERE civ_number IS NULL"):
         db.execute("UPDATE users SET civ_number = ? WHERE id = ?", (generate_civ_number(db), user["id"]))
+    for user in all_rows(db, "SELECT id FROM users WHERE referral_code IS NULL OR referral_code = '' ORDER BY id"):
+        db.execute("UPDATE users SET referral_code = ? WHERE id = ?", (generate_referral_code(db), user["id"]))
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_referral_code_unique ON users (referral_code)")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS user_characters (
@@ -1336,6 +1384,37 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS mdt_bolos_created_by_idx ON mdt_bolos (created_by, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS department_applications_user_idx ON department_applications (user_id, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS department_applications_department_idx ON department_applications (department_key, status)")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS referrals (
+            id SERIAL PRIMARY KEY,
+            referrer_id INTEGER NOT NULL,
+            referred_user_id INTEGER NOT NULL UNIQUE,
+            code_used TEXT NOT NULL,
+            bonus_amount NUMERIC(12,2) NOT NULL DEFAULT 50000,
+            status TEXT NOT NULL DEFAULT 'pending',
+            deposited_by INTEGER,
+            deposited_at TEXT,
+            admin_notes TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (referrer_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (referred_user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (deposited_by) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    db.execute("ALTER TABLE referrals ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'deposited'")
+    db.execute("ALTER TABLE referrals ADD COLUMN IF NOT EXISTS deposited_by INTEGER")
+    db.execute("ALTER TABLE referrals ADD COLUMN IF NOT EXISTS deposited_at TEXT")
+    db.execute("ALTER TABLE referrals ADD COLUMN IF NOT EXISTS admin_notes TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE referrals ADD COLUMN IF NOT EXISTS updated_at TEXT")
+    db.execute("UPDATE referrals SET updated_at = created_at WHERE updated_at IS NULL OR updated_at = ''")
+    db.execute("ALTER TABLE referrals ALTER COLUMN updated_at SET NOT NULL")
+    db.execute("ALTER TABLE referrals ALTER COLUMN status SET DEFAULT 'pending'")
+    db.execute("CREATE INDEX IF NOT EXISTS referrals_referrer_idx ON referrals (referrer_id, created_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS referrals_code_idx ON referrals (code_used)")
+    db.execute("CREATE INDEX IF NOT EXISTS referrals_status_idx ON referrals (status, updated_at)")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS treasury_requests (
@@ -1560,11 +1639,11 @@ def seed_owner(db: Database) -> None:
     created = db.execute(
         """
         INSERT INTO users
-        (civ_number, name, email, arma_id, password_hash, verified, roles, primary_agency, bank_balance, cash_balance, last_income_at, created_at)
-        VALUES (?, ?, ?, ?, ?, 1, ?, 'Owner Command', 50000, 1000, ?, ?)
+        (civ_number, name, email, arma_id, referral_code, password_hash, verified, roles, primary_agency, bank_balance, cash_balance, last_income_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, 1, ?, 'Owner Command', 50000, 1000, ?, ?)
         RETURNING id
         """,
-        (generate_civ_number(db), OWNER_NAME, OWNER_EMAIL, os.environ.get("OWNER_ARMA_ID", "OWNER"), hash_password(OWNER_PASSWORD), json.dumps(owner_roles), ts, ts),
+        (generate_civ_number(db), OWNER_NAME, OWNER_EMAIL, os.environ.get("OWNER_ARMA_ID", "OWNER"), generate_referral_code(db), hash_password(OWNER_PASSWORD), json.dumps(owner_roles), ts, ts),
     ).fetchone()
     ensure_default_character(db, int(created["id"]), OWNER_NAME)
 
@@ -2427,6 +2506,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_admin_overview(db, user)
                 elif path == "/api/admin/users" and method == "GET":
                     self.api_admin_users(db, user)
+                elif path == "/api/admin/referrals" and method == "GET":
+                    self.api_admin_referrals(db, user)
+                elif path.startswith("/api/admin/referrals/") and path.endswith("/deposit") and method == "POST":
+                    self.api_admin_deposit_referral(db, user, self.path_int(path, 3))
+                elif path == "/api/admin/department-applications" and method == "GET":
+                    self.api_admin_department_applications(db, user)
+                elif path.startswith("/api/admin/department-applications/") and method == "PATCH":
+                    self.api_admin_review_department_application(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/admin/users/") and method == "DELETE":
                     self.api_admin_delete_user(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/admin/users/") and method == "PATCH":
@@ -2473,19 +2560,81 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if len(arma_id) < 4:
             self.error(400, "Arma ID must be at least 4 characters")
             return
+        try:
+            referral_code = clean_referral_code(payload.get("referral_code") or payload.get("referral"))
+        except ValueError as exc:
+            self.error(400, str(exc))
+            return
+        referrer = None
+        if referral_code:
+            referrer = one(db, "SELECT id, name, email FROM users WHERE referral_code = ?", (referral_code,))
+            if not referrer:
+                self.error(400, "Referral code was not found")
+                return
+            if str(referrer["email"]).strip().lower() == email:
+                self.error(400, "You cannot use your own referral code")
+                return
         ts = now_iso()
         cur = db.execute(
             """
-            INSERT INTO users (civ_number, name, email, arma_id, car_entry_code, password_hash, verified, roles, bank_balance, cash_balance, last_income_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, 250, ?, ?)
+            INSERT INTO users (civ_number, name, email, arma_id, car_entry_code, referral_code, referred_by_user_id, password_hash, verified, roles, bank_balance, cash_balance, last_income_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, 250, ?, ?)
             RETURNING id
             """,
-            (generate_civ_number(db), str(payload["name"]).strip(), email, arma_id, car_entry_code, hash_password(password), json.dumps(["civ"]), ts, ts),
+            (
+                generate_civ_number(db),
+                str(payload["name"]).strip(),
+                email,
+                arma_id,
+                car_entry_code,
+                generate_referral_code(db),
+                referrer["id"] if referrer else None,
+                hash_password(password),
+                json.dumps(["civ"]),
+                ts,
+                ts,
+            ),
         )
         created = cur.fetchone()
         user_id = int(created["id"])
         create_default_dmv(db, user_id)
         ensure_default_character(db, user_id, str(payload["name"]).strip())
+        if referrer:
+            db.execute(
+                """
+                INSERT INTO referrals
+                (referrer_id, referred_user_id, code_used, bonus_amount, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'pending', ?, ?)
+                """,
+                (referrer["id"], user_id, referral_code, REFERRAL_BONUS_AMOUNT, ts, ts),
+            )
+            add_message(
+                db,
+                int(referrer["id"]),
+                "Referral payout pending",
+                f"{str(payload['name']).strip()} used your referral code. A ${REFERRAL_BONUS_AMOUNT:,.0f} cash ticket is waiting for admin deposit.",
+                user_id,
+            )
+            add_message(
+                db,
+                user_id,
+                "Referral code accepted",
+                f"Your registration used {referrer['name']}'s referral code. Their ${REFERRAL_BONUS_AMOUNT:,.0f} referral cash ticket is pending admin deposit.",
+                int(referrer["id"]),
+            )
+            staff = all_rows(
+                db,
+                "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ? ORDER BY id LIMIT 120",
+                ('%"owner"%', '%"admin"%'),
+            )
+            for row in staff:
+                add_message(
+                    db,
+                    int(row["id"]),
+                    "Referral payout ticket",
+                    f"{referrer['name']} earned a ${REFERRAL_BONUS_AMOUNT:,.0f} referral ticket from {str(payload['name']).strip()}. Deposit it from Admin > Referral Tickets.",
+                    user_id,
+                )
         owner = one(db, "SELECT id FROM users WHERE email = ?", (OWNER_EMAIL,))
         add_message(
             db,
@@ -2606,6 +2755,35 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             """,
             (user["id"],),
         )
+        referral_rows = all_rows(
+            db,
+            """
+            SELECT r.*, referred.name AS referred_name, referred.civ_number AS referred_civ_number
+            FROM referrals r
+            JOIN users referred ON referred.id = r.referred_user_id
+            WHERE r.referrer_id = ?
+            ORDER BY r.created_at DESC
+            LIMIT 10
+            """,
+            (user["id"],),
+        )
+        referral_total = one(
+            db,
+            """
+            SELECT COUNT(*) AS count,
+                   COALESCE(SUM(CASE WHEN status = 'deposited' THEN bonus_amount ELSE 0 END), 0) AS total,
+                   COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending_count,
+                   COALESCE(SUM(CASE WHEN status = 'pending' THEN bonus_amount ELSE 0 END), 0) AS pending_total
+            FROM referrals
+            WHERE referrer_id = ?
+            """,
+            (user["id"],),
+        )
+        referred_by = one(
+            db,
+            "SELECT id, name, civ_number FROM users WHERE id = ?",
+            (user.get("referred_by_user_id"),),
+        ) if user.get("referred_by_user_id") else None
         self.send_json(
             200,
             {
@@ -2616,6 +2794,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "arma_link": dict(link) if link else None,
                 "recent_activity": [dict(row) for row in activity],
                 "claimed_codes": [dict(row) for row in pending_codes],
+                "referrals": {
+                    "code": user.get("referral_code") or "",
+                    "bonus_amount": REFERRAL_BONUS_AMOUNT,
+                    "count": int(referral_total["count"] if referral_total else 0),
+                    "total_bonus": round(float(referral_total["total"] if referral_total else 0), 2),
+                    "pending_count": int(referral_total["pending_count"] if referral_total else 0),
+                    "pending_total": round(float(referral_total["pending_total"] if referral_total else 0), 2),
+                    "referred_by": dict(referred_by) if referred_by else None,
+                    "recent": [dict(row) for row in referral_rows],
+                },
             },
         )
 
@@ -3876,9 +4064,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             db,
             """
             SELECT id FROM users
-            WHERE roles LIKE ? OR roles LIKE ? OR roles LIKE ? OR roles LIKE ?
+            WHERE roles LIKE ? OR roles LIKE ? OR roles LIKE ? OR roles LIKE ? OR roles LIKE ?
             """,
-            ("%owner%", "%business_registrar%", "%city_hall%", "%economy_manager%"),
+            ("%owner%", "%admin%", "%business_registrar%", "%city_hall%", "%economy_manager%"),
         )
 
     def api_business(self, db: Database, user: DbRow | None) -> None:
@@ -5944,9 +6132,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         stats = {
             "users": one(db, "SELECT COUNT(*) AS count FROM users")["count"],
             "unverified": one(db, "SELECT COUNT(*) AS count FROM users WHERE verified = 0")["count"],
-            "department_applications": one(db, "SELECT COUNT(*) AS count FROM department_applications WHERE status NOT IN ('denied','withdrawn','closed')")["count"],
+            "department_applications": one(db, "SELECT COUNT(*) AS count FROM department_applications WHERE status IN ('submitted','under_review','interview_requested')")["count"],
             "open_cases": one(db, "SELECT COUNT(*) AS count FROM citations WHERE status NOT IN ('paid','dismissed')")["count"],
             "panic_alerts": one(db, "SELECT COUNT(*) AS count FROM panic_alerts WHERE status = 'active'")["count"],
+            "pending_referrals": one(db, "SELECT COUNT(*) AS count FROM referrals WHERE status = 'pending'")["count"],
         }
         self.send_json(200, {"stats": stats})
 
@@ -5968,6 +6157,173 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             item["active_character_name"] = active["character_name"] if active else row["name"]
             users.append(item)
         self.send_json(200, {"users": users})
+
+    def api_admin_referrals(self, db: Database, user: DbRow | None) -> None:
+        err = admin_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        rows = all_rows(
+            db,
+            """
+            SELECT r.*,
+                   referrer.name AS referrer_name,
+                   referrer.civ_number AS referrer_civ_number,
+                   referrer.email AS referrer_email,
+                   referred.name AS referred_name,
+                   referred.civ_number AS referred_civ_number,
+                   deposited.name AS deposited_by_name
+            FROM referrals r
+            JOIN users referrer ON referrer.id = r.referrer_id
+            JOIN users referred ON referred.id = r.referred_user_id
+            LEFT JOIN users deposited ON deposited.id = r.deposited_by
+            ORDER BY CASE r.status WHEN 'pending' THEN 0 ELSE 1 END, r.updated_at DESC, r.created_at DESC
+            LIMIT 160
+            """,
+        )
+        stats = {
+            "pending": one(db, "SELECT COUNT(*) AS count FROM referrals WHERE status = 'pending'")["count"],
+            "deposited": one(db, "SELECT COUNT(*) AS count FROM referrals WHERE status = 'deposited'")["count"],
+            "pending_total": round(float((one(db, "SELECT COALESCE(SUM(bonus_amount), 0) AS total FROM referrals WHERE status = 'pending'") or {}).get("total") or 0), 2),
+            "deposited_total": round(float((one(db, "SELECT COALESCE(SUM(bonus_amount), 0) AS total FROM referrals WHERE status = 'deposited'") or {}).get("total") or 0), 2),
+        }
+        self.send_json(200, {"stats": stats, "referrals": [dict(row) for row in rows]})
+
+    def api_admin_deposit_referral(self, db: Database, user: DbRow | None, referral_id: int) -> None:
+        err = admin_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        referral = one(
+            db,
+            """
+            SELECT r.*, referrer.name AS referrer_name, referred.name AS referred_name
+            FROM referrals r
+            JOIN users referrer ON referrer.id = r.referrer_id
+            JOIN users referred ON referred.id = r.referred_user_id
+            WHERE r.id = ?
+            """,
+            (referral_id,),
+        )
+        if not referral:
+            self.error(404, "Referral ticket not found")
+            return
+        if referral["status"] == "deposited":
+            self.error(409, "Referral ticket has already been deposited")
+            return
+        payload = self.read_json()
+        notes = str(payload.get("admin_notes") or payload.get("notes") or "").strip()[:800]
+        amount = round(float(referral["bonus_amount"] or REFERRAL_BONUS_AMOUNT), 2)
+        ts = now_iso()
+        db.execute("UPDATE users SET cash_balance = cash_balance + ? WHERE id = ?", (amount, referral["referrer_id"]))
+        db.execute(
+            """
+            UPDATE referrals
+            SET status = 'deposited', deposited_by = ?, deposited_at = ?, admin_notes = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (user["id"], ts, notes, ts, referral_id),
+        )
+        add_transaction(
+            db,
+            int(referral["referrer_id"]),
+            "referral_bonus",
+            amount,
+            f"Referral bonus for {referral['referred_name']} deposited by {user['name']}",
+            int(referral["referred_user_id"]),
+        )
+        add_message(
+            db,
+            int(referral["referrer_id"]),
+            "Referral cash deposited",
+            f"Your ${amount:,.0f} referral ticket for {referral['referred_name']} was deposited by {user['name']}.",
+            user["id"],
+        )
+        self.send_json(200, {"ok": True, "status": "deposited", "amount": amount})
+
+    def api_admin_department_applications(self, db: Database, user: DbRow | None) -> None:
+        err = admin_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        rows = all_rows(
+            db,
+            """
+            SELECT a.*,
+                   applicant.name AS applicant_name,
+                   applicant.email AS applicant_email,
+                   applicant.civ_number AS applicant_civ_number,
+                   applicant.arma_id AS applicant_arma_id,
+                   applicant.primary_agency AS applicant_primary_agency,
+                   applicant.callsign AS applicant_callsign,
+                   reviewer.name AS reviewer_name
+            FROM department_applications a
+            JOIN users applicant ON applicant.id = a.user_id
+            LEFT JOIN users reviewer ON reviewer.id = a.reviewed_by
+            ORDER BY
+                CASE a.status
+                    WHEN 'submitted' THEN 0
+                    WHEN 'under_review' THEN 1
+                    WHEN 'approved' THEN 2
+                    WHEN 'denied' THEN 3
+                    WHEN 'withdrawn' THEN 4
+                    ELSE 5
+                END,
+                a.updated_at DESC,
+                a.created_at DESC
+            LIMIT 240
+            """,
+        )
+        stats = {
+            "active": one(db, "SELECT COUNT(*) AS count FROM department_applications WHERE status IN ('submitted','under_review','interview_requested')")["count"],
+            "submitted": one(db, "SELECT COUNT(*) AS count FROM department_applications WHERE status = 'submitted'")["count"],
+            "under_review": one(db, "SELECT COUNT(*) AS count FROM department_applications WHERE status = 'under_review'")["count"],
+            "approved": one(db, "SELECT COUNT(*) AS count FROM department_applications WHERE status = 'approved'")["count"],
+            "denied": one(db, "SELECT COUNT(*) AS count FROM department_applications WHERE status = 'denied'")["count"],
+        }
+        self.send_json(200, {"stats": stats, "applications": [dict(row) for row in rows]})
+
+    def api_admin_review_department_application(self, db: Database, user: DbRow | None, application_id: int) -> None:
+        err = admin_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        application = one(db, "SELECT * FROM department_applications WHERE id = ?", (application_id,))
+        if not application:
+            self.error(404, "Department application not found")
+            return
+        payload = self.read_json()
+        status = str(payload.get("status") or application["status"]).strip().lower()
+        if status not in ("submitted", "under_review", "approved", "denied", "withdrawn", "closed"):
+            self.error(400, "Invalid application status")
+            return
+        reviewer_notes = str(payload.get("reviewer_notes") or application.get("reviewer_notes") or "").strip()[:1500]
+        ts = now_iso()
+        db.execute(
+            """
+            UPDATE department_applications
+            SET status = ?, reviewed_by = ?, reviewer_notes = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (status, user["id"], reviewer_notes, ts, application_id),
+        )
+        if status == "approved":
+            applicant = one(db, "SELECT * FROM users WHERE id = ?", (application["user_id"],))
+            if applicant:
+                desired_role = normalize_role(application["desired_role"])
+                updated_roles = sorted(set([*roles_for(applicant), desired_role]))
+                agency = applicant.get("primary_agency") or application["department_name"]
+                db.execute(
+                    "UPDATE users SET verified = 1, roles = ?, primary_agency = ? WHERE id = ?",
+                    (json.dumps(updated_roles), agency, application["user_id"]),
+                )
+        subject = f"{application['department_name']} application {status.replace('_', ' ')}"
+        note = reviewer_notes or f"Your {application['department_name']} application is now {status.replace('_', ' ')}."
+        if status == "approved":
+            note = f"{note}\n\nDepartment access has been added to your account."
+        add_message(db, application["user_id"], subject, note, user["id"])
+        self.send_json(200, {"ok": True, "status": status})
 
     def api_admin_update_user(self, db: Database, user: DbRow | None, target_id: int) -> None:
         err = admin_required(user)

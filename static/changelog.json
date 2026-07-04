@@ -1,6 +1,60 @@
 {
-  "version": "0.0.35",
+  "version": "0.0.38",
   "entries": [
+    {
+      "date": "2026-07-02",
+      "version": "0.0.38",
+      "title": "Application Review Queues",
+      "added": [
+        "Added an Admin Job Apps panel where owners/admins can see department applications without relying on inbox messages.",
+        "Admins can now mark department applications under review, approve them, deny them, or close them from the Admin panel.",
+        "Approved department applications now verify the account, add the requested department role, and set the agency when blank.",
+        "Admin accounts now receive Business Registry staff view access for reviewing business applications."
+      ],
+      "changed": [
+        "Business Registry review now uses compact application folders with status filters instead of one long expanded list.",
+        "Business Registry recent decisions now render as dedicated registry action rows."
+      ],
+      "fixed": [
+        "Fixed admins not having a visible queue for submitted job/department applications.",
+        "Reduced business application review wall clutter by hiding full plans, funding, and forms inside expandable folders."
+      ],
+      "removed": []
+    },
+    {
+      "date": "2026-07-01",
+      "version": "0.0.37",
+      "title": "Referral Cash Tickets",
+      "added": [
+        "Added an Admin Referral Tickets panel where owners/admins can review pending referral payouts.",
+        "Referral payouts are now held as $50,000 cash tickets until an owner/admin manually deposits them.",
+        "Admins and owners now receive inbox notifications when a referral payout ticket is created.",
+        "Referral ticket deposits create transaction history and notify the referrer after payout."
+      ],
+      "changed": [
+        "Referral registration no longer auto-deposits cash into the referrer's wallet.",
+        "Profile referral stats now separate pending referral tickets from deposited referral cash."
+      ],
+      "fixed": [],
+      "removed": []
+    },
+    {
+      "date": "2026-07-01",
+      "version": "0.0.36",
+      "title": "Referral Program",
+      "added": [
+        "Added a referral code to every user profile.",
+        "New users can enter a referral code during registration.",
+        "When a referral code is used, the code owner receives a $50,000 in-game cash credit.",
+        "Profile now shows referral stats, total referral cash earned, recent referral credits, and a Copy Code button."
+      ],
+      "changed": [
+        "Admin account search now also finds accounts by referral code.",
+        "Referral bonuses are recorded in the transaction ledger and message inbox."
+      ],
+      "fixed": [],
+      "removed": []
+    },
     {
       "date": "2026-07-01",
       "version": "0.0.35",
