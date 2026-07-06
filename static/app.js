@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.38";
+const OS_VERSION = "0.0.39";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 
 const state = {
@@ -1568,6 +1568,7 @@ function renderJobs() {
     ? applications.find((item) => item.department_key === selectedPosting.key)
     : null;
   const hasActiveApplication = latestApplication && !["denied", "withdrawn", "closed"].includes(latestApplication.status);
+  const activeApplications = applications.filter((item) => !["approved", "denied", "withdrawn", "closed"].includes(item.status));
   return `
     <div class="stack jobs-portal">
       <section class="jobs-hero">
@@ -1578,7 +1579,7 @@ function renderJobs() {
         </div>
         <div class="jobs-hero-metrics">
           <div><span>Applications</span><strong>${applications.length}</strong></div>
-          <div><span>Server time</span><strong>${minutes(data.income.presence_seconds_today)}m</strong></div>
+          <div><span>Active</span><strong>${activeApplications.length}</strong></div>
         </div>
       </section>
       <div class="job-tabs" aria-label="Department job postings">
@@ -1618,14 +1619,45 @@ function renderJobs() {
               </div>
               <span class="pill ${businessStatusClass(latestApplication.status)}">${humanLabel(latestApplication.status)}</span>
             </div>
-            ${renderDepartmentApplicationPreview(latestApplication)}
+            <details class="job-application-drawer">
+              <summary><span>Submitted packet</span><strong>View answers</strong></summary>
+              ${renderDepartmentApplicationPreview(latestApplication) || `<p class="muted small">${escapeHtml(latestApplication.statement || "No application answers recorded")}</p>`}
+            </details>
           ` : ""}
           ${hasActiveApplication ? `
             <div class="empty">Your ${escapeHtml(selectedPosting.label)} application is already active and waiting on command review.</div>
-          ` : renderDepartmentApplicationForm(selectedPosting)}
+          ` : `
+            <details class="job-application-drawer apply-drawer">
+              <summary><span>Application packet</span><strong>Open Form</strong></summary>
+              ${renderDepartmentApplicationForm(selectedPosting)}
+            </details>
+          `}
         </section>
       ` : `<div class="empty">No department postings configured</div>`}
+      <details class="jobs-history" ${applications.length ? "" : ""}>
+        <summary><span>My application files</span><strong>${applications.length}</strong></summary>
+        <div class="job-application-list">
+          ${applications.map((item) => renderJobApplicationFile(item, postings)).join("") || `<div class="empty">No department applications submitted yet</div>`}
+        </div>
+      </details>
+    </div>
+  `;
+}
+
+function renderJobApplicationFile(item, postings) {
+  const posting = postings.find((row) => row.key === item.department_key) || {};
+  return `
+    <article class="job-application-file">
+      <div class="row tight">
+        <div>
+          <p class="eyebrow">${escapeHtml(item.application_number)}</p>
+          <h3>${escapeHtml(posting.label || item.department_name || "Department")}</h3>
+          <p class="muted small">Submitted ${new Date(item.created_at).toLocaleString()}${item.reviewer_name ? ` / Reviewer ${escapeHtml(item.reviewer_name)}` : ""}</p>
+        </div>
+        <span class="pill ${businessStatusClass(item.status)}">${humanLabel(item.status)}</span>
       </div>
+      ${item.reviewer_notes ? `<p class="muted small">Command notes: ${escapeHtml(item.reviewer_notes)}</p>` : ""}
+    </article>
   `;
 }
 
@@ -2878,7 +2910,7 @@ function renderCourtRules() {
 
 function renderCourt() {
   const data = state.cache.court?.mine || {};
-  const isOfficer = canAny("leo", "cid", "cid_director", "iu", "iu_director", "owner");
+  const isOfficer = canAny("leo", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "owner");
   const isJudge = canAny("judge", "owner");
   const tabs = [
     ["defendant-active", "Active"],
@@ -2898,8 +2930,21 @@ function renderCourt() {
   const previous = state.courtTab.includes("previous");
   const judgeTab = state.courtTab.startsWith("judge");
   const defendantTab = state.courtTab.startsWith("defendant");
+  const activeTotal = (data.defendant?.active || []).length + (data.officer?.active || []).length + (data.judge?.active || []).length;
+  const previousTotal = (data.defendant?.previous || []).length + (data.officer?.previous || []).length + (data.judge?.previous || []).length;
   return `
-    <div class="stack">
+    <div class="stack court-app">
+      <section class="court-hero">
+        <div>
+          <p class="eyebrow">Court docket</p>
+          <h3>Citations & Cases</h3>
+          <p>MDT citations and filed criminal charges are routed here for defendants, officers, and judges.</p>
+        </div>
+        <div class="court-hero-stats">
+          <div><span>Active</span><strong>${activeTotal}</strong></div>
+          <div><span>Previous</span><strong>${previousTotal}</strong></div>
+        </div>
+      </section>
       <div class="court-tabs">
         ${tabs.map(([id, label]) => `<button class="${state.courtTab === id ? "active" : ""}" data-court-tab="${id}">${label}</button>`).join("")}
       </div>
@@ -2914,8 +2959,8 @@ function renderCaseList(cases, options = {}) {
   return `
     <div class="list">
       ${cases.map((item) => `
-        <article class="case-card">
-          <div class="row"><h3>${escapeHtml(item.charge_code)} - ${escapeHtml(item.charge_title)}</h3><span class="pill ${["paid", "dismissed", "closed"].includes(item.status) ? "green" : item.status === "contested" ? "amber" : "red"}">${escapeHtml(item.status)}</span></div>
+        <article class="case-card court-case-card">
+          <div class="row"><div><p class="eyebrow">Court case #${item.id} / Citation</p><h3>${escapeHtml(item.charge_code)} - ${escapeHtml(item.charge_title)}</h3></div><span class="pill ${["paid", "dismissed", "closed"].includes(item.status) ? "green" : item.status === "contested" ? "amber" : "red"}">${escapeHtml(item.status)}</span></div>
           <p class="muted small">Defendant ${escapeHtml(item.civ_name || "You")} - Officer ${escapeHtml(item.officer_name)} - Judge ${escapeHtml(item.judge_name || "Pending assignment")} - ${money(item.fine_amount)}</p>
           <p class="muted small">${escapeHtml(item.location)} - Court ${escapeHtml(item.court_date || "Pending")}</p>
           <p>${escapeHtml(item.narrative)}</p>
@@ -2934,8 +2979,8 @@ function renderJudgeCases(cases, previous = false) {
   return `
     <div class="list">
       ${cases.map((item) => `
-        <article class="case-card">
-          <div class="row"><h3>#${item.id} ${escapeHtml(item.charge_code)}</h3><span class="pill ${["paid", "dismissed", "closed"].includes(item.status) ? "green" : item.status === "contested" ? "amber" : "red"}">${escapeHtml(item.status)}</span></div>
+        <article class="case-card court-case-card">
+          <div class="row"><div><p class="eyebrow">Court case #${item.id} / Citation</p><h3>${escapeHtml(item.charge_code)}</h3></div><span class="pill ${["paid", "dismissed", "closed"].includes(item.status) ? "green" : item.status === "contested" ? "amber" : "red"}">${escapeHtml(item.status)}</span></div>
           <p class="muted small">Defendant ${escapeHtml(item.civ_name)} - ${escapeHtml(item.civ_email)} - Officer ${escapeHtml(item.officer_name)} - Presiding ${escapeHtml(item.judge_name || "Unassigned")}</p>
           <p><strong>${escapeHtml(item.charge_title)}</strong> - ${money(item.fine_amount)}</p>
           <p>${escapeHtml(item.narrative)}</p>
@@ -5808,32 +5853,43 @@ function renderAdminDepartmentApplications(data) {
 function renderAdminDepartmentApplicationCard(item) {
   const isClosed = ["approved", "denied", "withdrawn", "closed"].includes(item.status);
   return `
-    <article class="admin-application-card">
-      <div class="row tight">
-        <div>
-          <p class="eyebrow">${escapeHtml(item.application_number)}</p>
-          <h3>${escapeHtml(item.applicant_name || "Applicant")}</h3>
-          <p class="muted small">${escapeHtml(item.department_name)} / desired role ${escapeHtml(item.desired_role || "")}</p>
+    <article class="admin-application-card admin-application-folder">
+      <details>
+        <summary>
+          <div class="row tight">
+            <div>
+              <p class="eyebrow">${escapeHtml(item.application_number)}</p>
+              <h3>${escapeHtml(item.applicant_name || "Applicant")}</h3>
+              <p class="muted small">${escapeHtml(item.department_name)} / desired role ${escapeHtml(item.desired_role || "")}</p>
+            </div>
+            <span class="pill ${businessStatusClass(item.status)}">${humanLabel(item.status)}</span>
+          </div>
+          <div class="admin-application-strip">
+            <span>CIV ${escapeHtml(item.applicant_civ_number || "pending")}</span>
+            <span>${escapeHtml(item.applicant_arma_id || "No Arma ID")}</span>
+            <span>${escapeHtml(item.reviewer_name || "Unassigned")}</span>
+          </div>
+        </summary>
+        <div class="admin-application-body">
+          <div class="profile-grid compact">
+            <div><span>CIV</span><strong>${escapeHtml(item.applicant_civ_number || "pending")}</strong></div>
+            <div><span>Email</span><strong>${escapeHtml(item.applicant_email || "unknown")}</strong></div>
+            <div><span>Arma ID</span><strong>${escapeHtml(item.applicant_arma_id || "not provided")}</strong></div>
+            <div><span>Reviewer</span><strong>${escapeHtml(item.reviewer_name || "Unassigned")}</strong></div>
+          </div>
+          ${renderDepartmentApplicationPacket(item)}
+          ${item.reviewer_notes ? `<p class="muted small">Review notes: ${escapeHtml(item.reviewer_notes)}</p>` : ""}
+          <form class="admin-application-review-form" data-application-id="${item.id}">
+            <label>Review notes<textarea name="reviewer_notes" maxlength="1500" placeholder="Optional notes sent to the applicant">${escapeHtml(item.reviewer_notes || "")}</textarea></label>
+            <div class="admin-application-actions">
+              <button class="secondary" type="button" data-admin-application-status="under_review" ${item.status === "under_review" ? "disabled" : ""}>Mark Review</button>
+              <button class="primary" type="button" data-admin-application-status="approved" ${item.status === "approved" ? "disabled" : ""}>Approve</button>
+              <button class="danger" type="button" data-admin-application-status="denied" ${item.status === "denied" ? "disabled" : ""}>Deny</button>
+              <button class="secondary" type="button" data-admin-application-status="closed" ${isClosed ? "disabled" : ""}>Close</button>
+            </div>
+          </form>
         </div>
-        <span class="pill ${businessStatusClass(item.status)}">${humanLabel(item.status)}</span>
-      </div>
-      <div class="profile-grid compact">
-        <div><span>CIV</span><strong>${escapeHtml(item.applicant_civ_number || "pending")}</strong></div>
-        <div><span>Email</span><strong>${escapeHtml(item.applicant_email || "unknown")}</strong></div>
-        <div><span>Arma ID</span><strong>${escapeHtml(item.applicant_arma_id || "not provided")}</strong></div>
-        <div><span>Reviewer</span><strong>${escapeHtml(item.reviewer_name || "Unassigned")}</strong></div>
-      </div>
-      ${renderDepartmentApplicationPacket(item)}
-      ${item.reviewer_notes ? `<p class="muted small">Review notes: ${escapeHtml(item.reviewer_notes)}</p>` : ""}
-      <form class="admin-application-review-form" data-application-id="${item.id}">
-        <label>Review notes<textarea name="reviewer_notes" maxlength="1500" placeholder="Optional notes sent to the applicant">${escapeHtml(item.reviewer_notes || "")}</textarea></label>
-        <div class="admin-application-actions">
-          <button class="secondary" type="button" data-admin-application-status="under_review" ${item.status === "under_review" ? "disabled" : ""}>Mark Review</button>
-          <button class="primary" type="button" data-admin-application-status="approved" ${item.status === "approved" ? "disabled" : ""}>Approve</button>
-          <button class="danger" type="button" data-admin-application-status="denied" ${item.status === "denied" ? "disabled" : ""}>Deny</button>
-          <button class="secondary" type="button" data-admin-application-status="closed" ${isClosed ? "disabled" : ""}>Close</button>
-        </div>
-      </form>
+      </details>
     </article>
   `;
 }
@@ -6230,7 +6286,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.38").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.39").catch(() => {}));
 }
 
 bootApp();

@@ -1,6 +1,27 @@
 {
-  "version": "0.0.38",
+  "version": "0.0.39",
   "entries": [
+    {
+      "date": "2026-07-06",
+      "version": "0.0.39",
+      "title": "Court Citation Flow and Application Cleanup",
+      "added": [
+        "Court now clearly labels MDT-issued citations as court cases in the docket.",
+        "Users with issued citations can open Court to pay or contest even if their civilian verification is still pending.",
+        "Court now shows active and previous docket counts in a dedicated citation/case header."
+      ],
+      "changed": [
+        "Officer court dockets now use the full law-service role list, including Sheriff, Police, State Police, CID, and IU roles.",
+        "Admin Job Apps now render as compact expandable application folders instead of open review forms in a long wall.",
+        "The Jobs app now uses collapsible application packets and a compact My Application Files section."
+      ],
+      "fixed": [
+        "Fixed citations not appearing for officers whose role was a department role instead of the generic LEO role.",
+        "Fixed unverified defendants being unable to access Court when they already had a citation to resolve.",
+        "Reduced Admin and Jobs panel clutter from stacked application widgets."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-07-02",
       "version": "0.0.38",

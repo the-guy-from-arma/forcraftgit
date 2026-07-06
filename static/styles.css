@@ -1123,6 +1123,73 @@ textarea:focus {
   resize: vertical;
 }
 
+.job-application-drawer,
+.jobs-history {
+  border: 1px solid rgba(92, 156, 255, 0.12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  overflow: hidden;
+}
+
+.job-application-drawer summary,
+.jobs-history summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 48px;
+  padding: 11px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.job-application-drawer summary::-webkit-details-marker,
+.jobs-history summary::-webkit-details-marker,
+.admin-application-folder summary::-webkit-details-marker {
+  display: none;
+}
+
+.job-application-drawer summary span,
+.jobs-history summary span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.job-application-drawer summary strong,
+.jobs-history summary strong {
+  color: #d8fff1;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.job-application-drawer > form,
+.job-application-drawer > p,
+.job-application-drawer > .department-answer-preview,
+.jobs-history .job-application-list {
+  margin: 0 12px 12px;
+}
+
+.job-application-list {
+  display: grid;
+  gap: 8px;
+}
+
+.job-application-file {
+  display: grid;
+  gap: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.job-application-file h3,
+.job-application-file p {
+  margin: 0;
+}
+
 .law-application-form {
   border: 1px solid rgba(92, 156, 255, 0.14);
   border-radius: 10px;
@@ -1848,6 +1915,13 @@ textarea:focus {
   gap: 12px;
 }
 
+.admin-application-list {
+  max-height: 620px;
+  overflow: auto;
+  padding-right: 3px;
+  scrollbar-width: thin;
+}
+
 .admin-application-filters {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(106px, 1fr));
@@ -1869,6 +1943,60 @@ textarea:focus {
 .admin-application-card h3,
 .admin-application-card p {
   margin: 0;
+}
+
+.admin-application-folder {
+  padding: 0;
+  overflow: hidden;
+}
+
+.admin-application-folder details {
+  display: grid;
+}
+
+.admin-application-folder summary {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.admin-application-folder summary::after {
+  content: "Open file";
+  justify-self: end;
+  color: rgba(216, 255, 241, 0.74);
+  font-size: 10px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.admin-application-folder details[open] summary::after {
+  content: "Close file";
+}
+
+.admin-application-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.admin-application-strip span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  border: 1px solid rgba(92, 156, 255, 0.1);
+  border-radius: 7px;
+  padding: 7px;
+  color: rgba(245, 247, 244, 0.72);
+  background: rgba(0, 0, 0, 0.16);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.admin-application-body {
+  display: grid;
+  gap: 12px;
+  padding: 0 12px 12px;
 }
 
 .admin-application-packet {
@@ -2962,6 +3090,70 @@ textarea:focus {
 .court-tabs button.active {
   background: var(--ink);
   color: #111518;
+}
+
+.court-app {
+  gap: 10px;
+}
+
+.court-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid rgba(183, 140, 255, 0.18);
+  border-radius: 10px;
+  padding: 13px;
+  background:
+    linear-gradient(145deg, rgba(183, 140, 255, 0.12), rgba(92, 156, 255, 0.06)),
+    rgba(255, 255, 255, 0.04);
+}
+
+.court-hero h3,
+.court-hero p,
+.court-case-card h3,
+.court-case-card p {
+  margin: 0;
+}
+
+.court-hero p:not(.eyebrow) {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.court-hero-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(74px, 1fr));
+  gap: 8px;
+}
+
+.court-hero-stats div {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 9px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.court-hero-stats span {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.court-hero-stats strong {
+  font-size: 18px;
+}
+
+.court-case-card {
+  display: grid;
+  gap: 9px;
+  border-color: rgba(183, 140, 255, 0.16);
+  background:
+    linear-gradient(145deg, rgba(183, 140, 255, 0.08), rgba(255, 255, 255, 0.035)),
+    rgba(0, 0, 0, 0.12);
 }
 
 .mdt-shell {
@@ -5404,8 +5596,14 @@ textarea:focus {
   }
 
   .business-folder-strip,
+  .admin-application-strip,
   .admin-application-actions {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .court-hero {
+    align-items: stretch;
+    grid-template-columns: 1fr;
   }
 
   .jobs-hero,

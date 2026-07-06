@@ -1884,6 +1884,16 @@ def verified_required(user: DbRow | None) -> str | None:
     return None
 
 
+def court_access_required(db: Database, user: DbRow | None) -> str | None:
+    if not user:
+        return "Authentication required"
+    if bool(user["verified"]) or has_any(user, "owner", "admin"):
+        return None
+    if one(db, "SELECT id FROM citations WHERE civ_id = ? LIMIT 1", (user["id"],)):
+        return None
+    return "Civilian verification required"
+
+
 def contracts_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
@@ -2667,11 +2677,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         settings = get_system_settings(db)
         user = one(db, "SELECT * FROM users WHERE id = ?", (user["id"],)) or user
         unread = one(db, "SELECT COUNT(*) AS count FROM messages WHERE recipient_id = ? AND read_at IS NULL", (user["id"],))
+        apps = app_catalog(user, settings)
+        if court_access_required(db, user) is None:
+            for item in apps:
+                if item["id"] == "court":
+                    item["enabled"] = True
+                    item["coming_soon"] = False
+                    break
         self.send_json(
             200,
             {
                 "user": public_user(user),
-                "apps": app_catalog(user, settings),
+                "apps": apps,
                 "unread_messages": int(unread["count"] if unread else 0),
                 "income": income_snapshot(db, user),
                 "system": {
@@ -4505,7 +4522,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"ok": True})
 
     def api_my_cases(self, db: Database, user: DbRow | None) -> None:
-        err = verified_required(user)
+        err = court_access_required(db, user)
         if err:
             self.error(403 if user else 401, err)
             return
@@ -4530,7 +4547,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         officer_active: list[DbRow] = []
         officer_previous: list[DbRow] = []
-        if has_any(user, "leo", "cid", "cid_director", "iu", "iu_director", "owner"):
+        if has_any(user, *LAW_SERVICE_ROLES, "owner"):
             officer_active = all_rows(
                 db,
                 f"{base_select} WHERE c.officer_id = ? AND {case_status_clause(True)} ORDER BY c.created_at DESC",
@@ -4565,7 +4582,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
 
     def api_pay_case(self, db: Database, user: DbRow | None, case_id: int) -> None:
-        err = verified_required(user)
+        err = court_access_required(db, user)
         if err:
             self.error(403 if user else 401, err)
             return
@@ -4589,7 +4606,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"ok": True})
 
     def api_contest_case(self, db: Database, user: DbRow | None, case_id: int) -> None:
-        err = verified_required(user)
+        err = court_access_required(db, user)
         if err:
             self.error(403 if user else 401, err)
             return
