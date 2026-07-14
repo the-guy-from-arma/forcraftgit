@@ -1,6 +1,24 @@
 {
-  "version": "0.0.45",
+  "version": "0.0.46",
   "entries": [
+    {
+      "date": "2026-07-14",
+      "version": "0.0.46",
+      "title": "Mobile MDT Layout Repair",
+      "added": [],
+      "changed": [
+        "Rebuilt the phone-width MDT responsive rules so the header, command buttons, stats, and NCIC workspace fit inside the iPhone/Android viewport.",
+        "Mobile MDT now uses one compact command bar instead of showing duplicate quick-rail controls over the page.",
+        "Telemetry stats now collapse into compact two-column mobile tiles instead of giant horizontal desktop columns.",
+        "Confirmed-action popups now behave like a phone bottom sheet so they stay visible and reachable on mobile."
+      ],
+      "fixed": [
+        "Fixed mobile MDT horizontal overflow that cut off Messages, NCIC search, and empty-state text.",
+        "Fixed the duplicate Dispatch/Messages/Watch quick rail covering the mobile MDT content.",
+        "Fixed oversized stat panels and header controls making the mobile MDT feel like a broken desktop page."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-07-13",
       "version": "0.0.45",

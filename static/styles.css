@@ -6863,38 +6863,65 @@ textarea:focus {
 @media (max-width: 640px) {
   .mdt-workspace {
     grid-template-rows: auto auto minmax(0, 1fr);
-    gap: 8px;
-    padding: max(8px, env(safe-area-inset-top)) 8px max(88px, calc(env(safe-area-inset-bottom) + 80px));
+    gap: 7px;
+    width: 100%;
+    max-width: 100vw;
+    padding: max(8px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom));
+    overflow: hidden;
+  }
+
+  .mdt-redesign {
+    gap: 7px;
+  }
+
+  .mdt-redesign::before {
+    opacity: 0.18;
+  }
+
+  .mdt-quick-rail {
+    display: none;
   }
 
   .mdt-topbar {
     align-items: flex-start;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
     min-height: 0;
-    padding: 12px;
+    width: 100%;
+    padding: 8px 2px 7px;
+    overflow: hidden;
+  }
+
+  .mdt-topbar .eyebrow {
+    font-size: 10px;
+    letter-spacing: 0.04em;
   }
 
   .mdt-topbar h1 {
-    font-size: clamp(23px, 8vw, 34px);
-    line-height: 1.02;
+    max-width: 100%;
+    font-size: clamp(25px, 8vw, 31px);
+    line-height: 1;
+    overflow-wrap: normal;
   }
 
   .mdt-top-actions {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     width: 100%;
-    gap: 8px;
-    overflow-x: auto;
-    padding-bottom: 2px;
-    scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
+    gap: 6px;
+    overflow: visible;
+    padding: 0;
   }
 
   .mdt-top-actions button {
-    flex: 0 0 auto;
-    min-width: 108px;
-    min-height: 46px;
-    padding-inline: 10px;
+    width: 100%;
+    min-width: 0;
+    min-height: 38px;
+    padding: 0 7px;
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 1.05;
+    white-space: nowrap;
   }
 
   .mdt-top-actions::-webkit-scrollbar {
@@ -6908,6 +6935,16 @@ textarea:focus {
 
   .mdt-searchbar {
     grid-template-columns: 1fr;
+    gap: 8px;
+    margin-bottom: 8px;
+    min-width: 0;
+  }
+
+  .mdt-searchbar input,
+  .mdt-searchbar button {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
   }
 
   .mdt-section-head {
@@ -6922,17 +6959,29 @@ textarea:focus {
   .mdt-stat-strip.cid-stat-strip,
   .mdt-stat-strip.leo-stat-strip,
   .mdt-stat-strip.dispatch-stat-strip {
-    display: flex;
-    grid-template-columns: none;
-    overflow-x: auto;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1px;
+    overflow: hidden;
     scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
   }
 
   .mdt-stat-strip .metric {
-    flex: 0 0 132px;
-    min-height: 70px;
-    padding: 9px;
+    min-width: 0;
+    min-height: 52px;
+    padding: 8px;
+  }
+
+  .mdt-redesign .mdt-stat-strip .metric,
+  .mdt-redesign .metric {
+    min-height: 52px;
+    border-left: 0;
+    border-top: 1px solid rgba(126, 231, 255, 0.08);
+    padding: 8px;
+  }
+
+  .mdt-redesign .mdt-stat-strip .metric:nth-child(-n + 2) {
+    border-top: 0;
   }
 
   .mdt-stat-strip::-webkit-scrollbar {
@@ -6940,14 +6989,54 @@ textarea:focus {
   }
 
   .mdt-stat-strip .metric span {
-    font-size: 10px;
+    font-size: 9px;
     line-height: 1.15;
   }
 
+  .mdt-stat-strip .metric strong {
+    font-size: 22px;
+    line-height: 1;
+  }
+
+  .mdt-status-line {
+    gap: 5px;
+    margin-top: 6px;
+    overflow: hidden;
+  }
+
   .mdt-status-line span {
-    min-height: 22px;
-    font-size: 9px;
+    min-height: 20px;
     max-width: 100%;
+    padding-inline: 7px;
+    font-size: 8.5px;
+    white-space: nowrap;
+  }
+
+  .mdt-redesign .mdt-layout {
+    width: 100%;
+    min-width: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .mdt-redesign .mdt-main,
+  .mdt-main {
+    width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+    padding: 10px;
+  }
+
+  .mdt-return,
+  .mdt-form,
+  .mdt-results,
+  .mdt-code-grid,
+  .mdt-return-grid,
+  .mdt-subsection,
+  .empty {
+    max-width: 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
   .mdt-redesign .ticket-command-strip,
@@ -7062,6 +7151,23 @@ textarea:focus {
     max-height: calc(100dvh - 24px);
     overflow: auto;
     -webkit-overflow-scrolling: touch;
+  }
+
+  .action-confirm-backdrop {
+    place-items: end center;
+    padding: max(12px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom));
+    backdrop-filter: blur(5px);
+  }
+
+  .action-confirm-modal {
+    width: 100%;
+    max-width: none;
+    border-radius: 16px;
+    padding: 14px;
+  }
+
+  .action-confirm-actions {
+    grid-template-columns: 1fr;
   }
 
   .mdt-searchbar button,
