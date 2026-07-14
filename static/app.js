@@ -2,8 +2,10 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.42";
+const OS_VERSION = "0.0.44";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
+const pendingMutations = new Map();
+let activeActionConfirm = false;
 
 const state = {
   boot: {
@@ -170,10 +172,85 @@ function renderOptions(options, current) {
 }
 
 function toast(message) {
+  if (!message) return;
   toastEl.textContent = message;
   toastEl.classList.add("show");
   clearTimeout(toastEl.timer);
   toastEl.timer = setTimeout(() => toastEl.classList.remove("show"), 2600);
+}
+
+function isMutationMethod(method) {
+  return ["POST", "PATCH", "PUT", "DELETE"].includes(String(method || "GET").toUpperCase());
+}
+
+function actionConfirmExempt(path) {
+  const cleanPath = String(path || "").split("?")[0];
+  return cleanPath === "/api/presence" || cleanPath === "/api/auth/login" || cleanPath === "/api/auth/logout";
+}
+
+function actionFingerprint(method, path, body = "") {
+  const source = `${method}|${path}|${body}`;
+  let hash = 2166136261;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  const hex = (hash >>> 0).toString(16).toUpperCase().padStart(8, "0");
+  return `DF-${hex.slice(0, 4)}-${hex.slice(4, 8)}`;
+}
+
+function actionTitleFromPath(path, method) {
+  const clean = String(path || "")
+    .split("?")[0]
+    .replace(/^\/api\//, "")
+    .replaceAll("/", " ")
+    .replaceAll("-", " ")
+    .replace(/\b\d+\b/g, "record");
+  const title = clean.replace(/\b\w/g, (char) => char.toUpperCase()).trim() || "System Action";
+  return `${method} ${title}`;
+}
+
+function confirmDigitalAction({ method, path, body }) {
+  if (activeActionConfirm) {
+    toast("Confirm the open action first");
+    return Promise.resolve(false);
+  }
+  activeActionConfirm = true;
+  const signature = actionFingerprint(method, path, body);
+  const title = actionTitleFromPath(path, method);
+  return new Promise((resolve) => {
+    const backdrop = document.createElement("div");
+    backdrop.className = "action-confirm-backdrop";
+    backdrop.innerHTML = `
+      <section class="action-confirm-modal" role="dialog" aria-modal="true" aria-label="Confirm request">
+        <div>
+          <p class="eyebrow">Confirm request</p>
+          <h2>${escapeHtml(title)}</h2>
+          <p>This will send one request to the RP system. Confirm once and wait for the response before tapping again.</p>
+        </div>
+        <div class="digital-signature">
+          <span>Digital footprint</span>
+          <strong>${escapeHtml(signature)}</strong>
+        </div>
+        <div class="action-confirm-actions">
+          <button class="secondary" type="button" data-action-confirm-cancel>Cancel</button>
+          <button class="primary" type="button" data-action-confirm-ok>Confirm send</button>
+        </div>
+      </section>
+    `;
+    const cleanup = (value) => {
+      activeActionConfirm = false;
+      backdrop.remove();
+      resolve(value);
+    };
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) cleanup(false);
+    });
+    backdrop.querySelector("[data-action-confirm-cancel]")?.addEventListener("click", () => cleanup(false));
+    backdrop.querySelector("[data-action-confirm-ok]")?.addEventListener("click", () => cleanup(true));
+    document.body.appendChild(backdrop);
+    backdrop.querySelector("[data-action-confirm-ok]")?.focus();
+  });
 }
 
 async function copyToClipboard(value) {
@@ -197,13 +274,26 @@ async function copyToClipboard(value) {
 
 async function api(path, options = {}) {
   const timeoutMs = options.timeoutMs ?? 0;
+  const confirmOption = options.confirm;
+  const { timeoutMs: _timeoutMs, confirm: _confirm, headers: optionHeaders, ...restOptions } = options;
   const requestInit = {
     credentials: "same-origin",
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options,
+    headers: { "Content-Type": "application/json", ...(optionHeaders || {}) },
+    ...restOptions,
   };
+  requestInit.method = String(requestInit.method || "GET").toUpperCase();
   if (requestInit.body && typeof requestInit.body !== "string") {
     requestInit.body = JSON.stringify(requestInit.body);
+  }
+  const mutation = isMutationMethod(requestInit.method);
+  const lockKey = mutation ? `${requestInit.method} ${path} ${requestInit.body || ""}` : "";
+  if (lockKey && pendingMutations.has(lockKey)) {
+    toast("Action already sending");
+    return pendingMutations.get(lockKey);
+  }
+  if (mutation && confirmOption !== false && !actionConfirmExempt(path)) {
+    const confirmed = await confirmDigitalAction({ method: requestInit.method, path, body: requestInit.body || "" });
+    if (!confirmed) throw new Error("");
   }
   let timeoutId = null;
   let controller = null;
@@ -214,15 +304,24 @@ async function api(path, options = {}) {
       controller.abort("Request timed out");
     }, timeoutMs);
   }
-  const response = await fetch(path, {
-    ...requestInit,
-  });
-  clearTimeout(timeoutId);
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.error || "Request failed");
-  }
-  return data;
+  const request = (async () => {
+    try {
+      const response = await fetch(path, {
+        ...requestInit,
+      });
+      clearTimeout(timeoutId);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "Request failed");
+      }
+      return data;
+    } finally {
+      clearTimeout(timeoutId);
+      if (lockKey) pendingMutations.delete(lockKey);
+    }
+  })();
+  if (lockKey) pendingMutations.set(lockKey, request);
+  return request;
 }
 
 async function loadSession() {
@@ -6557,7 +6656,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.42").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.44").catch(() => {}));
 }
 
 bootApp();

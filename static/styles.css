@@ -1930,6 +1930,7 @@ textarea:focus {
 
 .admin-application-card {
   display: grid;
+  min-width: 0;
   gap: 12px;
   border: 1px solid rgba(92, 156, 255, 0.16);
   border-radius: 12px;
@@ -1947,11 +1948,12 @@ textarea:focus {
 
 .admin-application-folder {
   padding: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .admin-application-folder details {
   display: grid;
+  min-width: 0;
 }
 
 .admin-application-folder summary {
@@ -2013,7 +2015,7 @@ textarea:focus {
 
 .admin-application-strip {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
   gap: 6px;
 }
 
@@ -2031,8 +2033,20 @@ textarea:focus {
 
 .admin-application-body {
   display: grid;
+  min-width: 0;
   gap: 12px;
   padding: 0 12px 12px;
+}
+
+.panel-body .admin-application-list,
+.indeed-application-board .admin-application-list {
+  max-height: none;
+  overflow: visible;
+  padding-bottom: 120px;
+}
+
+.admin-application-body .profile-grid.compact {
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
 }
 
 .admin-application-packet {
@@ -3279,6 +3293,9 @@ textarea:focus {
   position: fixed;
   inset: 0;
   z-index: 30;
+  width: 100vw;
+  height: 100dvh;
+  min-height: 100svh;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 12px;
@@ -3288,6 +3305,8 @@ textarea:focus {
     repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.028) 0 1px, transparent 1px 120px);
   color: var(--ink);
   animation: mdtBoot 280ms ease-out both;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 .cid-workspace {
@@ -6122,6 +6141,76 @@ textarea:focus {
   transform: translateX(-50%) translateY(0);
 }
 
+.action-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: max(18px, env(safe-area-inset-top)) 18px max(18px, env(safe-area-inset-bottom));
+  background: rgba(0, 0, 0, 0.64);
+  backdrop-filter: blur(10px);
+  animation: drawerFade 160ms ease both;
+}
+
+.action-confirm-modal {
+  width: min(430px, 100%);
+  display: grid;
+  gap: 14px;
+  border: 1px solid rgba(40, 209, 124, 0.24);
+  border-radius: 12px;
+  padding: 16px;
+  background:
+    linear-gradient(180deg, rgba(11, 18, 20, 0.98), rgba(5, 9, 10, 0.99)),
+    repeating-linear-gradient(90deg, rgba(40, 209, 124, 0.04) 0 1px, transparent 1px 54px);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.58);
+}
+
+.action-confirm-modal h2,
+.action-confirm-modal p {
+  margin: 0;
+}
+
+.action-confirm-modal p:not(.eyebrow) {
+  color: rgba(226, 255, 249, 0.74);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.digital-signature {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(126, 231, 255, 0.14);
+  border-left: 3px solid rgba(40, 209, 124, 0.7);
+  border-radius: 7px;
+  padding: 11px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.digital-signature span {
+  color: rgba(170, 225, 213, 0.72);
+  font-size: 10px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.digital-signature strong {
+  color: #8fffd0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 18px;
+  letter-spacing: 0.08em;
+}
+
+.action-confirm-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.action-confirm-actions button {
+  min-height: 44px;
+}
+
 .empty {
   border: 1px dashed var(--line);
   border-radius: 12px;
@@ -6379,8 +6468,12 @@ textarea:focus {
 
 @media (max-width: 980px) {
   .mdt-workspace {
+    height: 100dvh;
+    min-height: 100svh;
+    grid-template-rows: auto auto minmax(0, 1fr);
     gap: 10px;
-    padding: 10px 10px 86px;
+    padding: max(10px, env(safe-area-inset-top)) 10px max(86px, calc(env(safe-area-inset-bottom) + 76px));
+    overflow: hidden;
   }
 
   .mdt-quick-rail {
@@ -6458,17 +6551,22 @@ textarea:focus {
     grid-template-columns: 1fr;
     padding: 10px;
     overflow: hidden;
+    min-height: 0;
   }
 
   .mdt-redesign .mdt-layout {
     grid-template-columns: 1fr;
     padding: 10px;
     border-radius: 8px;
+    min-height: 0;
   }
 
   .mdt-main {
     overflow: auto;
     padding: 12px;
+    min-height: 0;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
   }
 
   .mdt-redesign .mdt-main {
@@ -6481,12 +6579,13 @@ textarea:focus {
     top: 0;
     bottom: 0;
     z-index: 56;
-    width: min(342px, 86vw);
+    width: min(390px, 92vw);
     display: grid;
     align-content: start;
     gap: 10px;
     padding: max(16px, env(safe-area-inset-top)) 14px max(16px, env(safe-area-inset-bottom));
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
     border: 1px solid rgba(40, 209, 124, 0.2);
     border-radius: 0;
     background:
@@ -6553,6 +6652,12 @@ textarea:focus {
     text-align: left;
   }
 
+  .mdt-workspace input,
+  .mdt-workspace select,
+  .mdt-workspace textarea {
+    font-size: 16px;
+  }
+
   .mdt-return-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -6562,7 +6667,7 @@ textarea:focus {
   .mdt-workspace {
     grid-template-rows: auto auto minmax(0, 1fr);
     gap: 8px;
-    padding: max(8px, env(safe-area-inset-top)) 8px max(84px, calc(env(safe-area-inset-bottom) + 76px));
+    padding: max(8px, env(safe-area-inset-top)) 8px max(88px, calc(env(safe-area-inset-bottom) + 80px));
   }
 
   .mdt-topbar {
@@ -6574,20 +6679,29 @@ textarea:focus {
   }
 
   .mdt-topbar h1 {
-    font-size: clamp(28px, 9vw, 36px);
+    font-size: clamp(23px, 8vw, 34px);
     line-height: 1.02;
   }
 
   .mdt-top-actions {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: flex;
     width: 100%;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
   }
 
   .mdt-top-actions button {
-    width: 100%;
+    flex: 0 0 auto;
+    min-width: 108px;
     min-height: 46px;
     padding-inline: 10px;
+  }
+
+  .mdt-top-actions::-webkit-scrollbar {
+    display: none;
   }
 
   .mdt-searchbar,
@@ -6608,19 +6722,24 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
-  .mdt-stat-strip {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
   .mdt-stat-strip.cid-stat-strip,
   .mdt-stat-strip.leo-stat-strip,
   .mdt-stat-strip.dispatch-stat-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: flex;
+    grid-template-columns: none;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
   }
 
   .mdt-stat-strip .metric {
+    flex: 0 0 132px;
     min-height: 70px;
     padding: 9px;
+  }
+
+  .mdt-stat-strip::-webkit-scrollbar {
+    display: none;
   }
 
   .mdt-stat-strip .metric span {
@@ -6631,6 +6750,7 @@ textarea:focus {
   .mdt-status-line span {
     min-height: 22px;
     font-size: 9px;
+    max-width: 100%;
   }
 
   .mdt-redesign .ticket-command-strip,
@@ -6704,6 +6824,13 @@ textarea:focus {
     padding: 10px;
   }
 
+  .mdt-modal {
+    width: min(100%, calc(100vw - 18px));
+    max-height: calc(100dvh - 24px);
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
   .mdt-searchbar button,
   .mdt-form button,
   .mdt-section-head button {
@@ -6767,6 +6894,69 @@ textarea:focus {
 
   .fire-workspace .fire-board-row {
     padding: 12px 10px 12px 15px;
+  }
+}
+
+@media (max-width: 430px) {
+  .mdt-workspace {
+    padding-inline: 6px;
+  }
+
+  .mdt-topbar {
+    padding: 10px;
+  }
+
+  .mdt-topbar h1 {
+    font-size: clamp(22px, 7.6vw, 30px);
+  }
+
+  .mdt-status-line {
+    gap: 5px;
+  }
+
+  .mdt-status-line span {
+    padding-inline: 7px;
+    font-size: 8.5px;
+  }
+
+  .mdt-quick-rail {
+    left: 6px;
+    right: 6px;
+    gap: 6px;
+  }
+
+  .mdt-quick-rail button {
+    min-height: 50px;
+    padding: 6px 4px;
+  }
+
+  .mdt-quick-rail svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .mdt-quick-rail span {
+    font-size: 9px;
+  }
+
+  .mdt-redesign .mdt-layout {
+    padding: 7px;
+  }
+
+  .mdt-main {
+    padding: 8px;
+  }
+
+  .ticket-command-strip button {
+    min-height: 58px;
+  }
+
+  .action-confirm-modal {
+    padding: 14px;
+  }
+
+  .action-confirm-actions {
+    grid-template-columns: 1fr;
   }
 }
 

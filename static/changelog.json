@@ -1,6 +1,38 @@
 {
-  "version": "0.0.42",
+  "version": "0.0.44",
   "entries": [
+    {
+      "date": "2026-07-13",
+      "version": "0.0.44",
+      "title": "Mobile MDT and Confirmed Actions",
+      "added": [
+        "Added a global confirmation popup for important system-changing requests with a small digital footprint signature.",
+        "Added duplicate-request protection so repeated taps on the same action do not send multiple submissions while the first request is pending."
+      ],
+      "changed": [
+        "Reworked MDT mobile behavior for Android and iPhone with dynamic viewport height, safe-area padding, horizontal action strips, touch scrolling, compact stats, and iOS-friendly form inputs.",
+        "MDT drawers, modals, top actions, stats, and bottom quick controls now adapt better to narrow phone screens."
+      ],
+      "fixed": [
+        "Fixed repeated button taps being able to send duplicate POST/PATCH/DELETE requests.",
+        "Improved MDT scrolling and layout stability on phone-sized viewports."
+      ],
+      "removed": []
+    },
+    {
+      "date": "2026-07-13",
+      "version": "0.0.43",
+      "title": "Indeed Admin Application Folder Fix",
+      "added": [],
+      "changed": [
+        "Opened application folders in Indeed Admin and Admin Job Apps now use the main app panel scroll instead of a nested clipped list.",
+        "Application summary fields and reviewer profile fields now wrap into responsive columns on narrow phone screens."
+      ],
+      "fixed": [
+        "Fixed opened Indeed Admin applications being cut off at the bottom of the phone panel."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-07-13",
       "version": "0.0.42",
