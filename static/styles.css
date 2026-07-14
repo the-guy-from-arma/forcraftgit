@@ -1963,16 +1963,52 @@ textarea:focus {
 }
 
 .admin-application-folder summary::after {
-  content: "Open file";
-  justify-self: end;
-  color: rgba(216, 255, 241, 0.74);
+  content: none;
+}
+
+.admin-application-summary-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+}
+
+.admin-application-summary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.admin-folder-toggle {
+  display: inline-grid;
+  min-height: 28px;
+  place-items: center;
+  border: 1px solid rgba(40, 209, 124, 0.24);
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: #d8fff1;
+  background: rgba(40, 209, 124, 0.1);
   font-size: 10px;
   font-weight: 950;
   text-transform: uppercase;
 }
 
-.admin-application-folder details[open] summary::after {
-  content: "Close file";
+.admin-folder-toggle .close-label {
+  display: none;
+}
+
+.admin-application-details[open] .admin-folder-toggle {
+  border-color: rgba(92, 156, 255, 0.34);
+  background: rgba(92, 156, 255, 0.12);
+}
+
+.admin-application-details[open] .admin-folder-toggle .open-label {
+  display: none;
+}
+
+.admin-application-details[open] .admin-folder-toggle .close-label {
+  display: inline;
 }
 
 .admin-application-strip {
@@ -2062,6 +2098,57 @@ textarea:focus {
   min-width: 0;
   min-height: 42px;
   padding-inline: 8px;
+}
+
+.indeed-admin-app {
+  gap: 14px;
+}
+
+.indeed-hero {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid rgba(40, 209, 124, 0.22);
+  border-radius: 8px;
+  padding: 16px;
+  background:
+    linear-gradient(135deg, rgba(7, 23, 20, 0.94), rgba(11, 31, 35, 0.92)),
+    repeating-linear-gradient(90deg, rgba(40, 209, 124, 0.07) 0 1px, transparent 1px 70px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 18px 55px rgba(0, 0, 0, 0.28);
+}
+
+.indeed-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(40, 209, 124, 0.12), transparent);
+  transform: translateX(-110%);
+  animation: boloSweep 5.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.indeed-hero h3,
+.indeed-hero p {
+  margin: 0;
+}
+
+.indeed-hero-stats {
+  display: grid;
+  place-items: center;
+  min-width: 88px;
+  border: 1px solid rgba(40, 209, 124, 0.2);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.indeed-hero-stats span {
+  color: #31f4a0;
+  font-size: 30px;
+  font-weight: 950;
 }
 
 .character-list {
@@ -3829,6 +3916,37 @@ textarea:focus {
   background: rgba(255, 255, 255, 0.055);
 }
 
+.ticket-command-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ticket-command-strip button {
+  display: grid;
+  gap: 4px;
+  align-content: center;
+  min-height: 66px;
+  border: 1px solid rgba(92, 156, 255, 0.18);
+  border-radius: 6px;
+  padding: 10px;
+  text-align: left;
+  color: var(--ink);
+  background:
+    linear-gradient(145deg, rgba(92, 156, 255, 0.1), rgba(40, 209, 124, 0.05)),
+    rgba(255, 255, 255, 0.04);
+}
+
+.ticket-command-strip button strong {
+  font-size: 13px;
+}
+
+.ticket-command-strip button span {
+  color: rgba(245, 247, 244, 0.64);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
 .mdt-results,
 .mdt-code-grid {
   display: grid;
@@ -3880,6 +3998,517 @@ textarea:focus {
 .mdt-code-card {
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.045);
+}
+
+.mdt-redesign {
+  isolation: isolate;
+  gap: 10px;
+  background:
+    linear-gradient(180deg, rgba(4, 8, 9, 0.99), rgba(8, 11, 12, 0.99)),
+    repeating-linear-gradient(90deg, rgba(40, 209, 124, 0.03) 0 1px, transparent 1px 78px),
+    repeating-linear-gradient(0deg, rgba(126, 231, 255, 0.018) 0 1px, transparent 1px 42px);
+}
+
+.mdt-redesign::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background:
+    linear-gradient(90deg, transparent, rgba(40, 209, 124, 0.07), transparent),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 20%, transparent 80%, rgba(255, 255, 255, 0.02));
+  opacity: 0.42;
+  transform: translateX(-40%);
+  animation: mdtSweep 8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.mdt-redesign > * {
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes mdtSweep {
+  0%,
+  42% {
+    transform: translateX(-55%);
+    opacity: 0.18;
+  }
+  58% {
+    opacity: 0.48;
+  }
+  100% {
+    transform: translateX(55%);
+    opacity: 0.18;
+  }
+}
+
+.mdt-redesign .mdt-topbar,
+.mdt-redesign .mdt-stat-strip,
+.mdt-redesign .mdt-layout,
+.mdt-redesign .mdt-main,
+.mdt-redesign .mdt-side-panel,
+.mdt-redesign .mdt-return,
+.mdt-redesign .mdt-form,
+.mdt-redesign .mdt-modal {
+  box-shadow: none;
+}
+
+.mdt-redesign .mdt-topbar {
+  border: 0;
+  border-bottom: 1px solid rgba(126, 231, 255, 0.12);
+  border-radius: 0;
+  padding: 10px 2px 14px;
+  background: transparent;
+}
+
+.mdt-redesign .mdt-topbar h1 {
+  letter-spacing: 0;
+}
+
+.mdt-status-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.mdt-status-line span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border: 1px solid rgba(126, 231, 255, 0.13);
+  border-radius: 999px;
+  padding: 0 9px;
+  color: rgba(226, 255, 249, 0.82);
+  background: rgba(126, 231, 255, 0.045);
+  font-size: 10px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.mdt-redesign .mdt-top-actions button {
+  border-color: rgba(126, 231, 255, 0.16);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.mdt-redesign .mdt-layout {
+  grid-template-columns: 190px minmax(0, 1fr) 304px;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  border-color: rgba(126, 231, 255, 0.13);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(9, 15, 17, 0.92), rgba(4, 8, 9, 0.94)),
+    repeating-linear-gradient(90deg, rgba(126, 231, 255, 0.024) 0 1px, transparent 1px 56px);
+}
+
+.mdt-redesign .mdt-nav {
+  gap: 3px;
+  padding: 10px 8px;
+  border-right: 1px solid rgba(126, 231, 255, 0.11);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.mdt-redesign .mdt-nav button {
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  border: 0;
+  border-radius: 5px;
+  padding: 0 10px 0 8px;
+  background: transparent;
+  color: rgba(216, 232, 232, 0.68);
+  transition: background 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.mdt-redesign .mdt-nav button span {
+  color: rgba(126, 231, 255, 0.46);
+  font-size: 10px;
+  font-weight: 950;
+}
+
+.mdt-redesign .mdt-nav button strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.mdt-redesign .mdt-nav button:hover {
+  transform: translateX(2px);
+  color: #e9fff8;
+  background: rgba(126, 231, 255, 0.055);
+}
+
+.mdt-redesign .mdt-nav button.active {
+  color: #03100d;
+  border: 0;
+  background: linear-gradient(90deg, #28d17c, #7ee7ff);
+  box-shadow: 0 0 28px rgba(40, 209, 124, 0.16);
+}
+
+.mdt-redesign .mdt-nav button.active span {
+  color: rgba(3, 16, 13, 0.68);
+}
+
+.mdt-redesign .mdt-main {
+  border: 0;
+  border-radius: 0;
+  padding: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.026), rgba(255, 255, 255, 0.01)),
+    rgba(0, 0, 0, 0.08);
+}
+
+.mdt-redesign .mdt-side {
+  gap: 0;
+  border-left: 1px solid rgba(126, 231, 255, 0.11);
+  background: rgba(255, 255, 255, 0.014);
+}
+
+.mdt-redesign .mdt-side-panel {
+  border: 0;
+  border-bottom: 1px solid rgba(126, 231, 255, 0.09);
+  border-radius: 0;
+  background: transparent;
+}
+
+.mdt-redesign .mdt-stat-strip {
+  gap: 0;
+  overflow: hidden;
+  border-color: rgba(126, 231, 255, 0.11);
+  border-radius: 8px;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.mdt-redesign .mdt-stat-strip .metric,
+.mdt-redesign .metric {
+  min-height: 62px;
+  border: 0;
+  border-left: 1px solid rgba(126, 231, 255, 0.1);
+  border-radius: 0;
+  padding: 10px 12px;
+  background: transparent;
+}
+
+.mdt-redesign .mdt-stat-strip .metric:first-child {
+  border-left: 0;
+}
+
+.mdt-redesign .metric span {
+  color: rgba(170, 225, 213, 0.7);
+  letter-spacing: 0.04em;
+}
+
+.mdt-redesign .metric strong {
+  color: #f6fff8;
+}
+
+.mdt-redesign .mdt-return,
+.mdt-redesign .mdt-form {
+  border-color: rgba(126, 231, 255, 0.11);
+  border-left: 3px solid rgba(40, 209, 124, 0.52);
+  border-radius: 6px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.034), rgba(255, 255, 255, 0.015)),
+    rgba(0, 0, 0, 0.12);
+}
+
+.mdt-redesign .mdt-section-head {
+  border-bottom: 1px solid rgba(126, 231, 255, 0.09);
+  padding-bottom: 10px;
+}
+
+.mdt-redesign .mdt-searchbar input,
+.mdt-redesign .mdt-form input,
+.mdt-redesign .mdt-form select,
+.mdt-redesign .mdt-form textarea,
+.mdt-redesign input,
+.mdt-redesign select,
+.mdt-redesign textarea {
+  border-color: rgba(126, 231, 255, 0.13);
+  border-radius: 5px;
+  background: rgba(3, 9, 10, 0.62);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.015);
+}
+
+.mdt-redesign .ticket-command-strip {
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid rgba(126, 231, 255, 0.1);
+  border-radius: 6px;
+  background: rgba(126, 231, 255, 0.055);
+}
+
+.mdt-redesign .ticket-command-strip button {
+  min-height: 72px;
+  border: 0;
+  border-left: 1px solid rgba(126, 231, 255, 0.1);
+  border-radius: 0;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.mdt-redesign .ticket-command-strip button:first-child {
+  border-left: 0;
+}
+
+.mdt-redesign .ticket-command-strip button:hover {
+  background: rgba(40, 209, 124, 0.11);
+}
+
+.mdt-redesign .charge-card,
+.mdt-redesign .mdt-code-card,
+.mdt-redesign .cid-mini-case,
+.mdt-redesign .cid-command-card {
+  border-color: rgba(126, 231, 255, 0.1);
+  border-left: 3px solid rgba(126, 231, 255, 0.25);
+  border-radius: 6px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.032), rgba(255, 255, 255, 0.012)),
+    rgba(0, 0, 0, 0.12);
+}
+
+.mdt-redesign .cid-command-hero {
+  border-color: rgba(40, 209, 124, 0.16);
+  border-radius: 8px;
+  background:
+    linear-gradient(120deg, rgba(40, 209, 124, 0.13), rgba(126, 231, 255, 0.045)),
+    rgba(0, 0, 0, 0.16);
+}
+
+.mdt-redesign .cid-command-actions {
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid rgba(126, 231, 255, 0.1);
+  border-radius: 6px;
+  background: rgba(126, 231, 255, 0.055);
+}
+
+.mdt-redesign .cid-command-actions button {
+  border: 0;
+  border-left: 1px solid rgba(126, 231, 255, 0.1);
+  border-radius: 0;
+  background: rgba(0, 0, 0, 0.17);
+}
+
+.mdt-redesign .cid-command-actions button:first-child {
+  border-left: 0;
+}
+
+.mdt-redesign .mdt-quick-rail button {
+  border-radius: 6px;
+  background:
+    linear-gradient(180deg, rgba(17, 27, 29, 0.96), rgba(4, 8, 9, 0.98)),
+    repeating-linear-gradient(90deg, rgba(40, 209, 124, 0.035) 0 1px, transparent 1px 24px);
+}
+
+.mdt-settings-console {
+  display: grid;
+  gap: 14px;
+}
+
+.traffic-settings-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+  gap: 12px;
+}
+
+.traffic-settings-hero {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  align-content: end;
+  min-height: 260px;
+  border: 1px solid rgba(40, 209, 124, 0.16);
+  border-radius: 8px;
+  padding: 18px;
+  background:
+    linear-gradient(145deg, rgba(40, 209, 124, 0.14), rgba(126, 231, 255, 0.045)),
+    repeating-linear-gradient(90deg, rgba(126, 231, 255, 0.035) 0 1px, transparent 1px 54px),
+    rgba(0, 0, 0, 0.18);
+}
+
+.traffic-settings-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.08), transparent);
+  transform: translateX(-110%);
+  animation: mdtSweep 7s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.traffic-settings-hero > * {
+  position: relative;
+  z-index: 1;
+}
+
+.traffic-settings-hero h3,
+.traffic-settings-hero p,
+.traffic-setting-card h3 {
+  margin: 0;
+}
+
+.traffic-settings-hero p:not(.eyebrow) {
+  max-width: 720px;
+  margin: 6px 0 16px;
+  color: rgba(226, 255, 249, 0.76);
+}
+
+.traffic-setting-card {
+  align-content: start;
+}
+
+.traffic-protocol-preview {
+  display: grid;
+  gap: 6px;
+}
+
+.traffic-protocol-preview div {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  border-bottom: 1px solid rgba(126, 231, 255, 0.08);
+}
+
+.traffic-protocol-preview div:last-child {
+  border-bottom: 0;
+}
+
+.traffic-protocol-preview span {
+  color: rgba(126, 231, 255, 0.58);
+  font-size: 10px;
+  font-weight: 950;
+}
+
+.traffic-protocol-preview strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.traffic-stop-backdrop {
+  z-index: 80;
+}
+
+.traffic-stop-modal {
+  width: min(760px, calc(100vw - 28px));
+  border-color: rgba(40, 209, 124, 0.24);
+  background:
+    linear-gradient(180deg, rgba(8, 15, 16, 0.98), rgba(3, 7, 8, 0.98)),
+    repeating-linear-gradient(90deg, rgba(40, 209, 124, 0.04) 0 1px, transparent 1px 58px);
+}
+
+.traffic-stop-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.traffic-stop-head h2,
+.traffic-stop-body h3,
+.traffic-stop-body p {
+  margin: 0;
+}
+
+.traffic-progress {
+  overflow: hidden;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.traffic-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #28d17c, #7ee7ff);
+  box-shadow: 0 0 22px rgba(40, 209, 124, 0.4);
+  transition: width 200ms ease;
+}
+
+.traffic-stop-body {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(126, 231, 255, 0.1);
+  border-left: 3px solid rgba(40, 209, 124, 0.62);
+  border-radius: 6px;
+  padding: 14px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.traffic-stop-body h3 {
+  font-size: 24px;
+}
+
+.traffic-stop-body p {
+  color: rgba(226, 255, 249, 0.78);
+  line-height: 1.45;
+}
+
+.traffic-step-list {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid rgba(126, 231, 255, 0.1);
+  border-radius: 6px;
+  background: rgba(126, 231, 255, 0.055);
+}
+
+.traffic-step-list button {
+  display: grid;
+  gap: 4px;
+  min-height: 70px;
+  border: 0;
+  border-left: 1px solid rgba(126, 231, 255, 0.1);
+  border-radius: 0;
+  padding: 9px;
+  color: rgba(226, 255, 249, 0.72);
+  background: rgba(0, 0, 0, 0.18);
+  text-align: left;
+}
+
+.traffic-step-list button:first-child {
+  border-left: 0;
+}
+
+.traffic-step-list button.active {
+  color: #03100d;
+  background: linear-gradient(90deg, #28d17c, #7ee7ff);
+}
+
+.traffic-step-list span {
+  color: inherit;
+  font-size: 10px;
+  font-weight: 950;
+  opacity: 0.72;
+}
+
+.traffic-step-list strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  line-height: 1.15;
+}
+
+.traffic-stop-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
 }
 
 .bolo-console {
@@ -5601,6 +6230,16 @@ textarea:focus {
     grid-template-columns: 1fr 1fr;
   }
 
+  .admin-application-summary-main,
+  .indeed-hero,
+  .ticket-command-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-application-summary-actions {
+    justify-content: flex-start;
+  }
+
   .court-hero {
     align-items: stretch;
     grid-template-columns: 1fr;
@@ -5821,8 +6460,18 @@ textarea:focus {
     overflow: hidden;
   }
 
+  .mdt-redesign .mdt-layout {
+    grid-template-columns: 1fr;
+    padding: 10px;
+    border-radius: 8px;
+  }
+
   .mdt-main {
     overflow: auto;
+    padding: 12px;
+  }
+
+  .mdt-redesign .mdt-main {
     padding: 12px;
   }
 
@@ -5864,6 +6513,15 @@ textarea:focus {
 
   .mdt-side.open {
     transform: translateX(0);
+  }
+
+  .mdt-redesign .mdt-nav,
+  .mdt-redesign .mdt-side {
+    border-right: 1px solid rgba(40, 209, 124, 0.2);
+    border-left: 1px solid rgba(40, 209, 124, 0.2);
+    background:
+      linear-gradient(180deg, rgba(9, 16, 18, 0.98), rgba(4, 8, 9, 0.98)),
+      repeating-linear-gradient(90deg, rgba(40, 209, 124, 0.045) 0 1px, transparent 1px 46px);
   }
 
   .mdt-drawer-head {
@@ -5968,6 +6626,57 @@ textarea:focus {
   .mdt-stat-strip .metric span {
     font-size: 10px;
     line-height: 1.15;
+  }
+
+  .mdt-status-line span {
+    min-height: 22px;
+    font-size: 9px;
+  }
+
+  .mdt-redesign .ticket-command-strip,
+  .mdt-redesign .cid-command-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .traffic-settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .traffic-settings-hero {
+    min-height: 220px;
+  }
+
+  .traffic-step-list {
+    grid-template-columns: 1fr;
+    max-height: 250px;
+    overflow: auto;
+  }
+
+  .traffic-step-list button {
+    min-height: 48px;
+    border-left: 0;
+    border-top: 1px solid rgba(126, 231, 255, 0.1);
+    grid-template-columns: 34px minmax(0, 1fr);
+    align-items: center;
+  }
+
+  .traffic-step-list button:first-child {
+    border-top: 0;
+  }
+
+  .traffic-stop-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .mdt-redesign .ticket-command-strip button,
+  .mdt-redesign .cid-command-actions button {
+    border-left: 0;
+    border-top: 1px solid rgba(126, 231, 255, 0.1);
+  }
+
+  .mdt-redesign .ticket-command-strip button:first-child,
+  .mdt-redesign .cid-command-actions button:first-child {
+    border-top: 0;
   }
 
   .mdt-return-grid {

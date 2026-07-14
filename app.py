@@ -364,6 +364,7 @@ FIRE_COMMAND_ROLES = ("fire_chief", "deputy_chief", "fire_marshal")
 FIRE_SERVICE_ROLES = ("fireman", "ems", *FIRE_COMMAND_ROLES)
 FIRE_RIG_NAMES = ("Engine 1", "Ladder 1", "Truck 1", "Rescue 1", "Battalion 1", "Battalion 2", "Battalion 3", "Battalion 4", "Battalion 5")
 LAW_SERVICE_ROLES = ("leo", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director")
+INDEED_ADMIN_ROLE = "indeed_admin"
 LAW_ENFORCEMENT_DEPARTMENT_KEYS = ("state_police", "metro_police", "sheriff", "cid", "iu")
 LAW_ENFORCEMENT_DEPARTMENT_CHOICES = ("Sheriffs Department", "Police Department", "State Police", "CID", "Interrogation Unit")
 LAW_ENFORCEMENT_COMMAND_ROLES = {
@@ -484,7 +485,7 @@ SYSTEM_SETTING_DEFAULTS = {
 
 
 def posting_command_roles(posting: dict[str, Any]) -> tuple[str, ...]:
-    roles = ["owner", "admin"]
+    roles = ["owner", "admin", INDEED_ADMIN_ROLE]
     roles.extend(str(role) for role in posting.get("command_roles", ()) if str(role).strip())
     return tuple(sorted(set(normalize_role(role) for role in roles)))
 
@@ -1689,6 +1690,38 @@ def seed_charges(db: Database) -> None:
         ("TRF-402", "Improper Lane Change", "Moving Citation", "Unsafe or unsignaled lane movement creating a traffic hazard.", 160, 2, "Infraction", "citation"),
         ("TRF-501", "Illegal Parking", "Parking Citation", "Parking in a restricted, fire lane, or no-parking zone.", 90, 0, "Parking Citation", "citation"),
         ("TRF-601", "Vehicle Equipment Violation", "Equipment Citation", "Operating a vehicle with unlawful lighting, tint, or unsafe equipment.", 110, 0, "Fix-It Citation", "citation"),
+        ("VTL-1110A", "Disobey Traffic Control Device", "NYS VTL - Traffic Control", "Failure to obey an official traffic-control device or lawful traffic regulation.", 150, 2, "Traffic Infraction", "citation"),
+        ("VTL-1111D1", "Passed Steady Red Signal", "NYS VTL - Traffic Control", "Failed to stop for a steady red traffic-control signal before entering the intersection.", 250, 3, "Traffic Infraction", "citation"),
+        ("VTL-1172A", "Failed to Stop at Stop Sign", "NYS VTL - Traffic Control", "Failed to stop at a stop sign before entering the crosswalk or intersection.", 180, 3, "Traffic Infraction", "citation"),
+        ("VTL-1180A", "Speed Not Reasonable and Prudent", "NYS VTL - Speeding", "Operated at a speed not reasonable and prudent for roadway, traffic, or weather conditions.", 200, 3, "Traffic Infraction", "citation"),
+        ("VTL-1180B", "Speed Over Posted Limit", "NYS VTL - Speeding", "Exceeded the maximum speed limit posted for the roadway.", 250, 4, "Traffic Infraction", "citation"),
+        ("VTL-1180D", "Speed in Zone", "NYS VTL - Speeding", "Exceeded speed restrictions established for a designated speed zone.", 250, 4, "Traffic Infraction", "citation"),
+        ("VTL-1128A", "Unsafe Lane Change", "NYS VTL - Moving Violation", "Moved from a lane when the movement could not be made safely or failed to stay within a single lane.", 160, 3, "Traffic Infraction", "citation"),
+        ("VTL-1163A", "Improper or No Turn Signal", "NYS VTL - Moving Violation", "Turned or moved right/left without giving the required signal.", 125, 2, "Traffic Infraction", "citation"),
+        ("VTL-1129A", "Following Too Closely", "NYS VTL - Moving Violation", "Followed another vehicle more closely than was reasonable and prudent.", 180, 4, "Traffic Infraction", "citation"),
+        ("VTL-1211A", "Unsafe Backing", "NYS VTL - Moving Violation", "Backed a vehicle when the movement could not be made safely.", 125, 2, "Traffic Infraction", "citation"),
+        ("VTL-1212", "Reckless Driving", "NYS VTL - Moving Violation", "Operated in a manner unreasonably interfering with highway use or endangering highway users.", 750, 5, "Misdemeanor", "citation"),
+        ("VTL-1225C2A", "Mobile Phone Use While Driving", "NYS VTL - Distracted Driving", "Used a mobile telephone while operating a motor vehicle.", 200, 5, "Traffic Infraction", "citation"),
+        ("VTL-1225D", "Portable Electronic Device Use", "NYS VTL - Distracted Driving", "Used a portable electronic device while operating a motor vehicle.", 200, 5, "Traffic Infraction", "citation"),
+        ("VTL-1229C3", "Seat Belt Violation", "NYS VTL - Occupant Safety", "Operator or passenger failed to use a required safety restraint.", 100, 0, "Traffic Infraction", "citation"),
+        ("VTL-5091", "Unlicensed Operator", "NYS VTL - License", "Operated a motor vehicle without being duly licensed.", 250, 0, "Traffic Infraction", "citation"),
+        ("VTL-5111A", "Aggravated Unlicensed Operation 3rd", "NYS VTL - License", "Operated while license or driving privilege was suspended or revoked.", 500, 0, "Misdemeanor", "citation"),
+        ("VTL-4011A", "Unregistered Motor Vehicle", "NYS VTL - Registration", "Operated or permitted operation of a motor vehicle without valid registration.", 200, 0, "Traffic Infraction", "citation"),
+        ("VTL-3191", "Operating Without Insurance", "NYS VTL - Insurance", "Operated a motor vehicle without required financial security or insurance.", 500, 0, "Traffic Infraction", "citation"),
+        ("VTL-306B", "Uninspected Motor Vehicle", "NYS VTL - Inspection", "Operated a motor vehicle without a valid inspection certificate.", 120, 0, "Traffic Infraction", "citation"),
+        ("VTL-3752A1", "No or Inadequate Headlights", "NYS VTL - Vehicle Equipment", "Operated without required headlamps or with inadequate lighting.", 110, 0, "Equipment Violation", "citation"),
+        ("VTL-37512A", "Illegal Window Tint", "NYS VTL - Vehicle Equipment", "Operated with window tint or light transmittance below the allowed standard.", 150, 0, "Equipment Violation", "citation"),
+        ("VTL-37531", "Obstructed or Dirty Plate", "NYS VTL - Vehicle Equipment", "Displayed a number plate that was obstructed, dirty, covered, or not plainly visible.", 100, 0, "Equipment Violation", "citation"),
+        ("VTL-1200A", "General Parking Regulation Violation", "NYS VTL - Parking", "Stopped, stood, or parked contrary to posted or local parking regulations.", 75, 0, "Parking Ticket", "citation"),
+        ("VTL-1201A", "Stopped or Parked on Highway", "NYS VTL - Parking", "Stopped, parked, or left standing on the paved or traveled part of a highway where prohibited.", 95, 0, "Parking Ticket", "citation"),
+        ("VTL-1202A1A", "Parking on Sidewalk", "NYS VTL - Parking", "Stopped, stood, or parked a vehicle on a sidewalk.", 90, 0, "Parking Ticket", "citation"),
+        ("VTL-1202A1B", "Blocking Driveway", "NYS VTL - Parking", "Stopped, stood, or parked in front of a public or private driveway.", 90, 0, "Parking Ticket", "citation"),
+        ("VTL-1202A1C", "Parking in Intersection", "NYS VTL - Parking", "Stopped, stood, or parked within an intersection.", 100, 0, "Parking Ticket", "citation"),
+        ("VTL-1202A1D", "Parking Near Fire Hydrant", "NYS VTL - Parking", "Stopped, stood, or parked within the prohibited distance of a fire hydrant.", 115, 0, "Parking Ticket", "citation"),
+        ("VTL-1202A1E", "Parking on Crosswalk", "NYS VTL - Parking", "Stopped, stood, or parked on a crosswalk.", 95, 0, "Parking Ticket", "citation"),
+        ("VTL-1202A2A", "Double Parking", "NYS VTL - Parking", "Stopped, stood, or parked on the roadway side of another stopped or parked vehicle.", 115, 0, "Parking Ticket", "citation"),
+        ("VTL-1203B", "Improper Angle Parking", "NYS VTL - Parking", "Parked other than parallel or angle parking required by traffic control or local rule.", 75, 0, "Parking Ticket", "citation"),
+        ("VTL-1204B", "Accessible Parking Violation", "NYS VTL - Parking", "Parked in a space reserved for people with disabilities without authorization.", 250, 0, "Parking Ticket", "citation"),
         ("PEN-110", "Failure to Identify", "Public Order", "Refusing lawful identification during an investigation.", 350, 0, "Misdemeanor", "criminal"),
         ("PEN-210", "Disorderly Conduct", "Public Order", "Creating a public disturbance or hazardous condition.", 400, 0, "Misdemeanor", "criminal"),
         ("PEN-330", "Trespassing", "Property", "Knowingly entering or remaining on property without permission.", 450, 0, "Misdemeanor", "criminal"),
@@ -1868,6 +1901,14 @@ def admin_required(user: DbRow | None) -> str | None:
     return None
 
 
+def application_review_required(user: DbRow | None) -> str | None:
+    if not user:
+        return "Authentication required"
+    if not has_any(user, "owner", "admin", INDEED_ADMIN_ROLE):
+        return "Indeed Admin access required"
+    return None
+
+
 def owner_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
@@ -2022,6 +2063,8 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps.append({"id": "fire-settings", "label": "Fire Settings", "icon": "settings", "enabled": True, "hidden": False})
     if has_any(user, "owner"):
         apps.append({"id": "system", "label": "System", "icon": "settings", "enabled": True, "hidden": False})
+    if has_any(user, "owner", "admin", INDEED_ADMIN_ROLE):
+        apps.append({"id": "indeed-admin", "label": "Indeed Admin", "icon": "briefcase", "enabled": True, "hidden": False})
     if has_any(user, "owner", "admin"):
         apps.append({"id": "admin", "label": "Admin", "icon": "settings", "enabled": True, "hidden": False})
     return apps
@@ -2523,6 +2566,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 elif path == "/api/admin/department-applications" and method == "GET":
                     self.api_admin_department_applications(db, user)
                 elif path.startswith("/api/admin/department-applications/") and method == "PATCH":
+                    self.api_admin_review_department_application(db, user, self.path_int(path, 3))
+                elif path == "/api/indeed-admin/applications" and method == "GET":
+                    self.api_admin_department_applications(db, user)
+                elif path.startswith("/api/indeed-admin/applications/") and method == "PATCH":
                     self.api_admin_review_department_application(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/admin/users/") and method == "DELETE":
                     self.api_admin_delete_user(db, user, self.path_int(path, 3))
@@ -6259,7 +6306,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"ok": True, "status": "deposited", "amount": amount})
 
     def api_admin_department_applications(self, db: Database, user: DbRow | None) -> None:
-        err = admin_required(user)
+        err = application_review_required(user)
         if err:
             self.error(403 if user else 401, err)
             return
@@ -6298,10 +6345,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "approved": one(db, "SELECT COUNT(*) AS count FROM department_applications WHERE status = 'approved'")["count"],
             "denied": one(db, "SELECT COUNT(*) AS count FROM department_applications WHERE status = 'denied'")["count"],
         }
-        self.send_json(200, {"stats": stats, "applications": [dict(row) for row in rows]})
+        applications = []
+        can_view_sensitive = bool(user and has_any(user, "owner", "admin"))
+        for row in rows:
+            item = dict(row)
+            if not can_view_sensitive:
+                item["applicant_email"] = "Restricted"
+                item["applicant_arma_id"] = "Restricted"
+            applications.append(item)
+        self.send_json(200, {"stats": stats, "applications": applications})
 
     def api_admin_review_department_application(self, db: Database, user: DbRow | None, application_id: int) -> None:
-        err = admin_required(user)
+        err = application_review_required(user)
         if err:
             self.error(403 if user else 401, err)
             return

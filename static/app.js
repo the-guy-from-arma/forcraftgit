@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.39";
+const OS_VERSION = "0.0.42";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 
 const state = {
@@ -27,6 +27,9 @@ const state = {
   mdtSelectedChargeId: "",
   mdtReportAlertId: "",
   mdtNotice: null,
+  mdtProtocolAssistantEnabled: localStorage.getItem("rp.mdt.protocolAssistant") !== "0",
+  mdtTrafficStopActive: false,
+  mdtTrafficStopStep: 0,
   cidSelectedCaseId: null,
   cidSelectedIaId: null,
   cidWarrantModalId: null,
@@ -47,6 +50,7 @@ const state = {
   treasuryProofs: [],
   adminTab: "users",
   adminApplicationFilter: "active",
+  indeedApplicationFilter: "active",
   adminSearch: "",
   adminAccountId: null,
   dmvCountdownTimer: null,
@@ -136,6 +140,7 @@ const tileColors = {
   fire: "linear-gradient(145deg, #ff6b4a, #2d1b1b)",
   "fire-settings": "linear-gradient(145deg, #ffb15a, #5b1815)",
   system: "linear-gradient(145deg, #35e0b6, #22485c)",
+  "indeed-admin": "linear-gradient(145deg, #2fd38f, #172f28)",
   admin: "linear-gradient(145deg, #ffcf5a, #6c5010)",
 };
 
@@ -590,6 +595,7 @@ function renderPanel(id) {
     fire: "Fire MDT",
     "fire-settings": "Fire Settings",
     system: "System",
+    "indeed-admin": "Indeed Admin",
     admin: "Admin",
   };
   const body = {
@@ -610,6 +616,7 @@ function renderPanel(id) {
     fire: renderFireMdt,
     "fire-settings": renderFireSettings,
     system: renderSystem,
+    "indeed-admin": renderIndeedAdmin,
     admin: renderAdmin,
   }[id]?.() || `<div class="empty">Module unavailable</div>`;
 
@@ -656,6 +663,7 @@ async function loadAppData(id) {
     fire: () => api("/api/fire/overview"),
     "fire-settings": () => api("/api/fire/overview"),
     system: () => api("/api/system/settings"),
+    "indeed-admin": () => api("/api/indeed-admin/applications"),
     admin: async () => ({
       overview: await api("/api/admin/overview"),
       users: await api("/api/admin/users"),
@@ -708,6 +716,7 @@ function bindPanel() {
     fire: bindFireMdt,
     "fire-settings": bindFireSettings,
     system: bindSystem,
+    "indeed-admin": bindIndeedAdmin,
     admin: bindAdmin,
   };
   binders[state.activeApp]?.();
@@ -744,6 +753,44 @@ function mdtCommandLabel() {
   if (canAny("cid", "owner")) return "CID";
   return "LEO";
 }
+
+const TRAFFIC_STOP_STEPS = [
+  {
+    title: "Observe and decide",
+    callout: "Reason for stop",
+    body: "Confirm the traffic violation or reasonable suspicion before activating lights. Note vehicle description, plate, location, direction of travel, occupants, and any safety concerns.",
+  },
+  {
+    title: "Radio the stop",
+    callout: "Dispatch first",
+    body: "Advise dispatch of the stop before contact: unit callsign, location/postal, vehicle description, plate if visible, reason for stop, and occupant count.",
+  },
+  {
+    title: "Position and approach",
+    callout: "Officer safety",
+    body: "Park safely, offset behind the vehicle, watch occupants, and choose driver-side or passenger-side approach based on scene conditions. Keep the interaction professional and calm.",
+  },
+  {
+    title: "Introduce and request documents",
+    callout: "Contact script",
+    body: "Identify yourself, department, and reason for the stop. Request driver license, registration, and insurance. Ask clear questions without escalating the scene unnecessarily.",
+  },
+  {
+    title: "Run NCIC / DMV",
+    callout: "Records check",
+    body: "Return to the MDT and run the driver and vehicle through NCIC/DMV. Check license status, warrants, vehicle registration, insurance, prior citations, and officer safety notes.",
+  },
+  {
+    title: "Decide outcome",
+    callout: "Enforcement action",
+    body: "Choose warning, citation, further investigation, arrest, or release based on RP facts and server protocol. If writing a ticket, use the MDT citation writer and court date workflow.",
+  },
+  {
+    title: "Close and document",
+    callout: "Clear the stop",
+    body: "Explain the outcome to the driver, return documents when appropriate, and clear the stop with dispatch. File an after-call report if the stop became an incident, pursuit, arrest, or use-of-force event.",
+  },
+];
 
 function isUpdateLockdown() {
   return Boolean(state.session?.system?.update_lockdown_enabled);
@@ -3173,25 +3220,35 @@ function renderMdtWorkspace() {
     ["cid-ia", "Internal Affairs"],
     ["bolos", "BOLOs"],
     ["cad-reports", "Reports"],
-    ["ticket", "Issue"],
+    ["ticket", "Write Ticket"],
     ["criminal", "Criminal"],
-    ["citations", "Citations"],
+    ["citations", "NYS Codes"],
+    ["mdt-settings", "Settings"],
     ["panic", "Panic"],
   ] : [
     ["search", "NCIC / DMV"],
     ["bolos", "BOLOs"],
     ["cad-reports", "Reports"],
-    ["ticket", "Issue"],
-    ["citations", "Citations"],
+    ["ticket", "Write Ticket"],
+    ["citations", "NYS Codes"],
     ["criminal", "Criminal"],
+    ["mdt-settings", "Settings"],
     ["panic", "Panic"],
   ];
+  const activeNavLabel = navItems.find(([id]) => id === state.mdtTab)?.[1] || "NCIC / DMV";
+  const unitCallsign = state.session.user.callsign || "No callsign";
+  const terminalTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   return `
-    <section class="mdt-workspace ${mdtCommandEnabledNow ? "cid-workspace" : ""}">
+    <section class="mdt-workspace mdt-redesign ${mdtCommandEnabledNow ? "cid-workspace" : ""}">
       <header class="mdt-topbar">
         <div>
           <p class="eyebrow">${escapeHtml(state.session.user.primary_agency || (mdtCommandEnabledNow ? `${commandLabel} Command` : "Law Enforcement"))}</p>
           <h1>${mdtCommandEnabledNow ? `${commandLabel} Command MDT` : "Mobile Data Terminal"}</h1>
+          <div class="mdt-status-line">
+            <span>${escapeHtml(unitCallsign)}</span>
+            <span>${escapeHtml(activeNavLabel)}</span>
+            <span>${escapeHtml(terminalTime)}</span>
+          </div>
           ${mdtCommandEnabledNow ? `<p class="mdt-subtitle">Investigations / warrants / intelligence / internal affairs</p>` : ""}
         </div>
         <div class="mdt-top-actions">
@@ -3221,7 +3278,7 @@ function renderMdtWorkspace() {
       <div class="mdt-layout">
         <aside class="mdt-nav ${state.mdtNavOpen ? "open" : ""}">
           <div class="mdt-drawer-head"><strong>MDT Menu</strong><button class="icon-action" data-close-mdt-drawers aria-label="Close">x</button></div>
-          ${navItems.map(([id, label]) => `<button class="${state.mdtTab === id ? "active" : ""}" data-mdt-tab="${id}">${label}</button>`).join("")}
+          ${navItems.map(([id, label], index) => `<button class="${state.mdtTab === id ? "active" : ""}" data-mdt-tab="${id}"><span>${String(index + 1).padStart(2, "0")}</span><strong>${escapeHtml(label)}</strong></button>`).join("")}
         </aside>
         <main class="mdt-main">${renderMdtContent()}</main>
         <aside class="mdt-side ${state.mdtSideOpen ? "open" : ""}">
@@ -3232,6 +3289,7 @@ function renderMdtWorkspace() {
       ${(state.mdtNavOpen || state.mdtSideOpen) ? `<button class="mdt-drawer-backdrop" data-close-mdt-drawers aria-label="Close MDT drawer"></button>` : ""}
       ${state.mdtCatalogOpen ? renderMdtCatalogModal() : ""}
       ${state.mdtNotice ? renderMdtNoticeModal() : ""}
+      ${state.mdtTrafficStopActive ? renderTrafficStopAssistantModal() : ""}
       ${state.mdtProfileUserId ? renderMdtProfileModal() : ""}
       ${cidWarrantModal}
     </section>
@@ -4117,6 +4175,7 @@ function renderMdtContent() {
   if (state.mdtTab === "ticket") return renderTicketWriter();
   if (state.mdtTab === "citations") return renderCodeSection("citation");
   if (state.mdtTab === "criminal") return renderCodeSection("criminal");
+  if (state.mdtTab === "mdt-settings") return renderMdtSettings();
   if (state.mdtTab === "panic") return renderPanic();
   return renderMdtSearch();
 }
@@ -4224,6 +4283,10 @@ function renderMdtSide() {
       <div class="list compact-list">
         ${canOpenDispatch ? `<button class="secondary" type="button" data-open-mdt-dispatch>Dispatch CAD</button>` : `<p class="muted small">Dispatch unavailable</p>`}
         ${canOpenMessages ? `<button class="secondary" type="button" data-open-mdt-messages>Messages</button>` : `<p class="muted small">Messages unavailable</p>`}
+        ${state.mdtProtocolAssistantEnabled ? `<button class="secondary" type="button" data-start-traffic-stop>Initiate Traffic Stop</button>` : ""}
+        <button class="secondary" type="button" data-mdt-tab="ticket">Write Ticket</button>
+        <button class="secondary" type="button" data-mdt-tab="citations">NYS Codes</button>
+        <button class="secondary" type="button" data-mdt-tab="mdt-settings">MDT Settings</button>
       </div>
     </div>
     ${cid ? `
@@ -4712,6 +4775,20 @@ function getMdtCatalog(kind) {
   return data.citations || [];
 }
 
+function renderChargeOptions(charges, selectedId = "") {
+  const groups = new Map();
+  charges.forEach((charge) => {
+    const category = charge.category || "Other";
+    if (!groups.has(category)) groups.set(category, []);
+    groups.get(category).push(charge);
+  });
+  return Array.from(groups.entries()).map(([category, rows]) => `
+    <optgroup label="${escapeHtml(category)}">
+      ${rows.map((charge) => `<option value="${charge.id}"${selectedAttr(charge.id, selectedId)}>${escapeHtml(charge.code)} - ${escapeHtml(charge.title)} - ${money(charge.fine_amount)}</option>`).join("")}
+    </optgroup>
+  `).join("");
+}
+
 function renderTicketWriter() {
   const charges = getMdtCatalog(state.mdtCatalogMode);
   const civilians = getMdtCivilians();
@@ -4719,6 +4796,11 @@ function renderTicketWriter() {
   const defaultCourt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   return `
     <form id="ticketForm" class="mdt-form ${criminalMode ? "charge-warrant-form" : ""}">
+      <section class="ticket-command-strip">
+        <button type="button" data-open-catalog data-catalog-kind="citation"><strong>NYS Ticket Book</strong><span>Traffic, vehicle, and parking codes</span></button>
+        <button type="button" data-catalog-mode="criminal"><strong>Criminal Warrant</strong><span>Switch to charge/warrant writer</span></button>
+        <button type="button" data-mdt-tab="citations"><strong>Code Board</strong><span>Browse citation cards</span></button>
+      </section>
       <div class="mdt-section-head">
         <div><p class="eyebrow">${criminalMode ? "Criminal warrant writer" : "Citation writer"}</p><h2>Issue ${criminalMode ? "Criminal Charge" : "Citation"}</h2></div>
         <button class="secondary" type="button" data-open-catalog>Browse codes</button>
@@ -4736,7 +4818,8 @@ function renderTicketWriter() {
         <label>Court date<input name="court_date" type="date" value="${defaultCourt}" /></label>
       </div>
       <label>Code<select name="charge_id" required>
-        ${charges.map((charge) => `<option value="${charge.id}"${selectedAttr(charge.id, state.mdtSelectedChargeId)}>${escapeHtml(charge.code)} - ${escapeHtml(charge.title)} - ${money(charge.fine_amount)}</option>`).join("")}
+        <option value="">Select ${criminalMode ? "criminal charge" : "citation code"}</option>
+        ${renderChargeOptions(charges, state.mdtSelectedChargeId)}
       </select></label>
       <label>Location<input name="location" placeholder="Street, postal, landmark" required /></label>
       ${criminalMode ? `
@@ -4794,7 +4877,7 @@ function renderCodeSection(kind) {
   const rows = getMdtCatalog(kind);
   return `
     <div class="mdt-section-head">
-      <div><p class="eyebrow">${kind === "citation" ? "Traffic and civil" : "Criminal"} catalog</p><h2>${kind === "citation" ? "Citation Codes" : "Criminal Charges"}</h2></div>
+      <div><p class="eyebrow">${kind === "citation" ? "NYS traffic and parking" : "Criminal"} catalog</p><h2>${kind === "citation" ? "NYS Citation Codes" : "Criminal Charges"}</h2></div>
       <button class="secondary" data-open-catalog data-catalog-kind="${kind}">Open catalog</button>
     </div>
     <div class="mdt-code-grid">
@@ -4804,7 +4887,9 @@ function renderCodeSection(kind) {
           <h3>${escapeHtml(charge.title)}</h3>
           <p class="muted small">${escapeHtml(charge.category)} - ${money(charge.fine_amount)} - ${charge.points} pts</p>
           <p>${escapeHtml(charge.description)}</p>
-          ${kind === "criminal" ? `<button class="secondary" type="button" data-select-criminal-charge="${charge.id}">Use charge</button>` : ""}
+          ${kind === "criminal"
+            ? `<button class="secondary" type="button" data-select-criminal-charge="${charge.id}">Use charge</button>`
+            : `<button class="secondary" type="button" data-select-citation-charge="${charge.id}">Write ticket</button>`}
         </article>
       `).join("") || `<div class="empty">No ${kind} codes loaded</div>`}
     </div>
@@ -4817,7 +4902,7 @@ function renderMdtCatalogModal() {
     <div class="modal-backdrop" data-close-catalog>
       <section class="mdt-modal" role="dialog" aria-modal="true">
         <header class="row">
-          <div><p class="eyebrow">Code catalog</p><h2>${state.mdtCatalogMode === "citation" ? "Citation Codes" : "Criminal Charges"}</h2></div>
+          <div><p class="eyebrow">Code catalog</p><h2>${state.mdtCatalogMode === "citation" ? "NYS Citation Codes" : "Criminal Charges"}</h2></div>
           <button class="icon-action" data-close-catalog aria-label="Close">x</button>
         </header>
         <div class="segmented">
@@ -4831,6 +4916,7 @@ function renderMdtCatalogModal() {
               <div class="row"><strong>${escapeHtml(charge.code)} - ${escapeHtml(charge.title)}</strong><span class="pill">${money(charge.fine_amount)}</span></div>
               <p class="muted small">${escapeHtml(charge.category)} - ${escapeHtml(charge.severity)} - ${charge.points} pts</p>
               <p>${escapeHtml(charge.description)}</p>
+              <button class="secondary" type="button" ${state.mdtCatalogMode === "criminal" ? `data-select-criminal-charge="${charge.id}"` : `data-select-citation-charge="${charge.id}"`}>Use code</button>
             </article>
           `).join("")}
         </div>
@@ -4862,6 +4948,91 @@ function renderMdtNoticeModal() {
         <button class="primary" data-close-mdt-notice>Acknowledge notice</button>
       </section>
     </div>
+  `;
+}
+
+function renderTrafficStopAssistantModal() {
+  const stepIndex = Math.max(0, Math.min(TRAFFIC_STOP_STEPS.length - 1, Number(state.mdtTrafficStopStep || 0)));
+  const step = TRAFFIC_STOP_STEPS[stepIndex];
+  const progress = Math.round(((stepIndex + 1) / TRAFFIC_STOP_STEPS.length) * 100);
+  return `
+    <div class="modal-backdrop traffic-stop-backdrop">
+      <section class="mdt-modal traffic-stop-modal" role="dialog" aria-modal="true" aria-label="Traffic stop protocol assistant">
+        <header class="traffic-stop-head">
+          <div>
+            <p class="eyebrow">Traffic stop protocol</p>
+            <h2>${escapeHtml(step.title)}</h2>
+          </div>
+          <button class="icon-action" type="button" data-traffic-stop-close aria-label="Close">${iconSvg.back}</button>
+        </header>
+        <div class="traffic-progress" aria-label="Traffic stop progress">
+          <span style="width:${progress}%"></span>
+        </div>
+        <div class="traffic-stop-body">
+          <span class="pill green">Step ${stepIndex + 1} of ${TRAFFIC_STOP_STEPS.length}</span>
+          <h3>${escapeHtml(step.callout)}</h3>
+          <p>${escapeHtml(step.body)}</p>
+        </div>
+        <div class="traffic-step-list">
+          ${TRAFFIC_STOP_STEPS.map((item, index) => `
+            <button type="button" class="${index === stepIndex ? "active" : ""}" data-traffic-stop-step="${index}">
+              <span>${String(index + 1).padStart(2, "0")}</span>
+              <strong>${escapeHtml(item.title)}</strong>
+            </button>
+          `).join("")}
+        </div>
+        <footer class="traffic-stop-actions">
+          <button class="secondary" type="button" data-traffic-stop-skip>Skip guide</button>
+          <button class="secondary" type="button" data-traffic-stop-prev ${stepIndex === 0 ? "disabled" : ""}>Back</button>
+          <button class="primary" type="button" data-traffic-stop-next>${stepIndex === TRAFFIC_STOP_STEPS.length - 1 ? "Finish stop" : "Next prompt"}</button>
+        </footer>
+      </section>
+    </div>
+  `;
+}
+
+function renderMdtSettings() {
+  return `
+    <section class="mdt-settings-console">
+      <div class="mdt-section-head">
+        <div>
+          <p class="eyebrow">Officer workflow</p>
+          <h2>MDT Settings</h2>
+        </div>
+        <button class="primary" type="button" data-start-traffic-stop>Initiate Traffic Stop</button>
+      </div>
+      <div class="traffic-settings-grid">
+        <article class="traffic-settings-hero">
+          <div>
+            <p class="eyebrow">Guided protocol</p>
+            <h3>Traffic Stop Assistant</h3>
+            <p>Use this during a stop to keep the RP sequence clean: radio, approach, documents, NCIC/DMV, outcome, and documentation.</p>
+          </div>
+          <button class="primary" type="button" data-start-traffic-stop>Start stop prompts</button>
+        </article>
+        <article class="mdt-return traffic-setting-card">
+          <div class="row">
+            <div>
+              <h3>Prompt preference</h3>
+              <p class="muted small">This setting stays on this device for the logged-in officer.</p>
+            </div>
+            <span class="pill ${state.mdtProtocolAssistantEnabled ? "green" : "amber"}">${state.mdtProtocolAssistantEnabled ? "enabled" : "paused"}</span>
+          </div>
+          <label class="check-row"><input type="checkbox" data-mdt-protocol-toggle ${state.mdtProtocolAssistantEnabled ? "checked" : ""} /> Keep traffic stop assistant available in MDT quick tools</label>
+        </article>
+        <article class="mdt-return traffic-setting-card">
+          <h3>Protocol cards</h3>
+          <div class="traffic-protocol-preview">
+            ${TRAFFIC_STOP_STEPS.map((item, index) => `
+              <div>
+                <span>${String(index + 1).padStart(2, "0")}</span>
+                <strong>${escapeHtml(item.title)}</strong>
+              </div>
+            `).join("")}
+          </div>
+        </article>
+      </div>
+    </section>
   `;
 }
 
@@ -5331,6 +5502,44 @@ function bindMdt() {
     state.mdtNotice = null;
     render();
   }));
+  $$("[data-start-traffic-stop]").forEach((button) => button.addEventListener("click", () => {
+    state.mdtTrafficStopActive = true;
+    state.mdtTrafficStopStep = 0;
+    state.mdtNavOpen = false;
+    state.mdtSideOpen = false;
+    render();
+  }));
+  $$("[data-traffic-stop-step]").forEach((button) => button.addEventListener("click", () => {
+    state.mdtTrafficStopStep = Number(button.dataset.trafficStopStep || 0);
+    render();
+  }));
+  $("[data-traffic-stop-prev]")?.addEventListener("click", () => {
+    state.mdtTrafficStopStep = Math.max(0, Number(state.mdtTrafficStopStep || 0) - 1);
+    render();
+  });
+  $("[data-traffic-stop-next]")?.addEventListener("click", () => {
+    const nextStep = Number(state.mdtTrafficStopStep || 0) + 1;
+    if (nextStep >= TRAFFIC_STOP_STEPS.length) {
+      state.mdtTrafficStopActive = false;
+      state.mdtTrafficStopStep = 0;
+      toast("Traffic stop guide complete");
+    } else {
+      state.mdtTrafficStopStep = nextStep;
+    }
+    render();
+  });
+  $$("[data-traffic-stop-skip], [data-traffic-stop-close]").forEach((button) => button.addEventListener("click", () => {
+    state.mdtTrafficStopActive = false;
+    state.mdtTrafficStopStep = 0;
+    toast("Traffic stop guide skipped");
+    render();
+  }));
+  $("[data-mdt-protocol-toggle]")?.addEventListener("change", (event) => {
+    state.mdtProtocolAssistantEnabled = event.currentTarget.checked;
+    localStorage.setItem("rp.mdt.protocolAssistant", state.mdtProtocolAssistantEnabled ? "1" : "0");
+    toast(state.mdtProtocolAssistantEnabled ? "Traffic stop assistant enabled" : "Traffic stop assistant paused");
+    render();
+  });
   $$("[data-use-civ]").forEach((button) => button.addEventListener("click", () => {
     state.mdtSelectedCiv = button.dataset.useCiv;
     state.mdtTab = "ticket";
@@ -5400,6 +5609,13 @@ function bindMdt() {
   $$("[data-select-criminal-charge]").forEach((button) => button.addEventListener("click", () => {
     state.mdtCatalogMode = "criminal";
     state.mdtSelectedChargeId = button.dataset.selectCriminalCharge;
+    state.mdtTab = "ticket";
+    state.mdtCatalogOpen = false;
+    render();
+  }));
+  $$("[data-select-citation-charge]").forEach((button) => button.addEventListener("click", () => {
+    state.mdtCatalogMode = "citation";
+    state.mdtSelectedChargeId = button.dataset.selectCitationCharge;
     state.mdtTab = "ticket";
     state.mdtCatalogOpen = false;
     render();
@@ -5759,7 +5975,7 @@ function renderSystem() {
   `;
 }
 
-const roleOptions = ["civ", "owner", "admin", "leo", "judge", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "business_owner", "business_registrar", "city_hall", "economy_manager"];
+const roleOptions = ["civ", "owner", "admin", "indeed_admin", "leo", "judge", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "business_owner", "business_registrar", "city_hall", "economy_manager"];
 
 function adminUserSearchText(user) {
   return [
@@ -5811,7 +6027,27 @@ function renderDepartmentApplicationPacket(item) {
   `;
 }
 
-function renderAdminDepartmentApplications(data) {
+function renderIndeedAdmin() {
+  const data = state.cache["indeed-admin"] || { stats: {}, applications: [] };
+  return `
+    <div class="stack indeed-admin-app">
+      <section class="indeed-hero">
+        <div>
+          <p class="eyebrow">Recruitment desk</p>
+          <h3>Indeed Admin</h3>
+          <p>Review department job applications, open full packets, and move candidates through command approval without using the full Admin panel.</p>
+        </div>
+        <div class="indeed-hero-stats">
+          <span>${data.stats?.active || 0}</span>
+          <small>active files</small>
+        </div>
+      </section>
+      ${renderAdminDepartmentApplications(data, "indeed")}
+    </div>
+  `;
+}
+
+function renderAdminDepartmentApplications(data, mode = "admin") {
   const rows = data.applications || [];
   const groups = {
     active: rows.filter((item) => !["approved", "denied", "withdrawn", "closed"].includes(item.status)),
@@ -5819,8 +6055,11 @@ function renderAdminDepartmentApplications(data) {
     denied: rows.filter((item) => item.status === "denied"),
     closed: rows.filter((item) => ["withdrawn", "closed"].includes(item.status)),
   };
-  if (!groups[state.adminApplicationFilter]) state.adminApplicationFilter = "active";
-  const visible = groups[state.adminApplicationFilter] || [];
+  const isIndeed = mode === "indeed";
+  const filterKey = isIndeed ? "indeedApplicationFilter" : "adminApplicationFilter";
+  const filterAttr = isIndeed ? "data-indeed-application-filter" : "data-admin-application-filter";
+  if (!groups[state[filterKey]]) state[filterKey] = "active";
+  const visible = groups[state[filterKey]] || [];
   const filters = [
     ["active", "Active", groups.active.length],
     ["approved", "Approved", groups.approved.length],
@@ -5828,7 +6067,7 @@ function renderAdminDepartmentApplications(data) {
     ["closed", "Closed", groups.closed.length],
   ];
   return `
-    <section class="admin-application-board">
+    <section class="admin-application-board ${isIndeed ? "indeed-application-board" : ""}">
       <div class="grid-2">
         <div class="metric"><span>New</span><strong>${data.stats?.submitted || 0}</strong></div>
         <div class="metric"><span>Under review</span><strong>${data.stats?.under_review || 0}</strong></div>
@@ -5837,32 +6076,38 @@ function renderAdminDepartmentApplications(data) {
       </div>
       <div class="admin-application-filters">
         ${filters.map(([id, label, count]) => `
-          <button class="${state.adminApplicationFilter === id ? "active" : ""}" type="button" data-admin-application-filter="${id}">
+          <button class="${state[filterKey] === id ? "active" : ""}" type="button" ${filterAttr}="${id}">
             <span>${escapeHtml(label)}</span>
             <strong>${count}</strong>
           </button>
         `).join("")}
       </div>
       <div class="admin-application-list">
-        ${visible.map(renderAdminDepartmentApplicationCard).join("") || `<div class="empty">No applications in this folder</div>`}
+        ${visible.map((item) => renderAdminDepartmentApplicationCard(item, mode)).join("") || `<div class="empty">No applications in this folder</div>`}
       </div>
     </section>
   `;
 }
 
-function renderAdminDepartmentApplicationCard(item) {
+function renderAdminDepartmentApplicationCard(item, mode = "admin") {
   const isClosed = ["approved", "denied", "withdrawn", "closed"].includes(item.status);
+  const isIndeed = mode === "indeed";
+  const statusAttr = isIndeed ? "data-indeed-application-status" : "data-admin-application-status";
+  const formClass = isIndeed ? "indeed-application-review-form admin-application-review-form" : "admin-application-review-form";
   return `
     <article class="admin-application-card admin-application-folder">
-      <details>
+      <details class="admin-application-details">
         <summary>
-          <div class="row tight">
+          <div class="admin-application-summary-main">
             <div>
               <p class="eyebrow">${escapeHtml(item.application_number)}</p>
               <h3>${escapeHtml(item.applicant_name || "Applicant")}</h3>
               <p class="muted small">${escapeHtml(item.department_name)} / desired role ${escapeHtml(item.desired_role || "")}</p>
             </div>
-            <span class="pill ${businessStatusClass(item.status)}">${humanLabel(item.status)}</span>
+            <div class="admin-application-summary-actions">
+              <span class="pill ${businessStatusClass(item.status)}">${humanLabel(item.status)}</span>
+              <span class="admin-folder-toggle"><span class="open-label">Open review</span><span class="close-label">Close review</span></span>
+            </div>
           </div>
           <div class="admin-application-strip">
             <span>CIV ${escapeHtml(item.applicant_civ_number || "pending")}</span>
@@ -5879,13 +6124,13 @@ function renderAdminDepartmentApplicationCard(item) {
           </div>
           ${renderDepartmentApplicationPacket(item)}
           ${item.reviewer_notes ? `<p class="muted small">Review notes: ${escapeHtml(item.reviewer_notes)}</p>` : ""}
-          <form class="admin-application-review-form" data-application-id="${item.id}">
+          <form class="${formClass}" data-application-id="${item.id}">
             <label>Review notes<textarea name="reviewer_notes" maxlength="1500" placeholder="Optional notes sent to the applicant">${escapeHtml(item.reviewer_notes || "")}</textarea></label>
             <div class="admin-application-actions">
-              <button class="secondary" type="button" data-admin-application-status="under_review" ${item.status === "under_review" ? "disabled" : ""}>Mark Review</button>
-              <button class="primary" type="button" data-admin-application-status="approved" ${item.status === "approved" ? "disabled" : ""}>Approve</button>
-              <button class="danger" type="button" data-admin-application-status="denied" ${item.status === "denied" ? "disabled" : ""}>Deny</button>
-              <button class="secondary" type="button" data-admin-application-status="closed" ${isClosed ? "disabled" : ""}>Close</button>
+              <button class="secondary" type="button" ${statusAttr}="under_review" ${item.status === "under_review" ? "disabled" : ""}>Mark Review</button>
+              <button class="primary" type="button" ${statusAttr}="approved" ${item.status === "approved" ? "disabled" : ""}>Approve</button>
+              <button class="danger" type="button" ${statusAttr}="denied" ${item.status === "denied" ? "disabled" : ""}>Deny</button>
+              <button class="secondary" type="button" ${statusAttr}="closed" ${isClosed ? "disabled" : ""}>Close</button>
             </div>
           </form>
         </div>
@@ -6101,6 +6346,32 @@ function bindSystem() {
   });
 }
 
+function bindIndeedAdmin() {
+  $$("[data-indeed-application-filter]").forEach((button) => button.addEventListener("click", () => {
+    state.indeedApplicationFilter = button.dataset.indeedApplicationFilter;
+    render();
+  }));
+  $$("[data-indeed-application-status]").forEach((button) => button.addEventListener("click", async () => {
+    const form = button.closest(".indeed-application-review-form");
+    if (!form) return;
+    try {
+      await api(`/api/indeed-admin/applications/${form.dataset.applicationId}`, {
+        method: "PATCH",
+        body: {
+          status: button.dataset.indeedApplicationStatus,
+          reviewer_notes: new FormData(form).get("reviewer_notes") || "",
+        },
+      });
+      toast("Application updated");
+      await loadAppData("indeed-admin");
+      await loadSession();
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+}
+
 function applyAdminUserSearch() {
   const query = String(state.adminSearch || "").trim().toLowerCase();
   const cards = $$("[data-admin-user-card]");
@@ -6286,7 +6557,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.39").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.42").catch(() => {}));
 }
 
 bootApp();

@@ -1,6 +1,63 @@
 {
-  "version": "0.0.39",
+  "version": "0.0.42",
   "entries": [
+    {
+      "date": "2026-07-13",
+      "version": "0.0.42",
+      "title": "Traffic Stop Protocol Assistant",
+      "added": [
+        "Added a MDT Settings page for officer workflow controls.",
+        "Added a skippable Traffic Stop Assistant that walks officers through RP stop protocol from observation through documentation.",
+        "Added an Initiate Traffic Stop button in MDT Settings and the MDT watch panel.",
+        "Added a device-level setting to keep the traffic stop assistant available or pause it on that officer device."
+      ],
+      "changed": [
+        "Traffic stop guidance now appears as a terminal-style overlay with progress, step navigation, next/back controls, finish, and skip actions.",
+        "The MDT watch panel now exposes traffic stop protocol access alongside Dispatch, Messages, Write Ticket, and NYS Codes."
+      ],
+      "fixed": [],
+      "removed": []
+    },
+    {
+      "date": "2026-07-13",
+      "version": "0.0.41",
+      "title": "Officer MDT Visual Overhaul",
+      "added": [
+        "Added a new law/CID MDT terminal skin with a connected command layout instead of stacked widget panels.",
+        "Added a MDT status line showing callsign, active workspace, and terminal time.",
+        "Added numbered MDT navigation controls for faster officer orientation."
+      ],
+      "changed": [
+        "Reworked the officer/CID MDT shell, nav rail, telemetry strip, ticket writer, code cards, and watch panel to feel more like one modern CAD terminal.",
+        "Reduced repeated boxed-card styling across the MDT and replaced it with flatter connected panels, rail separators, and subtle command-console motion.",
+        "Added mobile-specific rules so the redesigned MDT still works with slide-out menu and watch drawers on phones."
+      ],
+      "fixed": [
+        "Reduced the blocky widget look in the MDT interface while preserving the existing NCIC, ticket, BOLO, report, panic, and CID workflows."
+      ],
+      "removed": []
+    },
+    {
+      "date": "2026-07-13",
+      "version": "0.0.40",
+      "title": "Indeed Admin and NYS Ticket Book",
+      "added": [
+        "Added a new Indeed Admin app icon for owners, admins, and the new indeed_admin role to review department job applications.",
+        "Added the indeed_admin role to account role assignment and department application review notifications.",
+        "Added NYS VTL-style traffic, vehicle, license, insurance, equipment, and parking citation entries to the MDT citation catalog.",
+        "Added MDT ticket shortcuts for Write Ticket and NYS Codes from the watch panel and citation cards."
+      ],
+      "changed": [
+        "Department application review permissions now allow the Indeed Admin role without granting full Admin account-management access.",
+        "Admin Job Apps and Indeed Admin review queues now use clearer folder-style application packets with explicit open and close controls.",
+        "The ticket writer now groups citation and criminal code dropdown options by category for faster officer selection."
+      ],
+      "fixed": [
+        "Improved application packet opening behavior in the Admin Job Apps layout.",
+        "Reduced officer ticket friction by making citation writing and NYS code browsing accessible from more MDT screens."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-07-06",
       "version": "0.0.39",

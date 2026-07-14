@@ -1,8 +1,8 @@
-const CACHE = "rp-command-v39-court-jobs-queues";
+const CACHE = "rp-command-v42-traffic-stop-assistant";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.39",
-  "/static/app.js?v=0.0.39",
+  "/static/styles.css?v=0.0.42",
+  "/static/app.js?v=0.0.42",
   "/static/icons/icon.svg",
   "/static/getting-started/used-cars.jpg",
   "/static/getting-started/dirty-pond.jpg",
