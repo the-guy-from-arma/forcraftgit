@@ -4424,6 +4424,9 @@ textarea:focus {
 
 .traffic-stop-modal {
   width: min(760px, calc(100vw - 28px));
+  max-height: min(840px, calc(100svh - 28px));
+  grid-template-rows: auto auto auto auto auto auto;
+  overflow: auto;
   border-color: rgba(40, 209, 124, 0.24);
   background:
     linear-gradient(180deg, rgba(8, 15, 16, 0.98), rgba(3, 7, 8, 0.98)),
@@ -4478,9 +4481,203 @@ textarea:focus {
   line-height: 1.45;
 }
 
+.traffic-stop-tools {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.traffic-ncic-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  padding: 10px;
+  border: 1px solid rgba(126, 231, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(126, 231, 255, 0.045);
+}
+
+.traffic-ncic-results {
+  display: grid;
+  gap: 8px;
+  max-height: 290px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.traffic-ncic-card,
+.traffic-attached-driver,
+.traffic-system-note,
+.traffic-arrest-panel {
+  border: 1px solid rgba(126, 231, 255, 0.13);
+  border-radius: 6px;
+  background:
+    linear-gradient(135deg, rgba(6, 18, 20, 0.92), rgba(3, 8, 10, 0.96)),
+    repeating-linear-gradient(90deg, rgba(126, 231, 255, 0.025) 0 1px, transparent 1px 52px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+.traffic-ncic-card {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+}
+
+.traffic-ncic-card h4,
+.traffic-arrest-panel h4,
+.traffic-arrest-panel p,
+.traffic-attached-driver p,
+.traffic-attached-driver strong,
+.traffic-system-note strong,
+.traffic-system-note span {
+  margin: 0;
+}
+
+.traffic-ncic-meta {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.traffic-ncic-meta span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px;
+  border-radius: 5px;
+  color: rgba(226, 255, 249, 0.78);
+  background: rgba(255, 255, 255, 0.045);
+  overflow-wrap: anywhere;
+}
+
+.traffic-ncic-meta strong {
+  color: rgba(126, 231, 255, 0.82);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.traffic-attached-driver {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border-color: rgba(40, 209, 124, 0.24);
+  background:
+    linear-gradient(135deg, rgba(6, 35, 25, 0.92), rgba(3, 10, 9, 0.96)),
+    repeating-linear-gradient(90deg, rgba(40, 209, 124, 0.035) 0 1px, transparent 1px 52px);
+}
+
+.traffic-attached-driver strong {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 19px;
+}
+
+.traffic-attached-driver span:not(.pill) {
+  display: block;
+  color: rgba(226, 255, 249, 0.68);
+  font-size: 12px;
+}
+
+.traffic-driver-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  justify-content: flex-end;
+}
+
+.traffic-system-note {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  color: rgba(226, 255, 249, 0.76);
+}
+
+.traffic-system-note.red {
+  border-color: rgba(239, 78, 99, 0.32);
+  background: linear-gradient(135deg, rgba(40, 13, 18, 0.88), rgba(6, 9, 10, 0.96));
+}
+
+.traffic-outcome-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid rgba(126, 231, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(126, 231, 255, 0.06);
+}
+
+.traffic-outcome-grid button {
+  display: grid;
+  gap: 7px;
+  min-height: 110px;
+  border: 0;
+  border-left: 1px solid rgba(126, 231, 255, 0.12);
+  border-radius: 0;
+  padding: 12px;
+  color: rgba(226, 255, 249, 0.82);
+  background: rgba(0, 0, 0, 0.2);
+  text-align: left;
+}
+
+.traffic-outcome-grid button:first-child {
+  border-left: 0;
+}
+
+.traffic-outcome-grid button.active,
+.traffic-outcome-grid button:hover:not(:disabled) {
+  color: #03100d;
+  background: linear-gradient(90deg, #28d17c, #7ee7ff);
+}
+
+.traffic-outcome-grid button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.traffic-outcome-grid strong {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.traffic-outcome-grid span {
+  color: inherit;
+  font-size: 11px;
+  line-height: 1.35;
+  opacity: 0.8;
+}
+
+.traffic-arrest-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-color: rgba(239, 78, 99, 0.28);
+  background:
+    linear-gradient(135deg, rgba(36, 10, 15, 0.94), rgba(7, 9, 10, 0.96)),
+    repeating-linear-gradient(90deg, rgba(239, 78, 99, 0.035) 0 1px, transparent 1px 52px);
+}
+
+.traffic-arrest-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 22px;
+  color: rgba(226, 255, 249, 0.78);
+  line-height: 1.4;
+}
+
+.traffic-arrest-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .traffic-step-list {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 1px;
   overflow: hidden;
   border: 1px solid rgba(126, 231, 255, 0.1);
@@ -6764,6 +6961,42 @@ textarea:focus {
 
   .traffic-settings-hero {
     min-height: 220px;
+  }
+
+  .traffic-stop-modal {
+    width: min(100%, calc(100vw - 14px));
+    max-height: calc(100dvh - 18px);
+    padding: 10px;
+  }
+
+  .traffic-ncic-form,
+  .traffic-attached-driver,
+  .traffic-outcome-grid,
+  .traffic-ncic-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .traffic-ncic-results {
+    max-height: 260px;
+  }
+
+  .traffic-driver-flags {
+    justify-content: flex-start;
+  }
+
+  .traffic-outcome-grid button {
+    min-height: 82px;
+    border-left: 0;
+    border-top: 1px solid rgba(126, 231, 255, 0.12);
+  }
+
+  .traffic-outcome-grid button:first-child {
+    border-top: 0;
+  }
+
+  .traffic-arrest-actions {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 
   .traffic-step-list {

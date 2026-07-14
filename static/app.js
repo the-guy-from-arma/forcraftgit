@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.44";
+const OS_VERSION = "0.0.45";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -32,6 +32,11 @@ const state = {
   mdtProtocolAssistantEnabled: localStorage.getItem("rp.mdt.protocolAssistant") !== "0",
   mdtTrafficStopActive: false,
   mdtTrafficStopStep: 0,
+  mdtTrafficStopQuery: "",
+  mdtTrafficStopResults: [],
+  mdtTrafficStopDriverId: "",
+  mdtTrafficStopDriverName: "",
+  mdtTrafficStopOutcome: "",
   cidSelectedCaseId: null,
   cidSelectedIaId: null,
   cidWarrantModalId: null,
@@ -855,36 +860,49 @@ function mdtCommandLabel() {
 
 const TRAFFIC_STOP_STEPS = [
   {
+    key: "observe",
     title: "Observe and decide",
     callout: "Reason for stop",
     body: "Confirm the traffic violation or reasonable suspicion before activating lights. Note vehicle description, plate, location, direction of travel, occupants, and any safety concerns.",
   },
   {
+    key: "radio",
     title: "Radio the stop",
     callout: "Dispatch first",
     body: "Advise dispatch of the stop before contact: unit callsign, location/postal, vehicle description, plate if visible, reason for stop, and occupant count.",
   },
   {
+    key: "position",
     title: "Position and approach",
     callout: "Officer safety",
     body: "Park safely, offset behind the vehicle, watch occupants, and choose driver-side or passenger-side approach based on scene conditions. Keep the interaction professional and calm.",
   },
   {
+    key: "documents",
     title: "Introduce and request documents",
     callout: "Contact script",
     body: "Identify yourself, department, and reason for the stop. Request driver license, registration, and insurance. Ask clear questions without escalating the scene unnecessarily.",
   },
   {
+    key: "ncic",
     title: "Run NCIC / DMV",
     callout: "Records check",
     body: "Return to the MDT and run the driver and vehicle through NCIC/DMV. Check license status, warrants, vehicle registration, insurance, prior citations, and officer safety notes.",
   },
   {
+    key: "outcome",
     title: "Decide outcome",
     callout: "Enforcement action",
     body: "Choose warning, citation, further investigation, arrest, or release based on RP facts and server protocol. If writing a ticket, use the MDT citation writer and court date workflow.",
   },
   {
+    key: "arrest",
+    title: "Arrest protocol",
+    callout: "Custody sequence",
+    body: "If the stop becomes an arrest or criminal offense, slow the scene down: notify dispatch, call backup or supervisor when needed, secure the driver, document probable cause, and route charges through the criminal writer.",
+  },
+  {
+    key: "close",
     title: "Close and document",
     callout: "Clear the stop",
     body: "Explain the outcome to the driver, return documents when appropriate, and clear the stop with dispatch. File an after-call report if the stop became an incident, pursuit, arrest, or use-of-force event.",
@@ -5050,6 +5068,156 @@ function renderMdtNoticeModal() {
   `;
 }
 
+function trafficStopStepIndex(key) {
+  const index = TRAFFIC_STOP_STEPS.findIndex((item) => item.key === key);
+  return index >= 0 ? index : 0;
+}
+
+function getTrafficStopDriverRecord() {
+  const selectedId = String(state.mdtTrafficStopDriverId || "");
+  if (!selectedId) return null;
+  const pools = [
+    state.mdtTrafficStopResults || [],
+    state.cache.mdt?.search || [],
+    getMdtCivilians(),
+  ];
+  for (const pool of pools) {
+    const match = (pool || []).find((item) => String(item.id) === selectedId);
+    if (match) return match;
+  }
+  return null;
+}
+
+function renderTrafficStopAttachedDriver() {
+  const person = getTrafficStopDriverRecord();
+  if (!state.mdtTrafficStopDriverId && !person) return "";
+  const name = person?.name || state.mdtTrafficStopDriverName || "Attached driver";
+  const openCases = person?.open_cases || [];
+  const activeWarrants = (person?.warrants || []).filter((item) => ["active", "pending"].includes(String(item.status || "").toLowerCase()));
+  return `
+    <article class="traffic-attached-driver">
+      <div>
+        <p class="eyebrow">Driver attached to stop</p>
+        <strong>${escapeHtml(name)}</strong>
+        <span>CIV ${escapeHtml(person?.civ_number || "pending")} / DB #${escapeHtml(state.mdtTrafficStopDriverId)}</span>
+      </div>
+      <div class="traffic-driver-flags">
+        <span class="pill ${mdtStatusClass(person?.license_status)}">${escapeHtml(person?.license_status || "License unknown")}</span>
+        <span class="pill ${activeWarrants.length ? "red" : "green"}">${activeWarrants.length} warrants</span>
+        <span class="pill ${openCases.length ? "amber" : "green"}">${openCases.length} open cases</span>
+      </div>
+      <button class="secondary" type="button" data-clear-traffic-driver>Change driver</button>
+    </article>
+  `;
+}
+
+function renderTrafficStopNcicTools() {
+  const results = state.mdtTrafficStopResults || [];
+  const searched = Boolean(String(state.mdtTrafficStopQuery || "").trim());
+  return `
+    <section class="traffic-stop-tools">
+      <form id="trafficStopNcicForm" class="traffic-ncic-form">
+        <label>NCIC / DMV driver search
+          <input name="q" minlength="2" value="${escapeHtml(state.mdtTrafficStopQuery)}" placeholder="Name, CIV number, plate, or car entry code" required />
+        </label>
+        <button class="primary" type="submit">Run NCIC</button>
+      </form>
+      ${renderTrafficStopAttachedDriver()}
+      <div class="traffic-ncic-results" aria-live="polite">
+        ${results.map((item) => {
+          const vehicles = item.vehicles || [];
+          const primaryVehicle = vehicles[0] || {};
+          const activeWarrants = (item.warrants || []).filter((warrant) => ["active", "pending"].includes(String(warrant.status || "").toLowerCase()));
+          return `
+            <article class="traffic-ncic-card">
+              <div class="row">
+                <div>
+                  <h4>${escapeHtml(item.name)}</h4>
+                  <p class="muted small">CIV ${escapeHtml(item.civ_number || "pending")} / DB #${item.id} / ${escapeHtml(item.email || "no email")}</p>
+                </div>
+                <span class="pill ${item.verified ? "green" : "amber"}">${item.verified ? "verified" : "unverified"}</span>
+              </div>
+              <div class="traffic-ncic-meta">
+                <span><strong>License</strong>${escapeHtml(item.license_status || "None")}</span>
+                <span><strong>Plate</strong>${escapeHtml(item.plate || primaryVehicle.plate || "None")}</span>
+                <span><strong>Car Code</strong>${escapeHtml(item.car_entry_code || "Not filed")}</span>
+                <span><strong>Warrants</strong>${activeWarrants.length}</span>
+              </div>
+              <p class="muted small">${vehicles.length ? `${escapeHtml(primaryVehicle.vehicle_year || "")} ${escapeHtml(primaryVehicle.vehicle_color || "")} ${escapeHtml(primaryVehicle.vehicle_make || item.vehicle_make || "")} ${escapeHtml(primaryVehicle.vehicle_model || item.vehicle_model || "")}` : "No registered vehicles on file"}</p>
+              <div class="row-actions">
+                <button class="primary" type="button" data-attach-traffic-driver="${item.id}" data-driver-name="${escapeHtml(item.name)}">Attach driver</button>
+              </div>
+            </article>
+          `;
+        }).join("") || (searched
+          ? `<div class="traffic-system-note red"><strong>No valid NCIC return</strong><span>The name, CIV, plate, or car code did not return a civilian record. Verify spelling and try again before continuing.</span></div>`
+          : `<div class="traffic-system-note"><strong>Run the stop return</strong><span>Search the presented driver or plate, then attach the matching civilian profile to this stop.</span></div>`)}
+      </div>
+    </section>
+  `;
+}
+
+function renderTrafficStopOutcomeTools() {
+  const hasDriver = Boolean(state.mdtTrafficStopDriverId);
+  const selected = state.mdtTrafficStopOutcome;
+  return `
+    <section class="traffic-stop-tools">
+      ${renderTrafficStopAttachedDriver() || `<div class="traffic-system-note red"><strong>No driver attached</strong><span>Go back to the NCIC / DMV step and attach the driver before writing a citation or charge.</span></div>`}
+      <div class="traffic-outcome-grid">
+        <button class="${selected === "warning" ? "active" : ""}" type="button" data-traffic-stop-outcome="warning" ${hasDriver ? "" : "disabled"}>
+          <strong>Warning / Release</strong>
+          <span>Document the warning, return documents, and clear the stop.</span>
+        </button>
+        <button type="button" data-traffic-stop-open-ticket ${hasDriver ? "" : "disabled"}>
+          <strong>Open Citation Writer</strong>
+          <span>Attach this driver to a NYS traffic, vehicle, or parking ticket.</span>
+        </button>
+        <button type="button" data-traffic-stop-open-criminal ${hasDriver ? "" : "disabled"}>
+          <strong>Criminal Offense</strong>
+          <span>Move into the criminal charge and warrant writer.</span>
+        </button>
+        <button class="${selected === "arrest" ? "active" : ""}" type="button" data-traffic-stop-outcome="arrest" ${hasDriver ? "" : "disabled"}>
+          <strong>Arrest Protocol</strong>
+          <span>Continue into custody, transport, and criminal filing steps.</span>
+        </button>
+      </div>
+    </section>
+  `;
+}
+
+function renderTrafficStopArrestTools() {
+  return `
+    <section class="traffic-stop-tools">
+      ${renderTrafficStopAttachedDriver() || `<div class="traffic-system-note red"><strong>No driver attached</strong><span>Attach the driver before proceeding with arrest protocol.</span></div>`}
+      <div class="traffic-arrest-panel">
+        <div>
+          <p class="eyebrow">Arrest protocol</p>
+          <h4>Custody and filing sequence</h4>
+          <p>Use this when the stop turns into a custodial arrest, criminal warrant, or probable-cause filing.</p>
+        </div>
+        <ol class="traffic-arrest-list">
+          <li>Notify dispatch of arrest status, location, and requested backup or supervisor.</li>
+          <li>Order the driver out, secure cuffs when lawful, and search incident to arrest.</li>
+          <li>Separate occupants, preserve evidence, and keep scene notes for the report.</li>
+          <li>Transport or hand off custody under department protocol.</li>
+          <li>File the criminal charge/warrant and after-call report before clearing.</li>
+        </ol>
+        <div class="traffic-arrest-actions">
+          <button class="danger" type="button" data-traffic-stop-open-criminal ${state.mdtTrafficStopDriverId ? "" : "disabled"}>Open Criminal Writer</button>
+          <button class="secondary" type="button" data-traffic-stop-open-report>Open After-Call Report</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderTrafficStopStepTools(step) {
+  if (step?.key === "ncic") return renderTrafficStopNcicTools();
+  if (step?.key === "outcome") return renderTrafficStopOutcomeTools();
+  if (step?.key === "arrest") return renderTrafficStopArrestTools();
+  return renderTrafficStopAttachedDriver();
+}
+
 function renderTrafficStopAssistantModal() {
   const stepIndex = Math.max(0, Math.min(TRAFFIC_STOP_STEPS.length - 1, Number(state.mdtTrafficStopStep || 0)));
   const step = TRAFFIC_STOP_STEPS[stepIndex];
@@ -5072,6 +5240,7 @@ function renderTrafficStopAssistantModal() {
           <h3>${escapeHtml(step.callout)}</h3>
           <p>${escapeHtml(step.body)}</p>
         </div>
+        ${renderTrafficStopStepTools(step)}
         <div class="traffic-step-list">
           ${TRAFFIC_STOP_STEPS.map((item, index) => `
             <button type="button" class="${index === stepIndex ? "active" : ""}" data-traffic-stop-step="${index}">
@@ -5604,10 +5773,106 @@ function bindMdt() {
   $$("[data-start-traffic-stop]").forEach((button) => button.addEventListener("click", () => {
     state.mdtTrafficStopActive = true;
     state.mdtTrafficStopStep = 0;
+    state.mdtTrafficStopQuery = "";
+    state.mdtTrafficStopResults = [];
+    state.mdtTrafficStopDriverId = "";
+    state.mdtTrafficStopDriverName = "";
+    state.mdtTrafficStopOutcome = "";
     state.mdtNavOpen = false;
     state.mdtSideOpen = false;
     render();
   }));
+  $("#trafficStopNcicForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const q = String(new FormData(event.currentTarget).get("q") || "").trim();
+    if (q.length < 2) {
+      toast("Enter at least 2 characters for NCIC");
+      return;
+    }
+    state.mdtTrafficStopQuery = q;
+    try {
+      const results = await api(`/api/mdt/search?q=${encodeURIComponent(q)}`);
+      state.mdtTrafficStopResults = results.results || [];
+      state.cache.mdt = state.cache.mdt || {};
+      state.cache.mdt.search = results.results || [];
+      if (!state.mdtTrafficStopResults.some((item) => String(item.id) === String(state.mdtTrafficStopDriverId))) {
+        state.mdtTrafficStopDriverId = "";
+        state.mdtTrafficStopDriverName = "";
+        state.mdtTrafficStopOutcome = "";
+      }
+      if (!state.mdtTrafficStopResults.length) {
+        toast("No valid NCIC return for that search");
+      }
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $$("[data-attach-traffic-driver]").forEach((button) => button.addEventListener("click", () => {
+    state.mdtTrafficStopDriverId = button.dataset.attachTrafficDriver;
+    state.mdtTrafficStopDriverName = button.dataset.driverName || "Attached driver";
+    state.mdtSelectedCiv = state.mdtTrafficStopDriverId;
+    state.mdtTrafficStopOutcome = "";
+    state.mdtTrafficStopStep = trafficStopStepIndex("outcome");
+    toast("Driver attached to traffic stop");
+    render();
+  }));
+  $("[data-clear-traffic-driver]")?.addEventListener("click", () => {
+    state.mdtTrafficStopDriverId = "";
+    state.mdtTrafficStopDriverName = "";
+    state.mdtTrafficStopOutcome = "";
+    state.mdtTrafficStopStep = trafficStopStepIndex("ncic");
+    render();
+  });
+  $$("[data-traffic-stop-outcome]").forEach((button) => button.addEventListener("click", () => {
+    state.mdtTrafficStopOutcome = button.dataset.trafficStopOutcome;
+    if (state.mdtTrafficStopOutcome === "arrest") {
+      state.mdtTrafficStopStep = trafficStopStepIndex("arrest");
+    } else {
+      state.mdtTrafficStopStep = trafficStopStepIndex("close");
+    }
+    render();
+  }));
+  $$("[data-traffic-stop-open-ticket]").forEach((button) => button.addEventListener("click", () => {
+    if (!state.mdtTrafficStopDriverId) {
+      toast("Attach a driver before writing a citation");
+      return;
+    }
+    state.mdtSelectedCiv = state.mdtTrafficStopDriverId;
+    state.mdtCatalogMode = "citation";
+    state.mdtSelectedChargeId = "";
+    state.mdtTab = "ticket";
+    state.mdtTrafficStopOutcome = "ticket";
+    state.mdtTrafficStopActive = false;
+    state.mdtNavOpen = false;
+    state.mdtSideOpen = false;
+    toast("Driver attached to citation writer");
+    render();
+  }));
+  $$("[data-traffic-stop-open-criminal]").forEach((button) => button.addEventListener("click", () => {
+    if (!state.mdtTrafficStopDriverId) {
+      toast("Attach a driver before filing criminal charges");
+      return;
+    }
+    state.mdtSelectedCiv = state.mdtTrafficStopDriverId;
+    state.mdtCatalogMode = "criminal";
+    state.mdtSelectedChargeId = "";
+    state.mdtTab = "ticket";
+    state.mdtTrafficStopOutcome = "criminal";
+    state.mdtTrafficStopActive = false;
+    state.mdtNavOpen = false;
+    state.mdtSideOpen = false;
+    toast("Driver attached to criminal writer");
+    render();
+  }));
+  $("[data-traffic-stop-open-report]")?.addEventListener("click", () => {
+    state.mdtTab = "cad-reports";
+    state.mdtTrafficStopActive = false;
+    state.mdtNavOpen = false;
+    state.mdtSideOpen = false;
+    toast("After-call report opened");
+    render();
+  });
   $$("[data-traffic-stop-step]").forEach((button) => button.addEventListener("click", () => {
     state.mdtTrafficStopStep = Number(button.dataset.trafficStopStep || 0);
     render();
@@ -5617,7 +5882,20 @@ function bindMdt() {
     render();
   });
   $("[data-traffic-stop-next]")?.addEventListener("click", () => {
-    const nextStep = Number(state.mdtTrafficStopStep || 0) + 1;
+    const currentIndex = Number(state.mdtTrafficStopStep || 0);
+    const currentStep = TRAFFIC_STOP_STEPS[currentIndex] || {};
+    if (currentStep.key === "ncic" && !state.mdtTrafficStopDriverId) {
+      toast("Attach the driver from NCIC before moving forward");
+      return;
+    }
+    if (currentStep.key === "outcome" && !state.mdtTrafficStopOutcome) {
+      toast("Choose the stop outcome first");
+      return;
+    }
+    let nextStep = currentIndex + 1;
+    if (currentStep.key === "outcome" && !["arrest", "criminal"].includes(state.mdtTrafficStopOutcome)) {
+      nextStep = trafficStopStepIndex("close");
+    }
     if (nextStep >= TRAFFIC_STOP_STEPS.length) {
       state.mdtTrafficStopActive = false;
       state.mdtTrafficStopStep = 0;
@@ -6656,7 +6934,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.44").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.45").catch(() => {}));
 }
 
 bootApp();

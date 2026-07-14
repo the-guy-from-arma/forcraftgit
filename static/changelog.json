@@ -1,6 +1,26 @@
 {
-  "version": "0.0.44",
+  "version": "0.0.45",
   "entries": [
+    {
+      "date": "2026-07-13",
+      "version": "0.0.45",
+      "title": "Traffic Stop NCIC Workflow",
+      "added": [
+        "Added an embedded NCIC / DMV search interface inside the Traffic Stop Assistant.",
+        "Officers can now attach the searched driver directly to the active traffic stop prompt.",
+        "Added a stop outcome screen with direct actions for warning/release, citation writer, criminal charge writer, and arrest protocol.",
+        "Added an arrest protocol prompt with custody sequence steps, criminal writer access, and after-call report access."
+      ],
+      "changed": [
+        "Traffic Stop Assistant now requires an attached driver before moving from NCIC into enforcement actions.",
+        "Citation and criminal writer shortcuts now preselect the attached driver from the traffic stop workflow.",
+        "Traffic Stop Assistant mobile panels now use compact NCIC return cards and touch-friendly outcome buttons."
+      ],
+      "fixed": [
+        "Reduced traffic-stop prompt confusion by routing officers from records check to the correct ticket, criminal charge, or arrest workflow."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-07-13",
       "version": "0.0.44",

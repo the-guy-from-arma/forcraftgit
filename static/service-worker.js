@@ -1,8 +1,8 @@
-const CACHE = "rp-command-v44-mobile-mdt-confirm";
+const CACHE = "rp-command-v45-traffic-stop-ncic";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.44",
-  "/static/app.js?v=0.0.44",
+  "/static/styles.css?v=0.0.45",
+  "/static/app.js?v=0.0.45",
   "/static/icons/icon.svg",
   "/static/getting-started/used-cars.jpg",
   "/static/getting-started/dirty-pond.jpg",
