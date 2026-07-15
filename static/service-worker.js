@@ -1,8 +1,8 @@
-const CACHE = "rp-command-v46-mobile-mdt-repair";
+const CACHE = "rp-command-v47-mobile-overlay-repair";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.46",
-  "/static/app.js?v=0.0.46",
+  "/static/styles.css?v=0.0.47",
+  "/static/app.js?v=0.0.47",
   "/static/icons/icon.svg",
   "/static/getting-started/used-cars.jpg",
   "/static/getting-started/dirty-pond.jpg",

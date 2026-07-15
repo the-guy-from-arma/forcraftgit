@@ -6773,18 +6773,19 @@ textarea:focus {
   .mdt-nav,
   .mdt-side {
     position: fixed;
-    top: 0;
-    bottom: 0;
-    z-index: 56;
-    width: min(390px, 92vw);
+    top: max(8px, env(safe-area-inset-top));
+    bottom: max(8px, env(safe-area-inset-bottom));
+    z-index: 260;
+    width: min(360px, calc(100vw - 18px));
+    max-width: calc(100vw - 18px);
     display: grid;
     align-content: start;
     gap: 10px;
-    padding: max(16px, env(safe-area-inset-top)) 14px max(16px, env(safe-area-inset-bottom));
+    padding: 14px;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     border: 1px solid rgba(40, 209, 124, 0.2);
-    border-radius: 0;
+    border-radius: 16px;
     background:
       linear-gradient(180deg, rgba(14, 21, 24, 0.98), rgba(7, 11, 13, 0.98)),
       repeating-linear-gradient(90deg, rgba(40, 209, 124, 0.045) 0 1px, transparent 1px 46px);
@@ -6794,25 +6795,26 @@ textarea:focus {
   }
 
   .mdt-nav {
-    left: 0;
-    transform: translateX(-104%);
+    left: 8px;
+    transform: translateX(calc(-100% - 18px));
   }
 
   .mdt-nav.open {
-    transform: translateX(0);
+    transform: translate3d(0, 0, 0);
   }
 
   .mdt-side {
-    right: 0;
-    transform: translateX(104%);
+    right: 8px;
+    transform: translateX(calc(100% + 18px));
   }
 
   .mdt-side.open {
-    transform: translateX(0);
+    transform: translate3d(0, 0, 0);
   }
 
   .mdt-redesign .mdt-nav,
   .mdt-redesign .mdt-side {
+    z-index: 260;
     border-right: 1px solid rgba(40, 209, 124, 0.2);
     border-left: 1px solid rgba(40, 209, 124, 0.2);
     background:
@@ -6834,12 +6836,12 @@ textarea:focus {
   .mdt-drawer-backdrop {
     position: fixed;
     inset: 0;
-    z-index: 50;
+    z-index: 240;
     display: block;
     border: 0;
     border-radius: 0;
-    background: rgba(0, 0, 0, 0.58);
-    backdrop-filter: blur(5px);
+    background: rgba(0, 0, 0, 0.42);
+    backdrop-filter: blur(2px);
     animation: drawerFade 180ms ease both;
   }
 
@@ -7153,15 +7155,39 @@ textarea:focus {
     -webkit-overflow-scrolling: touch;
   }
 
-  .action-confirm-backdrop {
+  .modal-backdrop {
     place-items: end center;
+    padding: max(10px, env(safe-area-inset-top)) 9px max(10px, env(safe-area-inset-bottom));
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(3px);
+  }
+
+  .modal-backdrop .mdt-modal {
+    position: relative;
+    z-index: 270;
+    width: 100%;
+    max-width: calc(100vw - 18px);
+    max-height: min(82dvh, calc(100dvh - 24px));
+    border-radius: 16px;
+  }
+
+  .action-confirm-backdrop {
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
     padding: max(12px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom));
-    backdrop-filter: blur(5px);
+    overflow: hidden;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(3px);
   }
 
   .action-confirm-modal {
-    width: 100%;
+    position: relative;
+    z-index: 275;
+    width: calc(100vw - 20px);
     max-width: none;
+    max-height: min(82dvh, calc(100dvh - 24px));
+    overflow: auto;
     border-radius: 16px;
     padding: 14px;
   }

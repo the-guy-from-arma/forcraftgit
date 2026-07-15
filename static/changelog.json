@@ -1,6 +1,22 @@
 {
-  "version": "0.0.46",
+  "version": "0.0.47",
   "entries": [
+    {
+      "date": "2026-07-15",
+      "version": "0.0.47",
+      "title": "Mobile Overlay and Drawer Repair",
+      "added": [],
+      "changed": [
+        "Mobile MDT drawers now open as inset phone panels above the blurred backdrop instead of edge-to-edge desktop sidebars.",
+        "Mobile modal and confirmation overlays now render as visible bottom sheets with lighter blur and stronger z-index ordering."
+      ],
+      "fixed": [
+        "Fixed some mobile pages showing only a blurred MDT screen when a drawer, modal, or confirm prompt was active.",
+        "Fixed Watch/Menu drawer panels being able to sit off-screen or behind the overlay on narrow iPhone views.",
+        "Fixed confirmation popups on phone screens being too easy to lose behind the dimmed background."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-07-14",
       "version": "0.0.46",
