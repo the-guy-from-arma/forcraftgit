@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.47";
+const OS_VERSION = "0.0.49";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -3403,13 +3403,32 @@ function renderMdtWorkspace() {
           ${renderMdtSide()}
         </aside>
       </div>
-      ${(state.mdtNavOpen || state.mdtSideOpen) ? `<button class="mdt-drawer-backdrop" data-close-mdt-drawers aria-label="Close MDT drawer"></button>` : ""}
+      ${renderMdtMobileDrawer(navItems)}
       ${state.mdtCatalogOpen ? renderMdtCatalogModal() : ""}
       ${state.mdtNotice ? renderMdtNoticeModal() : ""}
       ${state.mdtTrafficStopActive ? renderTrafficStopAssistantModal() : ""}
       ${state.mdtProfileUserId ? renderMdtProfileModal() : ""}
       ${cidWarrantModal}
     </section>
+  `;
+}
+
+function renderMdtMobileDrawer(navItems) {
+  if (!state.mdtNavOpen && !state.mdtSideOpen) return "";
+  const menuOpen = Boolean(state.mdtNavOpen);
+  return `
+    <div class="mdt-mobile-drawer-layer ${menuOpen ? "menu-open" : "watch-open"}" role="dialog" aria-modal="true" aria-label="${menuOpen ? "MDT Menu" : "Watch Panel"}">
+      <button class="mdt-mobile-drawer-scrim" type="button" data-close-mdt-drawers aria-label="Close MDT drawer"></button>
+      <aside class="mdt-mobile-drawer ${menuOpen ? "menu" : "watch"}">
+        <div class="mdt-drawer-head">
+          <strong>${menuOpen ? "MDT Menu" : "Watch Panel"}</strong>
+          <button class="icon-action" type="button" data-close-mdt-drawers aria-label="Close">x</button>
+        </div>
+        ${menuOpen
+          ? navItems.map(([id, label], index) => `<button class="${state.mdtTab === id ? "active" : ""}" data-mdt-tab="${id}"><span>${String(index + 1).padStart(2, "0")}</span><strong>${escapeHtml(label)}</strong></button>`).join("")
+          : renderMdtSide()}
+      </aside>
+    </div>
   `;
 }
 
@@ -6934,7 +6953,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.47").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.49").catch(() => {}));
 }
 
 bootApp();

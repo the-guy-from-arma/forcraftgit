@@ -3449,6 +3449,10 @@ textarea:focus {
   font-weight: 950;
 }
 
+.mdt-mobile-drawer-layer {
+  display: none;
+}
+
 .mdt-stat-strip {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -6671,6 +6675,8 @@ textarea:focus {
     gap: 10px;
     padding: max(10px, env(safe-area-inset-top)) 10px max(86px, calc(env(safe-area-inset-bottom) + 76px));
     overflow: hidden;
+    animation: none;
+    transform: none;
   }
 
   .mdt-quick-rail {
@@ -6744,10 +6750,112 @@ textarea:focus {
     display: inline-flex;
   }
 
+  .mdt-mobile-drawer-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 340;
+    display: block;
+    pointer-events: none;
+  }
+
+  .mdt-mobile-drawer-scrim {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    border-radius: 0;
+    background: rgba(0, 0, 0, 0.38);
+    backdrop-filter: blur(2px);
+    pointer-events: auto;
+  }
+
+  .mdt-mobile-drawer {
+    position: absolute;
+    top: max(8px, env(safe-area-inset-top));
+    bottom: max(8px, env(safe-area-inset-bottom));
+    z-index: 1;
+    width: min(360px, calc(100vw - 18px));
+    max-width: calc(100vw - 18px);
+    display: grid;
+    align-content: start;
+    gap: 10px;
+    padding: 14px;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+    border: 1px solid rgba(40, 209, 124, 0.24);
+    border-radius: 16px;
+    background:
+      linear-gradient(180deg, rgba(9, 16, 18, 0.99), rgba(4, 8, 9, 0.99)),
+      repeating-linear-gradient(90deg, rgba(40, 209, 124, 0.045) 0 1px, transparent 1px 46px);
+    box-shadow: 0 26px 90px rgba(0, 0, 0, 0.68);
+    pointer-events: auto;
+  }
+
+  .mdt-mobile-drawer.menu {
+    left: 8px;
+    animation: mobileDrawerLeft 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .mdt-mobile-drawer.watch {
+    right: 8px;
+    animation: mobileDrawerRight 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .mdt-mobile-drawer .mdt-side-panel {
+    border: 0;
+    border-bottom: 1px solid rgba(126, 231, 255, 0.1);
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .mdt-mobile-drawer > button,
+  .mdt-mobile-drawer .mdt-nav button {
+    width: 100%;
+  }
+
+  .mdt-mobile-drawer button[data-mdt-tab] {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr);
+    align-items: center;
+    gap: 9px;
+    min-height: 48px;
+    border: 1px solid rgba(126, 231, 255, 0.12);
+    border-radius: 8px;
+    padding: 0 12px 0 9px;
+    color: rgba(226, 255, 249, 0.76);
+    background: rgba(126, 231, 255, 0.045);
+    text-align: left;
+  }
+
+  .mdt-mobile-drawer button[data-mdt-tab].active {
+    color: #03100d;
+    border-color: transparent;
+    background: linear-gradient(90deg, #28d17c, #7ee7ff);
+  }
+
+  .mdt-mobile-drawer button[data-mdt-tab] span {
+    color: inherit;
+    font-size: 10px;
+    font-weight: 950;
+    opacity: 0.72;
+  }
+
+  .mdt-mobile-drawer button[data-mdt-tab] strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+  }
+
   .mdt-layout {
     grid-template-columns: 1fr;
     padding: 10px;
-    overflow: hidden;
+    overflow: visible;
     min-height: 0;
   }
 
@@ -6756,6 +6864,7 @@ textarea:focus {
     padding: 10px;
     border-radius: 8px;
     min-height: 0;
+    overflow: visible;
   }
 
   .mdt-main {
@@ -6768,6 +6877,12 @@ textarea:focus {
 
   .mdt-redesign .mdt-main {
     padding: 12px;
+  }
+
+  .mdt-layout > .mdt-nav,
+  .mdt-layout > .mdt-side,
+  .mdt-layout > .mdt-drawer-backdrop {
+    display: none !important;
   }
 
   .mdt-nav,
@@ -7328,6 +7443,28 @@ textarea:focus {
 @keyframes drawerFade {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+@keyframes mobileDrawerLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes mobileDrawerRight {
+  from {
+    opacity: 0;
+    transform: translateX(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

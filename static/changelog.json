@@ -1,6 +1,38 @@
 {
-  "version": "0.0.47",
+  "version": "0.0.49",
   "entries": [
+    {
+      "date": "2026-07-17",
+      "version": "0.0.49",
+      "title": "Mobile Menu and Watch Drawer Rebuild",
+      "added": [
+        "Added a dedicated mobile drawer layer for MDT Menu and Watch panels."
+      ],
+      "changed": [
+        "Mobile Menu and Watch no longer use the desktop MDT sidebars or the in-grid drawer path.",
+        "The mobile drawer layer now renders as its own fixed overlay with the scrim and panel in the same stacking context."
+      ],
+      "fixed": [
+        "Fixed mobile Menu and Watch buttons still opening to a blurred screen instead of a usable panel.",
+        "Fixed the NCIC/Menu drawer being trapped by MDT layout stacking and iOS fixed-position behavior."
+      ],
+      "removed": []
+    },
+    {
+      "date": "2026-07-15",
+      "version": "0.0.48",
+      "title": "Mobile MDT Drawer Layer Fix",
+      "added": [],
+      "changed": [
+        "Moved the mobile MDT drawer backdrop into the same layout layer as the Menu and Watch drawers so the drawer panel renders above the blur.",
+        "Disabled the mobile MDT boot transform during drawer use to avoid iOS fixed-position stacking issues."
+      ],
+      "fixed": [
+        "Fixed tapping Menu/NCIC on mobile showing only a blurred MDT screen with no visible drawer.",
+        "Fixed the drawer backdrop being able to cover the Menu and Watch panels because it was rendered as a higher z-index sibling."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-07-15",
       "version": "0.0.47",
