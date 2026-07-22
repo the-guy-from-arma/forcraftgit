@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.52";
+const OS_VERSION = "0.0.49";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -509,7 +509,7 @@ function renderCarEntryRequiredModal() {
         </header>
         <div class="notice-body">
           <p>Your profile needs your in-game car entry code before the phone can continue.</p>
-          <p>This code will appear in Faircroft MDT returns when an officer searches your account.</p>
+          <p>This code will appear in NCIC/DMV returns when an officer searches your account.</p>
         </div>
         <form id="forcedCarEntryCodeForm" class="form-grid">
           <label>Car entry code<input name="car_entry_code" maxlength="32" pattern="[A-Za-z0-9_-]{2,32}" placeholder="In-game vehicle access code" autocomplete="off" required autofocus /></label>
@@ -755,11 +755,9 @@ async function loadAppData(id) {
         charges: await api("/api/mdt/charges"),
         alerts: await api("/api/mdt/alerts"),
         reports: await api("/api/mdt/reports"),
-        audit: await api("/api/mdt/audit"),
         bolos: await optionalApi("/api/mdt/bolos", { active: [], recent: [] }),
         cid: mdtCommandEnabled() ? await api("/api/cid/overview") : null,
-        search: state.cache.mdt?.search || [],
-        lastInquiry: state.cache.mdt?.lastInquiry || null
+        search: state.cache.mdt?.search || []
       };
       if (data.cid && state.mdtTab === "search" && !data.search.length) {
         state.mdtTab = "cid-command";
@@ -887,9 +885,9 @@ const TRAFFIC_STOP_STEPS = [
   },
   {
     key: "ncic",
-    title: "Run Faircroft Inquiry",
+    title: "Run NCIC / DMV",
     callout: "Records check",
-    body: "Return to the Faircroft eJustice portal and run the driver and vehicle through the person / DMV inquiry. Check license status, warrants, vehicle registration, insurance, prior citations, and officer safety notes.",
+    body: "Return to the MDT and run the driver and vehicle through NCIC/DMV. Check license status, warrants, vehicle registration, insurance, prior citations, and officer safety notes.",
   },
   {
     key: "outcome",
@@ -1022,7 +1020,7 @@ function renderProfile() {
           <div>
             <p class="eyebrow">In-game vehicle access</p>
             <h3>Car Entry Code</h3>
-            <p class="muted small">Officers will see this code when they pull your Faircroft MDT profile.</p>
+            <p class="muted small">Officers will see this code when they pull your NCIC/DMV profile.</p>
           </div>
           <span class="pill ${user.car_entry_code ? "green" : "red"}">${user.car_entry_code ? "filed" : "required"}</span>
         </div>
@@ -3224,7 +3222,7 @@ function renderMdtSearchLegacy() {
   return `
     <form id="mdtSearch" class="card form-grid">
       <label>Name, email, or plate<input name="q" minlength="2" required /></label>
-      <button class="primary" type="submit">Search Faircroft</button>
+      <button class="primary" type="submit">Search NCIC</button>
     </form>
     <div class="list">
       ${results.map((item) => `
@@ -3333,45 +3331,41 @@ function renderMdtWorkspace() {
     : "";
   const navItems = mdtCommandEnabledNow ? [
     ["cid-command", `${commandLabel} Command`],
-    ["search", "Person / DMV Inquiry"],
+    ["search", "NCIC / DMV"],
     ["cid-investigations", "Case Folders"],
     ["cid-warrants", "Warrant Ops"],
     ["cid-ia", "Internal Affairs"],
-    ["bolos", "BOLO Board"],
-    ["cad-reports", "Incident Reports"],
-    ["ticket", "E-Ticket / UTT"],
-    ["criminal", "Criminal Process"],
-    ["citations", "Faircroft Codes"],
-    ["mdt-settings", "Terminal Settings"],
-    ["panic", "Officer Safety"],
+    ["bolos", "BOLOs"],
+    ["cad-reports", "Reports"],
+    ["ticket", "Issue"],
+    ["criminal", "Criminal"],
+    ["citations", "Citations"],
+    ["mdt-settings", "Settings"],
+    ["panic", "Panic"],
   ] : [
-    ["search", "Person / DMV Inquiry"],
-    ["bolos", "BOLO Board"],
-    ["cad-reports", "Incident Reports"],
-    ["ticket", "E-Ticket / UTT"],
-    ["citations", "Faircroft Codes"],
-    ["criminal", "Criminal Process"],
-    ["mdt-settings", "Terminal Settings"],
-    ["panic", "Officer Safety"],
+    ["search", "NCIC / DMV"],
+    ["bolos", "BOLOs"],
+    ["cad-reports", "Reports"],
+    ["ticket", "Issue"],
+    ["citations", "Citations"],
+    ["criminal", "Criminal"],
+    ["mdt-settings", "Settings"],
+    ["panic", "Panic"],
   ];
-  const activeNavLabel = navItems.find(([id]) => id === state.mdtTab)?.[1] || "Person / DMV Inquiry";
+  const activeNavLabel = navItems.find(([id]) => id === state.mdtTab)?.[1] || "NCIC / DMV";
   const unitCallsign = state.session.user.callsign || "No callsign";
   const terminalTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   return `
-    <section class="mdt-workspace mdt-redesign faircroft-justice ${mdtCommandEnabledNow ? "cid-workspace" : ""}">
+    <section class="mdt-workspace mdt-redesign ${mdtCommandEnabledNow ? "cid-workspace" : ""}">
       <header class="mdt-topbar">
-        <div class="justice-brand-block">
-          <div class="justice-wordmark" aria-hidden="true"><strong>FCJIS</strong><span>RP Justice Network</span></div>
-          <div>
-            <p class="eyebrow">State of Faircroft / Criminal Justice Services</p>
-            <h1>Justice Workstation</h1>
-            <p class="mdt-subtitle">${escapeHtml(state.session.user.primary_agency || (mdtCommandEnabledNow ? `${commandLabel} Command` : "Criminal Justice Services"))} / Records, CAD, UTT, warrants, and case workflow</p>
-            <div class="mdt-status-line">
-              <span>${escapeHtml(unitCallsign)}</span>
-              <span>${escapeHtml(activeNavLabel)}</span>
-              <span>${escapeHtml(terminalTime)}</span>
-              <span>Authorized Use Only</span>
-            </div>
+        <div>
+          <p class="eyebrow">${mdtCommandEnabledNow ? commandLabel : "Law Enforcement"}</p>
+          <h1>${mdtCommandEnabledNow ? `${commandLabel} Command MDT` : "Mobile Data Terminal"}</h1>
+          <p class="mdt-subtitle">${mdtCommandEnabledNow ? "Investigations / warrants / intelligence / internal affairs" : "NCIC / DMV / citations / warrants / dispatch"}</p>
+          <div class="mdt-status-line">
+            <span>${escapeHtml(unitCallsign)}</span>
+            <span>${escapeHtml(activeNavLabel)}</span>
+            <span>${escapeHtml(terminalTime)}</span>
           </div>
         </div>
         <div class="mdt-top-actions">
@@ -3383,10 +3377,6 @@ function renderMdtWorkspace() {
           <button class="secondary" data-close-mdt>Exit MDT</button>
         </div>
       </header>
-      <section class="justice-notice-strip" aria-label="Faircroft justice portal notice">
-        <strong>Session Audit Enabled</strong>
-        <span>Official Faircroft RP law-enforcement workspace. Queries, tickets, warrants, and court packets are logged to this unit session.</span>
-      </section>
       ${renderMdtQuickRail()}
       <div class="mdt-stat-strip ${mdtCommandEnabledNow ? "cid-stat-strip" : "leo-stat-strip"}">
         ${mdtCommandEnabledNow ? `
@@ -3396,20 +3386,20 @@ function renderMdtWorkspace() {
           <div class="metric"><span>IA open</span><strong>${cid?.stats?.ia_open || 0}</strong></div>
           <div class="metric"><span>Active BOLOs</span><strong>${activeBolos.length}</strong></div>
         ` : `
-          <div class="metric"><span>E-Ticket Codes</span><strong>${(charges.citations || []).length}</strong></div>
-          <div class="metric"><span>Criminal Process</span><strong>${(charges.criminal_charges || []).length}</strong></div>
+          <div class="metric"><span>Citations</span><strong>${(charges.citations || []).length}</strong></div>
+          <div class="metric"><span>Criminal Codes</span><strong>${(charges.criminal_charges || []).length}</strong></div>
           <div class="metric"><span>Officer Alerts</span><strong>${alerts.filter((alert) => alert.status === "active").length}</strong></div>
           <div class="metric"><span>Active BOLOs</span><strong>${activeBolos.length}</strong></div>
         `}
       </div>
       <div class="mdt-layout">
         <aside class="mdt-nav ${state.mdtNavOpen ? "open" : ""}">
-          <div class="mdt-drawer-head"><strong>Portal Menu</strong><button class="icon-action" data-close-mdt-drawers aria-label="Close">x</button></div>
+          <div class="mdt-drawer-head"><strong>MDT Menu</strong><button class="icon-action" data-close-mdt-drawers aria-label="Close">x</button></div>
           ${navItems.map(([id, label], index) => `<button class="${state.mdtTab === id ? "active" : ""}" data-mdt-tab="${id}"><span>${String(index + 1).padStart(2, "0")}</span><strong>${escapeHtml(label)}</strong></button>`).join("")}
         </aside>
         <main class="mdt-main">${renderMdtContent()}</main>
         <aside class="mdt-side ${state.mdtSideOpen ? "open" : ""}">
-          <div class="mdt-drawer-head"><strong>Justice Watch</strong><button class="icon-action" data-close-mdt-drawers aria-label="Close">x</button></div>
+          <div class="mdt-drawer-head"><strong>Watch Panel</strong><button class="icon-action" data-close-mdt-drawers aria-label="Close">x</button></div>
           ${renderMdtSide()}
         </aside>
       </div>
@@ -3427,11 +3417,11 @@ function renderMdtMobileDrawer(navItems) {
   if (!state.mdtNavOpen && !state.mdtSideOpen) return "";
   const menuOpen = Boolean(state.mdtNavOpen);
   return `
-    <div class="mdt-mobile-drawer-layer ${menuOpen ? "menu-open" : "watch-open"}" role="dialog" aria-modal="true" aria-label="${menuOpen ? "Portal Menu" : "Justice Watch"}">
+    <div class="mdt-mobile-drawer-layer ${menuOpen ? "menu-open" : "watch-open"}" role="dialog" aria-modal="true" aria-label="${menuOpen ? "MDT Menu" : "Watch Panel"}">
       <button class="mdt-mobile-drawer-scrim" type="button" data-close-mdt-drawers aria-label="Close MDT drawer"></button>
       <aside class="mdt-mobile-drawer ${menuOpen ? "menu" : "watch"}">
         <div class="mdt-drawer-head">
-          <strong>${menuOpen ? "Portal Menu" : "Justice Watch"}</strong>
+          <strong>${menuOpen ? "MDT Menu" : "Watch Panel"}</strong>
           <button class="icon-action" type="button" data-close-mdt-drawers aria-label="Close">x</button>
         </div>
         ${menuOpen
@@ -3839,8 +3829,8 @@ function renderDispatchWorkspace() {
           `}
           <form id="dispatchNcicSearchForm" class="dispatch-create-card">
             <div>
-              <p class="eyebrow">Faircroft justice query</p>
-              <h2>Run Portal Lookup</h2>
+              <p class="eyebrow">NCIC / DMV check</p>
+              <h2>Run Lookup</h2>
             </div>
             <label>Find person by name, civ, email, or plate<input name="q" value="${escapeHtml(state.dispatchNcicQuery)}" placeholder="Search civilian name, civ, email, plate" /></label>
             <button class="secondary" type="submit">Search</button>
@@ -4356,7 +4346,7 @@ function renderCidCommandCenter() {
         <button type="button" data-mdt-tab="cid-ia"><strong>Internal Affairs</strong><span>Officer investigations and reviews</span></button>
         <button type="button" data-mdt-tab="bolos"><strong>BOLO Board</strong><span>Broadcast active lookouts to all LEOs</span></button>
         <button type="button" data-mdt-tab="cad-reports"><strong>CAD Reports</strong><span>After-call narratives and dispositions</span></button>
-        <button type="button" data-mdt-tab="search"><strong>Person / DMV Inquiry</strong><span>Run target and vehicle returns</span></button>
+        <button type="button" data-mdt-tab="search"><strong>NCIC / DMV</strong><span>Run target and vehicle returns</span></button>
       </div>
       <div class="cid-command-grid">
         <section class="cid-command-card priority">
@@ -4416,7 +4406,6 @@ function renderMdtSide() {
   const commandLabel = mdtCommandLabel();
   const alerts = state.cache.mdt?.alerts?.alerts || [];
   const reports = state.cache.mdt?.reports?.reports || [];
-  const auditLogs = state.cache.mdt?.audit?.logs || [];
   const activeBolos = state.cache.mdt?.bolos?.active || [];
   const issued = state.cache.mdt?.search?.flatMap((person) => person.open_cases || []) || [];
   const cid = state.cache.mdt?.cid;
@@ -4426,14 +4415,14 @@ function renderMdtSide() {
   const canOpenMessages = canUseMdtMessages();
   return `
     <div class="mdt-side-panel">
-      <h3>Portal Resources</h3>
+      <h3>Quick Access</h3>
       <div class="list compact-list">
         ${canOpenDispatch ? `<button class="secondary" type="button" data-open-mdt-dispatch>Dispatch CAD</button>` : `<p class="muted small">Dispatch unavailable</p>`}
         ${canOpenMessages ? `<button class="secondary" type="button" data-open-mdt-messages>Messages</button>` : `<p class="muted small">Messages unavailable</p>`}
         ${state.mdtProtocolAssistantEnabled ? `<button class="secondary" type="button" data-start-traffic-stop>Initiate Traffic Stop</button>` : ""}
-        <button class="secondary" type="button" data-mdt-tab="ticket">Uniform Traffic Ticket</button>
-        <button class="secondary" type="button" data-mdt-tab="citations">Faircroft Code Tables</button>
-        <button class="secondary" type="button" data-mdt-tab="mdt-settings">Terminal Settings</button>
+        <button class="secondary" type="button" data-mdt-tab="ticket">Write Ticket</button>
+        <button class="secondary" type="button" data-mdt-tab="citations">NYS Codes</button>
+        <button class="secondary" type="button" data-mdt-tab="mdt-settings">MDT Settings</button>
       </div>
     </div>
     ${cid ? `
@@ -4459,18 +4448,6 @@ function renderMdtSide() {
       </div>
     ` : ""}
     <div class="mdt-side-panel">
-      <h3>Justice Audit</h3>
-      <div class="list compact-list justice-audit-list">
-        ${auditLogs.slice(0, 6).map((log) => `
-          <article>
-            <div class="row tight"><strong>${escapeHtml(log.query_number)}</strong><span>${escapeHtml(log.officer_callsign || log.officer_name || "Unit")}</span></div>
-            <p>${escapeHtml(humanLabel(log.query_type))} / ${escapeHtml(humanLabel(log.purpose))}</p>
-            <small>${Number(log.result_count || 0)} returns - ${log.created_at ? new Date(log.created_at).toLocaleString() : ""}</small>
-          </article>
-        `).join("") || `<p class="muted small">No Faircroft portal activity logged yet</p>`}
-      </div>
-    </div>
-    <div class="mdt-side-panel">
       <h3>Active BOLOs</h3>
       <div class="list compact-list">
         ${activeBolos.slice(0, 5).map((bolo) => `<button class="cid-side-link danger-link" data-mdt-tab="bolos"><strong>${escapeHtml(bolo.bolo_number)}</strong><span>${escapeHtml(bolo.target_name)} / ${escapeHtml(bolo.caution_level)}</span></button>`).join("") || `<p class="muted small">No active BOLOs</p>`}
@@ -4491,7 +4468,7 @@ function renderMdtSide() {
     <div class="mdt-side-panel">
       <h3>Open Returns</h3>
       <div class="list compact-list">
-        ${issued.slice(0, 5).map((item) => `<div class="row"><span>${escapeHtml(item.citation_number || item.charge_code)}</span><strong>${money(item.fine_amount)}</strong></div>`).join("") || `<p class="muted small">No Faircroft open case returns</p>`}
+        ${issued.slice(0, 5).map((item) => `<div class="row"><span>${escapeHtml(item.charge_code)}</span><strong>${money(item.fine_amount)}</strong></div>`).join("") || `<p class="muted small">No NCIC open case returns</p>`}
       </div>
     </div>
   `;
@@ -4786,52 +4763,16 @@ function renderCadReports() {
 
 function renderMdtSearch() {
   const results = state.cache.mdt?.search || [];
-  const lastInquiry = state.cache.mdt?.lastInquiry;
-  const purposeOptions = [
-    ["traffic_stop", "Traffic stop / vehicle stop"],
-    ["active_call", "Active CAD call"],
-    ["warrant_or_bolo", "Warrant / BOLO follow-up"],
-    ["case_followup", "Court or citation follow-up"],
-    ["investigation", "CID/IU investigation"],
-    ["supervisor_review", "Supervisor review"],
-  ];
   return `
-    <section class="justice-query-console">
-      <div class="justice-screen-head">
-        <div>
-          <p class="eyebrow">Faircroft Justice Query</p>
-          <h2>Person / DMV / Vehicle Inquiry</h2>
-          <p>Search civilian identity, CIV number, license status, plate, or in-game car entry code.</p>
-        </div>
-        <span class="justice-terminal-badge">QUERY AUDIT ACTIVE</span>
-      </div>
-      <div class="justice-module-row" aria-label="Inquiry modules">
-        <span>Person File</span>
-        <span>Driver License</span>
-        <span>Vehicle Registration</span>
-        <span>Court Returns</span>
-      </div>
-      ${lastInquiry ? `
-        <div class="justice-audit-packet">
-          <span>Last portal transaction</span>
-          <strong>${escapeHtml(lastInquiry.query_number)}</strong>
-          <small>${escapeHtml(humanLabel(lastInquiry.purpose))} / ${Number(lastInquiry.result_count || 0)} returns / ${lastInquiry.created_at ? new Date(lastInquiry.created_at).toLocaleString() : "just now"}</small>
-        </div>
-      ` : ""}
-      <form id="mdtSearch" class="mdt-searchbar justice-searchbar">
-        <label>Official purpose<select name="purpose" required>
-          ${purposeOptions.map(([value, label]) => `<option value="${value}">${escapeHtml(label)}</option>`).join("")}
-        </select></label>
-        <label>Universal search<input name="q" minlength="2" placeholder="Last name, CIV number, plate, email, or car entry code" required /></label>
-        <button class="primary" type="submit">Submit Inquiry</button>
-      </form>
-    </section>
+    <form id="mdtSearch" class="mdt-searchbar">
+      <label>Search name, email, plate, CIV, or car code<input name="q" minlength="2" placeholder="Search name, email, plate, CIV number, or car code" required /></label>
+      <button class="primary" type="submit">Run NCIC</button>
+    </form>
     <div class="mdt-results">
       ${results.map((item) => `
-        <article class="mdt-return justice-record-return">
-          <div class="justice-record-head">
+        <article class="mdt-return">
+          <div class="row">
             <div>
-              <p class="eyebrow">Faircroft record return</p>
               <h3>${escapeHtml(item.name)}</h3>
               <p class="muted small">CIV ${escapeHtml(item.civ_number || "pending")} / Record #${item.id} / ${escapeHtml(item.email)}</p>
             </div>
@@ -4848,11 +4789,11 @@ function renderMdtSearch() {
             ${(item.vehicles || []).map((vehicle) => `<p class="small">${escapeHtml(vehicle.vehicle_year)} ${escapeHtml(vehicle.vehicle_color)} ${escapeHtml(vehicle.vehicle_make)} ${escapeHtml(vehicle.vehicle_model)} - ${escapeHtml(vehicle.plate)} - ${escapeHtml(vehicle.registration_status)}</p>`).join("") || `<p class="muted small">No registered vehicles on file</p>`}
           </div>
           <div class="mdt-subsection">
-            <h4>Open court / e-ticket returns</h4>
-            ${(item.open_cases || []).map((c) => `<div class="row"><span>${escapeHtml(c.citation_number || `CASE-${c.id}`)} / ${escapeHtml(c.charge_code)} ${escapeHtml(c.charge_title)}</span><strong>${money(c.fine_amount)}</strong></div>`).join("") || `<p class="muted small">No open citations</p>`}
+            <h4>Open court/citation returns</h4>
+            ${(item.open_cases || []).map((c) => `<div class="row"><span>${escapeHtml(c.charge_code)} ${escapeHtml(c.charge_title)}</span><strong>${money(c.fine_amount)}</strong></div>`).join("") || `<p class="muted small">No open citations</p>`}
           </div>
         </article>
-      `).join("") || `<div class="empty justice-empty">Submit an inquiry to retrieve Faircroft DMV, court, and master-person records</div>`}
+      `).join("") || `<div class="empty">Run a search to pull DMV and case records</div>`}
     </div>
   `;
 }
@@ -4957,7 +4898,7 @@ function renderMdtProfileModal() {
               </div>
               <div class="mdt-subsection">
                 <h4>Open court/citation returns</h4>
-                ${(person.open_cases || []).map((c) => `<div class="row"><span>${escapeHtml(c.citation_number || `CASE-${c.id}`)} / ${escapeHtml(c.charge_code)} ${escapeHtml(c.charge_title)}</span><strong>${money(c.fine_amount)}</strong></div>`).join("") || `<p class="muted small">No open citations</p>`}
+                ${(person.open_cases || []).map((c) => `<div class="row"><span>${escapeHtml(c.charge_code)} ${escapeHtml(c.charge_title)}</span><strong>${money(c.fine_amount)}</strong></div>`).join("") || `<p class="muted small">No open citations</p>`}
               </div>
             </section>
           `}
@@ -4993,23 +4934,23 @@ function renderTicketWriter() {
   const criminalMode = state.mdtCatalogMode === "criminal";
   const defaultCourt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   return `
-    <form id="ticketForm" class="mdt-form justice-ticket-form ${criminalMode ? "charge-warrant-form" : ""}">
+    <form id="ticketForm" class="mdt-form ${criminalMode ? "charge-warrant-form" : ""}">
       <section class="ticket-command-strip">
-        <button type="button" data-open-catalog data-catalog-kind="citation"><strong>Faircroft UTT Book</strong><span>Traffic, vehicle, and parking codes</span></button>
-        <button type="button" data-catalog-mode="criminal"><strong>Criminal Process</strong><span>Switch to charge/warrant filing</span></button>
-        <button type="button" data-mdt-tab="citations"><strong>Code Tables</strong><span>Browse Faircroft citation cards</span></button>
+        <button type="button" data-open-catalog data-catalog-kind="citation"><strong>Citation Book</strong><span>Traffic, vehicle, and parking codes</span></button>
+        <button type="button" data-catalog-mode="criminal"><strong>Criminal Charges</strong><span>Switch to charge/warrant filing</span></button>
+        <button type="button" data-mdt-tab="citations"><strong>NYS Codes</strong><span>Browse citation cards</span></button>
       </section>
       <div class="mdt-section-head">
-        <div><p class="eyebrow">${criminalMode ? "Faircroft criminal process" : "Faircroft uniform traffic ticket"}</p><h2>${criminalMode ? "Issue Criminal Charge / Warrant" : "Create Uniform Traffic Ticket"}</h2></div>
+        <div><p class="eyebrow">${criminalMode ? "Criminal process" : "Citation writer"}</p><h2>${criminalMode ? "Issue Criminal Charge / Warrant" : "Issue Citation"}</h2></div>
         <button class="secondary" type="button" data-open-catalog>Browse codes</button>
       </div>
       <div class="segmented mdt-code-switch">
-        <button type="button" class="${state.mdtCatalogMode === "citation" ? "active" : ""}" data-catalog-mode="citation">UTT</button>
+        <button type="button" class="${state.mdtCatalogMode === "citation" ? "active" : ""}" data-catalog-mode="citation">Citations</button>
         <button type="button" class="${state.mdtCatalogMode === "criminal" ? "active" : ""}" data-catalog-mode="criminal">Criminal</button>
-        <button type="button" data-open-catalog>Code Table</button>
+        <button type="button" data-open-catalog>Catalog</button>
       </div>
       <div class="grid-2">
-        <label>${criminalMode ? "Subject master-person file" : "Defendant master-person file"}<select name="civ_id" required data-issue-subject>
+        <label>${criminalMode ? "Subject civilian" : "Civilian record"}<select name="civ_id" required data-issue-subject>
           <option value="">Select civilian record</option>
           ${civilians.map((person) => `<option value="${person.id}" data-name="${escapeHtml(person.name)}"${selectedAttr(person.id, state.mdtSelectedCiv)}>${escapeHtml(person.name)} - CIV ${escapeHtml(person.civ_number || "pending")} - ${escapeHtml(person.license_status || "No license")}</option>`).join("")}
         </select></label>
@@ -5030,8 +4971,8 @@ function renderTicketWriter() {
         <label>Operation plan<textarea name="operation_plan" placeholder="Optional service plan, unit notes, or transport instructions"></textarea></label>
         <button class="danger" type="submit">Sign and issue warrant</button>
       ` : `
-        <label>Officer narrative<textarea name="narrative" required placeholder="Observed violation, location, vehicle/driver details, and officer notes"></textarea></label>
-        <button class="primary" type="submit">File UTT to Court Queue</button>
+        <label>Narrative<textarea name="narrative" required placeholder="Observed violation, location, vehicle/driver details, and officer notes"></textarea></label>
+        <button class="primary" type="submit">Issue citation</button>
       `}
     </form>
   `;
@@ -5074,9 +5015,9 @@ function renderCriminalWarrantWriter(charges) {
 function renderCodeSection(kind) {
   const rows = getMdtCatalog(kind);
   return `
-    <div class="mdt-section-head justice-screen-head">
-      <div><p class="eyebrow">${kind === "citation" ? "Faircroft traffic and parking" : "Faircroft criminal process"} catalog</p><h2>${kind === "citation" ? "Faircroft Citation Codes" : "Criminal Charges"}</h2></div>
-      <button class="secondary" data-open-catalog data-catalog-kind="${kind}">Open code table</button>
+    <div class="mdt-section-head">
+      <div><p class="eyebrow">${kind === "citation" ? "Traffic and parking" : "Criminal charges"} catalog</p><h2>${kind === "citation" ? "Citation Codes" : "Criminal Charges"}</h2></div>
+      <button class="secondary" data-open-catalog data-catalog-kind="${kind}">Open catalog</button>
     </div>
     <div class="mdt-code-grid">
       ${rows.map((charge) => `
@@ -5100,7 +5041,7 @@ function renderMdtCatalogModal() {
     <div class="modal-backdrop" data-close-catalog>
       <section class="mdt-modal" role="dialog" aria-modal="true">
         <header class="row">
-          <div><p class="eyebrow">State of Faircroft code table</p><h2>${state.mdtCatalogMode === "citation" ? "Faircroft Citation Codes" : "Criminal Charges"}</h2></div>
+          <div><p class="eyebrow">MDT code table</p><h2>${state.mdtCatalogMode === "citation" ? "Citation Codes" : "Criminal Charges"}</h2></div>
           <button class="icon-action" data-close-catalog aria-label="Close">x</button>
         </header>
         <div class="segmented">
@@ -5198,10 +5139,10 @@ function renderTrafficStopNcicTools() {
   return `
     <section class="traffic-stop-tools">
       <form id="trafficStopNcicForm" class="traffic-ncic-form">
-        <label>Faircroft driver inquiry
+        <label>NCIC / DMV driver search
           <input name="q" minlength="2" value="${escapeHtml(state.mdtTrafficStopQuery)}" placeholder="Name, CIV number, plate, or car entry code" required />
         </label>
-        <button class="primary" type="submit">Submit Inquiry</button>
+        <button class="primary" type="submit">Run NCIC</button>
       </form>
       ${renderTrafficStopAttachedDriver()}
       <div class="traffic-ncic-results" aria-live="polite">
@@ -5243,7 +5184,7 @@ function renderTrafficStopOutcomeTools() {
   const selected = state.mdtTrafficStopOutcome;
   return `
     <section class="traffic-stop-tools">
-      ${renderTrafficStopAttachedDriver() || `<div class="traffic-system-note red"><strong>No driver attached</strong><span>Go back to the Faircroft inquiry step and attach the driver before writing a citation or charge.</span></div>`}
+      ${renderTrafficStopAttachedDriver() || `<div class="traffic-system-note red"><strong>No driver attached</strong><span>Go back to the NCIC / DMV step and attach the driver before writing a citation or charge.</span></div>`}
       <div class="traffic-outcome-grid">
         <button class="${selected === "warning" ? "active" : ""}" type="button" data-traffic-stop-outcome="warning" ${hasDriver ? "" : "disabled"}>
           <strong>Warning / Release</strong>
@@ -5251,7 +5192,7 @@ function renderTrafficStopOutcomeTools() {
         </button>
         <button type="button" data-traffic-stop-open-ticket ${hasDriver ? "" : "disabled"}>
           <strong>Open Citation Writer</strong>
-          <span>Attach this driver to a Faircroft traffic, vehicle, or parking ticket.</span>
+          <span>Attach this driver to a NYS traffic, vehicle, or parking ticket.</span>
         </button>
         <button type="button" data-traffic-stop-open-criminal ${hasDriver ? "" : "disabled"}>
           <strong>Criminal Offense</strong>
@@ -5355,7 +5296,7 @@ function renderMdtSettings() {
           <div>
             <p class="eyebrow">Guided protocol</p>
             <h3>Traffic Stop Assistant</h3>
-            <p>Use this during a stop to keep the RP sequence clean: radio, approach, documents, Faircroft inquiry, outcome, and documentation.</p>
+            <p>Use this during a stop to keep the RP sequence clean: radio, approach, documents, NCIC/DMV, outcome, and documentation.</p>
           </div>
           <button class="primary" type="button" data-start-traffic-stop>Start stop prompts</button>
         </article>
@@ -5867,24 +5808,22 @@ function bindMdt() {
     event.preventDefault();
     const q = String(new FormData(event.currentTarget).get("q") || "").trim();
     if (q.length < 2) {
-      toast("Enter at least 2 characters for the Faircroft inquiry");
+      toast("Enter at least 2 characters for NCIC");
       return;
     }
     state.mdtTrafficStopQuery = q;
     try {
-      const results = await api(`/api/mdt/search?${new URLSearchParams({ q, purpose: "traffic_stop" }).toString()}`);
+      const results = await api(`/api/mdt/search?q=${encodeURIComponent(q)}`);
       state.mdtTrafficStopResults = results.results || [];
       state.cache.mdt = state.cache.mdt || {};
       state.cache.mdt.search = results.results || [];
-      state.cache.mdt.lastInquiry = results.audit || null;
-      if (results.recent_audit) state.cache.mdt.audit = { logs: results.recent_audit };
       if (!state.mdtTrafficStopResults.some((item) => String(item.id) === String(state.mdtTrafficStopDriverId))) {
         state.mdtTrafficStopDriverId = "";
         state.mdtTrafficStopDriverName = "";
         state.mdtTrafficStopOutcome = "";
       }
       if (!state.mdtTrafficStopResults.length) {
-        toast("No valid Faircroft return for that search");
+        toast("No valid NCIC return for that search");
       }
       render();
     } catch (error) {
@@ -6169,22 +6108,18 @@ function bindMdt() {
   }));
   $("#mdtSearch")?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
-    const q = String(formData.get("q") || "").trim();
-    const purpose = String(formData.get("purpose") || "general").trim();
+    const q = new FormData(event.currentTarget).get("q");
     try {
-      const results = await api(`/api/mdt/search?${new URLSearchParams({ q, purpose }).toString()}`);
+      const results = await api(`/api/mdt/search?q=${encodeURIComponent(q)}`);
       state.cache.mdt = state.cache.mdt || {};
-      state.cache.mdt.search = results.results || [];
-      state.cache.mdt.lastInquiry = results.audit || null;
-      if (results.recent_audit) state.cache.mdt.audit = { logs: results.recent_audit };
-      if ((results.results || []).length) {
+      state.cache.mdt.search = results.results;
+      if (results.results.length) {
         state.mdtProfileUserId = results.results[0].id;
         state.mdtProfileTab = "profile";
       }
-      state.mdtNotice = (results.results || []).length
+      state.mdtNotice = results.results.length
         ? null
-        : { query: q, reference: results.audit?.query_number || `FJQ-${Math.floor(100000 + Math.random() * 900000)}` };
+        : { query: q, reference: `NCIC-${Math.floor(100000 + Math.random() * 900000)}` };
       render();
     } catch (error) {
       toast(error.message);
@@ -6196,12 +6131,10 @@ function bindMdt() {
       const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
       if (state.mdtCatalogMode === "criminal") {
         const result = await api("/api/mdt/charge-warrants", { method: "POST", body: payload });
-        state.cache.mdt.lastInquiry = result.audit || state.cache.mdt.lastInquiry;
-        toast(result.bypass_court ? `Warrant ${result.warrant_number} signed - court bypassed` : `Packet ${result.citation_number} / warrant ${result.warrant_number} signed - court ${result.court_date}`);
+        toast(result.bypass_court ? `Warrant ${result.warrant_number} signed - court bypassed` : `Warrant ${result.warrant_number} signed - court ${result.court_date}`);
       } else {
         const result = await api("/api/mdt/citations", { method: "POST", body: payload });
-        state.cache.mdt.lastInquiry = result.audit || state.cache.mdt.lastInquiry;
-        toast(`UTT ${result.citation_number} issued - court ${result.court_date}`);
+        toast(`Citation issued - court ${result.court_date}`);
       }
       event.currentTarget.reset();
       state.mdtSelectedCiv = "";
@@ -7023,7 +6956,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.52").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.49").catch(() => {}));
 }
 
 bootApp();

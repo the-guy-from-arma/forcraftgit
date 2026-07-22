@@ -336,8 +336,6 @@ def generate_vehicle_vin(db: Database) -> str:
 
 def generate_record_number(db: Database, table: str, column: str, prefix: str) -> str:
     allowed = {
-        ("citations", "citation_number"),
-        ("mdt_query_logs", "query_number"),
         ("cid_investigations", "case_number"),
         ("cid_warrants", "warrant_number"),
         ("cid_internal_affairs", "ia_number"),
@@ -356,61 +354,6 @@ def generate_record_number(db: Database, table: str, column: str, prefix: str) -
         if not one(db, f"SELECT id FROM {table} WHERE {column} = ?", (number,)):
             return number
     raise RuntimeError("Unable to generate unique record number")
-
-
-def recent_mdt_audit_logs(db: Database, user: DbRow, limit: int = 10) -> list[dict[str, Any]]:
-    limit = max(1, min(limit, 25))
-    params: list[Any] = []
-    scope = ""
-    if not has_any(user, "owner", "cid", "cid_director", "iu", "iu_director"):
-        scope = "WHERE l.officer_id = ?"
-        params.append(user["id"])
-    rows = all_rows(
-        db,
-        f"""
-        SELECT l.*, u.name AS officer_name, u.callsign AS officer_callsign
-        FROM mdt_query_logs l
-        JOIN users u ON u.id = l.officer_id
-        {scope}
-        ORDER BY l.created_at DESC
-        LIMIT {limit}
-        """,
-        tuple(params),
-    )
-    return [dict(row) for row in rows]
-
-
-def log_mdt_portal_event(
-    db: Database,
-    user: DbRow,
-    query_type: str,
-    query_text: str,
-    purpose: str,
-    result_count: int = 0,
-    matched_user_ids: list[int] | None = None,
-) -> dict[str, Any]:
-    ts = now_iso()
-    query_number = generate_record_number(db, "mdt_query_logs", "query_number", "FJQ")
-    clean_type = str(query_type or "portal action").strip()[:60]
-    clean_text = str(query_text or "").strip()[:240]
-    clean_purpose = str(purpose or "official Faircroft RP justice use").strip()[:140]
-    matched = ",".join(str(item) for item in (matched_user_ids or []))
-    db.execute(
-        """
-        INSERT INTO mdt_query_logs
-        (query_number, officer_id, query_type, query_text, purpose, result_count, matched_user_ids, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (query_number, user["id"], clean_type, clean_text, clean_purpose, int(result_count or 0), matched, ts),
-    )
-    return {
-        "query_number": query_number,
-        "query_type": clean_type,
-        "query_text": clean_text,
-        "purpose": clean_purpose,
-        "result_count": int(result_count or 0),
-        "created_at": ts,
-    }
 
 
 BUSINESS_APPLICATION_STATUSES = ("submitted", "under_review", "interview_requested", "approved", "denied")
@@ -866,7 +809,6 @@ def ensure_schema() -> None:
 
             CREATE TABLE IF NOT EXISTS citations (
                 id SERIAL PRIMARY KEY,
-                citation_number TEXT NOT NULL DEFAULT '',
                 civ_id INTEGER NOT NULL,
                 officer_id INTEGER NOT NULL,
                 judge_id INTEGER,
@@ -889,19 +831,6 @@ def ensure_schema() -> None:
                 FOREIGN KEY (officer_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (judge_id) REFERENCES users(id) ON DELETE SET NULL,
                 FOREIGN KEY (charge_id) REFERENCES charge_catalog(id) ON DELETE RESTRICT
-            );
-
-            CREATE TABLE IF NOT EXISTS mdt_query_logs (
-                id SERIAL PRIMARY KEY,
-                query_number TEXT NOT NULL UNIQUE,
-                officer_id INTEGER NOT NULL,
-                query_type TEXT NOT NULL,
-                query_text TEXT NOT NULL,
-                purpose TEXT NOT NULL,
-                result_count INTEGER NOT NULL DEFAULT 0,
-                matched_user_ids TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (officer_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS transactions (
@@ -1318,30 +1247,9 @@ def ensure_migrations(db: Database) -> None:
         ensure_default_character(db, int(existing_user["id"]), str(existing_user["name"] or "Civilian"))
     db.execute("ALTER TABLE charge_catalog ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'criminal'")
     db.execute("UPDATE charge_catalog SET kind = 'citation' WHERE code LIKE ?", ("TRF-%",))
-    db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS citation_number TEXT NOT NULL DEFAULT ''")
-    for existing_case in all_rows(db, "SELECT id FROM citations WHERE citation_number IS NULL OR citation_number = '' ORDER BY id"):
-        db.execute("UPDATE citations SET citation_number = ? WHERE id = ?", (f"UTT-{int(existing_case['id']):06d}", existing_case["id"]))
-    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS citations_citation_number_unique ON citations (citation_number) WHERE citation_number <> ''")
     db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS judge_id INTEGER")
     db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS final_result TEXT NOT NULL DEFAULT ''")
     db.execute("UPDATE citations SET final_result = status WHERE final_result = '' AND status NOT IN ('issued','contested','reviewed','reduced')")
-    db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS mdt_query_logs (
-            id SERIAL PRIMARY KEY,
-            query_number TEXT NOT NULL UNIQUE,
-            officer_id INTEGER NOT NULL,
-            query_type TEXT NOT NULL,
-            query_text TEXT NOT NULL,
-            purpose TEXT NOT NULL,
-            result_count INTEGER NOT NULL DEFAULT 0,
-            matched_user_ids TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (officer_id) REFERENCES users(id) ON DELETE CASCADE
-        )
-        """
-    )
-    db.execute("CREATE INDEX IF NOT EXISTS mdt_query_logs_officer_idx ON mdt_query_logs (officer_id, created_at)")
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS target_context TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS last_known TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS requirements TEXT NOT NULL DEFAULT ''")
@@ -1782,38 +1690,38 @@ def seed_charges(db: Database) -> None:
         ("TRF-402", "Improper Lane Change", "Moving Citation", "Unsafe or unsignaled lane movement creating a traffic hazard.", 160, 2, "Infraction", "citation"),
         ("TRF-501", "Illegal Parking", "Parking Citation", "Parking in a restricted, fire lane, or no-parking zone.", 90, 0, "Parking Citation", "citation"),
         ("TRF-601", "Vehicle Equipment Violation", "Equipment Citation", "Operating a vehicle with unlawful lighting, tint, or unsafe equipment.", 110, 0, "Fix-It Citation", "citation"),
-        ("VTL-1110A", "Disobey Traffic Control Device", "Faircroft VTL - Traffic Control", "Failure to obey an official traffic-control device or lawful traffic regulation.", 150, 2, "Traffic Infraction", "citation"),
-        ("VTL-1111D1", "Passed Steady Red Signal", "Faircroft VTL - Traffic Control", "Failed to stop for a steady red traffic-control signal before entering the intersection.", 250, 3, "Traffic Infraction", "citation"),
-        ("VTL-1172A", "Failed to Stop at Stop Sign", "Faircroft VTL - Traffic Control", "Failed to stop at a stop sign before entering the crosswalk or intersection.", 180, 3, "Traffic Infraction", "citation"),
-        ("VTL-1180A", "Speed Not Reasonable and Prudent", "Faircroft VTL - Speeding", "Operated at a speed not reasonable and prudent for roadway, traffic, or weather conditions.", 200, 3, "Traffic Infraction", "citation"),
-        ("VTL-1180B", "Speed Over Posted Limit", "Faircroft VTL - Speeding", "Exceeded the maximum speed limit posted for the roadway.", 250, 4, "Traffic Infraction", "citation"),
-        ("VTL-1180D", "Speed in Zone", "Faircroft VTL - Speeding", "Exceeded speed restrictions established for a designated speed zone.", 250, 4, "Traffic Infraction", "citation"),
-        ("VTL-1128A", "Unsafe Lane Change", "Faircroft VTL - Moving Violation", "Moved from a lane when the movement could not be made safely or failed to stay within a single lane.", 160, 3, "Traffic Infraction", "citation"),
-        ("VTL-1163A", "Improper or No Turn Signal", "Faircroft VTL - Moving Violation", "Turned or moved right/left without giving the required signal.", 125, 2, "Traffic Infraction", "citation"),
-        ("VTL-1129A", "Following Too Closely", "Faircroft VTL - Moving Violation", "Followed another vehicle more closely than was reasonable and prudent.", 180, 4, "Traffic Infraction", "citation"),
-        ("VTL-1211A", "Unsafe Backing", "Faircroft VTL - Moving Violation", "Backed a vehicle when the movement could not be made safely.", 125, 2, "Traffic Infraction", "citation"),
-        ("VTL-1212", "Reckless Driving", "Faircroft VTL - Moving Violation", "Operated in a manner unreasonably interfering with highway use or endangering highway users.", 750, 5, "Misdemeanor", "citation"),
-        ("VTL-1225C2A", "Mobile Phone Use While Driving", "Faircroft VTL - Distracted Driving", "Used a mobile telephone while operating a motor vehicle.", 200, 5, "Traffic Infraction", "citation"),
-        ("VTL-1225D", "Portable Electronic Device Use", "Faircroft VTL - Distracted Driving", "Used a portable electronic device while operating a motor vehicle.", 200, 5, "Traffic Infraction", "citation"),
-        ("VTL-1229C3", "Seat Belt Violation", "Faircroft VTL - Occupant Safety", "Operator or passenger failed to use a required safety restraint.", 100, 0, "Traffic Infraction", "citation"),
-        ("VTL-5091", "Unlicensed Operator", "Faircroft VTL - License", "Operated a motor vehicle without being duly licensed.", 250, 0, "Traffic Infraction", "citation"),
-        ("VTL-5111A", "Aggravated Unlicensed Operation 3rd", "Faircroft VTL - License", "Operated while license or driving privilege was suspended or revoked.", 500, 0, "Misdemeanor", "citation"),
-        ("VTL-4011A", "Unregistered Motor Vehicle", "Faircroft VTL - Registration", "Operated or permitted operation of a motor vehicle without valid registration.", 200, 0, "Traffic Infraction", "citation"),
-        ("VTL-3191", "Operating Without Insurance", "Faircroft VTL - Insurance", "Operated a motor vehicle without required financial security or insurance.", 500, 0, "Traffic Infraction", "citation"),
-        ("VTL-306B", "Uninspected Motor Vehicle", "Faircroft VTL - Inspection", "Operated a motor vehicle without a valid inspection certificate.", 120, 0, "Traffic Infraction", "citation"),
-        ("VTL-3752A1", "No or Inadequate Headlights", "Faircroft VTL - Vehicle Equipment", "Operated without required headlamps or with inadequate lighting.", 110, 0, "Equipment Violation", "citation"),
-        ("VTL-37512A", "Illegal Window Tint", "Faircroft VTL - Vehicle Equipment", "Operated with window tint or light transmittance below the allowed standard.", 150, 0, "Equipment Violation", "citation"),
-        ("VTL-37531", "Obstructed or Dirty Plate", "Faircroft VTL - Vehicle Equipment", "Displayed a number plate that was obstructed, dirty, covered, or not plainly visible.", 100, 0, "Equipment Violation", "citation"),
-        ("VTL-1200A", "General Parking Regulation Violation", "Faircroft VTL - Parking", "Stopped, stood, or parked contrary to posted or local parking regulations.", 75, 0, "Parking Ticket", "citation"),
-        ("VTL-1201A", "Stopped or Parked on Highway", "Faircroft VTL - Parking", "Stopped, parked, or left standing on the paved or traveled part of a highway where prohibited.", 95, 0, "Parking Ticket", "citation"),
-        ("VTL-1202A1A", "Parking on Sidewalk", "Faircroft VTL - Parking", "Stopped, stood, or parked a vehicle on a sidewalk.", 90, 0, "Parking Ticket", "citation"),
-        ("VTL-1202A1B", "Blocking Driveway", "Faircroft VTL - Parking", "Stopped, stood, or parked in front of a public or private driveway.", 90, 0, "Parking Ticket", "citation"),
-        ("VTL-1202A1C", "Parking in Intersection", "Faircroft VTL - Parking", "Stopped, stood, or parked within an intersection.", 100, 0, "Parking Ticket", "citation"),
-        ("VTL-1202A1D", "Parking Near Fire Hydrant", "Faircroft VTL - Parking", "Stopped, stood, or parked within the prohibited distance of a fire hydrant.", 115, 0, "Parking Ticket", "citation"),
-        ("VTL-1202A1E", "Parking on Crosswalk", "Faircroft VTL - Parking", "Stopped, stood, or parked on a crosswalk.", 95, 0, "Parking Ticket", "citation"),
-        ("VTL-1202A2A", "Double Parking", "Faircroft VTL - Parking", "Stopped, stood, or parked on the roadway side of another stopped or parked vehicle.", 115, 0, "Parking Ticket", "citation"),
-        ("VTL-1203B", "Improper Angle Parking", "Faircroft VTL - Parking", "Parked other than parallel or angle parking required by traffic control or local rule.", 75, 0, "Parking Ticket", "citation"),
-        ("VTL-1204B", "Accessible Parking Violation", "Faircroft VTL - Parking", "Parked in a space reserved for people with disabilities without authorization.", 250, 0, "Parking Ticket", "citation"),
+        ("VTL-1110A", "Disobey Traffic Control Device", "NYS VTL - Traffic Control", "Failure to obey an official traffic-control device or lawful traffic regulation.", 150, 2, "Traffic Infraction", "citation"),
+        ("VTL-1111D1", "Passed Steady Red Signal", "NYS VTL - Traffic Control", "Failed to stop for a steady red traffic-control signal before entering the intersection.", 250, 3, "Traffic Infraction", "citation"),
+        ("VTL-1172A", "Failed to Stop at Stop Sign", "NYS VTL - Traffic Control", "Failed to stop at a stop sign before entering the crosswalk or intersection.", 180, 3, "Traffic Infraction", "citation"),
+        ("VTL-1180A", "Speed Not Reasonable and Prudent", "NYS VTL - Speeding", "Operated at a speed not reasonable and prudent for roadway, traffic, or weather conditions.", 200, 3, "Traffic Infraction", "citation"),
+        ("VTL-1180B", "Speed Over Posted Limit", "NYS VTL - Speeding", "Exceeded the maximum speed limit posted for the roadway.", 250, 4, "Traffic Infraction", "citation"),
+        ("VTL-1180D", "Speed in Zone", "NYS VTL - Speeding", "Exceeded speed restrictions established for a designated speed zone.", 250, 4, "Traffic Infraction", "citation"),
+        ("VTL-1128A", "Unsafe Lane Change", "NYS VTL - Moving Violation", "Moved from a lane when the movement could not be made safely or failed to stay within a single lane.", 160, 3, "Traffic Infraction", "citation"),
+        ("VTL-1163A", "Improper or No Turn Signal", "NYS VTL - Moving Violation", "Turned or moved right/left without giving the required signal.", 125, 2, "Traffic Infraction", "citation"),
+        ("VTL-1129A", "Following Too Closely", "NYS VTL - Moving Violation", "Followed another vehicle more closely than was reasonable and prudent.", 180, 4, "Traffic Infraction", "citation"),
+        ("VTL-1211A", "Unsafe Backing", "NYS VTL - Moving Violation", "Backed a vehicle when the movement could not be made safely.", 125, 2, "Traffic Infraction", "citation"),
+        ("VTL-1212", "Reckless Driving", "NYS VTL - Moving Violation", "Operated in a manner unreasonably interfering with highway use or endangering highway users.", 750, 5, "Misdemeanor", "citation"),
+        ("VTL-1225C2A", "Mobile Phone Use While Driving", "NYS VTL - Distracted Driving", "Used a mobile telephone while operating a motor vehicle.", 200, 5, "Traffic Infraction", "citation"),
+        ("VTL-1225D", "Portable Electronic Device Use", "NYS VTL - Distracted Driving", "Used a portable electronic device while operating a motor vehicle.", 200, 5, "Traffic Infraction", "citation"),
+        ("VTL-1229C3", "Seat Belt Violation", "NYS VTL - Occupant Safety", "Operator or passenger failed to use a required safety restraint.", 100, 0, "Traffic Infraction", "citation"),
+        ("VTL-5091", "Unlicensed Operator", "NYS VTL - License", "Operated a motor vehicle without being duly licensed.", 250, 0, "Traffic Infraction", "citation"),
+        ("VTL-5111A", "Aggravated Unlicensed Operation 3rd", "NYS VTL - License", "Operated while license or driving privilege was suspended or revoked.", 500, 0, "Misdemeanor", "citation"),
+        ("VTL-4011A", "Unregistered Motor Vehicle", "NYS VTL - Registration", "Operated or permitted operation of a motor vehicle without valid registration.", 200, 0, "Traffic Infraction", "citation"),
+        ("VTL-3191", "Operating Without Insurance", "NYS VTL - Insurance", "Operated a motor vehicle without required financial security or insurance.", 500, 0, "Traffic Infraction", "citation"),
+        ("VTL-306B", "Uninspected Motor Vehicle", "NYS VTL - Inspection", "Operated a motor vehicle without a valid inspection certificate.", 120, 0, "Traffic Infraction", "citation"),
+        ("VTL-3752A1", "No or Inadequate Headlights", "NYS VTL - Vehicle Equipment", "Operated without required headlamps or with inadequate lighting.", 110, 0, "Equipment Violation", "citation"),
+        ("VTL-37512A", "Illegal Window Tint", "NYS VTL - Vehicle Equipment", "Operated with window tint or light transmittance below the allowed standard.", 150, 0, "Equipment Violation", "citation"),
+        ("VTL-37531", "Obstructed or Dirty Plate", "NYS VTL - Vehicle Equipment", "Displayed a number plate that was obstructed, dirty, covered, or not plainly visible.", 100, 0, "Equipment Violation", "citation"),
+        ("VTL-1200A", "General Parking Regulation Violation", "NYS VTL - Parking", "Stopped, stood, or parked contrary to posted or local parking regulations.", 75, 0, "Parking Ticket", "citation"),
+        ("VTL-1201A", "Stopped or Parked on Highway", "NYS VTL - Parking", "Stopped, parked, or left standing on the paved or traveled part of a highway where prohibited.", 95, 0, "Parking Ticket", "citation"),
+        ("VTL-1202A1A", "Parking on Sidewalk", "NYS VTL - Parking", "Stopped, stood, or parked a vehicle on a sidewalk.", 90, 0, "Parking Ticket", "citation"),
+        ("VTL-1202A1B", "Blocking Driveway", "NYS VTL - Parking", "Stopped, stood, or parked in front of a public or private driveway.", 90, 0, "Parking Ticket", "citation"),
+        ("VTL-1202A1C", "Parking in Intersection", "NYS VTL - Parking", "Stopped, stood, or parked within an intersection.", 100, 0, "Parking Ticket", "citation"),
+        ("VTL-1202A1D", "Parking Near Fire Hydrant", "NYS VTL - Parking", "Stopped, stood, or parked within the prohibited distance of a fire hydrant.", 115, 0, "Parking Ticket", "citation"),
+        ("VTL-1202A1E", "Parking on Crosswalk", "NYS VTL - Parking", "Stopped, stood, or parked on a crosswalk.", 95, 0, "Parking Ticket", "citation"),
+        ("VTL-1202A2A", "Double Parking", "NYS VTL - Parking", "Stopped, stood, or parked on the roadway side of another stopped or parked vehicle.", 115, 0, "Parking Ticket", "citation"),
+        ("VTL-1203B", "Improper Angle Parking", "NYS VTL - Parking", "Parked other than parallel or angle parking required by traffic control or local rule.", 75, 0, "Parking Ticket", "citation"),
+        ("VTL-1204B", "Accessible Parking Violation", "NYS VTL - Parking", "Parked in a space reserved for people with disabilities without authorization.", 250, 0, "Parking Ticket", "citation"),
         ("PEN-110", "Failure to Identify", "Public Order", "Refusing lawful identification during an investigation.", 350, 0, "Misdemeanor", "criminal"),
         ("PEN-210", "Disorderly Conduct", "Public Order", "Creating a public disturbance or hazardous condition.", 400, 0, "Misdemeanor", "criminal"),
         ("PEN-330", "Trespassing", "Property", "Knowingly entering or remaining on property without permission.", 450, 0, "Misdemeanor", "criminal"),
@@ -2583,8 +2491,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_update_case(db, user, self.path_int(path, 3))
                 elif path == "/api/mdt/search" and method == "GET":
                     self.api_mdt_search(db, user, query)
-                elif path == "/api/mdt/audit" and method == "GET":
-                    self.api_mdt_audit(db, user)
                 elif path == "/api/mdt/charges" and method == "GET":
                     self.api_mdt_charges(db, user)
                 elif path.startswith("/api/mdt/users/") and path.endswith("/license") and method == "PATCH":
@@ -4825,10 +4731,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403 if user else 401, err)
             return
         term = (query.get("q") or [""])[0].strip()
-        purpose = (query.get("purpose") or [""])[0].strip() or "general Faircroft justice inquiry"
         if len(term) < 2:
-            audit = log_mdt_portal_event(db, user, "invalid inquiry", term, purpose, 0, [])
-            self.send_json(200, {"results": [], "audit": audit, "recent_audit": recent_mdt_audit_logs(db, user)})
+            self.send_json(200, {"results": []})
             return
         like = f"%{term}%"
         rows = all_rows(
@@ -4849,7 +4753,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         for row in rows:
             warrants = all_rows(
                 db,
-                "SELECT id, citation_number, charge_code, charge_title, status, fine_amount, court_date FROM citations WHERE civ_id = ? AND status IN ('issued', 'contested', 'reviewed', 'reduced') ORDER BY created_at DESC LIMIT 10",
+                "SELECT id, charge_code, charge_title, status, fine_amount FROM citations WHERE civ_id = ? AND status IN ('issued', 'contested', 'reviewed', 'reduced') ORDER BY created_at DESC LIMIT 10",
                 (row["id"],),
             )
             vehicles = all_rows(
@@ -4882,23 +4786,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             item["license_applications"] = applications
             item["warrants"] = [dict(warrant) for warrant in user_warrants]
             results.append(item)
-        audit = log_mdt_portal_event(
-            db,
-            user,
-            "person/dmv inquiry",
-            term,
-            purpose,
-            len(results),
-            [int(item["id"]) for item in results],
-        )
-        self.send_json(200, {"results": results, "audit": audit, "recent_audit": recent_mdt_audit_logs(db, user)})
-
-    def api_mdt_audit(self, db: Database, user: DbRow | None) -> None:
-        err = leo_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        self.send_json(200, {"logs": recent_mdt_audit_logs(db, user, 15)})
+        self.send_json(200, {"results": results})
 
     def api_mdt_charges(self, db: Database, user: DbRow | None) -> None:
         err = leo_required(user)
@@ -4990,18 +4878,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         location = str(payload["location"]).strip()[:120]
         bypass_court = str(payload.get("bypass_court") or "").lower() in ("1", "true", "yes", "on")
         citation_id = None
-        citation_number = None
         if not bypass_court:
-            citation_number = generate_record_number(db, "citations", "citation_number", "CRP")
             citation = db.execute(
                 """
                 INSERT INTO citations
-                (citation_number, civ_id, officer_id, judge_id, charge_id, charge_code, charge_title, category, fine_amount, points, severity, location, narrative, court_date, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (civ_id, officer_id, judge_id, charge_id, charge_code, charge_title, category, fine_amount, points, severity, location, narrative, court_date, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 RETURNING id
                 """,
                 (
-                    citation_number,
                     civ["id"],
                     user["id"],
                     presiding_judge["id"] if presiding_judge else None,
@@ -5062,7 +4947,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "Charge warrant signed",
             f"Warrant {created_warrant['warrant_number']} was filed against {civ['name']}."
             if bypass_court
-            else f"Warrant {created_warrant['warrant_number']} and court packet {citation_number} were filed against {civ['name']}.",
+            else f"Warrant {created_warrant['warrant_number']} and court case #{citation_id} were filed against {civ['name']}.",
             user["id"],
         )
         if presiding_judge and not bypass_court:
@@ -5070,30 +4955,19 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 db,
                 presiding_judge["id"],
                 "Criminal warrant case assigned",
-                f"Case {citation_number} / warrant {created_warrant['warrant_number']} was assigned to you. Defendant: {civ['name']}.",
+                f"Case #{citation_id} / warrant {created_warrant['warrant_number']} was assigned to you. Defendant: {civ['name']}.",
                 user["id"],
             )
-        audit = log_mdt_portal_event(
-            db,
-            user,
-            "criminal process warrant",
-            f"{created_warrant['warrant_number']} {charge['code']} {civ['name']}",
-            "criminal process filing",
-            1,
-            [int(civ["id"])],
-        )
         self.send_json(
             201,
             {
                 "ok": True,
                 "citation_id": citation_id,
-                "citation_number": citation_number,
                 "warrant_id": warrant_id,
                 "warrant_number": created_warrant["warrant_number"],
                 "court_date": None if bypass_court else court_date,
                 "bypass_court": bypass_court,
                 "judge_id": None if bypass_court or not presiding_judge else presiding_judge["id"],
-                "audit": audit,
             },
         )
 
@@ -5116,16 +4990,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         court_date = str(payload.get("court_date") or "").strip() or default_court_date
         presiding_judge = pick_presiding_judge(db)
         ts = now_iso()
-        citation_number = generate_record_number(db, "citations", "citation_number", "UTT")
         cur = db.execute(
             """
             INSERT INTO citations
-            (citation_number, civ_id, officer_id, judge_id, charge_id, charge_code, charge_title, category, fine_amount, points, severity, location, narrative, court_date, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (civ_id, officer_id, judge_id, charge_id, charge_code, charge_title, category, fine_amount, points, severity, location, narrative, court_date, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING id
             """,
             (
-                citation_number,
                 civ["id"],
                 user["id"],
                 presiding_judge["id"] if presiding_judge else None,
@@ -5148,29 +5020,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         add_message(
             db,
             civ["id"],
-            f"New citation {citation_number}",
+            f"New citation {charge['code']}",
             f"{user['name']} issued {charge['title']} for ${float(charge['fine_amount']):,.2f}. Open COURT to pay or contest.",
             user["id"],
         )
-        add_message(db, user["id"], "Officer case filed", f"Case {citation_number} was filed against {civ['name']} and is now in your COURT officer docket.", user["id"])
+        add_message(db, user["id"], "Officer case filed", f"Case #{citation_id} was filed against {civ['name']} and is now in your COURT officer docket.", user["id"])
         if presiding_judge:
             add_message(
                 db,
                 presiding_judge["id"],
                 "Presiding case assigned",
-                f"Case {citation_number} was assigned to you. Defendant: {civ['name']}. Officer: {user['name']}.",
+                f"Case #{citation_id} was assigned to you. Defendant: {civ['name']}. Officer: {user['name']}.",
                 user["id"],
             )
-        audit = log_mdt_portal_event(
-            db,
-            user,
-            "uniform traffic ticket",
-            f"{citation_number} {charge['code']} {civ['name']}",
-            "uniform traffic ticket filing",
-            1,
-            [int(civ["id"])],
-        )
-        self.send_json(201, {"ok": True, "citation_id": citation_id, "citation_number": citation_number, "court_date": court_date, "judge_id": presiding_judge["id"] if presiding_judge else None, "audit": audit})
+        self.send_json(201, {"ok": True, "citation_id": citation_id, "court_date": court_date, "judge_id": presiding_judge["id"] if presiding_judge else None})
 
     def api_panic(self, db: Database, user: DbRow | None) -> None:
         err = emergency_required(user)

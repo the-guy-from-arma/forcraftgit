@@ -1,8 +1,8 @@
-const CACHE = "rp-command-v52-justice-workstation-polish";
+const CACHE = "rp-command-v49-mobile-drawer-rebuild";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.52",
-  "/static/app.js?v=0.0.52",
+  "/static/styles.css?v=0.0.49",
+  "/static/app.js?v=0.0.49",
   "/static/icons/icon.svg",
   "/static/getting-started/used-cars.jpg",
   "/static/getting-started/dirty-pond.jpg",
