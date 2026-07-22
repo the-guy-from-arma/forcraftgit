@@ -1,6 +1,46 @@
 {
-  "version": "0.0.49",
+  "version": "0.0.51",
   "entries": [
+    {
+      "date": "2026-07-21",
+      "version": "0.0.51",
+      "title": "Faircroft eJustice Internal Workflows",
+      "added": [
+        "Added Faircroft MDT query audit logging with generated portal reference numbers.",
+        "Added official inquiry-purpose selection for Person / DMV / Vehicle searches.",
+        "Added a Justice Audit watch panel showing recent MDT portal activity.",
+        "Added generated UTT and criminal-process packet numbers for filed tickets and criminal warrant court packets."
+      ],
+      "changed": [
+        "MDT search responses now return a transaction packet with purpose, result count, and timestamp.",
+        "Ticket and criminal warrant filing now records a Faircroft portal audit event in addition to routing the case to court, defendant, officer, and judge dashboards.",
+        "Open court returns inside MDT records now display the Faircroft packet number when available."
+      ],
+      "fixed": [
+        "Made the eJustice rebuild functional internally instead of only changing the MDT visual shell."
+      ],
+      "removed": []
+    },
+    {
+      "date": "2026-07-21",
+      "version": "0.0.50",
+      "title": "State of Faircroft eJustice MDT",
+      "added": [
+        "Added a fictional State of Faircroft eJustice Portal skin for the law enforcement MDT.",
+        "Added a restricted justice system notice, Faircroft seal treatment, portal status line, and CJIS-style query module row to the MDT.",
+        "Added Faircroft-branded Person / DMV Inquiry and Uniform Traffic Ticket presentation inside the MDT."
+      ],
+      "changed": [
+        "Reworked only the MDT shell, search screen, side resources, citation catalog, and ticket writer into a modern justice-portal style while keeping the rest of the PWA unchanged.",
+        "Updated MDT navigation labels from generic terminal wording to Faircroft portal language.",
+        "Tuned mobile MDT styling so the new portal header, notice strip, code modules, and record returns stay inside the phone viewport."
+      ],
+      "fixed": [
+        "Reduced the blocky widget feel in officer lookup and ticket-writing workflows.",
+        "Updated PWA cache versioning so installed iPhone and Android PWAs request the new MDT bundle."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-07-17",
       "version": "0.0.49",

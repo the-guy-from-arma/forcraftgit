@@ -4334,6 +4334,375 @@ textarea:focus {
     repeating-linear-gradient(90deg, rgba(40, 209, 124, 0.035) 0 1px, transparent 1px 24px);
 }
 
+.faircroft-justice {
+  --justice-navy: #07162a;
+  --justice-blue: #0e3e73;
+  --justice-blue-2: #14558f;
+  --justice-gold: #d8aa3d;
+  --justice-paper: #edf3f8;
+  --justice-paper-2: #dce8f2;
+  --justice-ink: #f7fbff;
+  --justice-line: rgba(191, 214, 231, 0.2);
+  color: var(--justice-ink);
+  background:
+    linear-gradient(180deg, rgba(5, 17, 32, 0.99), rgba(4, 9, 18, 0.99)),
+    repeating-linear-gradient(90deg, rgba(216, 170, 61, 0.04) 0 1px, transparent 1px 96px),
+    repeating-linear-gradient(0deg, rgba(89, 151, 203, 0.035) 0 1px, transparent 1px 44px);
+}
+
+.faircroft-justice::before {
+  background:
+    radial-gradient(circle at 16% 12%, rgba(216, 170, 61, 0.14), transparent 30%),
+    linear-gradient(90deg, transparent, rgba(41, 109, 168, 0.16), transparent);
+  opacity: 0.34;
+}
+
+.faircroft-justice .mdt-topbar {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid rgba(216, 170, 61, 0.28);
+  padding: 12px 4px 15px;
+}
+
+.justice-brand-block {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.justice-seal {
+  flex: 0 0 auto;
+  width: 58px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  border: 2px solid rgba(216, 170, 61, 0.65);
+  border-radius: 50%;
+  color: #07162a;
+  background:
+    radial-gradient(circle, #f6e2a1 0 34%, #d8aa3d 35% 58%, #f5fbff 59% 64%, #0e3e73 65%);
+  font-size: 16px;
+  font-weight: 950;
+  letter-spacing: 0.04em;
+  box-shadow: 0 0 0 4px rgba(216, 170, 61, 0.08), 0 20px 60px rgba(0, 0, 0, 0.36);
+}
+
+.faircroft-justice .mdt-topbar h1 {
+  color: #ffffff;
+  font-size: clamp(26px, 3.4vw, 42px);
+  font-weight: 950;
+  letter-spacing: 0;
+}
+
+.faircroft-justice .eyebrow {
+  color: rgba(245, 217, 139, 0.9);
+}
+
+.faircroft-justice .mdt-subtitle {
+  color: rgba(220, 232, 242, 0.78);
+  max-width: 760px;
+}
+
+.faircroft-justice .mdt-status-line span {
+  border-color: rgba(216, 170, 61, 0.28);
+  color: rgba(246, 251, 255, 0.9);
+  background: rgba(14, 62, 115, 0.45);
+}
+
+.justice-notice-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 38px;
+  border: 1px solid rgba(216, 170, 61, 0.26);
+  border-left: 5px solid var(--justice-gold);
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: rgba(247, 251, 255, 0.86);
+  background:
+    linear-gradient(90deg, rgba(216, 170, 61, 0.16), rgba(14, 62, 115, 0.28)),
+    rgba(2, 8, 16, 0.42);
+}
+
+.justice-notice-strip strong {
+  color: #f9df8a;
+  font-size: 12px;
+  font-weight: 950;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.justice-notice-strip span {
+  min-width: 0;
+  color: rgba(220, 232, 242, 0.74);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.faircroft-justice .mdt-layout {
+  grid-template-columns: 226px minmax(0, 1fr) 320px;
+  border: 1px solid rgba(165, 195, 218, 0.2);
+  border-radius: 6px;
+  background:
+    linear-gradient(180deg, rgba(8, 25, 45, 0.96), rgba(4, 11, 22, 0.98)),
+    repeating-linear-gradient(90deg, rgba(216, 170, 61, 0.035) 0 1px, transparent 1px 74px);
+}
+
+.faircroft-justice .mdt-nav {
+  padding: 0;
+  border-right: 1px solid rgba(165, 195, 218, 0.18);
+  background: linear-gradient(180deg, rgba(7, 22, 42, 0.96), rgba(5, 14, 27, 0.96));
+}
+
+.faircroft-justice .mdt-nav .mdt-drawer-head,
+.faircroft-justice .mdt-side .mdt-drawer-head {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(216, 170, 61, 0.18);
+  background: rgba(216, 170, 61, 0.08);
+}
+
+.faircroft-justice .mdt-nav button {
+  min-height: 44px;
+  border: 0;
+  border-bottom: 1px solid rgba(165, 195, 218, 0.08);
+  border-radius: 0;
+  color: rgba(231, 242, 249, 0.78);
+  background: transparent;
+}
+
+.faircroft-justice .mdt-nav button:hover {
+  color: white;
+  background: rgba(20, 85, 143, 0.32);
+}
+
+.faircroft-justice .mdt-nav button.active {
+  color: #07162a;
+  background: linear-gradient(90deg, #f3d57d, #eaf5ff);
+  box-shadow: inset 4px 0 0 #ffffff;
+}
+
+.faircroft-justice .mdt-main {
+  background:
+    linear-gradient(180deg, rgba(237, 243, 248, 0.055), rgba(237, 243, 248, 0.018)),
+    rgba(0, 0, 0, 0.06);
+}
+
+.faircroft-justice .mdt-side {
+  border-left: 1px solid rgba(165, 195, 218, 0.18);
+  background: rgba(5, 16, 30, 0.74);
+}
+
+.faircroft-justice .mdt-side-panel {
+  border-bottom: 1px solid rgba(165, 195, 218, 0.12);
+}
+
+.faircroft-justice .mdt-stat-strip {
+  border-color: rgba(165, 195, 218, 0.18);
+  background: linear-gradient(90deg, rgba(14, 62, 115, 0.42), rgba(7, 22, 42, 0.68));
+}
+
+.faircroft-justice .mdt-stat-strip .metric,
+.faircroft-justice .metric {
+  border-left-color: rgba(165, 195, 218, 0.16);
+}
+
+.faircroft-justice .metric span {
+  color: rgba(245, 217, 139, 0.78);
+}
+
+.faircroft-justice .metric strong {
+  color: #ffffff;
+}
+
+.justice-query-console,
+.justice-ticket-form,
+.faircroft-justice .mdt-return,
+.faircroft-justice .mdt-form {
+  border: 1px solid rgba(165, 195, 218, 0.2);
+  border-top: 4px solid rgba(216, 170, 61, 0.78);
+  border-left: 1px solid rgba(165, 195, 218, 0.2);
+  border-radius: 6px;
+  background:
+    linear-gradient(180deg, rgba(8, 28, 50, 0.92), rgba(4, 12, 23, 0.96)),
+    repeating-linear-gradient(90deg, rgba(237, 243, 248, 0.025) 0 1px, transparent 1px 60px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.justice-query-console {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 14px;
+}
+
+.justice-screen-head,
+.justice-record-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.justice-screen-head h2,
+.justice-record-head h3 {
+  margin: 0;
+  color: #ffffff;
+}
+
+.justice-screen-head p,
+.justice-record-head p {
+  margin: 3px 0 0;
+}
+
+.justice-terminal-badge {
+  flex: 0 0 auto;
+  border: 1px solid rgba(216, 170, 61, 0.35);
+  border-radius: 999px;
+  padding: 7px 10px;
+  color: #f7df8c;
+  background: rgba(216, 170, 61, 0.1);
+  font-size: 10px;
+  font-weight: 950;
+  letter-spacing: 0.04em;
+}
+
+.justice-module-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid rgba(165, 195, 218, 0.16);
+  border-radius: 5px;
+  background: rgba(165, 195, 218, 0.1);
+}
+
+.justice-module-row span {
+  min-height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 6px 8px;
+  color: rgba(231, 242, 249, 0.8);
+  background: rgba(3, 13, 25, 0.62);
+  font-size: 11px;
+  font-weight: 950;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.justice-audit-packet {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(216, 170, 61, 0.22);
+  border-radius: 5px;
+  padding: 9px 10px;
+  background:
+    linear-gradient(90deg, rgba(216, 170, 61, 0.13), rgba(14, 62, 115, 0.22)),
+    rgba(1, 8, 16, 0.54);
+}
+
+.justice-audit-packet span,
+.justice-audit-packet small {
+  color: rgba(220, 232, 242, 0.7);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.justice-audit-packet strong {
+  color: #f7df8c;
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.justice-audit-list article {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(165, 195, 218, 0.12);
+  border-radius: 5px;
+  padding: 8px;
+  background: rgba(1, 8, 16, 0.42);
+}
+
+.justice-audit-list p,
+.justice-audit-list small {
+  margin: 0;
+  color: rgba(220, 232, 242, 0.68);
+  font-size: 11px;
+}
+
+.justice-searchbar {
+  grid-template-columns: minmax(170px, 0.55fr) minmax(240px, 1fr) auto;
+  align-items: end;
+  margin-bottom: 0;
+}
+
+.justice-searchbar label {
+  display: grid;
+  gap: 5px;
+  color: rgba(245, 217, 139, 0.86);
+  font-size: 11px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.faircroft-justice input,
+.faircroft-justice select,
+.faircroft-justice textarea {
+  border-color: rgba(165, 195, 218, 0.25);
+  color: #f7fbff;
+  background: rgba(1, 8, 16, 0.74);
+}
+
+.faircroft-justice input::placeholder,
+.faircroft-justice textarea::placeholder {
+  color: rgba(220, 232, 242, 0.48);
+}
+
+.justice-record-return {
+  border-top-color: rgba(165, 195, 218, 0.34);
+}
+
+.justice-empty {
+  border-color: rgba(216, 170, 61, 0.28);
+  color: rgba(220, 232, 242, 0.72);
+  background: rgba(216, 170, 61, 0.055);
+}
+
+.faircroft-justice .ticket-command-strip {
+  border-color: rgba(165, 195, 218, 0.18);
+  background: rgba(165, 195, 218, 0.1);
+}
+
+.faircroft-justice .ticket-command-strip button {
+  color: rgba(247, 251, 255, 0.88);
+  background: linear-gradient(180deg, rgba(14, 62, 115, 0.42), rgba(5, 16, 30, 0.74));
+}
+
+.faircroft-justice .ticket-command-strip button:hover {
+  background: rgba(216, 170, 61, 0.14);
+}
+
+.faircroft-justice .primary {
+  background: linear-gradient(135deg, #f4d16f, #fbf7dd);
+  color: #07162a;
+}
+
+.faircroft-justice .secondary,
+.faircroft-justice .ghost {
+  border-color: rgba(165, 195, 218, 0.22);
+  color: rgba(247, 251, 255, 0.9);
+  background: rgba(14, 62, 115, 0.34);
+}
+
+.faircroft-justice .secondary:hover,
+.faircroft-justice .ghost:hover {
+  border-color: rgba(216, 170, 61, 0.44);
+  background: rgba(20, 85, 143, 0.52);
+}
+
 .mdt-settings-console {
   display: grid;
   gap: 14px;
@@ -7127,6 +7496,56 @@ textarea:focus {
     padding-inline: 7px;
     font-size: 8.5px;
     white-space: nowrap;
+  }
+
+  .faircroft-justice .mdt-topbar {
+    padding: 8px 2px 7px;
+  }
+
+  .faircroft-justice .mdt-topbar h1 {
+    font-size: clamp(24px, 7vw, 30px);
+  }
+
+  .justice-brand-block {
+    width: 100%;
+    align-items: flex-start;
+    gap: 9px;
+  }
+
+  .justice-seal {
+    width: 42px;
+    height: 42px;
+    font-size: 12px;
+  }
+
+  .justice-notice-strip {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px;
+  }
+
+  .justice-notice-strip strong {
+    white-space: normal;
+  }
+
+  .justice-module-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .justice-audit-packet {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+
+  .justice-screen-head,
+  .justice-record-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .justice-terminal-badge {
+    align-self: flex-start;
   }
 
   .mdt-redesign .mdt-layout {
