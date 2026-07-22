@@ -1,8 +1,8 @@
-const CACHE = "rp-command-v51-faircroft-ejustice-internals";
+const CACHE = "rp-command-v52-justice-workstation-polish";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.51",
-  "/static/app.js?v=0.0.51",
+  "/static/styles.css?v=0.0.52",
+  "/static/app.js?v=0.0.52",
   "/static/icons/icon.svg",
   "/static/getting-started/used-cars.jpg",
   "/static/getting-started/dirty-pond.jpg",

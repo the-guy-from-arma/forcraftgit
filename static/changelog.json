@@ -1,6 +1,25 @@
 {
-  "version": "0.0.51",
+  "version": "0.0.52",
   "entries": [
+    {
+      "date": "2026-07-21",
+      "version": "0.0.52",
+      "title": "Justice Workstation Visual Rebuild",
+      "added": [
+        "Added a compact FCJIS wordmark and Justice Workstation header for the MDT."
+      ],
+      "changed": [
+        "Replaced the dark-blue/gold eJustice-inspired MDT skin with a cleaner professional graphite workstation interface.",
+        "Removed the large decorative seal and fake-government hero styling from the MDT header.",
+        "Reworked MDT panels, navigation, action buttons, query cards, audit packets, and side watch sections with restrained spacing and stronger hierarchy.",
+        "Reduced CID command dashboard empty-wall behavior by allowing command cards to size closer to their content."
+      ],
+      "fixed": [
+        "Reduced the generated/widget-like look of the MDT while preserving Faircroft RP justice workflows, audit logging, UTT packet numbers, warrants, and court routing.",
+        "Updated PWA cache versioning so installed devices request the polished MDT styles."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-07-21",
       "version": "0.0.51",

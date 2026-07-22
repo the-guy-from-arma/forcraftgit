@@ -4703,6 +4703,425 @@ textarea:focus {
   background: rgba(20, 85, 143, 0.52);
 }
 
+/* Professional Faircroft justice workstation skin. This intentionally overrides the
+   earlier eJustice-inspired treatment with a calmer, engineered operations UI. */
+.faircroft-justice {
+  --justice-bg: #0f1215;
+  --justice-panel: #171b20;
+  --justice-panel-2: #1d2329;
+  --justice-rail: #12161a;
+  --justice-line: rgba(222, 229, 235, 0.12);
+  --justice-line-strong: rgba(222, 229, 235, 0.2);
+  --justice-text: #edf2f6;
+  --justice-muted: #97a4af;
+  --justice-accent: #63c7b2;
+  --justice-accent-2: #7aa7ff;
+  --justice-warn: #e8b45f;
+  color: var(--justice-text);
+  background:
+    linear-gradient(180deg, #111418 0%, #0c0f12 100%),
+    repeating-linear-gradient(0deg, rgba(255,255,255,0.018) 0 1px, transparent 1px 32px);
+}
+
+.faircroft-justice::before {
+  display: none;
+}
+
+.faircroft-justice .mdt-topbar {
+  align-items: flex-start;
+  border: 1px solid var(--justice-line);
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: linear-gradient(180deg, rgba(28, 34, 40, 0.94), rgba(18, 22, 26, 0.96));
+  box-shadow: none;
+}
+
+.justice-brand-block {
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.justice-wordmark {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 2px;
+  min-width: 96px;
+  border: 1px solid var(--justice-line-strong);
+  border-left: 3px solid var(--justice-accent);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.justice-wordmark strong {
+  color: var(--justice-text);
+  font-size: 15px;
+  font-weight: 950;
+  letter-spacing: 0;
+}
+
+.justice-wordmark span {
+  color: var(--justice-muted);
+  font-size: 9px;
+  font-weight: 850;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.justice-seal {
+  display: none;
+}
+
+.faircroft-justice .mdt-topbar h1 {
+  color: var(--justice-text);
+  font-size: clamp(30px, 3.1vw, 44px);
+  line-height: 0.96;
+  font-weight: 900;
+}
+
+.faircroft-justice .eyebrow {
+  color: var(--justice-accent);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+}
+
+.faircroft-justice .mdt-subtitle {
+  color: var(--justice-muted);
+}
+
+.faircroft-justice .mdt-status-line span {
+  border-color: var(--justice-line);
+  border-radius: 5px;
+  color: #dfe7ec;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.faircroft-justice .mdt-top-actions button,
+.faircroft-justice .secondary,
+.faircroft-justice .ghost {
+  border: 1px solid var(--justice-line-strong);
+  border-radius: 6px;
+  color: #e9eef2;
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: none;
+}
+
+.faircroft-justice .mdt-top-actions button:hover,
+.faircroft-justice .secondary:hover,
+.faircroft-justice .ghost:hover {
+  border-color: rgba(99, 199, 178, 0.5);
+  background: rgba(99, 199, 178, 0.09);
+}
+
+.faircroft-justice .primary {
+  border: 1px solid rgba(99, 199, 178, 0.55);
+  border-radius: 6px;
+  color: #06100e;
+  background: linear-gradient(180deg, #78dcc9, #52bea8);
+  box-shadow: none;
+}
+
+.justice-notice-strip {
+  min-height: 36px;
+  border: 1px solid var(--justice-line);
+  border-left: 3px solid var(--justice-accent);
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: rgba(23, 27, 32, 0.8);
+}
+
+.justice-notice-strip strong {
+  color: #dfe7ec;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.justice-notice-strip span {
+  color: var(--justice-muted);
+}
+
+.faircroft-justice .mdt-stat-strip {
+  overflow: hidden;
+  border: 1px solid var(--justice-line);
+  border-radius: 8px;
+  background: var(--justice-panel);
+}
+
+.faircroft-justice .mdt-stat-strip .metric,
+.faircroft-justice .metric {
+  min-height: 74px;
+  border-left-color: var(--justice-line);
+  background: transparent;
+}
+
+.faircroft-justice .metric span {
+  color: var(--justice-muted);
+  font-size: 10px;
+}
+
+.faircroft-justice .metric strong {
+  color: var(--justice-text);
+  font-size: 26px;
+}
+
+.faircroft-justice .mdt-layout {
+  grid-template-columns: 224px minmax(0, 1fr) 314px;
+  overflow: hidden;
+  border: 1px solid var(--justice-line);
+  border-radius: 8px;
+  background: var(--justice-panel);
+}
+
+.faircroft-justice .mdt-nav {
+  border-right: 1px solid var(--justice-line);
+  background: var(--justice-rail);
+}
+
+.faircroft-justice .mdt-nav .mdt-drawer-head,
+.faircroft-justice .mdt-side .mdt-drawer-head {
+  border-bottom: 1px solid var(--justice-line);
+  color: var(--justice-muted);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.faircroft-justice .mdt-nav button {
+  min-height: 46px;
+  border-bottom: 1px solid rgba(222, 229, 235, 0.07);
+  color: #b9c4cc;
+}
+
+.faircroft-justice .mdt-nav button span {
+  color: #6f7b85;
+}
+
+.faircroft-justice .mdt-nav button:hover {
+  color: var(--justice-text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.faircroft-justice .mdt-nav button.active {
+  color: var(--justice-text);
+  background: rgba(99, 199, 178, 0.12);
+  box-shadow: inset 3px 0 0 var(--justice-accent);
+}
+
+.faircroft-justice .mdt-nav button.active span {
+  color: var(--justice-accent);
+}
+
+.faircroft-justice .mdt-main {
+  background: #14181d;
+}
+
+.faircroft-justice .mdt-side {
+  border-left: 1px solid var(--justice-line);
+  background: var(--justice-rail);
+}
+
+.faircroft-justice .mdt-side-panel {
+  border-bottom: 1px solid var(--justice-line);
+}
+
+.faircroft-justice .mdt-side-panel h3 {
+  color: #f4f7f9;
+}
+
+.justice-query-console,
+.justice-ticket-form,
+.faircroft-justice .mdt-return,
+.faircroft-justice .mdt-form,
+.faircroft-justice .cid-command-card,
+.faircroft-justice .cid-command-hero,
+.faircroft-justice .charge-card,
+.faircroft-justice .mdt-code-card {
+  border: 1px solid var(--justice-line);
+  border-top: 1px solid var(--justice-line-strong);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(32, 38, 44, 0.96), rgba(20, 24, 29, 0.98));
+  box-shadow: none;
+}
+
+.justice-query-console {
+  gap: 14px;
+  padding: 16px;
+}
+
+.justice-screen-head h2,
+.justice-record-head h3 {
+  color: var(--justice-text);
+  font-weight: 900;
+}
+
+.justice-screen-head p,
+.justice-record-head p {
+  color: var(--justice-muted);
+}
+
+.justice-terminal-badge {
+  border-color: rgba(99, 199, 178, 0.42);
+  border-radius: 5px;
+  color: #9ee8db;
+  background: rgba(99, 199, 178, 0.08);
+  letter-spacing: 0.02em;
+}
+
+.justice-module-row {
+  gap: 8px;
+  border: 0;
+  background: transparent;
+}
+
+.justice-module-row span {
+  min-height: 38px;
+  border: 1px solid var(--justice-line);
+  border-radius: 6px;
+  color: #d6dde3;
+  background: rgba(255, 255, 255, 0.035);
+  text-transform: none;
+}
+
+.justice-audit-packet {
+  border-color: rgba(122, 167, 255, 0.28);
+  border-radius: 6px;
+  background: rgba(122, 167, 255, 0.075);
+}
+
+.justice-audit-packet strong {
+  color: #afc7ff;
+}
+
+.justice-audit-list article {
+  border-color: var(--justice-line);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.justice-searchbar label {
+  color: #c3ccd4;
+  letter-spacing: 0;
+}
+
+.faircroft-justice input,
+.faircroft-justice select,
+.faircroft-justice textarea {
+  border: 1px solid var(--justice-line-strong);
+  border-radius: 6px;
+  color: var(--justice-text);
+  background: #0f1317;
+}
+
+.faircroft-justice input:focus,
+.faircroft-justice select:focus,
+.faircroft-justice textarea:focus {
+  border-color: rgba(99, 199, 178, 0.65);
+  box-shadow: 0 0 0 3px rgba(99, 199, 178, 0.12);
+  outline: 0;
+}
+
+.justice-record-return {
+  display: grid;
+  gap: 12px;
+}
+
+.justice-empty {
+  border-color: var(--justice-line);
+  border-radius: 8px;
+  color: var(--justice-muted);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.faircroft-justice .ticket-command-strip {
+  gap: 8px;
+  border-color: var(--justice-line);
+  background: transparent;
+}
+
+.faircroft-justice .ticket-command-strip button {
+  border: 1px solid var(--justice-line);
+  border-radius: 7px;
+  color: #dfe7ec;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.faircroft-justice .ticket-command-strip button:hover {
+  background: rgba(99, 199, 178, 0.08);
+}
+
+.faircroft-justice .cid-command-center {
+  gap: 14px;
+}
+
+.faircroft-justice .cid-command-hero {
+  min-height: 104px;
+  border-color: var(--justice-line);
+  padding: 16px;
+  background: linear-gradient(180deg, rgba(32, 38, 44, 0.96), rgba(20, 24, 29, 0.98));
+  box-shadow: none;
+}
+
+.faircroft-justice .cid-command-hero p:not(.eyebrow) {
+  color: var(--justice-muted);
+}
+
+.faircroft-justice .cid-command-pulse {
+  border-color: rgba(232, 180, 95, 0.3);
+  border-radius: 6px;
+  color: #f1d7ad;
+  background: rgba(232, 180, 95, 0.08);
+}
+
+.faircroft-justice .cid-command-pulse span {
+  background: var(--justice-warn);
+  box-shadow: none;
+  animation: none;
+}
+
+.faircroft-justice .cid-command-actions {
+  gap: 8px;
+  border: 0;
+  background: transparent;
+}
+
+.faircroft-justice .cid-command-actions button,
+.faircroft-justice .cid-mini-case,
+.faircroft-justice .cid-side-link {
+  border: 1px solid var(--justice-line);
+  border-radius: 7px;
+  color: #e8eef2;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.faircroft-justice .cid-command-actions button {
+  min-height: 70px;
+  border-left: 1px solid var(--justice-line);
+  padding: 12px;
+}
+
+.faircroft-justice .cid-command-actions button:first-child {
+  border-left: 1px solid var(--justice-line);
+}
+
+.faircroft-justice .cid-command-actions button:hover,
+.faircroft-justice .cid-mini-case:hover,
+.faircroft-justice .cid-side-link:hover {
+  border-color: rgba(99, 199, 178, 0.45);
+  background: rgba(99, 199, 178, 0.08);
+}
+
+.faircroft-justice .cid-command-grid {
+  gap: 10px;
+}
+
+.faircroft-justice .cid-command-card {
+  min-height: 156px;
+  padding: 14px;
+  border-left: 1px solid var(--justice-line);
+}
+
+.faircroft-justice .cid-command-card.priority {
+  border-color: rgba(232, 180, 95, 0.26);
+}
+
 .mdt-settings-console {
   display: grid;
   gap: 14px;
@@ -7510,6 +7929,19 @@ textarea:focus {
     width: 100%;
     align-items: flex-start;
     gap: 9px;
+  }
+
+  .justice-wordmark {
+    min-width: 74px;
+    padding: 7px 8px;
+  }
+
+  .justice-wordmark strong {
+    font-size: 12px;
+  }
+
+  .justice-wordmark span {
+    font-size: 8px;
   }
 
   .justice-seal {

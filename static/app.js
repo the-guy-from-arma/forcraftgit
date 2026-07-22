@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.51";
+const OS_VERSION = "0.0.52";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -3361,11 +3361,11 @@ function renderMdtWorkspace() {
     <section class="mdt-workspace mdt-redesign faircroft-justice ${mdtCommandEnabledNow ? "cid-workspace" : ""}">
       <header class="mdt-topbar">
         <div class="justice-brand-block">
-          <div class="justice-seal" aria-hidden="true">SF</div>
+          <div class="justice-wordmark" aria-hidden="true"><strong>FCJIS</strong><span>RP Justice Network</span></div>
           <div>
-            <p class="eyebrow">State of Faircroft</p>
-            <h1>Faircroft eJustice Portal</h1>
-            <p class="mdt-subtitle">${escapeHtml(state.session.user.primary_agency || (mdtCommandEnabledNow ? `${commandLabel} Command` : "Criminal Justice Services"))} / Integrated CJIS, DMV, e-ticketing, and case access</p>
+            <p class="eyebrow">State of Faircroft / Criminal Justice Services</p>
+            <h1>Justice Workstation</h1>
+            <p class="mdt-subtitle">${escapeHtml(state.session.user.primary_agency || (mdtCommandEnabledNow ? `${commandLabel} Command` : "Criminal Justice Services"))} / Records, CAD, UTT, warrants, and case workflow</p>
             <div class="mdt-status-line">
               <span>${escapeHtml(unitCallsign)}</span>
               <span>${escapeHtml(activeNavLabel)}</span>
@@ -3384,8 +3384,8 @@ function renderMdtWorkspace() {
         </div>
       </header>
       <section class="justice-notice-strip" aria-label="Faircroft justice portal notice">
-        <strong>Restricted Justice Information System</strong>
-        <span>All inquiries are for official Faircroft RP law-enforcement use. Activity is logged to your unit session.</span>
+        <strong>Session Audit Enabled</strong>
+        <span>Official Faircroft RP law-enforcement workspace. Queries, tickets, warrants, and court packets are logged to this unit session.</span>
       </section>
       ${renderMdtQuickRail()}
       <div class="mdt-stat-strip ${mdtCommandEnabledNow ? "cid-stat-strip" : "leo-stat-strip"}">
@@ -7023,7 +7023,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.51").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.52").catch(() => {}));
 }
 
 bootApp();
