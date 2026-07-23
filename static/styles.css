@@ -536,6 +536,35 @@ textarea:focus {
   background: #ff5d74;
 }
 
+.dev-tools-hero {
+  border-color: rgba(139, 255, 207, 0.28);
+  background: linear-gradient(135deg, rgba(49, 86, 216, 0.2), rgba(139, 255, 207, 0.1));
+}
+
+.dev-generated-code {
+  margin-top: 12px;
+  border: 1px solid rgba(139, 255, 207, 0.45);
+}
+
+.dev-generated-code strong {
+  color: #8bffcf;
+  font-size: clamp(1.35rem, 6vw, 2rem);
+  letter-spacing: 0.12em;
+}
+
+.dev-record-list,
+.dev-audit-list {
+  max-height: 520px;
+  overflow: auto;
+}
+
+.dev-audit-list code {
+  display: block;
+  overflow-wrap: anywhere;
+  color: #9fc1ff;
+  white-space: pre-wrap;
+}
+
 .primary:focus-visible,
 .secondary:focus-visible,
 .danger:focus-visible,

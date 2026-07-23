@@ -694,6 +694,66 @@ def ensure_schema() -> None:
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS developer_unlink_codes (
+                id SERIAL PRIMARY KEY,
+                code_hash TEXT NOT NULL UNIQUE,
+                code_hint TEXT NOT NULL,
+                created_by INTEGER NOT NULL,
+                expires_at TEXT NOT NULL,
+                uses_remaining INTEGER NOT NULL DEFAULT 1,
+                used_by INTEGER,
+                used_at TEXT,
+                revoked_at TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (used_by) REFERENCES users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS account_sanctions (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                sanction_type TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                internal_notes TEXT NOT NULL DEFAULT '',
+                starts_at TEXT NOT NULL,
+                expires_at TEXT,
+                created_by INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                revoked_by INTEGER,
+                revoked_at TEXT,
+                revoke_reason TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (revoked_by) REFERENCES users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS account_internal_warnings (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                severity TEXT NOT NULL DEFAULT 'standard',
+                subject TEXT NOT NULL,
+                body TEXT NOT NULL,
+                created_by INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                resolved_by INTEGER,
+                resolved_at TEXT,
+                resolution_notes TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (resolved_by) REFERENCES users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS admin_audit_logs (
+                id SERIAL PRIMARY KEY,
+                actor_id INTEGER,
+                target_user_id INTEGER,
+                action TEXT NOT NULL,
+                details TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE SET NULL,
+                FOREIGN KEY (target_user_id) REFERENCES users(id) ON DELETE SET NULL
+            );
+
             CREATE TABLE IF NOT EXISTS jobs (
                 id SERIAL PRIMARY KEY,
                 title TEXT NOT NULL,
@@ -1443,6 +1503,9 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS arma_link_codes_code_idx ON arma_link_codes (code)")
     db.execute("CREATE INDEX IF NOT EXISTS arma_link_codes_status_idx ON arma_link_codes (status)")
     db.execute("CREATE INDEX IF NOT EXISTS arma_activity_logs_user_idx ON arma_activity_logs (user_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS account_sanctions_user_idx ON account_sanctions (user_id, created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS account_warnings_user_idx ON account_internal_warnings (user_id, created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS admin_audit_logs_created_idx ON admin_audit_logs (created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS panic_alerts_department_idx ON panic_alerts (department)")
     db.execute("CREATE INDEX IF NOT EXISTS panic_alerts_status_idx ON panic_alerts (status, priority, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS dispatch_call_units_alert_idx ON dispatch_call_units (alert_id, detached_at)")
@@ -1974,6 +2037,48 @@ def admin_required(user: DbRow | None) -> str | None:
     return None
 
 
+def developer_required(user: DbRow | None) -> str | None:
+    if not user:
+        return "Authentication required"
+    if not has_any(user, "owner", "admin", "dev"):
+        return "Developer, owner, or admin access required"
+    return None
+
+
+def active_account_block(db: Database, user_id: int) -> DbRow | None:
+    now = now_iso()
+    return one(
+        db,
+        """
+        SELECT * FROM account_sanctions
+        WHERE user_id = ?
+          AND revoked_at IS NULL
+          AND sanction_type IN ('ban', 'timeout')
+          AND starts_at <= ?
+          AND (expires_at IS NULL OR expires_at > ?)
+        ORDER BY CASE sanction_type WHEN 'ban' THEN 0 ELSE 1 END, created_at DESC
+        LIMIT 1
+        """,
+        (user_id, now, now),
+    )
+
+
+def add_admin_audit(
+    db: Database,
+    actor_id: int,
+    action: str,
+    target_user_id: int | None = None,
+    details: dict[str, Any] | None = None,
+) -> None:
+    db.execute(
+        """
+        INSERT INTO admin_audit_logs (actor_id, target_user_id, action, details, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (actor_id, target_user_id, action[:100], json.dumps(details or {}, separators=(",", ":"), default=str)[:4000], now_iso()),
+    )
+
+
 def application_review_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
@@ -2140,6 +2245,8 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps.append({"id": "indeed-admin", "label": "Indeed Admin", "icon": "briefcase", "enabled": True, "hidden": False})
     if has_any(user, "owner", "admin"):
         apps.append({"id": "admin", "label": "Admin", "icon": "settings", "enabled": True, "hidden": False})
+    if has_any(user, "owner", "admin", "dev"):
+        apps.append({"id": "dev-tools", "label": "Dev Tools", "icon": "code", "enabled": True, "hidden": False})
     return apps
 
 
@@ -2481,6 +2588,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         try:
             with conn() as db:
                 user = self.current_user(db)
+                if user and path not in ("/api/session", "/api/auth/logout"):
+                    block = active_account_block(db, int(user["id"]))
+                    if block:
+                        self.error(403, f"Account {block['sanction_type']}: {block['reason']}")
+                        return
                 if path == "/api/health" and method == "GET":
                     self.send_json(200, {"ok": True, "time": now_iso()})
                 elif path == "/api/auth/register" and method == "POST":
@@ -2655,6 +2767,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_system_settings(db, user)
                 elif path == "/api/system/settings" and method == "PATCH":
                     self.api_update_system_settings(db, user)
+                elif path == "/api/dev-tools" and method == "GET":
+                    self.api_dev_tools(db, user)
+                elif path == "/api/dev-tools/unlink-codes" and method == "POST":
+                    self.api_dev_generate_unlink_code(db, user)
+                elif path == "/api/dev-tools/sanctions" and method == "POST":
+                    self.api_dev_create_sanction(db, user)
+                elif path.startswith("/api/dev-tools/sanctions/") and path.endswith("/revoke") and method == "POST":
+                    self.api_dev_revoke_sanction(db, user, self.path_int(path, 3))
+                elif path == "/api/dev-tools/warnings" and method == "POST":
+                    self.api_dev_create_warning(db, user)
+                elif path.startswith("/api/dev-tools/warnings/") and path.endswith("/resolve") and method == "POST":
+                    self.api_dev_resolve_warning(db, user, self.path_int(path, 3))
                 elif path == "/api/admin/overview" and method == "GET":
                     self.api_admin_overview(db, user)
                 elif path == "/api/admin/users" and method == "GET":
@@ -2813,6 +2937,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not user or not verify_password(str(payload["password"]), user["password_hash"]):
             self.error(401, "Invalid email or password")
             return
+        block = active_account_block(db, int(user["id"]))
+        if block:
+            until = block.get("expires_at") or "indefinitely"
+            self.error(403, f"Account {block['sanction_type']}: {block['reason']} (until {until})")
+            return
         self.send_json(200, {"ok": True, "user": public_user(user)}, {"Set-Cookie": self.session_header(user["id"])})
 
     def api_session(self, db: Database, user: DbRow | None) -> None:
@@ -2823,7 +2952,23 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         apply_auto_license_approval(db)
         settings = get_system_settings(db)
         user = one(db, "SELECT * FROM users WHERE id = ?", (user["id"],)) or user
+        block = active_account_block(db, int(user["id"]))
+        if block:
+            self.send_json(
+                403,
+                {
+                    "error": f"Account {block['sanction_type']}: {block['reason']}",
+                    "sanction": {
+                        "type": block["sanction_type"],
+                        "reason": block["reason"],
+                        "expires_at": block.get("expires_at"),
+                    },
+                },
+                {"Set-Cookie": self.clear_session_header()},
+            )
+            return
         unread = one(db, "SELECT COUNT(*) AS count FROM messages WHERE recipient_id = ? AND read_at IS NULL", (user["id"],))
+        arma_linked = bool(one(db, "SELECT id FROM arma_account_links WHERE user_id = ?", (user["id"],)))
         apps = app_catalog(user, settings)
         if court_access_required(db, user) is None:
             for item in apps:
@@ -2838,6 +2983,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "apps": apps,
                 "unread_messages": int(unread["count"] if unread else 0),
                 "income": income_snapshot(db, user),
+                "arma_linked": arma_linked,
+                "requires_arma_link": bool(user["verified"]) and not arma_linked,
                 "system": {
                     "update_lockdown_enabled": settings["update_lockdown_enabled"],
                     "update_lockdown_message": settings["update_lockdown_message"],
@@ -3158,6 +3305,25 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if payload.get("confirmation") != "UNLINK FOR DEVELOPMENT":
             self.error(400, "Confirm that unlinking is for development reasons and is being done with server engineer guidance.")
             return
+        dev_code = str(payload.get("dev_code") or "").strip().upper()
+        if not dev_code:
+            self.error(400, "A specialized developer unlink code is required")
+            return
+        code_hash = hashlib.sha256(dev_code.encode("utf-8")).hexdigest()
+        code_record = one(
+            db,
+            """
+            SELECT * FROM developer_unlink_codes
+            WHERE code_hash = ?
+              AND revoked_at IS NULL
+              AND uses_remaining > 0
+              AND expires_at > ?
+            """,
+            (code_hash, now_iso()),
+        )
+        if not code_record:
+            self.error(403, "Developer unlink code is invalid, expired, or already used")
+            return
         link = one(db, "SELECT * FROM arma_account_links WHERE user_id = ?", (user["id"],))
         if not link:
             self.error(404, "No linked Arma account was found")
@@ -3167,6 +3333,21 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute(
             "UPDATE arma_link_codes SET status = 'unlinked' WHERE claimed_by = ? AND status = 'claimed'",
             (user["id"],),
+        )
+        db.execute(
+            """
+            UPDATE developer_unlink_codes
+            SET uses_remaining = uses_remaining - 1, used_by = ?, used_at = ?
+            WHERE id = ?
+            """,
+            (user["id"], now_iso(), code_record["id"]),
+        )
+        add_admin_audit(
+            db,
+            int(code_record["created_by"]),
+            "arma.development_unlink",
+            int(user["id"]),
+            {"code_hint": code_record["code_hint"], "identity_id": link["identity_id"]},
         )
         add_message(
             db,
@@ -6554,6 +6735,228 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         settings = get_system_settings(db)
         stats = {**auto_verify_stats(db, settings), **auto_license_stats(db, settings)}
         self.send_json(200, {"ok": True, "settings": settings, "stats": stats, "auto_verified_now": auto_verified, "auto_licensed_now": auto_licensed})
+
+    def api_dev_tools(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        users = all_rows(
+            db,
+            """
+            SELECT id, civ_number, name, email, verified, roles, arma_id, created_at
+            FROM users ORDER BY name, id LIMIT 500
+            """,
+        )
+        sanctions = all_rows(
+            db,
+            """
+            SELECT s.*, target.name AS target_name, target.civ_number,
+                   creator.name AS created_by_name, revoker.name AS revoked_by_name
+            FROM account_sanctions s
+            JOIN users target ON target.id = s.user_id
+            JOIN users creator ON creator.id = s.created_by
+            LEFT JOIN users revoker ON revoker.id = s.revoked_by
+            ORDER BY s.created_at DESC LIMIT 250
+            """,
+        )
+        warnings = all_rows(
+            db,
+            """
+            SELECT w.*, target.name AS target_name, target.civ_number,
+                   creator.name AS created_by_name, resolver.name AS resolved_by_name
+            FROM account_internal_warnings w
+            JOIN users target ON target.id = w.user_id
+            JOIN users creator ON creator.id = w.created_by
+            LEFT JOIN users resolver ON resolver.id = w.resolved_by
+            ORDER BY w.created_at DESC LIMIT 250
+            """,
+        )
+        audit_logs = all_rows(
+            db,
+            """
+            SELECT l.*, actor.name AS actor_name, target.name AS target_name, target.civ_number
+            FROM admin_audit_logs l
+            LEFT JOIN users actor ON actor.id = l.actor_id
+            LEFT JOIN users target ON target.id = l.target_user_id
+            ORDER BY l.created_at DESC LIMIT 300
+            """,
+        )
+        codes = all_rows(
+            db,
+            """
+            SELECT c.id, c.code_hint, c.expires_at, c.uses_remaining, c.used_at, c.revoked_at, c.created_at,
+                   creator.name AS created_by_name, used.name AS used_by_name
+            FROM developer_unlink_codes c
+            JOIN users creator ON creator.id = c.created_by
+            LEFT JOIN users used ON used.id = c.used_by
+            ORDER BY c.created_at DESC LIMIT 100
+            """,
+        )
+        now = utcnow()
+        active_sanctions = [
+            row for row in sanctions
+            if not row.get("revoked_at") and (not row.get("expires_at") or parse_iso(row["expires_at"]) > now)
+        ]
+        self.send_json(
+            200,
+            {
+                "users": [dict(row) for row in users],
+                "sanctions": [dict(row) for row in sanctions],
+                "active_sanctions": len(active_sanctions),
+                "warnings": [dict(row) for row in warnings],
+                "audit_logs": [dict(row) for row in audit_logs],
+                "unlink_codes": [dict(row) for row in codes],
+            },
+        )
+
+    def api_dev_generate_unlink_code(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        try:
+            expiry_minutes = max(5, min(int(payload.get("expiry_minutes") or 30), 1440))
+        except (TypeError, ValueError):
+            self.error(400, "Expiry must be a number of minutes")
+            return
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        raw_code = "DEV-" + "".join(secrets.choice(alphabet) for _ in range(4)) + "-" + "".join(secrets.choice(alphabet) for _ in range(4))
+        code_hash = hashlib.sha256(raw_code.encode("utf-8")).hexdigest()
+        created_at = utcnow()
+        expires_at = created_at + dt.timedelta(minutes=expiry_minutes)
+        db.execute(
+            """
+            INSERT INTO developer_unlink_codes
+            (code_hash, code_hint, created_by, expires_at, uses_remaining, created_at)
+            VALUES (?, ?, ?, ?, 1, ?)
+            """,
+            (code_hash, raw_code[-4:], user["id"], expires_at.isoformat(), created_at.isoformat()),
+        )
+        add_admin_audit(db, int(user["id"]), "dev.unlink_code.created", details={"code_hint": raw_code[-4:], "expires_at": expires_at.isoformat()})
+        self.send_json(201, {"ok": True, "code": raw_code, "expires_at": expires_at.isoformat(), "uses": 1})
+
+    def api_dev_create_sanction(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        missing = require_fields(payload, "user_id", "sanction_type", "reason")
+        if missing:
+            self.error(400, missing)
+            return
+        sanction_type = str(payload["sanction_type"]).strip().lower()
+        if sanction_type not in ("ban", "timeout", "sanction"):
+            self.error(400, "Sanction type must be ban, timeout, or sanction")
+            return
+        target_id = int(payload["user_id"])
+        target = one(db, "SELECT * FROM users WHERE id = ?", (target_id,))
+        if not target:
+            self.error(404, "Target account not found")
+            return
+        if has_any(target, "owner") and not has_any(user, "owner"):
+            self.error(403, "Only the owner can sanction an owner account")
+            return
+        starts_at = utcnow()
+        expires_at: str | None = None
+        if sanction_type == "timeout":
+            try:
+                duration_minutes = max(1, min(int(payload.get("duration_minutes") or 60), 525600))
+            except (TypeError, ValueError):
+                self.error(400, "Timeout duration must be a number of minutes")
+                return
+            expires_at = (starts_at + dt.timedelta(minutes=duration_minutes)).isoformat()
+        elif sanction_type == "sanction" and payload.get("duration_minutes"):
+            expires_at = (starts_at + dt.timedelta(minutes=max(1, int(payload["duration_minutes"])))).isoformat()
+        created = db.execute(
+            """
+            INSERT INTO account_sanctions
+            (user_id, sanction_type, reason, internal_notes, starts_at, expires_at, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
+            """,
+            (
+                target_id,
+                sanction_type,
+                str(payload["reason"]).strip()[:1200],
+                str(payload.get("internal_notes") or "").strip()[:2000],
+                starts_at.isoformat(),
+                expires_at,
+                user["id"],
+                starts_at.isoformat(),
+            ),
+        ).fetchone()
+        add_admin_audit(db, int(user["id"]), f"account.{sanction_type}.created", target_id, {"reason": payload["reason"], "expires_at": expires_at})
+        self.send_json(201, {"ok": True, "id": int(created["id"]), "expires_at": expires_at})
+
+    def api_dev_revoke_sanction(self, db: Database, user: DbRow | None, sanction_id: int) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        sanction = one(db, "SELECT * FROM account_sanctions WHERE id = ?", (sanction_id,))
+        if not sanction:
+            self.error(404, "Sanction not found")
+            return
+        if sanction.get("revoked_at"):
+            self.error(409, "Sanction is already revoked")
+            return
+        payload = self.read_json()
+        reason = str(payload.get("reason") or "Revoked by staff").strip()[:1000]
+        db.execute(
+            "UPDATE account_sanctions SET revoked_by = ?, revoked_at = ?, revoke_reason = ? WHERE id = ?",
+            (user["id"], now_iso(), reason, sanction_id),
+        )
+        add_admin_audit(db, int(user["id"]), "account.sanction.revoked", int(sanction["user_id"]), {"sanction_id": sanction_id, "reason": reason})
+        self.send_json(200, {"ok": True})
+
+    def api_dev_create_warning(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        missing = require_fields(payload, "user_id", "subject", "body")
+        if missing:
+            self.error(400, missing)
+            return
+        target_id = int(payload["user_id"])
+        if not one(db, "SELECT id FROM users WHERE id = ?", (target_id,)):
+            self.error(404, "Target account not found")
+            return
+        severity = str(payload.get("severity") or "standard").strip().lower()
+        if severity not in ("low", "standard", "high", "critical"):
+            self.error(400, "Invalid warning severity")
+            return
+        created = db.execute(
+            """
+            INSERT INTO account_internal_warnings
+            (user_id, severity, subject, body, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?) RETURNING id
+            """,
+            (target_id, severity, str(payload["subject"]).strip()[:160], str(payload["body"]).strip()[:3000], user["id"], now_iso()),
+        ).fetchone()
+        add_admin_audit(db, int(user["id"]), "account.internal_warning.created", target_id, {"severity": severity, "subject": payload["subject"]})
+        self.send_json(201, {"ok": True, "id": int(created["id"])})
+
+    def api_dev_resolve_warning(self, db: Database, user: DbRow | None, warning_id: int) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        warning = one(db, "SELECT * FROM account_internal_warnings WHERE id = ?", (warning_id,))
+        if not warning:
+            self.error(404, "Warning not found")
+            return
+        payload = self.read_json()
+        notes = str(payload.get("notes") or "Resolved by staff").strip()[:1200]
+        db.execute(
+            "UPDATE account_internal_warnings SET resolved_by = ?, resolved_at = ?, resolution_notes = ? WHERE id = ?",
+            (user["id"], now_iso(), notes, warning_id),
+        )
+        add_admin_audit(db, int(user["id"]), "account.internal_warning.resolved", int(warning["user_id"]), {"warning_id": warning_id, "notes": notes})
+        self.send_json(200, {"ok": True})
 
     def api_admin_overview(self, db: Database, user: DbRow | None) -> None:
         err = admin_required(user)

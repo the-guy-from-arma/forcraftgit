@@ -18,6 +18,9 @@ const state = {
   activeApp: null,
   returnToMdtOnClose: false,
   pendingArmaCode: new URL(window.location.href).searchParams.get("code") || "",
+  armaUnlinkOpen: false,
+  armaLinkPromptDismissed: false,
+  generatedDevCode: null,
   dmvTab: "overview",
   jobsTab: "state_police",
   mdtTab: "search",
@@ -123,6 +126,7 @@ const iconSvg = {
   target: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
   scroll: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 21h9a3 3 0 0 0 3-3V5a2 2 0 0 0-2-2H7a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3h1Z"/><path d="M8 21a3 3 0 0 1-3-3V7h13"/><path d="M9 11h6M9 15h5"/></svg>',
   settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V22a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 18l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1A2 2 0 1 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>',
+  code: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M14 5l-4 14"/><circle cx="19" cy="5" r="2"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m15 18-6-6 6-6"/></svg>',
   logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M10 17l5-5-5-5M15 12H3M21 3v18"/></svg>',
@@ -149,6 +153,7 @@ const tileColors = {
   system: "linear-gradient(145deg, #35e0b6, #22485c)",
   "indeed-admin": "linear-gradient(145deg, #2fd38f, #172f28)",
   admin: "linear-gradient(145deg, #ffcf5a, #6c5010)",
+  "dev-tools": "linear-gradient(145deg, #8bffcf, #3156d8)",
 };
 
 function money(value) {
@@ -566,7 +571,29 @@ function renderCallsignRequiredModal() {
 }
 
 function renderRequiredProfileModals() {
-  return renderCarEntryRequiredModal() || renderCallsignRequiredModal();
+  return renderCarEntryRequiredModal() || renderCallsignRequiredModal() || renderArmaLinkRequiredModal();
+}
+
+function renderArmaLinkRequiredModal() {
+  if (!state.session?.requires_arma_link || state.armaLinkPromptDismissed) return "";
+  return `
+    <div class="modal-backdrop force-code-backdrop">
+      <section class="mdt-modal force-code-modal" role="dialog" aria-modal="true" aria-label="Link Arma account">
+        <header>
+          <p class="eyebrow">Verified account setup</p>
+          <h2>Link Your Arma Account</h2>
+        </header>
+        <div class="notice-body">
+          <p>Your Faircroft account is verified but no live Arma Reforger account is linked.</p>
+          <p>Join the game, request a linking code, then enter it from the Profile app.</p>
+        </div>
+        <div class="row">
+          <button class="primary" type="button" data-open-arma-link>Open Profile Linking</button>
+          <button class="secondary" type="button" data-dismiss-arma-link>Later</button>
+        </div>
+      </section>
+    </div>
+  `;
 }
 
 function bindRequiredProfileModals() {
@@ -580,6 +607,16 @@ function bindRequiredProfileModals() {
     } catch (error) {
       toast(error.message);
     }
+  });
+  $("[data-open-arma-link]")?.addEventListener("click", async () => {
+    state.armaLinkPromptDismissed = true;
+    state.activeApp = "profile";
+    await loadAppData("profile");
+    render();
+  });
+  $("[data-dismiss-arma-link]")?.addEventListener("click", () => {
+    state.armaLinkPromptDismissed = true;
+    render();
   });
 }
 
@@ -701,6 +738,7 @@ function renderPanel(id) {
     system: "System",
     "indeed-admin": "Indeed Admin",
     admin: "Admin",
+    "dev-tools": "Dev Tools",
   };
   const body = {
     profile: renderProfile,
@@ -722,6 +760,7 @@ function renderPanel(id) {
     system: renderSystem,
     "indeed-admin": renderIndeedAdmin,
     admin: renderAdmin,
+    "dev-tools": renderDevTools,
   }[id]?.() || `<div class="empty">Module unavailable</div>`;
 
   return `
@@ -769,6 +808,7 @@ async function loadAppData(id) {
     "fire-settings": () => api("/api/fire/overview"),
     system: () => api("/api/system/settings"),
     "indeed-admin": () => api("/api/indeed-admin/applications"),
+    "dev-tools": () => api("/api/dev-tools"),
     admin: async () => ({
       overview: await api("/api/admin/overview"),
       users: await api("/api/admin/users"),
@@ -823,6 +863,7 @@ function bindPanel() {
     system: bindSystem,
     "indeed-admin": bindIndeedAdmin,
     admin: bindAdmin,
+    "dev-tools": bindDevTools,
   };
   binders[state.activeApp]?.();
 }
@@ -1096,20 +1137,32 @@ function renderProfile() {
             <div><span>Identity</span><strong>${escapeHtml(link.identity_id || "Not provided")}</strong></div>
             <div><span>Last sync</span><strong>${escapeHtml(link.last_sync_at || link.linked_at || "Awaiting sync")}</strong></div>
           </div>
-          <form id="armaUnlinkForm" class="form-grid arma-unlink-form">
-            <div class="home-alert compact-alert">
-              ${iconSvg.shield}
-              <div>
-                <strong>Development use only</strong>
-                <p>Unlinking your Arma account is for development reasons only. Do this only with server engineer guidance.</p>
-              </div>
+          <button class="danger" type="button" data-open-arma-unlink>Unlink Arma Account</button>
+          ${state.armaUnlinkOpen ? `
+            <div class="modal-backdrop" data-close-arma-unlink>
+              <section class="mdt-modal force-code-modal" role="dialog" aria-modal="true" aria-label="Developer Arma unlink">
+                <header class="row">
+                  <div><p class="eyebrow">Development use only</p><h2>Unlink Arma Account</h2></div>
+                  <button class="icon-action" type="button" data-close-arma-unlink aria-label="Close">${iconSvg.back}</button>
+                </header>
+                <div class="home-alert compact-alert">
+                  ${iconSvg.shield}
+                  <div>
+                    <strong>Server engineer guidance required</strong>
+                    <p>Unlinking is for development reasons only. A developer must generate a specialized one-time code for this action.</p>
+                  </div>
+                </div>
+                <form id="armaUnlinkForm" class="form-grid arma-unlink-form">
+                  <label>Developer unlink code<input name="dev_code" placeholder="DEV-XXXX-XXXX" autocomplete="off" required /></label>
+                  <label class="checkbox-row">
+                    <input name="acknowledge" type="checkbox" required />
+                    <span>I understand this removes my live Arma account link.</span>
+                  </label>
+                  <button class="danger" type="submit">Confirm Development Unlink</button>
+                </form>
+              </section>
             </div>
-            <label class="checkbox-row">
-              <input name="acknowledge" type="checkbox" required />
-              <span>I understand this will remove my live Arma account link.</span>
-            </label>
-            <button class="danger" type="submit">Unlink Arma Account</button>
-          </form>
+          ` : ""}
         ` : `
           <p class="muted small">Enter the in-game link code shown by TBS RP LINKING SYSTEM after joining the server.</p>
           <form id="armaLinkForm" class="form-grid arma-link-form">
@@ -1249,6 +1302,15 @@ function bindProfile() {
       toast(error.message);
     }
   });
+  $("[data-open-arma-unlink]")?.addEventListener("click", () => {
+    state.armaUnlinkOpen = true;
+    render();
+  });
+  $$("[data-close-arma-unlink]").forEach((button) => button.addEventListener("click", (event) => {
+    if (event.currentTarget.classList?.contains("modal-backdrop") && event.target !== event.currentTarget) return;
+    state.armaUnlinkOpen = false;
+    render();
+  }));
   $("#armaUnlinkForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -1262,11 +1324,14 @@ function bindProfile() {
     );
     if (!confirmed) return;
     try {
+      const devCode = String(new FormData(form).get("dev_code") || "").trim().toUpperCase();
       await api("/api/profile/unlink-arma", {
         method: "POST",
-        body: { confirmation: "UNLINK FOR DEVELOPMENT" },
+        body: { confirmation: "UNLINK FOR DEVELOPMENT", dev_code: devCode },
       });
       toast("Arma account unlinked for development");
+      state.armaUnlinkOpen = false;
+      state.armaLinkPromptDismissed = false;
       await loadAppData("profile");
       await loadSession();
       render();
@@ -6545,6 +6610,141 @@ function bindMdt() {
   }));
 }
 
+function devUserOptions(users) {
+  return (users || []).map((user) => (
+    `<option value="${user.id}">${escapeHtml(user.name)} / CIV ${escapeHtml(user.civ_number || "pending")} / ${escapeHtml(user.email)}</option>`
+  )).join("");
+}
+
+function renderDevTools() {
+  const data = state.cache["dev-tools"] || {};
+  const users = data.users || [];
+  const sanctions = data.sanctions || [];
+  const warnings = data.warnings || [];
+  const logs = data.audit_logs || [];
+  const codes = data.unlink_codes || [];
+  return `
+    <div class="stack dev-tools-app">
+      <section class="profile-hero dev-tools-hero">
+        <div><p class="eyebrow">Restricted engineering console</p><h3>Developer Tools</h3><p>Account linking support, moderation controls, internal warnings, and immutable staff activity.</p></div>
+        <span class="pill amber">DEV</span>
+      </section>
+      <div class="profile-grid">
+        <div><span>Accounts</span><strong>${users.length}</strong></div>
+        <div><span>Active sanctions</span><strong>${Number(data.active_sanctions || 0)}</strong></div>
+        <div><span>Open warnings</span><strong>${warnings.filter((item) => !item.resolved_at).length}</strong></div>
+        <div><span>Audit events</span><strong>${logs.length}</strong></div>
+      </div>
+
+      <section class="profile-link-card">
+        <div class="row"><div><p class="eyebrow">Secure account unlink</p><h3>One-time Developer Code</h3><p class="muted small">Codes are shown once, stored as hashes, and expire automatically.</p></div><span class="pill red">restricted</span></div>
+        <form id="devCodeForm" class="form-grid">
+          <label>Expires in minutes<input name="expiry_minutes" type="number" min="5" max="1440" value="30" required /></label>
+          <button class="primary" type="submit">Generate One-Time Code</button>
+        </form>
+        ${state.generatedDevCode ? `<div class="referral-code-box dev-generated-code"><span>Give this code directly to the guided user</span><strong>${escapeHtml(state.generatedDevCode.code)}</strong><small>Expires ${escapeHtml(state.generatedDevCode.expires_at)}</small></div>` : ""}
+        <div class="list">${codes.slice(0, 8).map((item) => `<div class="row"><span>••••-${escapeHtml(item.code_hint)} / ${escapeHtml(item.created_by_name)}</span><strong>${item.uses_remaining ? "available" : "used"}</strong></div>`).join("") || `<div class="empty">No developer codes generated</div>`}</div>
+      </section>
+
+      <section class="profile-link-card">
+        <div class="row"><div><p class="eyebrow">Account enforcement</p><h3>Create Sanction</h3></div><span class="pill red">staff action</span></div>
+        <form id="devSanctionForm" class="form-grid">
+          <label>Account<select name="user_id" required><option value="">Select account</option>${devUserOptions(users)}</select></label>
+          <label>Action<select name="sanction_type" required><option value="timeout">Timeout</option><option value="ban">Ban</option><option value="sanction">Recorded sanction</option></select></label>
+          <label>Duration minutes<input name="duration_minutes" type="number" min="1" max="525600" value="60" /></label>
+          <label>Public reason<textarea name="reason" maxlength="1200" required></textarea></label>
+          <label>Internal notes<textarea name="internal_notes" maxlength="2000"></textarea></label>
+          <button class="danger" type="submit">Apply Enforcement Action</button>
+        </form>
+        <div class="list dev-record-list">${sanctions.slice(0, 30).map((item) => `
+          <article class="card">
+            <div class="row"><strong>${escapeHtml(item.target_name)} / ${escapeHtml(item.sanction_type)}</strong><span class="pill ${item.revoked_at ? "" : "red"}">${item.revoked_at ? "revoked" : "active"}</span></div>
+            <p>${escapeHtml(item.reason)}</p>
+            <p class="muted small">By ${escapeHtml(item.created_by_name)} · ${escapeHtml(item.created_at)}${item.expires_at ? ` · expires ${escapeHtml(item.expires_at)}` : ""}</p>
+            ${item.revoked_at ? "" : `<button class="secondary" type="button" data-revoke-sanction="${item.id}">Revoke / Unban</button>`}
+          </article>
+        `).join("") || `<div class="empty">No sanctions recorded</div>`}</div>
+      </section>
+
+      <section class="profile-link-card">
+        <div class="row"><div><p class="eyebrow">Staff-only case notes</p><h3>Internal Warning</h3></div><span class="pill amber">not player-visible</span></div>
+        <form id="devWarningForm" class="form-grid">
+          <label>Account<select name="user_id" required><option value="">Select account</option>${devUserOptions(users)}</select></label>
+          <label>Severity<select name="severity"><option>low</option><option selected>standard</option><option>high</option><option>critical</option></select></label>
+          <label>Subject<input name="subject" maxlength="160" required /></label>
+          <label>Internal warning<textarea name="body" maxlength="3000" required></textarea></label>
+          <button class="secondary" type="submit">Record Internal Warning</button>
+        </form>
+        <div class="list dev-record-list">${warnings.slice(0, 30).map((item) => `
+          <article class="card">
+            <div class="row"><strong>${escapeHtml(item.target_name)} / ${escapeHtml(item.subject)}</strong><span class="pill ${item.severity === "critical" ? "red" : "amber"}">${escapeHtml(item.severity)}</span></div>
+            <p>${escapeHtml(item.body)}</p>
+            <p class="muted small">By ${escapeHtml(item.created_by_name)} · ${escapeHtml(item.created_at)}</p>
+            ${item.resolved_at ? `<span class="pill green">resolved</span>` : `<button class="secondary" type="button" data-resolve-warning="${item.id}">Resolve Warning</button>`}
+          </article>
+        `).join("") || `<div class="empty">No internal warnings</div>`}</div>
+      </section>
+
+      <section class="profile-link-card">
+        <div class="row"><div><p class="eyebrow">Administrative accountability</p><h3>Audit Log</h3></div><span class="pill green">${logs.length} events</span></div>
+        <div class="list dev-audit-list">${logs.map((item) => `
+          <div class="card"><div class="row"><strong>${escapeHtml(item.action)}</strong><span>${escapeHtml(item.actor_name)}</span></div><p class="muted small">${escapeHtml(item.target_name || "System")} · ${escapeHtml(item.created_at)}</p><code>${escapeHtml(item.details || "{}")}</code></div>
+        `).join("") || `<div class="empty">No audited actions yet</div>`}</div>
+      </section>
+    </div>
+  `;
+}
+
+async function refreshDevTools() {
+  await loadAppData("dev-tools");
+  render();
+}
+
+function bindDevTools() {
+  $("#devCodeForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      state.generatedDevCode = await api("/api/dev-tools/unlink-codes", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast("One-time developer code generated");
+      await refreshDevTools();
+    } catch (error) { toast(error.message); }
+  });
+  $("#devSanctionForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api("/api/dev-tools/sanctions", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast("Enforcement action recorded");
+      await refreshDevTools();
+    } catch (error) { toast(error.message); }
+  });
+  $$("[data-revoke-sanction]").forEach((button) => button.addEventListener("click", async () => {
+    try {
+      const reason = window.prompt("Reason for revoking this sanction or unbanning the account:", "Reviewed by staff");
+      if (reason === null) return;
+      await api(`/api/dev-tools/sanctions/${button.dataset.revokeSanction}/revoke`, { method: "POST", body: { reason } });
+      toast("Sanction revoked");
+      await refreshDevTools();
+    } catch (error) { toast(error.message); }
+  }));
+  $("#devWarningForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api("/api/dev-tools/warnings", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast("Internal warning recorded");
+      await refreshDevTools();
+    } catch (error) { toast(error.message); }
+  });
+  $$("[data-resolve-warning]").forEach((button) => button.addEventListener("click", async () => {
+    try {
+      const notes = window.prompt("Resolution notes:", "Resolved by staff");
+      if (notes === null) return;
+      await api(`/api/dev-tools/warnings/${button.dataset.resolveWarning}/resolve`, { method: "POST", body: { notes } });
+      toast("Warning resolved");
+      await refreshDevTools();
+    } catch (error) { toast(error.message); }
+  }));
+}
+
 function renderAdmin() {
   const data = state.cache.admin;
   if (!data) return `<div class="empty">Admin loading</div>`;
@@ -6645,7 +6845,7 @@ function renderSystem() {
   `;
 }
 
-const roleOptions = ["civ", "owner", "admin", "indeed_admin", "leo", "judge", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "business_owner", "business_registrar", "city_hall", "economy_manager"];
+const roleOptions = ["civ", "owner", "admin", "dev", "indeed_admin", "leo", "judge", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "business_owner", "business_registrar", "city_hall", "economy_manager"];
 
 function adminUserSearchText(user) {
   return [
