@@ -1,18 +1,24 @@
 {
-  "name": "RP Command Roleplay System",
-  "short_name": "RP Command",
-  "description": "Mobile-first roleplay civilian, admin, MDT, court, jobs, banking, and property PWA.",
+  "name": "Faircroft RP",
+  "short_name": "Faircroft",
+  "description": "The official Faircroft RP civilian, government, business, court, banking, and staff system.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#0c1012",
-  "theme_color": "#101418",
+  "background_color": "#030306",
+  "theme_color": "#07070c",
   "icons": [
     {
-      "src": "/static/icons/icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
+      "src": "/static/brand/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/brand/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
       "purpose": "any maskable"
     }
   ]

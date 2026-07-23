@@ -3,30 +3,33 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#101418" />
+    <meta name="theme-color" content="#07070c" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-title" content="RP Command" />
+    <meta name="apple-mobile-web-app-title" content="Faircroft RP" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="apple-touch-icon" href="/static/icons/icon.svg" />
-    <link rel="stylesheet" href="/static/styles.css?v=0.0.61" />
-    <title>RP Command</title>
+    <link rel="apple-touch-icon" href="/static/brand/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/static/brand/icon-192.png" />
+    <link rel="stylesheet" href="/static/styles.css?v=0.0.66" />
+    <title>Faircroft RP</title>
   </head>
   <body>
     <main id="app" aria-live="polite">
       <div class="boot-screen booting">
-        <div class="boot-brand">RP</div>
+        <video class="faircroft-entrance-media" autoplay muted loop playsinline poster="/static/brand/faircroft-emblem.webp">
+          <source src="/static/brand/faircroft-light-sweep.mp4" type="video/mp4" />
+        </video>
         <div class="boot-orb" aria-hidden="true">
           <span class="boot-orb-core"></span>
           <span class="boot-orb-ring"></span>
           <span class="boot-orb-ring"></span>
         </div>
-        <p class="boot-title">Loading roleplay core...</p>
+        <p class="boot-title">Entering Faircroft...</p>
         <p class="boot-subtitle">Syncing your account and loading modules.</p>
         <div class="boot-progress"><span></span></div>
       </div>
     </main>
     <div id="toast" class="toast" role="status"></div>
-    <script src="/static/app.js?v=0.0.61" defer></script>
+    <script src="/static/app.js?v=0.0.66" defer></script>
   </body>
 </html>

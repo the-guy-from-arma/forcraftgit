@@ -1505,6 +1505,111 @@ def ensure_migrations(db: Database) -> None:
     db.execute("UPDATE citations SET final_result = status WHERE final_result = '' AND status NOT IN ('issued','contested','reviewed','reduced')")
     db.execute(
         """
+        CREATE TABLE IF NOT EXISTS fine_settlement_batches (
+            id SERIAL PRIMARY KEY,
+            batch_number TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL DEFAULT 'draft',
+            approval_code_hash TEXT NOT NULL DEFAULT '',
+            approval_code_hint TEXT NOT NULL DEFAULT '',
+            approval_expires_at TEXT,
+            approved_by INTEGER,
+            approved_at TEXT,
+            processing_started_at TEXT,
+            completed_at TEXT,
+            created_by INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            notes TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL,
+            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS fine_settlement_items (
+            id SERIAL PRIMARY KEY,
+            batch_id INTEGER NOT NULL,
+            citation_id INTEGER NOT NULL UNIQUE,
+            user_id INTEGER NOT NULL,
+            identity_id TEXT NOT NULL,
+            fine_amount NUMERIC(12,2) NOT NULL,
+            balance_before NUMERIC(12,2) NOT NULL,
+            expected_balance NUMERIC(12,2) NOT NULL,
+            verified_balance NUMERIC(12,2),
+            status TEXT NOT NULL DEFAULT 'pending',
+            failure_reason TEXT NOT NULL DEFAULT '',
+            verified_at TEXT,
+            FOREIGN KEY (batch_id) REFERENCES fine_settlement_batches(id) ON DELETE CASCADE,
+            FOREIGN KEY (citation_id) REFERENCES citations(id) ON DELETE RESTRICT,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS fine_settlement_batch_idx ON fine_settlement_items (batch_id)")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS business_tax_assessments (
+            id SERIAL PRIMARY KEY,
+            business_id INTEGER NOT NULL,
+            amount NUMERIC(12,2) NOT NULL,
+            period_label TEXT NOT NULL,
+            notes TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'unpaid',
+            assessed_by INTEGER NOT NULL,
+            assessed_at TEXT NOT NULL,
+            settlement_batch_id INTEGER,
+            settled_at TEXT,
+            FOREIGN KEY (business_id) REFERENCES businesses(id) ON DELETE CASCADE,
+            FOREIGN KEY (assessed_by) REFERENCES users(id) ON DELETE RESTRICT
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS business_tax_settlement_batches (
+            id SERIAL PRIMARY KEY,
+            batch_number TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL DEFAULT 'draft',
+            approval_code_hash TEXT NOT NULL DEFAULT '',
+            approval_code_hint TEXT NOT NULL DEFAULT '',
+            approval_expires_at TEXT,
+            approved_by INTEGER,
+            approved_at TEXT,
+            completed_at TEXT,
+            created_by INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            notes TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL,
+            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS business_tax_settlement_items (
+            id SERIAL PRIMARY KEY,
+            batch_id INTEGER NOT NULL,
+            business_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            identity_id TEXT NOT NULL,
+            tax_amount NUMERIC(12,2) NOT NULL,
+            balance_before NUMERIC(12,2) NOT NULL,
+            expected_balance NUMERIC(12,2) NOT NULL,
+            verified_balance NUMERIC(12,2),
+            status TEXT NOT NULL DEFAULT 'pending',
+            failure_reason TEXT NOT NULL DEFAULT '',
+            verified_at TEXT,
+            FOREIGN KEY (batch_id) REFERENCES business_tax_settlement_batches(id) ON DELETE CASCADE,
+            FOREIGN KEY (business_id) REFERENCES businesses(id) ON DELETE RESTRICT,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            UNIQUE (batch_id, business_id)
+        )
+        """
+    )
+    db.execute("ALTER TABLE business_tax_assessments ADD COLUMN IF NOT EXISTS settlement_batch_id INTEGER")
+    db.execute("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS tax_last_assessed_at TEXT")
+    db.execute(
+        """
         CREATE TABLE IF NOT EXISTS mdt_bookings (
             id SERIAL PRIMARY KEY,
             booking_number TEXT NOT NULL UNIQUE,
@@ -2227,6 +2332,14 @@ def developer_required(user: DbRow | None) -> str | None:
     return None
 
 
+def fine_settlement_required(user: DbRow | None) -> str | None:
+    if not user:
+        return "Authentication required"
+    if not has_any(user, "owner", "dev"):
+        return "Owner or developer access required"
+    return None
+
+
 def active_account_block(db: Database, user_id: int) -> DbRow | None:
     now = now_iso()
     return one(
@@ -2427,6 +2540,8 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps.append({"id": "admin", "label": "Admin", "icon": "settings", "enabled": True, "hidden": False})
     if has_any(user, "owner", "admin", "dev"):
         apps.append({"id": "dev-tools", "label": "Dev Tools", "icon": "code", "enabled": True, "hidden": False})
+    if has_any(user, "owner", "dev"):
+        apps.append({"id": "fine-settlement", "label": "Fine Settlement", "icon": "gavel", "enabled": True, "hidden": False})
     return apps
 
 
@@ -2862,6 +2977,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_create_business_inspection(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/business/licenses/") and path.endswith("/violations") and method == "POST":
                     self.api_create_business_violation(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/business/licenses/") and path.endswith("/taxes") and method == "POST":
+                    self.api_create_business_tax(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/business/licenses/") and method == "PATCH":
                     self.api_update_business_license(db, user, self.path_int(path, 3))
                 elif path == "/api/properties" and method == "GET":
@@ -2964,6 +3081,24 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_create_warning(db, user)
                 elif path.startswith("/api/dev-tools/warnings/") and path.endswith("/resolve") and method == "POST":
                     self.api_dev_resolve_warning(db, user, self.path_int(path, 3))
+                elif path == "/api/fine-settlement" and method == "GET":
+                    self.api_fine_settlement(db, user)
+                elif path == "/api/fine-settlement/batches" and method == "POST":
+                    self.api_create_fine_settlement_batch(db, user)
+                elif path.startswith("/api/fine-settlement/batches/") and path.endswith("/code") and method == "POST":
+                    self.api_fine_settlement_code(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/fine-settlement/batches/") and path.endswith("/approve") and method == "POST":
+                    self.api_approve_fine_settlement(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/fine-settlement/batches/") and path.endswith("/complete") and method == "POST":
+                    self.api_complete_fine_settlement(db, user, self.path_int(path, 3))
+                elif path == "/api/fine-settlement/tax-batches" and method == "POST":
+                    self.api_create_tax_settlement_batch(db, user)
+                elif path.startswith("/api/fine-settlement/tax-batches/") and path.endswith("/code") and method == "POST":
+                    self.api_tax_settlement_code(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/fine-settlement/tax-batches/") and path.endswith("/approve") and method == "POST":
+                    self.api_approve_tax_settlement(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/fine-settlement/tax-batches/") and path.endswith("/complete") and method == "POST":
+                    self.api_complete_tax_settlement(db, user, self.path_int(path, 3))
                 elif path == "/api/admin/overview" and method == "GET":
                     self.api_admin_overview(db, user)
                 elif path == "/api/admin/users" and method == "GET":
@@ -4594,10 +4729,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         }
 
     def business_license_payload(self, row: DbRow) -> dict[str, Any]:
-        return {
+        tax_anchor = parse_iso(str(row.get("tax_last_assessed_at") or row.get("created_at") or now_iso()))
+        accrued_weeks = max(0, int((utcnow() - tax_anchor).total_seconds() // (7 * 24 * 60 * 60)))
+        weekly_tax = round(float(row["weekly_tax"] or 0), 2)
+        payload = {
             **dict(row),
             "startup_budget": round(float(row["startup_budget"] or 0), 2),
-            "weekly_tax": round(float(row["weekly_tax"] or 0), 2),
+            "weekly_tax": weekly_tax,
             "planned_employees": int(row["planned_employees"] or 0),
             "activity_requirement_minutes": int(row["activity_requirement_minutes"] or 0),
             "reputation_score": int(row["reputation_score"] or 0),
@@ -4605,6 +4743,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "open_violations": int(row.get("open_violations") or 0),
             "inspection_count": int(row.get("inspection_count") or 0),
         }
+        if row.get("identity_id"):
+            payload.update(
+                {
+                    "unpaid_tax": round(float(row.get("unpaid_tax") or 0), 2),
+                    "accrued_tax": round(weekly_tax * accrued_weeks, 2),
+                    "accrued_weeks": accrued_weeks,
+                    "tax_available_at": (tax_anchor + dt.timedelta(days=7)).isoformat(),
+                }
+            )
+        return payload
 
     def business_staff_rows(self, db: Database) -> list[DbRow]:
         return all_rows(
@@ -4655,7 +4803,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             """,
             (user["id"],),
         )
-
         payload: dict[str, Any] = {
             "staff_view": staff_view,
             "categories": list(BUSINESS_LICENSE_CATEGORIES),
@@ -5014,6 +5161,41 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         add_message(db, business["owner_id"], "Business violation issued", f"A {payload['severity']} violation was issued for {business['business_name']}.", user["id"])
         self.send_json(201, {"ok": True})
+
+    def api_create_business_tax(self, db: Database, user: DbRow | None, business_id: int) -> None:
+        err = fine_settlement_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        business = one(db, "SELECT * FROM businesses WHERE id = ?", (business_id,))
+        if not business:
+            self.error(404, "Business license not found")
+            return
+        payload = self.read_json()
+        anchor = parse_iso(str(business.get("tax_last_assessed_at") or business.get("created_at") or now_iso()))
+        assessed_at = utcnow()
+        accrued_weeks = max(0, int((assessed_at - anchor).total_seconds() // (7 * 24 * 60 * 60)))
+        weekly_tax = round(float(business["weekly_tax"] or 0), 2)
+        amount = round(weekly_tax * accrued_weeks, 2)
+        if accrued_weeks < 1 or amount <= 0:
+            available_at = anchor + dt.timedelta(days=7)
+            self.error(409, f"No full weekly tax period has accrued. Next assessment: {available_at.isoformat()}")
+            return
+        period_end = anchor + dt.timedelta(days=7 * accrued_weeks)
+        period_label = f"{accrued_weeks} week(s): {anchor.date().isoformat()} through {period_end.date().isoformat()}"
+        created = db.execute(
+            """
+            INSERT INTO business_tax_assessments
+            (business_id, amount, period_label, notes, assessed_by, assessed_at)
+            VALUES (?, ?, ?, ?, ?, ?) RETURNING id
+            """,
+            (business_id, amount, period_label, str(payload.get("notes") or "").strip()[:1200], user["id"], assessed_at.isoformat()),
+        ).fetchone()
+        db.execute("UPDATE businesses SET tax_last_assessed_at = ?, updated_at = ? WHERE id = ?", (period_end.isoformat(), assessed_at.isoformat(), business_id))
+        add_message(db, business["owner_id"], "Business tax assessed", f"{business['business_name']} received a {amount:.2f} tax assessment for {period_label}.", user["id"])
+        add_admin_audit(db, int(user["id"]), "business.tax.assessed", int(business["owner_id"]), {"business_id": business_id, "amount": amount, "period": period_label})
+        self.send_json(201, {"ok": True, "id": int(created["id"])})
 
     def api_properties(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -7319,6 +7501,450 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         add_admin_audit(db, int(user["id"]), "account.internal_warning.resolved", int(warning["user_id"]), {"warning_id": warning_id, "notes": notes})
         self.send_json(200, {"ok": True})
+
+    def fine_settlement_payload(self, db: Database) -> dict[str, Any]:
+        unpaid = all_rows(
+            db,
+            """
+            SELECT c.id, c.charge_code, c.charge_title, c.fine_amount, c.status,
+                   c.created_at, u.id AS user_id, u.name, u.civ_number,
+                   l.identity_id, b.balance, b.synced_at
+            FROM citations c
+            JOIN users u ON u.id = c.civ_id
+            LEFT JOIN arma_account_links l ON l.user_id = u.id
+            LEFT JOIN arma_game_bank_balances b ON b.identity_id = l.identity_id
+            LEFT JOIN fine_settlement_items i ON i.citation_id = c.id
+            WHERE c.status IN ('issued', 'reviewed', 'reduced') AND i.id IS NULL
+              AND l.identity_id IS NOT NULL AND b.balance IS NOT NULL
+              AND b.balance >= c.fine_amount
+            ORDER BY c.created_at ASC
+            """
+        )
+        batches = all_rows(
+            db,
+            """
+            SELECT b.*, creator.name AS created_by_name, approver.name AS approved_by_name,
+                   COUNT(i.id) AS item_count, COALESCE(SUM(i.fine_amount), 0) AS total_amount
+            FROM fine_settlement_batches b
+            JOIN users creator ON creator.id = b.created_by
+            LEFT JOIN users approver ON approver.id = b.approved_by
+            LEFT JOIN fine_settlement_items i ON i.batch_id = b.id
+            GROUP BY b.id, creator.name, approver.name
+            ORDER BY b.created_at DESC LIMIT 30
+            """
+        )
+        result_batches: list[dict[str, Any]] = []
+        for batch in batches:
+            item = dict(batch)
+            item["items"] = [
+                dict(row)
+                for row in all_rows(
+                    db,
+                    """
+                    SELECT i.*, c.charge_code, c.charge_title, u.name, u.civ_number
+                    FROM fine_settlement_items i
+                    JOIN citations c ON c.id = i.citation_id
+                    JOIN users u ON u.id = i.user_id
+                    WHERE i.batch_id = ? ORDER BY i.id
+                    """,
+                    (batch["id"],),
+                )
+            ]
+            result_batches.append(item)
+        tax_ready = all_rows(
+            db,
+            """
+            SELECT b.id AS business_id, b.business_name, b.license_number, u.id AS user_id,
+                   u.name AS owner_name, u.civ_number, l.identity_id, bank.balance, bank.synced_at,
+                   COUNT(t.id) AS assessment_count, SUM(t.amount) AS tax_amount
+            FROM business_tax_assessments t
+            JOIN businesses b ON b.id = t.business_id
+            JOIN users u ON u.id = b.owner_id
+            JOIN arma_account_links l ON l.user_id = u.id
+            JOIN arma_game_bank_balances bank ON bank.identity_id = l.identity_id
+            WHERE t.status = 'unpaid' AND t.settlement_batch_id IS NULL
+            GROUP BY b.id, b.business_name, b.license_number, u.id, u.name, u.civ_number,
+                     l.identity_id, bank.balance, bank.synced_at
+            HAVING bank.balance >= SUM(t.amount)
+            ORDER BY b.business_name
+            """
+        )
+        tax_license_rows = all_rows(
+            db,
+            """
+            SELECT b.*, u.name AS owner_name, u.civ_number AS owner_civ_number,
+                   l.identity_id, bank.balance, bank.synced_at,
+                   (SELECT COALESCE(SUM(t.amount), 0) FROM business_tax_assessments t
+                    WHERE t.business_id = b.id AND t.status = 'unpaid') AS unpaid_tax
+            FROM businesses b
+            JOIN users u ON u.id = b.owner_id
+            JOIN arma_account_links l ON l.user_id = u.id
+            LEFT JOIN arma_game_bank_balances bank ON bank.identity_id = l.identity_id
+            WHERE b.status IN ('active', 'suspended')
+            ORDER BY b.business_name
+            """
+        )
+        tax_licenses = [self.business_license_payload(row) for row in tax_license_rows]
+        tax_batches = all_rows(
+            db,
+            """
+            SELECT b.*, creator.name AS created_by_name, approver.name AS approved_by_name,
+                   COUNT(i.id) AS item_count, COALESCE(SUM(i.tax_amount), 0) AS total_amount
+            FROM business_tax_settlement_batches b
+            JOIN users creator ON creator.id = b.created_by
+            LEFT JOIN users approver ON approver.id = b.approved_by
+            LEFT JOIN business_tax_settlement_items i ON i.batch_id = b.id
+            GROUP BY b.id, creator.name, approver.name
+            ORDER BY b.created_at DESC LIMIT 30
+            """
+        )
+        result_tax_batches: list[dict[str, Any]] = []
+        for batch in tax_batches:
+            item = dict(batch)
+            item["items"] = [
+                dict(row) for row in all_rows(
+                    db,
+                    """
+                    SELECT i.*, b.business_name, b.license_number, u.name AS owner_name
+                    FROM business_tax_settlement_items i
+                    JOIN businesses b ON b.id = i.business_id
+                    JOIN users u ON u.id = i.user_id
+                    WHERE i.batch_id = ? ORDER BY i.id
+                    """,
+                    (batch["id"],),
+                )
+            ]
+            result_tax_batches.append(item)
+        return {
+            "unpaid": [dict(row) for row in unpaid],
+            "batches": result_batches,
+            "tax_ready": [dict(row) for row in tax_ready],
+            "tax_licenses": tax_licenses,
+            "tax_batches": result_tax_batches,
+        }
+
+    def api_fine_settlement(self, db: Database, user: DbRow | None) -> None:
+        err = fine_settlement_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        self.send_json(200, self.fine_settlement_payload(db))
+
+    def api_create_fine_settlement_batch(self, db: Database, user: DbRow | None) -> None:
+        err = fine_settlement_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        raw_ids = payload.get("citation_ids")
+        if not isinstance(raw_ids, list) or not raw_ids:
+            self.error(400, "Select at least one unpaid fine")
+            return
+        citation_ids = list(dict.fromkeys(int(value) for value in raw_ids))[:100]
+        placeholders = ",".join("?" for _ in citation_ids)
+        rows = all_rows(
+            db,
+            f"""
+            SELECT c.id, c.civ_id, c.fine_amount, c.status, l.identity_id, b.balance
+            FROM citations c
+            JOIN arma_account_links l ON l.user_id = c.civ_id
+            JOIN arma_game_bank_balances b ON b.identity_id = l.identity_id
+            LEFT JOIN fine_settlement_items i ON i.citation_id = c.id
+            WHERE c.id IN ({placeholders})
+              AND c.status IN ('issued', 'reviewed', 'reduced') AND i.id IS NULL
+              AND b.balance >= c.fine_amount
+            """,
+            tuple(citation_ids),
+        )
+        if len(rows) != len(citation_ids):
+            self.error(409, "Every selected fine must be unpaid, unbatched, linked, and have a synced game balance")
+            return
+        created_at = utcnow()
+        batch_number = f"DCJS-{created_at.strftime('%Y%m%d')}-{secrets.randbelow(900000) + 100000}"
+        batch = db.execute(
+            """
+            INSERT INTO fine_settlement_batches (batch_number, created_by, created_at, notes)
+            VALUES (?, ?, ?, ?) RETURNING id
+            """,
+            (batch_number, user["id"], created_at.isoformat(), str(payload.get("notes") or "").strip()[:2000]),
+        ).fetchone()
+        for row in rows:
+            fine = round(float(row["fine_amount"]), 2)
+            before = round(float(row["balance"]), 2)
+            db.execute(
+                """
+                INSERT INTO fine_settlement_items
+                (batch_id, citation_id, user_id, identity_id, fine_amount, balance_before, expected_balance)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (batch["id"], row["id"], row["civ_id"], row["identity_id"], fine, before, round(before - fine, 2)),
+            )
+        add_admin_audit(db, int(user["id"]), "fine_settlement.batch.created", details={"batch_number": batch_number, "citation_ids": citation_ids})
+        self.send_json(201, {"ok": True, "batch_id": int(batch["id"]), "batch_number": batch_number})
+
+    def api_fine_settlement_code(self, db: Database, user: DbRow | None, batch_id: int) -> None:
+        err = fine_settlement_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        batch = one(db, "SELECT * FROM fine_settlement_batches WHERE id = ?", (batch_id,))
+        if not batch:
+            self.error(404, "Settlement batch not found")
+            return
+        if batch["status"] != "draft":
+            self.error(409, "Only a draft batch can receive a new approval code")
+            return
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        raw_code = "DCJS-" + "".join(secrets.choice(alphabet) for _ in range(8))
+        expires_at = (utcnow() + dt.timedelta(minutes=10)).isoformat()
+        db.execute(
+            "UPDATE fine_settlement_batches SET approval_code_hash = ?, approval_code_hint = ?, approval_expires_at = ? WHERE id = ?",
+            (hash_password(raw_code), raw_code[-4:], expires_at, batch_id),
+        )
+        add_admin_audit(db, int(user["id"]), "fine_settlement.code.created", details={"batch_id": batch_id, "hint": raw_code[-4:]})
+        self.send_json(201, {"ok": True, "code": raw_code, "expires_at": expires_at})
+
+    def api_approve_fine_settlement(self, db: Database, user: DbRow | None, batch_id: int) -> None:
+        err = fine_settlement_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        batch = one(db, "SELECT * FROM fine_settlement_batches WHERE id = ?", (batch_id,))
+        code = str(payload.get("code") or "").strip().upper()
+        if not batch or batch["status"] != "draft":
+            self.error(409, "Settlement batch is not awaiting approval")
+            return
+        if not batch["approval_code_hash"] or not verify_password(code, batch["approval_code_hash"]):
+            self.error(403, "Invalid settlement authorization code")
+            return
+        if not batch["approval_expires_at"] or dt.datetime.fromisoformat(batch["approval_expires_at"]) <= utcnow():
+            self.error(403, "Settlement authorization code has expired")
+            return
+        approved_at = now_iso()
+        db.execute(
+            """
+            UPDATE fine_settlement_batches
+            SET status = 'awaiting_codex', approved_by = ?, approved_at = ?,
+                processing_started_at = ?, approval_code_hash = ''
+            WHERE id = ?
+            """,
+            (user["id"], approved_at, approved_at, batch_id),
+        )
+        prompt = (
+            f"Process approved DCJS fine settlement batch {batch['batch_number']} (database batch ID {batch_id}). "
+            "Use the signed-in Shadowhaven panel and configured SFTP access. Stop the Arma server manually, "
+            "wait the full 120 seconds, confirm it is offline, then edit only the matching live FCRPMUSSALO/Banks "
+            "JSON balances to the locked expected values shown in Fine Settlement. Do not create a backup. "
+            "Start the server, wait for Railway bank sync, then use Verify synced balances in the Fine Settlement app. "
+            "Never mark fines paid unless every actual synced balance matches its expected value."
+        )
+        add_admin_audit(db, int(user["id"]), "fine_settlement.batch.approved", details={"batch_id": batch_id})
+        self.send_json(200, {"ok": True, "codex_prompt": prompt})
+
+    def api_complete_fine_settlement(self, db: Database, user: DbRow | None, batch_id: int) -> None:
+        err = fine_settlement_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        batch = one(db, "SELECT * FROM fine_settlement_batches WHERE id = ?", (batch_id,))
+        if not batch or batch["status"] not in ("awaiting_codex", "needs_review"):
+            self.error(409, "Batch is not ready for balance verification")
+            return
+        items = all_rows(db, "SELECT * FROM fine_settlement_items WHERE batch_id = ?", (batch_id,))
+        paid = 0
+        for item in items:
+            if item["status"] == "paid":
+                paid += 1
+                continue
+            bank = one(db, "SELECT balance FROM arma_game_bank_balances WHERE identity_id = ?", (item["identity_id"],))
+            actual = round(float(bank["balance"]), 2) if bank else None
+            expected = round(float(item["expected_balance"]), 2)
+            if actual is not None and abs(actual - expected) <= 0.01:
+                verified_at = now_iso()
+                db.execute(
+                    "UPDATE fine_settlement_items SET status = 'paid', verified_balance = ?, verified_at = ?, failure_reason = '' WHERE id = ?",
+                    (actual, verified_at, item["id"]),
+                )
+                db.execute(
+                    "UPDATE citations SET status = 'paid', final_result = ?, updated_at = ? WHERE id = ?",
+                    (final_result_for("paid", f"Settled through {batch['batch_number']}", float(item["fine_amount"])), verified_at, item["citation_id"]),
+                )
+                add_transaction(
+                    db, int(item["user_id"]), "dcjs_fine_settlement", -float(item["fine_amount"]),
+                    f"State of Faircroft DCJS · Fine settlement · Case {item['citation_id']} · Batch {batch['batch_number']}",
+                )
+                paid += 1
+            else:
+                reason = "Live bank balance has not synced" if actual is None else f"Expected {expected:.2f}; synced {actual:.2f}"
+                db.execute(
+                    "UPDATE fine_settlement_items SET status = 'needs_review', verified_balance = ?, verified_at = ?, failure_reason = ? WHERE id = ?",
+                    (actual, now_iso(), reason, item["id"]),
+                )
+        status = "completed" if paid == len(items) else "needs_review"
+        db.execute(
+            "UPDATE fine_settlement_batches SET status = ?, completed_at = ? WHERE id = ?",
+            (status, now_iso() if status == "completed" else None, batch_id),
+        )
+        add_admin_audit(db, int(user["id"]), "fine_settlement.batch.verified", details={"batch_id": batch_id, "paid": paid, "total": len(items), "status": status})
+        self.send_json(200, {"ok": status == "completed", "status": status, "paid": paid, "total": len(items)})
+
+    def api_create_tax_settlement_batch(self, db: Database, user: DbRow | None) -> None:
+        err = fine_settlement_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        raw_ids = payload.get("business_ids")
+        if not isinstance(raw_ids, list) or not raw_ids:
+            self.error(400, "Select at least one business tax account")
+            return
+        business_ids = list(dict.fromkeys(int(value) for value in raw_ids))[:100]
+        placeholders = ",".join("?" for _ in business_ids)
+        rows = all_rows(
+            db,
+            f"""
+            SELECT b.id AS business_id, b.owner_id, l.identity_id, bank.balance, SUM(t.amount) AS tax_amount
+            FROM businesses b
+            JOIN business_tax_assessments t ON t.business_id = b.id
+            JOIN arma_account_links l ON l.user_id = b.owner_id
+            JOIN arma_game_bank_balances bank ON bank.identity_id = l.identity_id
+            WHERE b.id IN ({placeholders}) AND t.status = 'unpaid' AND t.settlement_batch_id IS NULL
+            GROUP BY b.id, b.owner_id, l.identity_id, bank.balance
+            HAVING bank.balance >= SUM(t.amount)
+            """,
+            tuple(business_ids),
+        )
+        if len(rows) != len(business_ids):
+            self.error(409, "Every business must have unpaid taxes, a linked owner, and sufficient synced game funds")
+            return
+        identities = [str(row["identity_id"]) for row in rows]
+        if len(set(identities)) != len(identities):
+            self.error(409, "Select only one business per Arma account in each batch")
+            return
+        created_at = utcnow()
+        batch_number = f"DCJS-TAX-{created_at.strftime('%Y%m%d')}-{secrets.randbelow(900000) + 100000}"
+        batch = db.execute(
+            "INSERT INTO business_tax_settlement_batches (batch_number, created_by, created_at, notes) VALUES (?, ?, ?, ?) RETURNING id",
+            (batch_number, user["id"], created_at.isoformat(), str(payload.get("notes") or "").strip()[:2000]),
+        ).fetchone()
+        for row in rows:
+            amount = round(float(row["tax_amount"]), 2)
+            before = round(float(row["balance"]), 2)
+            db.execute(
+                """
+                INSERT INTO business_tax_settlement_items
+                (batch_id, business_id, user_id, identity_id, tax_amount, balance_before, expected_balance)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (batch["id"], row["business_id"], row["owner_id"], row["identity_id"], amount, before, round(before - amount, 2)),
+            )
+            db.execute(
+                """
+                UPDATE business_tax_assessments SET settlement_batch_id = ?
+                WHERE business_id = ? AND status = 'unpaid' AND settlement_batch_id IS NULL
+                """,
+                (batch["id"], row["business_id"]),
+            )
+        add_admin_audit(db, int(user["id"]), "business_tax.batch.created", details={"batch_number": batch_number, "business_ids": business_ids})
+        self.send_json(201, {"ok": True, "batch_id": int(batch["id"]), "batch_number": batch_number})
+
+    def api_tax_settlement_code(self, db: Database, user: DbRow | None, batch_id: int) -> None:
+        err = fine_settlement_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        batch = one(db, "SELECT * FROM business_tax_settlement_batches WHERE id = ?", (batch_id,))
+        if not batch or batch["status"] != "draft":
+            self.error(409, "Tax settlement batch is not a draft")
+            return
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        raw_code = "TAX-" + "".join(secrets.choice(alphabet) for _ in range(8))
+        expires_at = (utcnow() + dt.timedelta(minutes=10)).isoformat()
+        db.execute(
+            "UPDATE business_tax_settlement_batches SET approval_code_hash = ?, approval_code_hint = ?, approval_expires_at = ? WHERE id = ?",
+            (hash_password(raw_code), raw_code[-4:], expires_at, batch_id),
+        )
+        self.send_json(201, {"ok": True, "code": raw_code, "expires_at": expires_at})
+
+    def api_approve_tax_settlement(self, db: Database, user: DbRow | None, batch_id: int) -> None:
+        err = fine_settlement_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        batch = one(db, "SELECT * FROM business_tax_settlement_batches WHERE id = ?", (batch_id,))
+        code = str(payload.get("code") or "").strip().upper()
+        if not batch or batch["status"] != "draft":
+            self.error(409, "Tax settlement batch is not awaiting approval")
+            return
+        if not batch["approval_code_hash"] or not verify_password(code, batch["approval_code_hash"]):
+            self.error(403, "Invalid tax authorization code")
+            return
+        if not batch["approval_expires_at"] or dt.datetime.fromisoformat(batch["approval_expires_at"]) <= utcnow():
+            self.error(403, "Tax authorization code has expired")
+            return
+        db.execute(
+            "UPDATE business_tax_settlement_batches SET status = 'awaiting_codex', approved_by = ?, approved_at = ?, approval_code_hash = '' WHERE id = ?",
+            (user["id"], now_iso(), batch_id),
+        )
+        prompt = (
+            f"Process approved State of Faircroft DCJS business-tax batch {batch['batch_number']} (database batch ID {batch_id}). "
+            "Use the signed-in Shadowhaven panel and configured SFTP access. Stop the Arma server manually, wait the full "
+            "120 seconds, confirm it is offline, then change only the matching live FCRPMUSSALO/Banks JSON balances to the "
+            "locked expected values in Fine Settlement. Do not create a backup. Start the server, wait for Railway bank sync, "
+            "then select Verify synced tax balances. Do not mark taxes paid unless every synced balance matches."
+        )
+        add_admin_audit(db, int(user["id"]), "business_tax.batch.approved", details={"batch_id": batch_id})
+        self.send_json(200, {"ok": True, "codex_prompt": prompt})
+
+    def api_complete_tax_settlement(self, db: Database, user: DbRow | None, batch_id: int) -> None:
+        err = fine_settlement_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        batch = one(db, "SELECT * FROM business_tax_settlement_batches WHERE id = ?", (batch_id,))
+        if not batch or batch["status"] not in ("awaiting_codex", "needs_review"):
+            self.error(409, "Tax batch is not ready for verification")
+            return
+        items = all_rows(db, "SELECT * FROM business_tax_settlement_items WHERE batch_id = ?", (batch_id,))
+        paid = 0
+        for item in items:
+            if item["status"] == "paid":
+                paid += 1
+                continue
+            bank = one(db, "SELECT balance FROM arma_game_bank_balances WHERE identity_id = ?", (item["identity_id"],))
+            actual = round(float(bank["balance"]), 2) if bank else None
+            expected = round(float(item["expected_balance"]), 2)
+            if actual is not None and abs(actual - expected) <= 0.01:
+                verified_at = now_iso()
+                db.execute(
+                    "UPDATE business_tax_settlement_items SET status = 'paid', verified_balance = ?, verified_at = ?, failure_reason = '' WHERE id = ?",
+                    (actual, verified_at, item["id"]),
+                )
+                db.execute(
+                    "UPDATE business_tax_assessments SET status = 'paid', settled_at = ? WHERE settlement_batch_id = ? AND business_id = ?",
+                    (verified_at, batch_id, item["business_id"]),
+                )
+                business = one(db, "SELECT business_name, license_number FROM businesses WHERE id = ?", (item["business_id"],))
+                add_transaction(
+                    db, int(item["user_id"]), "dcjs_business_tax", -float(item["tax_amount"]),
+                    f"State of Faircroft DCJS · Business tax · {business['business_name']} ({business['license_number']}) · Batch {batch['batch_number']}",
+                )
+                paid += 1
+            else:
+                reason = "Live bank balance has not synced" if actual is None else f"Expected {expected:.2f}; synced {actual:.2f}"
+                db.execute(
+                    "UPDATE business_tax_settlement_items SET status = 'needs_review', verified_balance = ?, verified_at = ?, failure_reason = ? WHERE id = ?",
+                    (actual, now_iso(), reason, item["id"]),
+                )
+        status = "completed" if paid == len(items) else "needs_review"
+        db.execute(
+            "UPDATE business_tax_settlement_batches SET status = ?, completed_at = ? WHERE id = ?",
+            (status, now_iso() if status == "completed" else None, batch_id),
+        )
+        add_admin_audit(db, int(user["id"]), "business_tax.batch.verified", details={"batch_id": batch_id, "paid": paid, "total": len(items), "status": status})
+        self.send_json(200, {"ok": status == "completed", "status": status, "paid": paid, "total": len(items)})
 
     def api_admin_overview(self, db: Database, user: DbRow | None) -> None:
         err = admin_required(user)

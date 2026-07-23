@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.61";
+const OS_VERSION = "0.0.66";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -21,6 +21,10 @@ const state = {
   armaUnlinkOpen: false,
   armaLinkPromptDismissed: false,
   generatedDevCode: null,
+  fineSettlementCode: null,
+  taxSettlementCode: null,
+  settlementTab: "fines",
+  fineSettlementPrompt: "",
   devTab: "dashboard",
   devAccount: null,
   dmvTab: "overview",
@@ -351,13 +355,15 @@ function renderBootScreen() {
   const attempting = state.boot.attempt || 1;
   return phone(`
     <section class="boot-screen ${connecting ? "booting" : ""}">
-      <div class="boot-brand">RP</div>
+      <video class="faircroft-entrance-media" autoplay muted loop playsinline poster="/static/brand/faircroft-emblem.webp">
+        <source src="/static/brand/faircroft-light-sweep.mp4" type="video/mp4" />
+      </video>
       <div class="boot-orb" aria-hidden="true">
         <span class="boot-orb-core"></span>
         <span class="boot-orb-ring"></span>
         <span class="boot-orb-ring"></span>
       </div>
-      <p class="boot-title">${connecting ? "Loading roleplay core..." : "Cannot contact server"}</p>
+      <p class="boot-title">${connecting ? "Entering Faircroft..." : "Cannot contact Faircroft services"}</p>
       <p class="boot-subtitle">
         ${connecting ? "Syncing your account and loading modules. This usually takes just a second." : escapeHtml(state.boot.lastError || "Server response could not be loaded right now.")}
       </p>
@@ -463,10 +469,10 @@ function renderAuth() {
   return `
     <section class="auth-card">
       <div class="brand-lockup">
-        <div class="app-mark">RP</div>
+        <img class="app-mark faircroft-emblem" src="/static/brand/faircroft-emblem.webp" alt="Faircroft emblem" />
         <div>
-          <p class="eyebrow">Roleplay PWA</p>
-          <h1>Command phone</h1>
+          <p class="eyebrow">Official roleplay system</p>
+          <h1>Faircroft RP</h1>
         </div>
       </div>
       <div class="auth-tabs">
@@ -636,9 +642,12 @@ function renderHome() {
   return `
     <section class="home-stack">
       <header class="home-header">
-        <div>
+        <div class="home-identity">
+          <img class="home-emblem" src="/static/brand/faircroft-emblem.webp" alt="" />
+          <div>
           <p class="eyebrow">${user.primary_agency || (user.verified ? "Civilian" : "Unverified civilian")}</p>
           <h1>${escapeHtml(user.name.split(" ")[0] || user.name)}</h1>
+          </div>
         </div>
         <button class="icon-action" data-logout aria-label="Sign out">${iconSvg.logout}</button>
       </header>
@@ -755,6 +764,7 @@ function renderPanel(id) {
     "indeed-admin": "Indeed Admin",
     admin: "Admin",
     "dev-tools": "Dev Tools",
+    "fine-settlement": "Fine Settlement",
   };
   const body = {
     profile: renderProfile,
@@ -778,6 +788,7 @@ function renderPanel(id) {
     "indeed-admin": renderIndeedAdmin,
     admin: renderAdmin,
     "dev-tools": renderDevTools,
+    "fine-settlement": renderFineSettlement,
   }[id]?.() || `<div class="empty">Module unavailable</div>`;
 
   return `
@@ -826,6 +837,7 @@ async function loadAppData(id) {
     system: () => api("/api/system/settings"),
     "indeed-admin": () => api("/api/indeed-admin/applications"),
     "dev-tools": () => api("/api/dev-tools"),
+    "fine-settlement": () => api("/api/fine-settlement"),
     admin: async () => ({
       overview: await api("/api/admin/overview"),
       users: await api("/api/admin/users"),
@@ -910,6 +922,7 @@ function bindPanel() {
     "indeed-admin": bindIndeedAdmin,
     admin: bindAdmin,
     "dev-tools": bindDevTools,
+    "fine-settlement": bindFineSettlement,
   };
   binders[state.activeApp]?.();
 }
@@ -6771,7 +6784,7 @@ function renderDevWorkspace() {
   }[state.devTab] || ["Staff Operations", "Faircroft administrative console"];
   return `<section class="dev-workspace">
     <aside class="dev-sidebar">
-      <div class="dev-brand"><span>FC</span><div><strong>Faircroft RP</strong><small>Staff Operations</small></div></div>
+      <div class="dev-brand"><img class="dev-emblem" src="/static/brand/faircroft-emblem.webp" alt="" /><div><strong>Faircroft RP</strong><small>Staff Operations</small></div></div>
       <p class="dev-nav-label">Workspace</p>
       <nav>${[["dashboard","Overview"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["audit","Activity Log"]].map(([id,label]) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><span>${label}</span></button>`).join("")}</nav>
       <div class="dev-sidebar-footer"><span class="dev-access-dot"></span><div><strong>Authorized Staff</strong><small>${escapeHtml(state.session?.user?.name || "Staff member")}</small></div></div>
@@ -6912,6 +6925,191 @@ function bindDevWorkspace() {
 async function refreshDevTools() {
   await loadAppData("dev-tools");
   render();
+}
+
+function renderFineSettlement() {
+  const data = state.cache["fine-settlement"] || { unpaid: [], batches: [] };
+  const unpaid = data.unpaid || [];
+  const batches = data.batches || [];
+  const taxReady = data.tax_ready || [];
+  const taxBatches = data.tax_batches || [];
+  return `
+    <div class="stack">
+      <section class="profile-hero">
+        <div>
+          <p class="eyebrow">State of Faircroft DCJS</p>
+          <h3>Fine Settlement Control</h3>
+          <p>Owner/developer-only processing for court fines against live FCRPMUSSALO bank balances.</p>
+        </div>
+        <span class="pill">${unpaid.length} READY</span>
+      </section>
+      <div class="court-tabs">
+        <button class="${state.settlementTab === "fines" ? "active" : ""}" data-settlement-tab="fines">Fine Settlement</button>
+        <button class="${state.settlementTab === "taxes" ? "active" : ""}" data-settlement-tab="taxes">Tax Settlement</button>
+      </div>
+      <div style="${state.settlementTab === "fines" ? "" : "display:none"}" class="stack">
+      <section class="profile-link-card">
+        <h3>Required Codex procedure</h3>
+        <ol class="small">
+          <li>Select eligible fines and lock a settlement batch.</li>
+          <li>Generate the one-time developer code and approve that exact batch.</li>
+          <li>Copy the generated instructions into Codex. Codex must use the signed-in Shadowhaven panel.</li>
+          <li>Codex stops the Arma server, waits 120 seconds, confirms it is offline, and edits only the listed live bank JSON records through SFTP.</li>
+          <li>No backup is created. Codex starts the server and waits for the Railway bank sync.</li>
+          <li>Run balance verification below. Only exact verified deductions become paid.</li>
+        </ol>
+        <p class="muted small">Never edit the bank database while the game server is running. Manual Shadowhaven Stop/Start is required because no hosting-panel API is configured.</p>
+      </section>
+      <section class="profile-link-card">
+        <div class="row"><div><h3>Eligible unpaid fines</h3><p class="muted small">Only linked accounts with a synced game balance appear here.</p></div><strong>${unpaid.length}</strong></div>
+        <form id="fine-batch-form" class="stack">
+          ${unpaid.map((fine) => `
+            <label class="dev-account-row">
+              <input type="checkbox" name="citation_ids" value="${fine.id}" />
+              <span><strong>${escapeHtml(fine.name)} · ${escapeHtml(fine.civ_number || "")}</strong>
+              <small>${escapeHtml(fine.charge_code)} ${escapeHtml(fine.charge_title)} · Current ${money(fine.balance)} · Fine ${money(fine.fine_amount)}</small></span>
+            </label>`).join("") || `<div class="empty">No eligible unpaid fines are awaiting settlement.</div>`}
+          ${unpaid.length ? `<label>Batch notes<textarea name="notes" rows="3" placeholder="Court order, docket, or settlement instructions"></textarea></label><button type="submit">Create locked batch</button>` : ""}
+        </form>
+      </section>
+      <section class="stack">
+        <div class="row"><h3>Settlement batches</h3><span class="pill">${batches.length}</span></div>
+        ${batches.map((batch) => `
+          <article class="profile-link-card">
+            <div class="row"><div><p class="eyebrow">${escapeHtml(batch.batch_number)}</p><h3>${escapeHtml(String(batch.status || "").replaceAll("_", " "))}</h3></div><strong>${money(batch.total_amount)}</strong></div>
+            ${(batch.items || []).map((item) => `
+              <div class="row"><span>${escapeHtml(item.name)} · Case ${item.citation_id}<small>${escapeHtml(item.charge_code)} · ${money(item.balance_before)} → ${money(item.expected_balance)}</small></span>
+              <span class="pill">${escapeHtml(item.status)}</span></div>
+              ${item.failure_reason ? `<p class="muted small">${escapeHtml(item.failure_reason)}</p>` : ""}`).join("")}
+            ${batch.status === "draft" ? `
+              <div class="row"><button type="button" class="secondary" data-fine-code="${batch.id}">Generate 10-minute code</button>
+              ${state.fineSettlementCode?.batchId === batch.id ? `<strong>${escapeHtml(state.fineSettlementCode.code)}</strong>` : ""}</div>
+              <form data-fine-approve="${batch.id}" class="inline-form"><input name="code" required placeholder="DCJS authorization code" autocomplete="off" /><button>Approve for Codex</button></form>` : ""}
+            ${batch.status === "awaiting_codex" || batch.status === "needs_review" ? `
+              <button type="button" data-fine-verify="${batch.id}">Verify synced balances and resolve</button>` : ""}
+          </article>`).join("") || `<div class="empty">No settlement batches created.</div>`}
+      </section>
+      </div>
+      <div style="${state.settlementTab === "taxes" ? "" : "display:none"}" class="stack">
+      <section class="profile-link-card">
+        <div class="row"><div><p class="eyebrow">Registered licenses</p><h3>Issue accrued weekly tax</h3><p class="muted small">This license list and its tax controls are visible only to owners/developers.</p></div><span class="pill">${(data.tax_licenses || []).length}</span></div>
+        ${(data.tax_licenses || []).map((license) => `
+          <article class="dev-account-row">
+            <span><strong>${escapeHtml(license.business_name)} · ${escapeHtml(license.license_number)}</strong>
+            <small>${escapeHtml(license.owner_name)} · ${license.accrued_weeks || 0} complete week(s) · ${money(license.weekly_tax)}/week · ${money(license.unpaid_tax)} unpaid</small></span>
+            <form data-issue-license-tax="${license.id}" class="inline-form">
+              <input name="notes" placeholder="Optional developer note" />
+              <button ${(license.accrued_weeks || 0) < 1 ? "disabled" : ""}>Issue ${money(license.accrued_tax || 0)}</button>
+            </form>
+            ${(license.accrued_weeks || 0) < 1 ? `<small>Next accrual: ${new Date(license.tax_available_at).toLocaleString()}</small>` : ""}
+          </article>`).join("") || `<div class="empty">No linked registered business licenses.</div>`}
+      </section>
+      <section class="profile-link-card">
+        <div class="row"><div><p class="eyebrow">Business revenue</p><h3>Eligible accumulated taxes</h3><p class="muted small">Assessments tally by registered business. Only linked owners with sufficient synced game funds appear.</p></div><strong>${taxReady.length}</strong></div>
+        <form id="tax-batch-form" class="stack">
+          ${taxReady.map((tax) => `
+            <label class="dev-account-row"><input type="checkbox" name="business_ids" value="${tax.business_id}" />
+              <span><strong>${escapeHtml(tax.business_name)} · ${escapeHtml(tax.license_number)}</strong>
+              <small>${escapeHtml(tax.owner_name)} · ${tax.assessment_count} assessment(s) · Tax ${money(tax.tax_amount)} · Balance ${money(tax.balance)}</small></span>
+            </label>`).join("") || `<div class="empty">No eligible accumulated business taxes.</div>`}
+          ${taxReady.length ? `<label>Batch notes<textarea name="notes" rows="3" placeholder="Tax order or processing notes"></textarea></label><button type="submit">Create locked tax batch</button>` : ""}
+        </form>
+      </section>
+      <section class="stack">
+        <div class="row"><h3>Business tax batches</h3><span class="pill">${taxBatches.length}</span></div>
+        ${taxBatches.map((batch) => `
+          <article class="profile-link-card">
+            <div class="row"><div><p class="eyebrow">${escapeHtml(batch.batch_number)}</p><h3>${humanLabel(batch.status)}</h3></div><strong>${money(batch.total_amount)}</strong></div>
+            ${(batch.items || []).map((item) => `<div class="row"><span>${escapeHtml(item.business_name)} · ${escapeHtml(item.owner_name)}<small>${money(item.balance_before)} → ${money(item.expected_balance)}</small></span><span class="pill">${escapeHtml(item.status)}</span></div>${item.failure_reason ? `<p class="muted small">${escapeHtml(item.failure_reason)}</p>` : ""}`).join("")}
+            ${batch.status === "draft" ? `<div class="row"><button type="button" class="secondary" data-tax-code="${batch.id}">Generate 10-minute tax code</button>${state.taxSettlementCode?.batchId === batch.id ? `<strong>${escapeHtml(state.taxSettlementCode.code)}</strong>` : ""}</div>
+              <form data-tax-approve="${batch.id}" class="inline-form"><input name="code" required placeholder="TAX authorization code" autocomplete="off" /><button>Approve for Codex</button></form>` : ""}
+            ${["awaiting_codex", "needs_review"].includes(batch.status) ? `<button type="button" data-tax-verify="${batch.id}">Verify synced tax balances</button>` : ""}
+          </article>`).join("") || `<div class="empty">No business tax settlement batches.</div>`}
+      </section>
+      </div>
+      ${state.fineSettlementPrompt ? `<section class="profile-link-card"><h3>Codex processing request</h3><textarea id="fine-codex-prompt" rows="8" readonly>${escapeHtml(state.fineSettlementPrompt)}</textarea><button type="button" data-copy-fine-prompt>Copy for Codex</button></section>` : ""}
+    </div>`;
+}
+
+function bindFineSettlement() {
+  $$("[data-settlement-tab]").forEach((button) => button.addEventListener("click", () => {
+    state.settlementTab = button.dataset.settlementTab;
+    render();
+  }));
+  $$("[data-issue-license-tax]").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await api(`/api/business/licenses/${form.dataset.issueLicenseTax}/taxes`, {
+      method: "POST",
+      body: { notes: form.notes?.value || "" },
+    });
+    toast("Accrued business tax issued");
+    state.cache["fine-settlement"] = await api("/api/fine-settlement");
+    render();
+  }));
+  $("#fine-batch-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const citation_ids = $$('input[name="citation_ids"]:checked', form).map((input) => Number(input.value));
+    if (!citation_ids.length) return toast("Select at least one fine");
+    await api("/api/fine-settlement/batches", { method: "POST", body: { citation_ids, notes: form.notes?.value || "" } });
+    state.cache["fine-settlement"] = await api("/api/fine-settlement");
+    render();
+  });
+  $$("[data-fine-code]").forEach((button) => button.addEventListener("click", async () => {
+    const batchId = Number(button.dataset.fineCode);
+    const result = await api(`/api/fine-settlement/batches/${batchId}/code`, { method: "POST", body: {} });
+    state.fineSettlementCode = { batchId, code: result.code, expiresAt: result.expires_at };
+    render();
+  }));
+  $$("[data-fine-approve]").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const batchId = Number(form.dataset.fineApprove);
+    const result = await api(`/api/fine-settlement/batches/${batchId}/approve`, { method: "POST", body: { code: form.code.value } });
+    state.fineSettlementPrompt = result.codex_prompt || "";
+    state.fineSettlementCode = null;
+    state.cache["fine-settlement"] = await api("/api/fine-settlement");
+    render();
+  }));
+  $$("[data-fine-verify]").forEach((button) => button.addEventListener("click", async () => {
+    const result = await api(`/api/fine-settlement/batches/${button.dataset.fineVerify}/complete`, { method: "POST", body: {} });
+    toast(result.status === "completed" ? "All deductions verified and fines marked paid" : "Balance mismatch found; batch requires review");
+    state.cache["fine-settlement"] = await api("/api/fine-settlement");
+    render();
+  }));
+  $("#tax-batch-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const business_ids = $$('input[name="business_ids"]:checked', form).map((input) => Number(input.value));
+    if (!business_ids.length) return toast("Select at least one business");
+    await api("/api/fine-settlement/tax-batches", { method: "POST", body: { business_ids, notes: form.notes?.value || "" } });
+    state.cache["fine-settlement"] = await api("/api/fine-settlement");
+    render();
+  });
+  $$("[data-tax-code]").forEach((button) => button.addEventListener("click", async () => {
+    const batchId = Number(button.dataset.taxCode);
+    const result = await api(`/api/fine-settlement/tax-batches/${batchId}/code`, { method: "POST", body: {} });
+    state.taxSettlementCode = { batchId, code: result.code };
+    render();
+  }));
+  $$("[data-tax-approve]").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const batchId = Number(form.dataset.taxApprove);
+    const result = await api(`/api/fine-settlement/tax-batches/${batchId}/approve`, { method: "POST", body: { code: form.code.value } });
+    state.fineSettlementPrompt = result.codex_prompt || "";
+    state.taxSettlementCode = null;
+    state.cache["fine-settlement"] = await api("/api/fine-settlement");
+    render();
+  }));
+  $$("[data-tax-verify]").forEach((button) => button.addEventListener("click", async () => {
+    const result = await api(`/api/fine-settlement/tax-batches/${button.dataset.taxVerify}/complete`, { method: "POST", body: {} });
+    toast(result.status === "completed" ? "Business taxes verified and marked paid" : "Tax balance mismatch; batch requires review");
+    state.cache["fine-settlement"] = await api("/api/fine-settlement");
+    render();
+  }));
+  $("[data-copy-fine-prompt]")?.addEventListener("click", async () => {
+    await navigator.clipboard.writeText(state.fineSettlementPrompt);
+    toast("Codex request copied");
+  });
 }
 
 function bindDevTools() {
@@ -7645,7 +7843,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.60").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.66").catch(() => {}));
 }
 
 bootApp();

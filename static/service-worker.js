@@ -1,9 +1,13 @@
-const CACHE = "rp-command-v61-timeout-access";
+const CACHE = "faircroft-rp-v66-brand-identity";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.61",
-  "/static/app.js?v=0.0.61",
-  "/static/icons/icon.svg",
+  "/static/styles.css?v=0.0.66",
+  "/static/app.js?v=0.0.66",
+  "/static/brand/faircroft-emblem.webp",
+  "/static/brand/faircroft-light-sweep.mp4",
+  "/static/brand/icon-192.png",
+  "/static/brand/icon-512.png",
+  "/static/brand/apple-touch-icon.png",
   "/static/getting-started/used-cars.jpg",
   "/static/getting-started/dirty-pond.jpg",
   "/static/getting-started/bag-store.jpg",
