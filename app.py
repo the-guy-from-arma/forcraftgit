@@ -341,6 +341,7 @@ def generate_record_number(db: Database, table: str, column: str, prefix: str) -
         ("cid_internal_affairs", "ia_number"),
         ("cad_after_call_reports", "report_number"),
         ("mdt_bolos", "bolo_number"),
+        ("mdt_bookings", "booking_number"),
         ("rp_contracts", "contract_number"),
         ("business_applications", "application_number"),
         ("businesses", "license_number"),
@@ -833,6 +834,39 @@ def ensure_schema() -> None:
                 FOREIGN KEY (charge_id) REFERENCES charge_catalog(id) ON DELETE RESTRICT
             );
 
+            CREATE TABLE IF NOT EXISTS mdt_bookings (
+                id SERIAL PRIMARY KEY,
+                booking_number TEXT NOT NULL UNIQUE,
+                civ_id INTEGER NOT NULL,
+                officer_id INTEGER NOT NULL,
+                charge_id INTEGER NOT NULL,
+                court_case_id INTEGER,
+                charge_code TEXT NOT NULL,
+                charge_title TEXT NOT NULL,
+                category TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                arrest_location TEXT NOT NULL,
+                arrest_datetime TEXT NOT NULL,
+                arresting_agency TEXT NOT NULL DEFAULT '',
+                incident_number TEXT NOT NULL DEFAULT '',
+                probable_cause TEXT NOT NULL,
+                property_inventory TEXT NOT NULL DEFAULT '',
+                medical_notes TEXT NOT NULL DEFAULT '',
+                booking_notes TEXT NOT NULL DEFAULT '',
+                holding_cell TEXT NOT NULL DEFAULT '',
+                bond_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'intake',
+                court_date TEXT,
+                release_notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
+                FOREIGN KEY (civ_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (officer_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (charge_id) REFERENCES charge_catalog(id) ON DELETE RESTRICT,
+                FOREIGN KEY (court_case_id) REFERENCES citations(id) ON DELETE SET NULL
+            );
+
             CREATE TABLE IF NOT EXISTS transactions (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL,
@@ -1250,6 +1284,42 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS judge_id INTEGER")
     db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS final_result TEXT NOT NULL DEFAULT ''")
     db.execute("UPDATE citations SET final_result = status WHERE final_result = '' AND status NOT IN ('issued','contested','reviewed','reduced')")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mdt_bookings (
+            id SERIAL PRIMARY KEY,
+            booking_number TEXT NOT NULL UNIQUE,
+            civ_id INTEGER NOT NULL,
+            officer_id INTEGER NOT NULL,
+            charge_id INTEGER NOT NULL,
+            court_case_id INTEGER,
+            charge_code TEXT NOT NULL,
+            charge_title TEXT NOT NULL,
+            category TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            arrest_location TEXT NOT NULL,
+            arrest_datetime TEXT NOT NULL,
+            arresting_agency TEXT NOT NULL DEFAULT '',
+            incident_number TEXT NOT NULL DEFAULT '',
+            probable_cause TEXT NOT NULL,
+            property_inventory TEXT NOT NULL DEFAULT '',
+            medical_notes TEXT NOT NULL DEFAULT '',
+            booking_notes TEXT NOT NULL DEFAULT '',
+            holding_cell TEXT NOT NULL DEFAULT '',
+            bond_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'intake',
+            court_date TEXT,
+            release_notes TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            completed_at TEXT,
+            FOREIGN KEY (civ_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (officer_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (charge_id) REFERENCES charge_catalog(id) ON DELETE RESTRICT,
+            FOREIGN KEY (court_case_id) REFERENCES citations(id) ON DELETE SET NULL
+        )
+        """
+    )
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS target_context TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS last_known TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS requirements TEXT NOT NULL DEFAULT ''")
@@ -1383,6 +1453,9 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS cad_after_call_reports_disposition_idx ON cad_after_call_reports (disposition)")
     db.execute("CREATE INDEX IF NOT EXISTS mdt_bolos_status_idx ON mdt_bolos (status, updated_at)")
     db.execute("CREATE INDEX IF NOT EXISTS mdt_bolos_created_by_idx ON mdt_bolos (created_by, created_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS mdt_bookings_status_idx ON mdt_bookings (status, updated_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS mdt_bookings_civ_idx ON mdt_bookings (civ_id, created_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS mdt_bookings_officer_idx ON mdt_bookings (officer_id, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS department_applications_user_idx ON department_applications (user_id, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS department_applications_department_idx ON department_applications (department_key, status)")
     db.execute(
@@ -2499,6 +2572,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_issue_charge_warrant(db, user)
                 elif path == "/api/mdt/citations" and method == "POST":
                     self.api_issue_citation(db, user)
+                elif path == "/api/mdt/bookings" and method == "GET":
+                    self.api_mdt_bookings(db, user)
+                elif path == "/api/mdt/bookings" and method == "POST":
+                    self.api_create_mdt_booking(db, user)
+                elif path.startswith("/api/mdt/bookings/") and method == "PATCH":
+                    self.api_update_mdt_booking(db, user, self.path_int(path, 3))
                 elif path == "/api/mdt/panic" and method == "POST":
                     self.api_panic(db, user)
                 elif path == "/api/mdt/reports" and method == "GET":
@@ -4779,12 +4858,27 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 """,
                 (row["id"],),
             )
+            booking_rows = all_rows(
+                db,
+                """
+                SELECT b.*, officer.name AS officer_name, c.status AS court_status
+                FROM mdt_bookings b
+                JOIN users officer ON officer.id = b.officer_id
+                LEFT JOIN citations c ON c.id = b.court_case_id
+                WHERE b.civ_id = ?
+                ORDER BY CASE WHEN b.status IN ('intake','booked','holding','ready_for_court') THEN 0 ELSE 1 END,
+                         b.updated_at DESC
+                LIMIT 20
+                """,
+                (row["id"],),
+            )
             item = dict(row)
             item["roles"] = roles_for(row)
             item["open_cases"] = [dict(w) for w in warrants]
             item["vehicles"] = vehicles
             item["license_applications"] = applications
             item["warrants"] = [dict(warrant) for warrant in user_warrants]
+            item["bookings"] = [dict(booking) for booking in booking_rows]
             results.append(item)
         self.send_json(200, {"results": results})
 
@@ -5034,6 +5128,232 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 user["id"],
             )
         self.send_json(201, {"ok": True, "citation_id": citation_id, "court_date": court_date, "judge_id": presiding_judge["id"] if presiding_judge else None})
+
+    def api_mdt_bookings(self, db: Database, user: DbRow | None) -> None:
+        err = leo_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        active_statuses = ("intake", "booked", "holding", "ready_for_court")
+        active = all_rows(
+            db,
+            """
+            SELECT b.*, civ.name AS civ_name, civ.civ_number, officer.name AS officer_name,
+                   judge.name AS judge_name, c.status AS court_status
+            FROM mdt_bookings b
+            JOIN users civ ON civ.id = b.civ_id
+            JOIN users officer ON officer.id = b.officer_id
+            LEFT JOIN citations c ON c.id = b.court_case_id
+            LEFT JOIN users judge ON judge.id = c.judge_id
+            WHERE b.status IN (?, ?, ?, ?)
+            ORDER BY CASE b.status WHEN 'intake' THEN 0 WHEN 'booked' THEN 1 WHEN 'holding' THEN 2 ELSE 3 END,
+                     b.updated_at DESC
+            LIMIT 120
+            """,
+            active_statuses,
+        )
+        recent = all_rows(
+            db,
+            """
+            SELECT b.*, civ.name AS civ_name, civ.civ_number, officer.name AS officer_name,
+                   judge.name AS judge_name, c.status AS court_status
+            FROM mdt_bookings b
+            JOIN users civ ON civ.id = b.civ_id
+            JOIN users officer ON officer.id = b.officer_id
+            LEFT JOIN citations c ON c.id = b.court_case_id
+            LEFT JOIN users judge ON judge.id = c.judge_id
+            ORDER BY b.created_at DESC
+            LIMIT 120
+            """,
+        )
+        stats = {
+            "active": one(db, "SELECT COUNT(*) AS count FROM mdt_bookings WHERE status IN (?, ?, ?, ?)", active_statuses)["count"],
+            "today": one(db, "SELECT COUNT(*) AS count FROM mdt_bookings WHERE created_at >= ?", (utcnow().date().isoformat(),))["count"],
+            "released": one(db, "SELECT COUNT(*) AS count FROM mdt_bookings WHERE status = 'released'")["count"],
+        }
+        self.send_json(200, {"active": [dict(row) for row in active], "recent": [dict(row) for row in recent], "stats": stats})
+
+    def api_create_mdt_booking(self, db: Database, user: DbRow | None) -> None:
+        err = leo_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        missing = require_fields(payload, "civ_id", "charge_id", "arrest_location", "probable_cause")
+        if missing:
+            self.error(400, missing)
+            return
+        civ = one(db, "SELECT * FROM users WHERE id = ?", (int(payload["civ_id"]),))
+        charge = one(db, "SELECT * FROM charge_catalog WHERE id = ?", (int(payload["charge_id"]),))
+        if not civ or not charge:
+            self.error(404, "Civilian or criminal code not found")
+            return
+        if charge.get("kind") != "criminal":
+            self.error(400, "Booking requires a criminal charge code")
+            return
+        try:
+            bond_amount = round(float(payload.get("bond_amount") or 0), 2)
+        except (TypeError, ValueError):
+            self.error(400, "Bond amount must be a number")
+            return
+        if bond_amount < 0:
+            self.error(400, "Bond amount cannot be negative")
+            return
+        ts = now_iso()
+        default_court_date = (utcnow() + dt.timedelta(days=3)).date().isoformat()
+        court_date = str(payload.get("court_date") or "").strip() or default_court_date
+        arrest_location = str(payload["arrest_location"]).strip()[:180]
+        probable_cause = str(payload["probable_cause"]).strip()[:1800]
+        if not arrest_location or not probable_cause:
+            self.error(400, "Arrest location and probable cause are required")
+            return
+        presiding_judge = pick_presiding_judge(db)
+        court_case = db.execute(
+            """
+            INSERT INTO citations
+            (civ_id, officer_id, judge_id, charge_id, charge_code, charge_title, category, fine_amount, points, severity, location, narrative, court_date, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id
+            """,
+            (
+                civ["id"],
+                user["id"],
+                presiding_judge["id"] if presiding_judge else None,
+                charge["id"],
+                charge["code"],
+                charge["title"],
+                charge["category"],
+                float(charge["fine_amount"]),
+                int(charge["points"]),
+                charge["severity"],
+                arrest_location,
+                probable_cause,
+                court_date,
+                ts,
+                ts,
+            ),
+        ).fetchone()
+        court_case_id = int(court_case["id"])
+        booking_number = generate_record_number(db, "mdt_bookings", "booking_number", "BKG")
+        arresting_agency = str(payload.get("arresting_agency") or user["primary_agency"] or "Law Enforcement").strip()[:120]
+        created = db.execute(
+            """
+            INSERT INTO mdt_bookings
+            (booking_number, civ_id, officer_id, charge_id, court_case_id, charge_code, charge_title, category, severity,
+             arrest_location, arrest_datetime, arresting_agency, incident_number, probable_cause, property_inventory,
+             medical_notes, booking_notes, holding_cell, bond_amount, status, court_date, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'intake', ?, ?, ?)
+            RETURNING id, booking_number
+            """,
+            (
+                booking_number,
+                civ["id"],
+                user["id"],
+                charge["id"],
+                court_case_id,
+                charge["code"],
+                charge["title"],
+                charge["category"],
+                charge["severity"],
+                arrest_location,
+                str(payload.get("arrest_datetime") or ts).strip()[:40],
+                arresting_agency,
+                str(payload.get("incident_number") or "").strip()[:80],
+                probable_cause,
+                str(payload.get("property_inventory") or "").strip()[:1800],
+                str(payload.get("medical_notes") or "").strip()[:1200],
+                str(payload.get("booking_notes") or "").strip()[:1600],
+                str(payload.get("holding_cell") or "").strip()[:80],
+                bond_amount,
+                court_date,
+                ts,
+                ts,
+            ),
+        ).fetchone()
+        add_message(
+            db,
+            civ["id"],
+            "Arrest booking processed",
+            f"Booking {created['booking_number']} was filed for {charge['code']} - {charge['title']}. Court date: {court_date}.",
+            user["id"],
+        )
+        add_message(
+            db,
+            user["id"],
+            "Booking packet filed",
+            f"Booking {created['booking_number']} and court case #{court_case_id} were filed for {civ['name']}.",
+            user["id"],
+        )
+        if presiding_judge:
+            add_message(
+                db,
+                presiding_judge["id"],
+                "Booking case assigned",
+                f"Booking {created['booking_number']} / case #{court_case_id} was assigned to you. Defendant: {civ['name']}.",
+                user["id"],
+            )
+        self.send_json(
+            201,
+            {
+                "ok": True,
+                "id": int(created["id"]),
+                "booking_number": created["booking_number"],
+                "court_case_id": court_case_id,
+                "court_date": court_date,
+                "judge_id": presiding_judge["id"] if presiding_judge else None,
+            },
+        )
+
+    def api_update_mdt_booking(self, db: Database, user: DbRow | None, booking_id: int) -> None:
+        err = leo_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        booking = one(db, "SELECT * FROM mdt_bookings WHERE id = ?", (booking_id,))
+        if not booking:
+            self.error(404, "Booking not found")
+            return
+        allowed_statuses = {"intake", "booked", "holding", "ready_for_court", "released", "transferred", "voided"}
+        status = str(payload.get("status") or booking["status"]).strip().lower()
+        if status not in allowed_statuses:
+            self.error(400, "Unsupported booking status")
+            return
+        try:
+            bond_amount = round(float(payload.get("bond_amount") if payload.get("bond_amount") not in (None, "") else booking["bond_amount"]), 2)
+        except (TypeError, ValueError):
+            self.error(400, "Bond amount must be a number")
+            return
+        if bond_amount < 0:
+            self.error(400, "Bond amount cannot be negative")
+            return
+        final_status = status in {"released", "transferred", "voided"}
+        completed_at = now_iso() if final_status and not booking["completed_at"] else booking["completed_at"]
+        ts = now_iso()
+        db.execute(
+            """
+            UPDATE mdt_bookings
+            SET status = ?, holding_cell = ?, release_notes = ?, booking_notes = ?, medical_notes = ?,
+                property_inventory = ?, bond_amount = ?, updated_at = ?, completed_at = ?
+            WHERE id = ?
+            """,
+            (
+                status,
+                str(payload.get("holding_cell") if payload.get("holding_cell") is not None else booking["holding_cell"]).strip()[:80],
+                str(payload.get("release_notes") if payload.get("release_notes") is not None else booking["release_notes"]).strip()[:1200],
+                str(payload.get("booking_notes") if payload.get("booking_notes") is not None else booking["booking_notes"]).strip()[:1600],
+                str(payload.get("medical_notes") if payload.get("medical_notes") is not None else booking["medical_notes"]).strip()[:1200],
+                str(payload.get("property_inventory") if payload.get("property_inventory") is not None else booking["property_inventory"]).strip()[:1800],
+                bond_amount,
+                ts,
+                completed_at,
+                booking_id,
+            ),
+        )
+        if final_status:
+            add_message(db, booking["civ_id"], "Booking status updated", f"Booking {booking['booking_number']} is now marked {status}.", user["id"])
+        self.send_json(200, {"ok": True, "status": status})
 
     def api_panic(self, db: Database, user: DbRow | None) -> None:
         err = emergency_required(user)

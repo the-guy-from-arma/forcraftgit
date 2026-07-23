@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.49";
+const OS_VERSION = "0.0.50";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -755,6 +755,7 @@ async function loadAppData(id) {
         charges: await api("/api/mdt/charges"),
         alerts: await api("/api/mdt/alerts"),
         reports: await api("/api/mdt/reports"),
+        bookings: await optionalApi("/api/mdt/bookings", { active: [], recent: [], stats: { active: 0, today: 0, released: 0 } }),
         bolos: await optionalApi("/api/mdt/bolos", { active: [], recent: [] }),
         cid: mdtCommandEnabled() ? await api("/api/cid/overview") : null,
         search: state.cache.mdt?.search || []
@@ -3319,6 +3320,7 @@ function renderMdtWorkspace() {
   const charges = state.cache.mdt?.charges || {};
   const alerts = state.cache.mdt?.alerts?.alerts || [];
   const activeBolos = state.cache.mdt?.bolos?.active || [];
+  const activeBookings = state.cache.mdt?.bookings?.active || [];
   const cid = state.cache.mdt?.cid;
   const mdtCommandEnabledNow = mdtCommandEnabled();
   const commandLabel = mdtCommandLabel();
@@ -3338,6 +3340,7 @@ function renderMdtWorkspace() {
     ["bolos", "BOLOs"],
     ["cad-reports", "Reports"],
     ["ticket", "Issue"],
+    ["booking", "Booking"],
     ["criminal", "Criminal"],
     ["citations", "Citations"],
     ["mdt-settings", "Settings"],
@@ -3347,6 +3350,7 @@ function renderMdtWorkspace() {
     ["bolos", "BOLOs"],
     ["cad-reports", "Reports"],
     ["ticket", "Issue"],
+    ["booking", "Booking"],
     ["citations", "Citations"],
     ["criminal", "Criminal"],
     ["mdt-settings", "Settings"],
@@ -3361,7 +3365,7 @@ function renderMdtWorkspace() {
         <div>
           <p class="eyebrow">${mdtCommandEnabledNow ? commandLabel : "Law Enforcement"}</p>
           <h1>${mdtCommandEnabledNow ? `${commandLabel} Command MDT` : "Mobile Data Terminal"}</h1>
-          <p class="mdt-subtitle">${mdtCommandEnabledNow ? "Investigations / warrants / intelligence / internal affairs" : "NCIC / DMV / citations / warrants / dispatch"}</p>
+          <p class="mdt-subtitle">${mdtCommandEnabledNow ? "Investigations / warrants / booking / internal affairs" : "NCIC / DMV / citations / booking / dispatch"}</p>
           <div class="mdt-status-line">
             <span>${escapeHtml(unitCallsign)}</span>
             <span>${escapeHtml(activeNavLabel)}</span>
@@ -3383,11 +3387,13 @@ function renderMdtWorkspace() {
           <div class="metric"><span>Case folders</span><strong>${cid?.stats?.open_investigations || 0}</strong></div>
           <div class="metric"><span>Priority watch</span><strong>${priorityCases.length}</strong></div>
           <div class="metric"><span>Active warrants</span><strong>${cid?.stats?.active_warrants || 0}</strong></div>
+          <div class="metric"><span>Bookings</span><strong>${activeBookings.length}</strong></div>
           <div class="metric"><span>IA open</span><strong>${cid?.stats?.ia_open || 0}</strong></div>
           <div class="metric"><span>Active BOLOs</span><strong>${activeBolos.length}</strong></div>
         ` : `
           <div class="metric"><span>Citations</span><strong>${(charges.citations || []).length}</strong></div>
           <div class="metric"><span>Criminal Codes</span><strong>${(charges.criminal_charges || []).length}</strong></div>
+          <div class="metric"><span>Bookings</span><strong>${activeBookings.length}</strong></div>
           <div class="metric"><span>Officer Alerts</span><strong>${alerts.filter((alert) => alert.status === "active").length}</strong></div>
           <div class="metric"><span>Active BOLOs</span><strong>${activeBolos.length}</strong></div>
         `}
@@ -4309,6 +4315,7 @@ function renderMdtContent() {
   if (state.mdtTab === "bolos") return renderBolos();
   if (state.mdtTab === "cad-reports") return renderCadReports();
   if (state.mdtTab === "ticket") return renderTicketWriter();
+  if (state.mdtTab === "booking") return renderBookingSystem();
   if (state.mdtTab === "citations") return renderCodeSection("citation");
   if (state.mdtTab === "criminal") return renderCodeSection("criminal");
   if (state.mdtTab === "mdt-settings") return renderMdtSettings();
@@ -4421,6 +4428,7 @@ function renderMdtSide() {
         ${canOpenMessages ? `<button class="secondary" type="button" data-open-mdt-messages>Messages</button>` : `<p class="muted small">Messages unavailable</p>`}
         ${state.mdtProtocolAssistantEnabled ? `<button class="secondary" type="button" data-start-traffic-stop>Initiate Traffic Stop</button>` : ""}
         <button class="secondary" type="button" data-mdt-tab="ticket">Write Ticket</button>
+        <button class="secondary" type="button" data-mdt-tab="booking">Booking Desk</button>
         <button class="secondary" type="button" data-mdt-tab="citations">NYS Codes</button>
         <button class="secondary" type="button" data-mdt-tab="mdt-settings">MDT Settings</button>
       </div>
@@ -4785,12 +4793,16 @@ function renderMdtSearch() {
             <div class="metric"><span>Car Entry</span><strong>${escapeHtml(item.car_entry_code || "Not filed")}</strong></div>
           </div>
           <div class="mdt-subsection">
-            <div class="row"><h4>Registered vehicles</h4><div class="row-actions"><button class="secondary" data-open-mdt-profile="${item.id}">Open master file</button><button class="secondary" data-use-civ="${item.id}">Attach to UTT</button></div></div>
+            <div class="row"><h4>Registered vehicles</h4><div class="row-actions"><button class="secondary" data-open-mdt-profile="${item.id}">Open master file</button><button class="secondary" data-use-civ="${item.id}">Attach to UTT</button><button class="secondary" data-use-civ-booking="${item.id}">Book arrest</button></div></div>
             ${(item.vehicles || []).map((vehicle) => `<p class="small">${escapeHtml(vehicle.vehicle_year)} ${escapeHtml(vehicle.vehicle_color)} ${escapeHtml(vehicle.vehicle_make)} ${escapeHtml(vehicle.vehicle_model)} - ${escapeHtml(vehicle.plate)} - ${escapeHtml(vehicle.registration_status)}</p>`).join("") || `<p class="muted small">No registered vehicles on file</p>`}
           </div>
           <div class="mdt-subsection">
             <h4>Open court/citation returns</h4>
             ${(item.open_cases || []).map((c) => `<div class="row"><span>${escapeHtml(c.charge_code)} ${escapeHtml(c.charge_title)}</span><strong>${money(c.fine_amount)}</strong></div>`).join("") || `<p class="muted small">No open citations</p>`}
+          </div>
+          <div class="mdt-subsection">
+            <h4>Booking returns</h4>
+            ${(item.bookings || []).slice(0, 4).map((booking) => `<div class="row"><span>${escapeHtml(booking.booking_number)} - ${escapeHtml(booking.charge_code)} ${escapeHtml(booking.charge_title)}</span><span class="pill ${bookingStatusClass(booking.status)}">${escapeHtml(booking.status)}</span></div>`).join("") || `<p class="muted small">No booking history</p>`}
           </div>
         </article>
       `).join("") || `<div class="empty">Run a search to pull DMV and case records</div>`}
@@ -4806,6 +4818,9 @@ function renderMdtProfileModal() {
   const vehicles = person.vehicles || [];
   const applications = person.license_applications || [];
   const warrants = person.warrants || [];
+  const bookings = person.bookings || [];
+  const activeBookings = bookings.filter((item) => ["intake", "booked", "holding", "ready_for_court"].includes(item.status));
+  const previousBookings = bookings.filter((item) => !["intake", "booked", "holding", "ready_for_court"].includes(item.status));
   const activeWarrants = warrants.filter((item) => ["active", "pending"].includes(item.status));
   const previousWarrants = warrants.filter((item) => !["active", "pending"].includes(item.status));
   const licenseStatus = person.license_status || "None";
@@ -4825,6 +4840,7 @@ function renderMdtProfileModal() {
           <button class="${state.mdtProfileTab === "profile" ? "active" : ""}" type="button" data-mdt-profile-tab="profile">Profile</button>
           <button class="${state.mdtProfileTab === "license" ? "active" : ""}" type="button" data-mdt-profile-tab="license">Driver License</button>
           <button class="${state.mdtProfileTab === "warrants" ? "active" : ""}" type="button" data-mdt-profile-tab="warrants">Warrants ${activeWarrants.length ? `(${activeWarrants.length})` : ""}</button>
+          <button class="${state.mdtProfileTab === "bookings" ? "active" : ""}" type="button" data-mdt-profile-tab="bookings">Bookings ${activeBookings.length ? `(${activeBookings.length})` : ""}</button>
         </div>
         <div class="admin-account-scroll">
           ${state.mdtProfileTab === "warrants" ? `
@@ -4855,6 +4871,25 @@ function renderMdtProfileModal() {
               <div class="mdt-subsection">
                 <h4>Previous warrants</h4>
                 ${previousWarrants.map((warrant) => `<div class="row"><span>${escapeHtml(warrant.warrant_number)} - ${escapeHtml(warrant.warrant_type)}</span><span class="pill ${mdtStatusClass(warrant.status)}">${escapeHtml(warrant.status)}</span></div>`).join("") || `<p class="muted small">No previous warrant history</p>`}
+              </div>
+            </section>
+          ` : state.mdtProfileTab === "bookings" ? `
+            <section class="account-section">
+              <div class="row tight">
+                <h3>Booking Record</h3>
+                <span class="pill ${activeBookings.length ? "red" : "green"}">${activeBookings.length} active</span>
+              </div>
+              <div class="row-actions">
+                <button class="danger" type="button" data-use-civ-booking="${person.id}">Create booking packet</button>
+                <button class="secondary" type="button" data-use-civ="${person.id}">Write citation</button>
+              </div>
+              <div class="mdt-subsection">
+                <h4>Active custody</h4>
+                ${activeBookings.map((booking) => renderBookingCard({ ...booking, civ_name: person.name, civ_number: person.civ_number }, true)).join("") || `<p class="muted small">No active booking packets attached to this profile</p>`}
+              </div>
+              <div class="mdt-subsection">
+                <h4>Previous bookings</h4>
+                ${previousBookings.map((booking) => renderBookingCard({ ...booking, civ_name: person.name, civ_number: person.civ_number }, false)).join("") || `<p class="muted small">No previous booking history</p>`}
               </div>
             </section>
           ` : state.mdtProfileTab === "license" ? `
@@ -4890,10 +4925,10 @@ function renderMdtProfileModal() {
                 <div class="metric"><span>Email</span><strong>${escapeHtml(person.email)}</strong></div>
                 <div class="metric"><span>Roles</span><strong>${escapeHtml((person.roles || []).join(", ") || "civ")}</strong></div>
                 <div class="metric"><span>Car Entry</span><strong>${escapeHtml(person.car_entry_code || "Not filed")}</strong></div>
-                <div class="metric"><span>Open cases</span><strong>${(person.open_cases || []).length}</strong></div>
+                <div class="metric"><span>Bookings</span><strong>${bookings.length}</strong></div>
               </div>
               <div class="mdt-subsection">
-                <div class="row"><h4>Registered vehicles</h4><button class="secondary" data-use-civ="${person.id}">Use for ticket</button></div>
+                <div class="row"><h4>Registered vehicles</h4><div class="row-actions"><button class="secondary" data-use-civ="${person.id}">Use for ticket</button><button class="secondary" data-use-civ-booking="${person.id}">Book arrest</button></div></div>
                 ${vehicles.map((vehicle) => `<p class="small">${escapeHtml(vehicle.vehicle_year)} ${escapeHtml(vehicle.vehicle_color)} ${escapeHtml(vehicle.vehicle_make)} ${escapeHtml(vehicle.vehicle_model)} - ${escapeHtml(vehicle.plate)} - ${escapeHtml(vehicle.registration_status)}</p>`).join("") || `<p class="muted small">No registered vehicles on file</p>`}
               </div>
               <div class="mdt-subsection">
@@ -5009,6 +5044,137 @@ function renderCriminalWarrantWriter(charges) {
       <label>Operation plan<textarea name="operation_plan" placeholder="Optional service plan, unit notes, or court transport instructions"></textarea></label>
       <button class="danger" type="submit">Sign and issue warrant</button>
     </form>
+  `;
+}
+
+function bookingStatusClass(status) {
+  const normalized = String(status || "").toLowerCase();
+  if (["released", "transferred"].includes(normalized)) return "green";
+  if (["voided"].includes(normalized)) return "red";
+  if (["holding", "ready_for_court"].includes(normalized)) return "amber";
+  return "amber";
+}
+
+function renderBookingCard(booking, active = true) {
+  const statusButtons = [
+    ["booked", "Booked"],
+    ["holding", "Holding"],
+    ["ready_for_court", "Ready for Court"],
+    ["released", "Release"],
+    ["transferred", "Transfer"],
+  ];
+  return `
+    <article class="booking-card status-${escapeHtml(booking.status || "intake")}" data-booking-card>
+      <div class="booking-card-head">
+        <div>
+          <p class="eyebrow">${escapeHtml(booking.booking_number || "Booking")}</p>
+          <h3>${escapeHtml(booking.civ_name || "Unknown subject")}</h3>
+          <p class="muted small">CIV ${escapeHtml(booking.civ_number || "pending")} / ${escapeHtml(booking.charge_code)} ${escapeHtml(booking.charge_title)}</p>
+        </div>
+        <span class="pill ${bookingStatusClass(booking.status)}">${escapeHtml(booking.status || "intake")}</span>
+      </div>
+      <div class="booking-meta-grid">
+        <div><span>Officer</span><strong>${escapeHtml(booking.officer_name || "Unknown")}</strong></div>
+        <div><span>Location</span><strong>${escapeHtml(booking.arrest_location || "Not filed")}</strong></div>
+        <div><span>Court Case</span><strong>${booking.court_case_id ? `#${booking.court_case_id}` : "Pending"}</strong></div>
+        <div><span>Court Date</span><strong>${escapeHtml(booking.court_date || "Pending")}</strong></div>
+        <div><span>Holding</span><strong>${escapeHtml(booking.holding_cell || "Unassigned")}</strong></div>
+        <div><span>Bond</span><strong>${money(booking.bond_amount)}</strong></div>
+      </div>
+      <div class="booking-summary">
+        <p><strong>Probable cause:</strong> ${escapeHtml(booking.probable_cause || "No probable cause narrative filed")}</p>
+        ${booking.property_inventory ? `<p><strong>Property:</strong> ${escapeHtml(booking.property_inventory)}</p>` : ""}
+        ${booking.medical_notes ? `<p><strong>Medical:</strong> ${escapeHtml(booking.medical_notes)}</p>` : ""}
+        ${booking.booking_notes ? `<p><strong>Notes:</strong> ${escapeHtml(booking.booking_notes)}</p>` : ""}
+        ${booking.release_notes ? `<p><strong>Disposition:</strong> ${escapeHtml(booking.release_notes)}</p>` : ""}
+      </div>
+      ${active ? `
+        <div class="booking-action-panel">
+          <label>Cell / unit<input data-booking-cell value="${escapeHtml(booking.holding_cell || "")}" placeholder="Cell A1, transport, supervisor hold" /></label>
+          <label>Bond<input data-booking-bond type="number" min="0" step="1" value="${escapeHtml(booking.bond_amount || 0)}" /></label>
+          <label class="booking-note-field">Status note<textarea data-booking-note rows="2" placeholder="Release condition, transfer destination, booking desk note">${escapeHtml(booking.release_notes || "")}</textarea></label>
+        </div>
+        <div class="booking-status-buttons">
+          ${statusButtons.map(([status, label]) => `<button class="${status === "released" || status === "transferred" ? "danger" : "secondary"}" type="button" data-booking-status="${booking.id}" data-status="${status}" ${booking.status === status ? "disabled" : ""}>${label}</button>`).join("")}
+        </div>
+      ` : ""}
+    </article>
+  `;
+}
+
+function renderBookingSystem() {
+  const bookingData = state.cache.mdt?.bookings || {};
+  const activeBookings = bookingData.active || [];
+  const recentBookings = bookingData.recent || [];
+  const previousBookings = recentBookings.filter((item) => !["intake", "booked", "holding", "ready_for_court"].includes(item.status));
+  const charges = getMdtCatalog("criminal");
+  const civilians = getMdtCivilians();
+  const defaultCourt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  return `
+    <div class="booking-workspace">
+      <form id="bookingForm" class="mdt-form booking-intake-form">
+        <div class="mdt-section-head">
+          <div>
+            <p class="eyebrow">Custodial arrest intake</p>
+            <h2>Booking Desk</h2>
+            <p class="muted small">Create a booking packet, attach a criminal code, and file the court case in one workflow.</p>
+          </div>
+          <span class="pill red">${activeBookings.length} active</span>
+        </div>
+        <div class="ticket-command-strip">
+          <button type="button" data-mdt-tab="search"><strong>NCIC First</strong><span>Verify the subject record</span></button>
+          <button type="button" data-mdt-tab="criminal"><strong>Criminal Codes</strong><span>Review charge definitions</span></button>
+          <button type="button" data-mdt-tab="cad-reports"><strong>After-Call Report</strong><span>File incident narrative</span></button>
+        </div>
+        <div class="grid-2">
+          <label>Arrestee<select name="civ_id" required data-booking-subject>
+            <option value="">Select civilian record</option>
+            ${civilians.map((person) => `<option value="${person.id}"${selectedAttr(person.id, state.mdtSelectedCiv)}>${escapeHtml(person.name)} - CIV ${escapeHtml(person.civ_number || "pending")} - ${escapeHtml(person.license_status || "No license")}</option>`).join("")}
+          </select></label>
+          <label>Criminal code<select name="charge_id" required>
+            <option value="">Select criminal charge</option>
+            ${renderChargeOptions(charges, state.mdtSelectedChargeId)}
+          </select></label>
+          <label>Arrest location<input name="arrest_location" required placeholder="Street, postal, landmark, or station" /></label>
+          <label>Arrest date/time<input name="arrest_datetime" type="datetime-local" /></label>
+          <label>Arresting agency<input name="arresting_agency" value="${escapeHtml(state.session?.user?.primary_agency || "")}" placeholder="Department / agency" /></label>
+          <label>Incident / CAD number<input name="incident_number" placeholder="CAD call, report, or scene number" /></label>
+          <label>Holding cell / transport<input name="holding_cell" placeholder="Cell A1, transport van, hospital watch" /></label>
+          <label>Bond amount<input name="bond_amount" type="number" min="0" step="1" value="0" /></label>
+          <label>Court date<input name="court_date" type="date" value="${defaultCourt}" /></label>
+        </div>
+        <label>Probable cause<textarea name="probable_cause" rows="5" required placeholder="Facts supporting custody, arrest, and the selected criminal code"></textarea></label>
+        <div class="grid-2">
+          <label>Property inventory<textarea name="property_inventory" rows="4" placeholder="Cash, weapons, contraband, phone, keys, vehicle, evidence tags"></textarea></label>
+          <label>Medical / safety notes<textarea name="medical_notes" rows="4" placeholder="Injuries, EMS check, intoxication, restraints, separation notes"></textarea></label>
+        </div>
+        <label>Booking notes<textarea name="booking_notes" rows="4" placeholder="Miranda/warnings, supervisor approval, transport route, jail desk notes"></textarea></label>
+        <button class="danger" type="submit">Create booking packet</button>
+      </form>
+      <section class="booking-queue">
+        <div class="mdt-section-head">
+          <div>
+            <p class="eyebrow">Custody queue</p>
+            <h2>Active Bookings</h2>
+          </div>
+          <span class="pill amber">${bookingData.stats?.today || 0} today</span>
+        </div>
+        <div class="booking-card-list">
+          ${activeBookings.map((booking) => renderBookingCard(booking, true)).join("") || `<div class="empty">No active bookings in custody</div>`}
+        </div>
+      </section>
+      <section class="booking-history">
+        <div class="mdt-section-head">
+          <div>
+            <p class="eyebrow">Booking archive</p>
+            <h2>Recent Releases / Transfers</h2>
+          </div>
+        </div>
+        <div class="booking-card-list compact">
+          ${previousBookings.slice(0, 20).map((booking) => renderBookingCard(booking, false)).join("") || `<div class="empty">No previous booking dispositions</div>`}
+        </div>
+      </section>
+    </div>
   `;
 }
 
@@ -5225,6 +5391,7 @@ function renderTrafficStopArrestTools() {
           <li>File the criminal charge/warrant and after-call report before clearing.</li>
         </ol>
         <div class="traffic-arrest-actions">
+          <button class="danger" type="button" data-traffic-stop-open-booking ${state.mdtTrafficStopDriverId ? "" : "disabled"}>Open Booking Desk</button>
           <button class="danger" type="button" data-traffic-stop-open-criminal ${state.mdtTrafficStopDriverId ? "" : "disabled"}>Open Criminal Writer</button>
           <button class="secondary" type="button" data-traffic-stop-open-report>Open After-Call Report</button>
         </div>
@@ -5887,6 +6054,22 @@ function bindMdt() {
     toast("Driver attached to criminal writer");
     render();
   }));
+  $$("[data-traffic-stop-open-booking]").forEach((button) => button.addEventListener("click", () => {
+    if (!state.mdtTrafficStopDriverId) {
+      toast("Attach a driver before opening booking");
+      return;
+    }
+    state.mdtSelectedCiv = state.mdtTrafficStopDriverId;
+    state.mdtCatalogMode = "criminal";
+    state.mdtSelectedChargeId = "";
+    state.mdtTab = "booking";
+    state.mdtTrafficStopOutcome = "arrest";
+    state.mdtTrafficStopActive = false;
+    state.mdtNavOpen = false;
+    state.mdtSideOpen = false;
+    toast("Driver attached to booking desk");
+    render();
+  }));
   $("[data-traffic-stop-open-report]")?.addEventListener("click", () => {
     state.mdtTab = "cad-reports";
     state.mdtTrafficStopActive = false;
@@ -5943,6 +6126,16 @@ function bindMdt() {
     state.mdtSelectedCiv = button.dataset.useCiv;
     state.mdtTab = "ticket";
     state.mdtProfileUserId = null;
+    render();
+  }));
+  $$("[data-use-civ-booking]").forEach((button) => button.addEventListener("click", () => {
+    state.mdtSelectedCiv = button.dataset.useCivBooking;
+    state.mdtCatalogMode = "criminal";
+    state.mdtSelectedChargeId = "";
+    state.mdtTab = "booking";
+    state.mdtProfileUserId = null;
+    state.mdtNavOpen = false;
+    state.mdtSideOpen = false;
     render();
   }));
   $$("[data-use-alert-report]").forEach((button) => button.addEventListener("click", () => {
@@ -6031,6 +6224,45 @@ function bindMdt() {
       toast(error.message);
     }
   });
+  $("#bookingForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const result = await api("/api/mdt/bookings", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast(`Booking ${result.booking_number} filed - court ${result.court_date}`);
+      state.mdtSelectedChargeId = "";
+      await loadAppData("mdt");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $$("[data-booking-status]").forEach((button) => button.addEventListener("click", async () => {
+    const card = button.closest("[data-booking-card]");
+    try {
+      await api(`/api/mdt/bookings/${button.dataset.bookingStatus}`, {
+        method: "PATCH",
+        body: {
+          status: button.dataset.status,
+          holding_cell: card?.querySelector("[data-booking-cell]")?.value || "",
+          bond_amount: card?.querySelector("[data-booking-bond]")?.value || 0,
+          release_notes: card?.querySelector("[data-booking-note]")?.value || "",
+        },
+      });
+      toast(`Booking marked ${button.dataset.status}`);
+      if (state.mdtProfileUserId) {
+        const activeSearch = state.cache.mdt?.search || [];
+        const q = activeSearch.find((item) => String(item.id) === String(state.mdtProfileUserId))?.name || "";
+        if (q) {
+          const refreshed = await api(`/api/mdt/search?q=${encodeURIComponent(q)}`);
+          state.cache.mdt.search = refreshed.results;
+        }
+      }
+      await loadAppData("mdt");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
   $$("[data-cid-open-case]").forEach((button) => button.addEventListener("click", () => {
     state.cidSelectedCaseId = button.dataset.cidOpenCase;
     render();
@@ -6956,7 +7188,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.49").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.50").catch(() => {}));
 }
 
 bootApp();

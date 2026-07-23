@@ -1,6 +1,24 @@
 {
-  "version": "0.0.49",
+  "version": "0.0.50",
   "entries": [
+    {
+      "date": "2026-07-23",
+      "version": "0.0.50",
+      "title": "MDT Arrest Booking System",
+      "added": [
+        "Added a full Booking Desk inside the MDT for custodial arrest processing.",
+        "Added booking packets with generated booking numbers, arrestee records, criminal code selection, probable cause, property inventory, medical notes, holding cell, bond, court date, and officer notes.",
+        "Added active booking queue and recent release/transfer history for officers.",
+        "Added booking history to NCIC returns and the civilian MDT profile pop-up.",
+        "Added traffic-stop arrest handoff into the new Booking Desk."
+      ],
+      "changed": [
+        "Criminal bookings now auto-create a linked court case using the existing criminal code catalog and notify the defendant, officer, and assigned judge when available.",
+        "The MDT navigation, side quick access, and stats strip now include Booking."
+      ],
+      "fixed": [],
+      "removed": []
+    },
     {
       "date": "2026-07-17",
       "version": "0.0.49",

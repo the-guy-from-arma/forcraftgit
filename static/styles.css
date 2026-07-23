@@ -4937,6 +4937,149 @@ textarea:focus {
     repeating-linear-gradient(90deg, rgba(239, 78, 99, 0.045) 0 1px, transparent 1px 56px);
 }
 
+.booking-workspace {
+  display: grid;
+  gap: 14px;
+}
+
+.booking-intake-form {
+  border-color: rgba(239, 78, 99, 0.24);
+  background:
+    linear-gradient(180deg, rgba(28, 18, 22, 0.94), rgba(11, 16, 18, 0.96)),
+    repeating-linear-gradient(90deg, rgba(239, 78, 99, 0.035) 0 1px, transparent 1px 52px);
+}
+
+.booking-queue,
+.booking-history {
+  display: grid;
+  gap: 10px;
+}
+
+.booking-card-list {
+  display: grid;
+  gap: 10px;
+}
+
+.booking-card-list.compact {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.booking-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(126, 231, 255, 0.12);
+  border-left: 3px solid rgba(126, 231, 255, 0.42);
+  border-radius: 7px;
+  padding: 12px;
+  background:
+    linear-gradient(180deg, rgba(15, 22, 25, 0.94), rgba(7, 11, 12, 0.96)),
+    repeating-linear-gradient(90deg, rgba(126, 231, 255, 0.025) 0 1px, transparent 1px 42px);
+}
+
+.booking-card.status-holding,
+.booking-card.status-ready_for_court {
+  border-left-color: rgba(255, 207, 90, 0.72);
+}
+
+.booking-card.status-released,
+.booking-card.status-transferred {
+  border-left-color: rgba(40, 209, 124, 0.72);
+}
+
+.booking-card.status-voided {
+  border-left-color: rgba(239, 78, 99, 0.72);
+}
+
+.booking-card-head,
+.booking-status-buttons,
+.booking-action-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.booking-card-head {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.booking-card-head h3,
+.booking-card-head p,
+.booking-summary p {
+  margin: 0;
+}
+
+.booking-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.booking-meta-grid div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 9px 10px;
+  border-left: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.booking-meta-grid div:first-child {
+  border-left: 0;
+}
+
+.booking-meta-grid span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.booking-meta-grid strong,
+.booking-summary {
+  overflow-wrap: anywhere;
+}
+
+.booking-summary {
+  display: grid;
+  gap: 6px;
+  color: rgba(245, 249, 249, 0.84);
+  font-size: 13px;
+}
+
+.booking-action-panel {
+  grid-template-columns: minmax(120px, 0.45fr) minmax(100px, 0.25fr) minmax(180px, 1fr);
+  align-items: end;
+}
+
+.booking-note-field {
+  grid-column: auto;
+}
+
+.booking-status-buttons {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.booking-status-buttons button {
+  min-height: 42px;
+}
+
+@media (max-width: 760px) {
+  .booking-card-head,
+  .booking-action-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .booking-status-buttons {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .booking-card-list.compact {
+    grid-template-columns: 1fr;
+  }
+}
+
 .warrant-button-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));

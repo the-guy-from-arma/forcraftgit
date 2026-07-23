@@ -1,8 +1,8 @@
-const CACHE = "rp-command-v49-mobile-drawer-rebuild";
+const CACHE = "rp-command-v50-mdt-booking-system";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.49",
-  "/static/app.js?v=0.0.49",
+  "/static/styles.css?v=0.0.50",
+  "/static/app.js?v=0.0.50",
   "/static/icons/icon.svg",
   "/static/getting-started/used-cars.jpg",
   "/static/getting-started/dirty-pond.jpg",
