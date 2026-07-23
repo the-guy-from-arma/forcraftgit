@@ -8,6 +8,8 @@ import json
 import mimetypes
 import os
 import secrets
+import threading
+import time
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -15,6 +17,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 import psycopg
+import paramiko
 from psycopg.rows import dict_row
 
 
@@ -29,6 +32,15 @@ OWNER_PASSWORD = os.environ.get("OWNER_PASSWORD", "owner1234")
 OWNER_NAME = os.environ.get("OWNER_NAME", "Server Owner")
 ARMA_BRIDGE_API_KEY = os.environ.get("ARMA_BRIDGE_API_KEY", "").strip()
 ARMA_LINK_CODE_TTL_MINUTES = int(os.environ.get("ARMA_LINK_CODE_TTL_MINUTES", "30"))
+SHADOWHAVEN_SFTP_HOST = os.environ.get("SHADOWHAVEN_SFTP_HOST", "").strip()
+SHADOWHAVEN_SFTP_PORT = int(os.environ.get("SHADOWHAVEN_SFTP_PORT", "2022"))
+SHADOWHAVEN_SFTP_USERNAME = os.environ.get("SHADOWHAVEN_SFTP_USERNAME", "").strip()
+SHADOWHAVEN_SFTP_PASSWORD = os.environ.get("SHADOWHAVEN_SFTP_PASSWORD", "")
+SHADOWHAVEN_BANK_FILE = os.environ.get(
+    "SHADOWHAVEN_BANK_FILE",
+    "profile/profile/.db/FCRPMUSSALO/Banks/00bb0001-1e42-6138-7e90-c04752d4fab6.json",
+).strip()
+SHADOWHAVEN_BANK_SYNC_SECONDS = max(5, int(os.environ.get("SHADOWHAVEN_BANK_SYNC_SECONDS", "15")))
 NAME_CHANGE_LIMIT = 3
 NAME_CHANGE_WINDOW_DAYS = 3
 TREASURY_STIMULUS_AMOUNT = 75000.00
@@ -225,6 +237,89 @@ def one(db: Database, sql: str, params: tuple[Any, ...] = ()) -> DbRow | None:
 
 def all_rows(db: Database, sql: str, params: tuple[Any, ...] = ()) -> list[DbRow]:
     return db.execute(sql, params).fetchall()
+
+
+def extract_shadowhaven_bank_data(payload: Any) -> tuple[dict[str, Any], str]:
+    if not isinstance(payload, dict):
+        return {}, ""
+    source_saved_at = str(payload.get("m_iLastSaved") or "")
+    components = payload.get("m_aComponents")
+    if not isinstance(components, list):
+        return {}, source_saved_at
+    for component in components:
+        if not isinstance(component, dict) or component.get("_type") != "BankManagerComponent":
+            continue
+        data = component.get("m_pData")
+        if isinstance(data, dict) and isinstance(data.get("m_Banks"), dict):
+            return data["m_Banks"], source_saved_at
+    return {}, source_saved_at
+
+
+def sync_shadowhaven_bank_once() -> int:
+    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+        return 0
+    transport = paramiko.Transport((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_PORT))
+    try:
+        transport.connect(username=SHADOWHAVEN_SFTP_USERNAME, password=SHADOWHAVEN_SFTP_PASSWORD)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+        try:
+            with sftp.open(SHADOWHAVEN_BANK_FILE, "r") as remote_file:
+                payload = json.loads(remote_file.read().decode("utf-8-sig"))
+        finally:
+            sftp.close()
+    finally:
+        transport.close()
+
+    balances, source_saved_at = extract_shadowhaven_bank_data(payload)
+    if not balances:
+        raise RuntimeError("BankManagerComponent contained no balances")
+    synced_at = now_iso()
+    accepted = 0
+    with conn() as db:
+        for identity_id, raw_balance in balances.items():
+            identity = str(identity_id or "").strip()[:160]
+            if not identity:
+                continue
+            try:
+                balance = round(float(raw_balance or 0), 2)
+            except (TypeError, ValueError):
+                continue
+            db.execute(
+                """
+                INSERT INTO arma_game_bank_balances
+                (identity_id, balance, source_file, source_saved_at, raw_payload, synced_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT (identity_id) DO UPDATE SET
+                    balance = EXCLUDED.balance,
+                    source_file = EXCLUDED.source_file,
+                    source_saved_at = EXCLUDED.source_saved_at,
+                    raw_payload = EXCLUDED.raw_payload,
+                    synced_at = EXCLUDED.synced_at
+                """,
+                (
+                    identity,
+                    balance,
+                    SHADOWHAVEN_BANK_FILE[:255],
+                    source_saved_at[:80],
+                    json.dumps({"balance": balance}),
+                    synced_at,
+                ),
+            )
+            accepted += 1
+    return accepted
+
+
+def shadowhaven_bank_sync_worker() -> None:
+    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+        print("Shadowhaven SFTP bank sync disabled: credentials are not configured")
+        return
+    while True:
+        try:
+            accepted = sync_shadowhaven_bank_once()
+            print(f"Shadowhaven SFTP bank sync updated {accepted} balance(s)")
+        except Exception as exc:
+            print(f"Shadowhaven SFTP bank sync failed: {type(exc).__name__}: {exc}")
+        time.sleep(SHADOWHAVEN_BANK_SYNC_SECONDS)
 
 
 def roles_for(user: DbRow) -> list[str]:
@@ -7476,6 +7571,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
 
 def main() -> None:
     ensure_schema()
+    threading.Thread(target=shadowhaven_bank_sync_worker, name="shadowhaven-bank-sync", daemon=True).start()
     port = int(os.environ.get("PORT", "8080"))
     host = os.environ.get("HOST", "0.0.0.0")
     server = ThreadingHTTPServer((host, port), RoleplayHandler)

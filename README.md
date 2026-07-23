@@ -43,3 +43,9 @@ Useful environment variables:
 - `COOKIE_SECURE=1`: use once deployed behind HTTPS.
 - `ARMA_BRIDGE_API_KEY`: shared secret used by the external `TBS RP LINKING SYSTEM` bridge when posting link requests/events and pulling snapshots.
 - `ARMA_LINK_CODE_TTL_MINUTES`: optional expiration window for in-game link codes, default `30`.
+- `SHADOWHAVEN_SFTP_HOST`: Shadowhaven SFTP hostname.
+- `SHADOWHAVEN_SFTP_PORT`: Shadowhaven SFTP port, default `2022`.
+- `SHADOWHAVEN_SFTP_USERNAME`: server-specific SFTP username.
+- `SHADOWHAVEN_SFTP_PASSWORD`: SFTP password; configure only in Railway variables.
+- `SHADOWHAVEN_BANK_FILE`: remote FCRPMUSSALO bank JSON path.
+- `SHADOWHAVEN_BANK_SYNC_SECONDS`: polling interval, default `15` seconds.
