@@ -2361,10 +2361,29 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(status, {"error": message})
 
     def read_json(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length") or 0)
-        if length <= 0:
-            return {}
-        raw = self.rfile.read(length)
+        transfer_encoding = (self.headers.get("Transfer-Encoding") or "").lower()
+        if "chunked" in transfer_encoding:
+            chunks = bytearray()
+            while True:
+                size_line = self.rfile.readline().strip()
+                if not size_line:
+                    return {}
+                try:
+                    chunk_size = int(size_line.split(b";", 1)[0], 16)
+                except ValueError:
+                    return {}
+                if chunk_size == 0:
+                    while self.rfile.readline() not in (b"\r\n", b"\n", b""):
+                        pass
+                    break
+                chunks.extend(self.rfile.read(chunk_size))
+                self.rfile.read(2)
+            raw = bytes(chunks)
+        else:
+            length = int(self.headers.get("Content-Length") or 0)
+            if length <= 0:
+                return {}
+            raw = self.rfile.read(length)
         text = raw.decode("utf-8", errors="replace").strip()
         try:
             payload = json.loads(text)
