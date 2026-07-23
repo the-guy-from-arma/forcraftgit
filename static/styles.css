@@ -552,6 +552,35 @@ textarea:focus {
   letter-spacing: 0.12em;
 }
 
+.restriction-alert {
+  border-color: rgba(255, 159, 92, 0.42);
+  background: rgba(114, 42, 29, 0.32);
+}
+
+.restriction-hero {
+  border-color: rgba(255, 159, 92, 0.36);
+}
+
+.restriction-detail {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.35fr) minmax(0, 1fr);
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.restriction-detail:last-child {
+  border-bottom: 0;
+}
+
+.restriction-detail span {
+  color: var(--muted);
+}
+
+.restriction-detail strong {
+  overflow-wrap: anywhere;
+}
+
 .dev-account-directory {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));

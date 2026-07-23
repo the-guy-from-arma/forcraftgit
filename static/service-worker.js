@@ -1,8 +1,8 @@
-const CACHE = "rp-command-v60-staff-operations";
+const CACHE = "rp-command-v61-timeout-access";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.60",
-  "/static/app.js?v=0.0.60",
+  "/static/styles.css?v=0.0.61",
+  "/static/app.js?v=0.0.61",
   "/static/icons/icon.svg",
   "/static/getting-started/used-cars.jpg",
   "/static/getting-started/dirty-pond.jpg",

@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.60";
+const OS_VERSION = "0.0.61";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -143,6 +143,7 @@ const tileColors = {
   properties: "linear-gradient(145deg, #28d17c, #17623d)",
   cash: "linear-gradient(145deg, #f15f79, #7a1e31)",
   bank: "linear-gradient(145deg, #5c9cff, #21497e)",
+  restriction: "linear-gradient(145deg, #ff9f5c, #7d281f)",
   treasury: "linear-gradient(145deg, #f8d572, #0f806f)",
   business: "linear-gradient(145deg, #58e6a5, #2457a8)",
   messages: "linear-gradient(145deg, #ffffff, #6d7779)",
@@ -578,6 +579,7 @@ function renderCallsignRequiredModal() {
 }
 
 function renderRequiredProfileModals() {
+  if (state.session?.sanction?.type === "timeout") return "";
   return renderCarEntryRequiredModal() || renderCallsignRequiredModal() || renderArmaLinkRequiredModal();
 }
 
@@ -641,6 +643,12 @@ function renderHome() {
         <button class="icon-action" data-logout aria-label="Sign out">${iconSvg.logout}</button>
       </header>
       <div class="user-chip"><span class="user-dot ${locked ? "" : "ok"}"></span>${locked ? "Waiting on verification" : "Verified"} · CIV ${escapeHtml(user.civ_number || "pending")} · ${escapeHtml(user.roles.join(", "))}</div>
+      ${state.session?.sanction?.type === "timeout" ? `
+        <div class="home-alert restriction-alert">
+          ${iconSvg.lock}
+          <div><strong>Account access temporarily limited</strong><p>${escapeHtml(state.session.sanction.reason || "A staff timeout is active.")} Open the Restriction app for the remaining time and bail instructions.</p></div>
+        </div>
+      ` : ""}
       ${locked ? `
         <div class="home-alert">
           ${iconSvg.lock}
@@ -734,6 +742,7 @@ function renderPanel(id) {
     properties: "Properties",
     cash: "Cash App",
     bank: "Bank",
+    restriction: "Restriction Notice",
     treasury: "Faircroft Treasury",
     business: "Business",
     messages: "Messages",
@@ -756,6 +765,7 @@ function renderPanel(id) {
     properties: renderProperties,
     cash: renderCash,
     bank: renderBank,
+    restriction: renderRestrictionNotice,
     treasury: renderTreasury,
     business: renderBusiness,
     messages: renderMessages,
@@ -831,6 +841,35 @@ async function loadAppData(id) {
       toast(error.message);
     }
   }
+}
+
+function renderRestrictionNotice() {
+  const sanction = state.session?.sanction || {};
+  const expires = sanction.expires_at ? new Date(sanction.expires_at) : null;
+  const expiryText = expires && !Number.isNaN(expires.getTime()) ? expires.toLocaleString() : "Pending staff review";
+  const bail = Number(sanction.bail_amount || 0);
+  return `
+    <div class="stack restriction-notice">
+      <section class="profile-hero restriction-hero">
+        <div>
+          <p class="eyebrow">Temporary account restriction</p>
+          <h3>Limited Access Active</h3>
+          <p>Your account remains available for Profile, Bank, and this notice.</p>
+        </div>
+        <span class="pill amber">TIMEOUT</span>
+      </section>
+      <section class="profile-link-card">
+        <div class="restriction-detail"><span>Reason</span><strong>${escapeHtml(sanction.reason || "No public reason supplied")}</strong></div>
+        <div class="restriction-detail"><span>Report</span><strong>${escapeHtml(sanction.report_number || "Not available")}</strong></div>
+        <div class="restriction-detail"><span>Restriction ends</span><strong>${escapeHtml(expiryText)}</strong></div>
+        <div class="restriction-detail"><span>Bail amount</span><strong>${bail > 0 ? money(bail) : "No bail set"}</strong></div>
+      </section>
+      <section class="profile-link-card">
+        <h3>How access is restored</h3>
+        <p>${bail > 0 ? `A friend may arrange payment of ${money(bail)} with Faircroft staff on your behalf. Staff must confirm payment and release the restriction.` : "No bail amount was assigned. You must serve the timeout or contact staff if you believe it was issued incorrectly."}</p>
+        <p class="muted small">Otherwise, serve the full timeout. Access returns automatically after the listed expiration time.</p>
+      </section>
+    </div>`;
 }
 
 function bindPanel() {
@@ -6774,6 +6813,7 @@ function renderDevTools() {
       <label>Account<select name="user_id" required><option value="">Select account</option>${devUserOptions(users)}</select></label>
       <label>Action<select name="sanction_type" required><option value="timeout">Timeout</option><option value="ban">Ban</option><option value="sanction">Recorded sanction</option></select></label>
       <label>Duration (minutes)<input name="duration_minutes" type="number" min="1" max="525600" value="60" /></label>
+      <label>Bail amount<input name="bail_amount" type="number" min="0" max="10000000" step="0.01" value="0" /></label>
       <label>Rule violated<select name="rule_code" id="devRuleSelect" required><option value="">Select rule</option>${devRuleOptions()}</select></label>
       <label class="wide">Public reason<textarea name="reason" id="devPublicReason" maxlength="1200" required></textarea></label>
       <label>Incident date/time<input name="incident_at" type="datetime-local" required /></label>
@@ -6894,7 +6934,9 @@ function bindDevTools() {
     event.preventDefault();
     try {
       const result = await api("/api/dev-tools/sanctions", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
-      toast(`Enforcement report ${result.report_number || ""} recorded`);
+      toast(result.game_enforcement_status === "rcon_not_configured"
+        ? `Report ${result.report_number || ""} recorded in CAD; RCON is not configured`
+        : `Enforcement report ${result.report_number || ""} applied`);
       await refreshDevTools();
     } catch (error) { toast(error.message); }
   });

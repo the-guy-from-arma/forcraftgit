@@ -852,6 +852,7 @@ def ensure_schema() -> None:
                 player_statement TEXT NOT NULL DEFAULT '',
                 appeal_guidance TEXT NOT NULL DEFAULT '',
                 internal_notes TEXT NOT NULL DEFAULT '',
+                bail_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
                 starts_at TEXT NOT NULL,
                 expires_at TEXT,
                 created_by INTEGER NOT NULL,
@@ -1534,6 +1535,7 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS staff_findings TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS player_statement TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS appeal_guidance TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS bail_amount NUMERIC(12,2) NOT NULL DEFAULT 0")
     # Legacy profile-entered IDs are not links. Preserve only IDs backed by the
     # authoritative link table; new links are created exclusively by code claim.
     db.execute(
@@ -2747,7 +2749,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 user = self.current_user(db)
                 if user and path not in ("/api/session", "/api/auth/logout"):
                     block = active_account_block(db, int(user["id"]))
-                    if block:
+                    timeout_allowed = path in ("/api/health", "/api/profile", "/api/bank", "/api/presence")
+                    if block and (block["sanction_type"] == "ban" or not timeout_allowed):
                         self.error(403, f"Account {block['sanction_type']}: {block['reason']}")
                         return
                 if path == "/api/health" and method == "GET":
@@ -3095,7 +3098,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(401, "Invalid email or password")
             return
         block = active_account_block(db, int(user["id"]))
-        if block:
+        if block and block["sanction_type"] == "ban":
             until = block.get("expires_at") or "indefinitely"
             self.error(403, f"Account {block['sanction_type']}: {block['reason']} (until {until})")
             return
@@ -3110,7 +3113,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         settings = get_system_settings(db)
         user = one(db, "SELECT * FROM users WHERE id = ?", (user["id"],)) or user
         block = active_account_block(db, int(user["id"]))
-        if block:
+        if block and block["sanction_type"] == "ban":
             self.send_json(
                 403,
                 {
@@ -3127,6 +3130,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         unread = one(db, "SELECT COUNT(*) AS count FROM messages WHERE recipient_id = ? AND read_at IS NULL", (user["id"],))
         arma_linked = bool(one(db, "SELECT id FROM arma_account_links WHERE user_id = ?", (user["id"],)))
         apps = app_catalog(user, settings)
+        if block and block["sanction_type"] == "timeout":
+            apps = [
+                {"id": "profile", "label": "Profile", "icon": "user", "enabled": True, "coming_soon": False, "hidden": False},
+                {"id": "bank", "label": "Bank", "icon": "bank", "enabled": True, "coming_soon": False, "hidden": False},
+                {"id": "restriction", "label": "Restriction", "icon": "lock", "enabled": True, "coming_soon": False, "hidden": False},
+            ]
         if court_access_required(db, user) is None:
             for item in apps:
                 if item["id"] == "court":
@@ -3142,6 +3151,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "income": income_snapshot(db, user),
                 "arma_linked": arma_linked,
                 "requires_arma_link": bool(user["verified"]) and not arma_linked,
+                "sanction": (
+                    {
+                        "type": block["sanction_type"],
+                        "reason": block["reason"],
+                        "report_number": block.get("report_number") or "",
+                        "expires_at": block.get("expires_at"),
+                        "bail_amount": float(block.get("bail_amount") or 0),
+                    }
+                    if block and block["sanction_type"] == "timeout"
+                    else None
+                ),
                 "system": {
                     "update_lockdown_enabled": settings["update_lockdown_enabled"],
                     "update_lockdown_message": settings["update_lockdown_message"],
@@ -7156,6 +7176,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         starts_at = utcnow()
         report_number = f"FR-{starts_at.strftime('%Y%m%d')}-{secrets.randbelow(900000) + 100000}"
         expires_at: str | None = None
+        try:
+            bail_amount = max(0.0, min(float(payload.get("bail_amount") or 0), 10_000_000.0))
+        except (TypeError, ValueError):
+            self.error(400, "Bail amount must be a valid number")
+            return
         if sanction_type == "timeout":
             try:
                 duration_minutes = max(1, min(int(payload.get("duration_minutes") or 60), 525600))
@@ -7170,8 +7195,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             INSERT INTO account_sanctions
             (user_id, sanction_type, reason, report_number, rule_code, incident_at,
              incident_summary, evidence, witness_names, staff_findings, player_statement,
-             appeal_guidance, internal_notes, starts_at, expires_at, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
+             appeal_guidance, internal_notes, bail_amount, starts_at, expires_at, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
             """,
             (
                 target_id,
@@ -7187,6 +7212,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 str(payload.get("player_statement") or "").strip()[:3000],
                 str(payload.get("appeal_guidance") or "").strip()[:2000],
                 str(payload.get("internal_notes") or "").strip()[:2000],
+                bail_amount,
                 starts_at.isoformat(),
                 expires_at,
                 user["id"],
@@ -7194,7 +7220,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             ),
         ).fetchone()
         add_admin_audit(db, int(user["id"]), f"account.{sanction_type}.created", target_id, {"report_number": report_number, "rule_code": payload.get("rule_code"), "reason": payload["reason"], "expires_at": expires_at})
-        self.send_json(201, {"ok": True, "id": int(created["id"]), "report_number": report_number, "expires_at": expires_at})
+        self.send_json(
+            201,
+            {
+                "ok": True,
+                "id": int(created["id"]),
+                "report_number": report_number,
+                "expires_at": expires_at,
+                "game_enforcement_status": "rcon_not_configured",
+            },
+        )
 
     def api_dev_revoke_sanction(self, db: Database, user: DbRow | None, sanction_id: int) -> None:
         err = developer_required(user)
