@@ -21,6 +21,7 @@ const state = {
   armaUnlinkOpen: false,
   armaLinkPromptDismissed: false,
   generatedDevCode: null,
+  devTab: "dashboard",
   dmvTab: "overview",
   jobsTab: "state_police",
   mdtTab: "search",
@@ -434,6 +435,12 @@ function render() {
           : renderMdtWorkspace()
     ) + renderRequiredProfileModals();
     state.activeApp === "fire" ? bindFireWorkspace() : state.activeApp === "dispatch" ? bindDispatchWorkspace() : bindMdtWorkspace();
+    bindRequiredProfileModals();
+    return;
+  }
+  if (state.activeApp === "dev-tools") {
+    app.innerHTML = renderDevWorkspace() + renderRequiredProfileModals();
+    bindDevWorkspace();
     bindRequiredProfileModals();
     return;
   }
@@ -6616,7 +6623,7 @@ function devUserOptions(users) {
   )).join("");
 }
 
-function renderDevTools() {
+function renderDevToolsLegacy() {
   const data = state.cache["dev-tools"] || {};
   const users = data.users || [];
   const sanctions = data.sanctions || [];
@@ -6695,12 +6702,120 @@ function renderDevTools() {
   `;
 }
 
+const FAIRCRAFT_RULES = [
+  ["1.1", "Respect", "Harassment, discrimination, hate speech, excessive toxicity, and real-life threats are prohibited."],
+  ["1.2", "Staff Authority", "Respect staff decisions; use the designated support system for appeals instead of arguing publicly."],
+  ["1.3", "Exploiting", "Do not use bugs, glitches, or unintended mechanics for an advantage; report discovered exploits."],
+  ["1.4", "Cheating", "Hacks, cheats, macros, scripts, and unfair third-party software are forbidden."],
+  ["2.1", "Stay In Character", "Remain in character, use OOC only when necessary, and avoid breaking immersion."],
+  ["2.2", "FearRP", "Value your character's life and respond realistically to overwhelming force."],
+  ["2.3", "Metagaming", "Do not use information learned outside roleplay, including streams or Discord, in character."],
+  ["2.5", "Random Deathmatch (RDM)", "Do not kill or attack players without a valid roleplay reason."],
+  ["2.6", "Vehicle Deathmatch (VDM)", "Do not use a vehicle as a weapon without a valid roleplay reason."],
+  ["2.7", "New Life Rule (NLR)", "Forget events leading to death and do not return to the scene for 15 minutes unless roleplay justifies it."],
+  ["2.8", "Combat Logging", "Do not disconnect to avoid roleplay, arrest, injury, or consequences."],
+  ["3.1", "Character Names", "Use realistic names; troll and celebrity names are not allowed."],
+  ["3.2", "Character Development", "Maintain a consistent character and complete two interactions before a shootout."],
+  ["3.3", "Character Knowledge", "Use only information your character learned through roleplay."],
+  ["4.1", "Robberies", "Robberies require roleplay interaction; instant robbery demands are prohibited."],
+  ["4.2", "Hostage Situations", "Use real players when possible, treat hostages realistically, and avoid unjustified excessive harm."],
+  ["4.3", "Gang Activity", "Gang wars require roleplay buildup; constant kill-on-sight behavior is prohibited."],
+  ["4.4", "Kidnapping", "Kidnapping requires a valid roleplay reason and victims cannot be held indefinitely."],
+  ["4.5", "After Killing a Cop", "Only the pistol and rifle may be taken; uniform theft and police impersonation are prohibited."],
+  ["4.6", "Lockers and Arsenals", "Do not take items from arsenals, boxes, or lockers without admin permission or faction authorization."],
+];
+
+function devRuleOptions() {
+  return FAIRCRAFT_RULES.map(([code, title, description]) =>
+    `<option value="${code}" data-title="${escapeHtml(title)}" data-description="${escapeHtml(description)}">${code} — ${escapeHtml(title)}</option>`
+  ).join("");
+}
+
+function renderDevWorkspace() {
+  return `<section class="dev-workspace">
+    <aside class="dev-sidebar">
+      <div class="dev-brand"><span>FC</span><div><strong>Faircroft</strong><small>Staff Operations</small></div></div>
+      <nav>${[["dashboard","Dashboard"],["enforcement","Enforcement"],["warnings","Internal Notes"],["linking","Account Linking"],["audit","Audit Log"]].map(([id,label]) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}">${label}</button>`).join("")}</nav>
+      <div class="dev-sidebar-footer"><span class="pill amber">Restricted</span><small>${escapeHtml(state.session?.user?.name || "Developer")}</small></div>
+    </aside>
+    <main class="dev-main">
+      <header class="dev-topbar"><div><p class="eyebrow">Professional moderation console</p><h1>Developer Operations</h1></div><div class="row"><button class="secondary" data-refresh-dev>Refresh</button><button class="primary" data-close-dev>Return to Phone</button></div></header>
+      <div class="dev-content">${renderDevTools()}</div>
+    </main>
+  </section>`;
+}
+
+function devMetrics(data, warnings) {
+  return `<div class="dev-metrics">
+    <div class="dev-metric red-tone"><span>Active bans</span><strong>${Number(data.active_bans || 0)}</strong><small>Denied access</small></div>
+    <div class="dev-metric amber-tone"><span>Active timeouts</span><strong>${Number(data.active_timeouts || 0)}</strong><small>Temporary restrictions</small></div>
+    <div class="dev-metric"><span>Internal notes</span><strong>${warnings.filter((x) => !x.resolved_at).length}</strong><small>Open staff records</small></div>
+    <div class="dev-metric blue-tone"><span>Verified, unlinked</span><strong>${Number(data.verified_unlinked || 0)}</strong><small>Need Arma link</small></div>
+    <div class="dev-metric green-tone"><span>Linked accounts</span><strong>${Number(data.linked_accounts || 0)}</strong><small>Current total</small></div>
+    <div class="dev-metric"><span>Unverified</span><strong>${Number(data.unverified_accounts || 0)}</strong><small>Awaiting approval</small></div>
+  </div>`;
+}
+
+function devSanctionRow(item) {
+  return `<article class="dev-case"><div><div class="row"><strong>${escapeHtml(item.report_number || "Legacy record")} · ${escapeHtml(item.target_name)}</strong><span class="pill ${item.revoked_at ? "" : "red"}">${item.revoked_at ? "revoked" : escapeHtml(item.sanction_type)}</span></div><p>${escapeHtml(item.rule_code || "No rule")} — ${escapeHtml(item.reason)}</p><small>By ${escapeHtml(item.created_by_name)} · ${escapeHtml(item.created_at)}${item.expires_at ? ` · expires ${escapeHtml(item.expires_at)}` : ""}</small></div>${item.revoked_at ? "" : `<button class="secondary" type="button" data-revoke-sanction="${item.id}">Revoke</button>`}</article>`;
+}
+
+function devAudit(logs) {
+  return `<div class="dev-audit-list">${logs.map((item) => `<div class="dev-audit-event"><div><strong>${escapeHtml(item.action)}</strong><small>${escapeHtml(item.target_name || "System")} · ${escapeHtml(item.created_at)}</small></div><span>${escapeHtml(item.actor_name || "Deleted account")}</span><code>${escapeHtml(item.details || "{}")}</code></div>`).join("") || `<div class="empty">No audited actions yet</div>`}</div>`;
+}
+
+function renderDevTools() {
+  const data = state.cache["dev-tools"] || {};
+  const users = data.users || [], sanctions = data.sanctions || [], warnings = data.warnings || [], logs = data.audit_logs || [], codes = data.unlink_codes || [];
+  const metrics = devMetrics(data, warnings);
+  if (state.devTab === "dashboard") return `<div class="stack">${metrics}<div class="dev-grid-2"><section class="dev-card"><div class="row"><div><p class="eyebrow">Live enforcement</p><h2>Active Cases</h2></div><button class="secondary" data-dev-go="enforcement">Open</button></div>${sanctions.filter((x) => !x.revoked_at).slice(0,8).map(devSanctionRow).join("") || `<div class="empty">No active cases</div>`}</section><section class="dev-card"><div class="row"><div><p class="eyebrow">Account activity</p><h2>Newest Arma Links</h2></div><button class="secondary" data-dev-go="linking">Open</button></div>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card"><div class="row"><h2>Recent Staff Activity</h2><button class="secondary" data-dev-go="audit">Full log</button></div>${devAudit(logs.slice(0,10))}</section></div>`;
+  if (state.devTab === "enforcement") return `<div class="dev-grid-enforcement"><section class="dev-card"><div class="row"><div><p class="eyebrow">Required incident documentation</p><h2>Enforcement Report</h2><p class="muted">A ban or timeout cannot be issued until this report is complete.</p></div><span class="pill red">required</span></div>
+    <form id="devSanctionForm" class="dev-report-form">
+      <label>Account<select name="user_id" required><option value="">Select account</option>${devUserOptions(users)}</select></label>
+      <label>Action<select name="sanction_type" required><option value="timeout">Timeout</option><option value="ban">Ban</option><option value="sanction">Recorded sanction</option></select></label>
+      <label>Duration (minutes)<input name="duration_minutes" type="number" min="1" max="525600" value="60" /></label>
+      <label>Rule violated<select name="rule_code" id="devRuleSelect" required><option value="">Select rule</option>${devRuleOptions()}</select></label>
+      <label class="wide">Public reason<textarea name="reason" id="devPublicReason" maxlength="1200" required></textarea></label>
+      <label>Incident date/time<input name="incident_at" type="datetime-local" required /></label>
+      <label>Witnesses / staff<input name="witness_names" maxlength="1200" placeholder="Names, callsigns, or none" /></label>
+      <label class="wide">Detailed incident narrative<textarea name="incident_summary" minlength="40" maxlength="5000" required placeholder="Sequence of events, location, player actions, staff response, and context."></textarea></label>
+      <label class="wide">Evidence and log references<textarea name="evidence" minlength="10" maxlength="5000" required placeholder="Video, screenshots, server timestamps, witnesses, case IDs."></textarea></label>
+      <label class="wide">Staff findings and proportionality<textarea name="staff_findings" minlength="30" maxlength="5000" required placeholder="What was substantiated and why this action is proportionate."></textarea></label>
+      <label>Player statement<textarea name="player_statement" maxlength="3000" placeholder="Response, admission, denial, or not available."></textarea></label>
+      <label>Appeal guidance<textarea name="appeal_guidance" maxlength="2000" required>Appeal through the designated Faircroft support system. Include the report number and counter-evidence.</textarea></label>
+      <label class="wide">Confidential staff notes<textarea name="internal_notes" maxlength="2000"></textarea></label>
+      <label class="dev-certify wide"><input type="checkbox" required /> I certify this report is accurate, evidence-based, and complete.</label>
+      <button class="danger wide" type="submit">Submit Report and Apply Action</button>
+    </form></section><section class="dev-card"><h2>Enforcement Records</h2><div class="dev-record-list">${sanctions.map(devSanctionRow).join("") || `<div class="empty">No reports</div>`}</div></section></div>`;
+  if (state.devTab === "warnings") return `<div class="dev-grid-2"><section class="dev-card"><div class="row"><div><p class="eyebrow">Staff-only intelligence</p><h2>Internal Note</h2></div><span class="pill amber">not player-visible</span></div><form id="devWarningForm" class="form-grid"><label>Account<select name="user_id" required><option value="">Select account</option>${devUserOptions(users)}</select></label><label>Severity<select name="severity"><option>low</option><option selected>standard</option><option>high</option><option>critical</option></select></label><label>Subject<input name="subject" maxlength="160" required /></label><label>Internal note<textarea name="body" maxlength="3000" required></textarea></label><button class="primary">Record Note</button></form></section><section class="dev-card"><h2>Note History</h2><div class="dev-record-list">${warnings.map((x) => `<article class="dev-case"><div><strong>${escapeHtml(x.target_name)} · ${escapeHtml(x.subject)}</strong><p>${escapeHtml(x.body)}</p><small>${escapeHtml(x.created_by_name)} · ${escapeHtml(x.created_at)}</small></div>${x.resolved_at ? `<span class="pill green">resolved</span>` : `<button class="secondary" data-resolve-warning="${x.id}">Resolve</button>`}</article>`).join("") || `<div class="empty">No internal notes</div>`}</div></section></div>`;
+  if (state.devTab === "linking") return `<div class="stack">${metrics}<div class="dev-grid-2"><section class="dev-card"><p class="eyebrow">Secure unlink authorization</p><h2>One-time Developer Code</h2><form id="devCodeForm" class="form-grid"><label>Expires in minutes<input name="expiry_minutes" type="number" min="5" max="1440" value="30" required /></label><button class="primary">Generate Code</button></form>${state.generatedDevCode ? `<div class="dev-generated-code"><span>Shown once</span><strong>${escapeHtml(state.generatedDevCode.code)}</strong><small>Expires ${escapeHtml(state.generatedDevCode.expires_at)}</small></div>` : ""}<div class="dev-record-list">${codes.slice(0,12).map((x) => `<div class="dev-case"><span>••••-${escapeHtml(x.code_hint)} · ${escapeHtml(x.created_by_name)}</span><strong>${x.uses_remaining ? "available" : "used"}</strong></div>`).join("")}</div></section><section class="dev-card"><h2>Recent Links</h2>${devRecentLinks(data.recent_links || [])}</section></div></div>`;
+  return `<section class="dev-card"><div class="row"><div><p class="eyebrow">Administrative accountability</p><h2>Audit Log</h2></div><span class="pill green">${logs.length} events</span></div>${devAudit(logs)}</section>`;
+}
+
+function devRecentLinks(links) {
+  return `<div class="dev-table">${links.slice(0,40).map((x) => `<div class="dev-table-row"><div><strong>${escapeHtml(x.account_name || x.player_name || "Unknown")}</strong><small>${escapeHtml(x.civ_number || "No CIV")} · ${escapeHtml(x.arma_id || "")}</small></div><span>${escapeHtml(x.linked_at || "")}</span></div>`).join("") || `<div class="empty">No completed links</div>`}</div>`;
+}
+
+function bindDevWorkspace() {
+  bindDevTools();
+  $$("[data-dev-tab], [data-dev-go]").forEach((button) => button.addEventListener("click", () => { state.devTab = button.dataset.devTab || button.dataset.devGo; render(); }));
+  $("[data-close-dev]")?.addEventListener("click", async () => { state.activeApp = null; await loadSession(); });
+  $("[data-refresh-dev]")?.addEventListener("click", refreshDevTools);
+}
+
 async function refreshDevTools() {
   await loadAppData("dev-tools");
   render();
 }
 
 function bindDevTools() {
+  $("#devRuleSelect")?.addEventListener("change", (event) => {
+    const option = event.currentTarget.selectedOptions[0];
+    const reason = $("#devPublicReason");
+    if (reason && option?.value) {
+      reason.value = `Violation of Faircroft Rule ${option.value} — ${option.dataset.title}: ${option.dataset.description}`;
+    }
+  });
   $("#devCodeForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
@@ -6712,8 +6827,8 @@ function bindDevTools() {
   $("#devSanctionForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
-      await api("/api/dev-tools/sanctions", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
-      toast("Enforcement action recorded");
+      const result = await api("/api/dev-tools/sanctions", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast(`Enforcement report ${result.report_number || ""} recorded`);
       await refreshDevTools();
     } catch (error) { toast(error.message); }
   });

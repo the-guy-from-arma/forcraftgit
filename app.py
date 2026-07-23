@@ -714,6 +714,15 @@ def ensure_schema() -> None:
                 user_id INTEGER NOT NULL,
                 sanction_type TEXT NOT NULL,
                 reason TEXT NOT NULL,
+                report_number TEXT NOT NULL DEFAULT '',
+                rule_code TEXT NOT NULL DEFAULT '',
+                incident_at TEXT NOT NULL DEFAULT '',
+                incident_summary TEXT NOT NULL DEFAULT '',
+                evidence TEXT NOT NULL DEFAULT '',
+                witness_names TEXT NOT NULL DEFAULT '',
+                staff_findings TEXT NOT NULL DEFAULT '',
+                player_statement TEXT NOT NULL DEFAULT '',
+                appeal_guidance TEXT NOT NULL DEFAULT '',
                 internal_notes TEXT NOT NULL DEFAULT '',
                 starts_at TEXT NOT NULL,
                 expires_at TEXT,
@@ -1388,6 +1397,15 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE panic_alerts ADD COLUMN IF NOT EXISTS call_type TEXT NOT NULL DEFAULT 'Emergency Call'")
     db.execute("ALTER TABLE panic_alerts ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'standard'")
     db.execute("ALTER TABLE panic_alerts ADD COLUMN IF NOT EXISTS updated_at TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS report_number TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS rule_code TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS incident_at TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS incident_summary TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS evidence TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS witness_names TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS staff_findings TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS player_statement TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS appeal_guidance TEXT NOT NULL DEFAULT ''")
     db.execute("UPDATE panic_alerts SET updated_at = created_at WHERE updated_at = ''")
     db.execute(
         """
@@ -6798,12 +6816,34 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             row for row in sanctions
             if not row.get("revoked_at") and (not row.get("expires_at") or parse_iso(row["expires_at"]) > now)
         ]
+        active_bans = sum(1 for row in active_sanctions if row.get("sanction_type") == "ban")
+        active_timeouts = sum(1 for row in active_sanctions if row.get("sanction_type") == "timeout")
+        verified_unlinked = sum(1 for row in users if row.get("verified") and not row.get("arma_id"))
+        unverified_accounts = sum(1 for row in users if not row.get("verified"))
+        linked_accounts = sum(1 for row in users if row.get("arma_id"))
+        recent_links = all_rows(
+            db,
+            """
+            SELECT c.id, c.code, c.claimed_at AS linked_at, c.player_name,
+                   c.identity_id AS arma_id, u.name AS account_name, u.civ_number
+            FROM arma_link_codes c
+            LEFT JOIN users u ON u.id = c.claimed_by
+            WHERE c.status = 'claimed'
+            ORDER BY c.claimed_at DESC NULLS LAST LIMIT 40
+            """,
+        )
         self.send_json(
             200,
             {
                 "users": [dict(row) for row in users],
                 "sanctions": [dict(row) for row in sanctions],
                 "active_sanctions": len(active_sanctions),
+                "active_bans": active_bans,
+                "active_timeouts": active_timeouts,
+                "verified_unlinked": verified_unlinked,
+                "unverified_accounts": unverified_accounts,
+                "linked_accounts": linked_accounts,
+                "recent_links": [dict(row) for row in recent_links],
                 "warnings": [dict(row) for row in warnings],
                 "audit_logs": [dict(row) for row in audit_logs],
                 "unlink_codes": [dict(row) for row in codes],
@@ -6851,6 +6891,28 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if sanction_type not in ("ban", "timeout", "sanction"):
             self.error(400, "Sanction type must be ban, timeout, or sanction")
             return
+        report_fields = (
+            "rule_code",
+            "incident_at",
+            "incident_summary",
+            "evidence",
+            "staff_findings",
+            "appeal_guidance",
+        )
+        if sanction_type in ("ban", "timeout"):
+            report_missing = require_fields(payload, *report_fields)
+            if report_missing:
+                self.error(400, f"A complete enforcement report is required: {report_missing}")
+                return
+            if len(str(payload.get("incident_summary") or "").strip()) < 40:
+                self.error(400, "Incident summary must contain at least 40 characters")
+                return
+            if len(str(payload.get("staff_findings") or "").strip()) < 30:
+                self.error(400, "Staff findings must contain at least 30 characters")
+                return
+            if len(str(payload.get("evidence") or "").strip()) < 10:
+                self.error(400, "Evidence and log references must contain at least 10 characters")
+                return
         target_id = int(payload["user_id"])
         target = one(db, "SELECT * FROM users WHERE id = ?", (target_id,))
         if not target:
@@ -6860,6 +6922,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403, "Only the owner can sanction an owner account")
             return
         starts_at = utcnow()
+        report_number = f"FR-{starts_at.strftime('%Y%m%d')}-{secrets.randbelow(900000) + 100000}"
         expires_at: str | None = None
         if sanction_type == "timeout":
             try:
@@ -6873,13 +6936,24 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         created = db.execute(
             """
             INSERT INTO account_sanctions
-            (user_id, sanction_type, reason, internal_notes, starts_at, expires_at, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
+            (user_id, sanction_type, reason, report_number, rule_code, incident_at,
+             incident_summary, evidence, witness_names, staff_findings, player_statement,
+             appeal_guidance, internal_notes, starts_at, expires_at, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
             """,
             (
                 target_id,
                 sanction_type,
                 str(payload["reason"]).strip()[:1200],
+                report_number,
+                str(payload.get("rule_code") or "").strip()[:40],
+                str(payload.get("incident_at") or "").strip()[:80],
+                str(payload.get("incident_summary") or "").strip()[:5000],
+                str(payload.get("evidence") or "").strip()[:5000],
+                str(payload.get("witness_names") or "").strip()[:1200],
+                str(payload.get("staff_findings") or "").strip()[:5000],
+                str(payload.get("player_statement") or "").strip()[:3000],
+                str(payload.get("appeal_guidance") or "").strip()[:2000],
                 str(payload.get("internal_notes") or "").strip()[:2000],
                 starts_at.isoformat(),
                 expires_at,
@@ -6887,8 +6961,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 starts_at.isoformat(),
             ),
         ).fetchone()
-        add_admin_audit(db, int(user["id"]), f"account.{sanction_type}.created", target_id, {"reason": payload["reason"], "expires_at": expires_at})
-        self.send_json(201, {"ok": True, "id": int(created["id"]), "expires_at": expires_at})
+        add_admin_audit(db, int(user["id"]), f"account.{sanction_type}.created", target_id, {"report_number": report_number, "rule_code": payload.get("rule_code"), "reason": payload["reason"], "expires_at": expires_at})
+        self.send_json(201, {"ok": True, "id": int(created["id"]), "report_number": report_number, "expires_at": expires_at})
 
     def api_dev_revoke_sanction(self, db: Database, user: DbRow | None, sanction_id: int) -> None:
         err = developer_required(user)
