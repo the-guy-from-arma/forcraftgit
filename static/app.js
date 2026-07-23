@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.56";
+const OS_VERSION = "0.0.57";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -22,6 +22,7 @@ const state = {
   armaLinkPromptDismissed: false,
   generatedDevCode: null,
   devTab: "dashboard",
+  devAccount: null,
   dmvTab: "overview",
   jobsTab: "state_police",
   mdtTab: "search",
@@ -6740,6 +6741,7 @@ function renderDevWorkspace() {
       <header class="dev-topbar"><div><p class="eyebrow">Professional moderation console</p><h1>Developer Operations</h1></div><div class="row"><button class="secondary" data-refresh-dev>Refresh</button><button class="primary" data-close-dev>Return to Phone</button></div></header>
       <div class="dev-content">${renderDevTools()}</div>
     </main>
+    ${state.devAccount ? renderDevAccountModal(state.devAccount) : ""}
   </section>`;
 }
 
@@ -6786,17 +6788,85 @@ function renderDevTools() {
       <button class="danger wide" type="submit">Submit Report and Apply Action</button>
     </form></section><section class="dev-card"><h2>Enforcement Records</h2><div class="dev-record-list">${sanctions.map(devSanctionRow).join("") || `<div class="empty">No reports</div>`}</div></section></div>`;
   if (state.devTab === "warnings") return `<div class="dev-grid-2"><section class="dev-card"><div class="row"><div><p class="eyebrow">Staff-only intelligence</p><h2>Internal Note</h2></div><span class="pill amber">not player-visible</span></div><form id="devWarningForm" class="form-grid"><label>Account<select name="user_id" required><option value="">Select account</option>${devUserOptions(users)}</select></label><label>Severity<select name="severity"><option>low</option><option selected>standard</option><option>high</option><option>critical</option></select></label><label>Subject<input name="subject" maxlength="160" required /></label><label>Internal note<textarea name="body" maxlength="3000" required></textarea></label><button class="primary">Record Note</button></form></section><section class="dev-card"><h2>Note History</h2><div class="dev-record-list">${warnings.map((x) => `<article class="dev-case"><div><strong>${escapeHtml(x.target_name)} · ${escapeHtml(x.subject)}</strong><p>${escapeHtml(x.body)}</p><small>${escapeHtml(x.created_by_name)} · ${escapeHtml(x.created_at)}</small></div>${x.resolved_at ? `<span class="pill green">resolved</span>` : `<button class="secondary" data-resolve-warning="${x.id}">Resolve</button>`}</article>`).join("") || `<div class="empty">No internal notes</div>`}</div></section></div>`;
-  if (state.devTab === "linking") return `<div class="stack">${metrics}<div class="dev-grid-2"><section class="dev-card"><p class="eyebrow">Secure unlink authorization</p><h2>One-time Developer Code</h2><form id="devCodeForm" class="form-grid"><label>Expires in minutes<input name="expiry_minutes" type="number" min="5" max="1440" value="30" required /></label><button class="primary">Generate Code</button></form>${state.generatedDevCode ? `<div class="dev-generated-code"><span>Shown once</span><strong>${escapeHtml(state.generatedDevCode.code)}</strong><small>Expires ${escapeHtml(state.generatedDevCode.expires_at)}</small></div>` : ""}<div class="dev-record-list">${codes.slice(0,12).map((x) => `<div class="dev-case"><span>••••-${escapeHtml(x.code_hint)} · ${escapeHtml(x.created_by_name)}</span><strong>${x.uses_remaining ? "available" : "used"}</strong></div>`).join("")}</div></section><section class="dev-card"><h2>Recent Links</h2>${devRecentLinks(data.recent_links || [])}</section></div></div>`;
+  if (state.devTab === "linking") return `<div class="stack">${metrics}<div class="dev-grid-2"><section class="dev-card"><p class="eyebrow">Secure unlink authorization</p><h2>One-time Developer Code</h2><form id="devCodeForm" class="form-grid"><label>Expires in minutes<input name="expiry_minutes" type="number" min="5" max="1440" value="30" required /></label><button class="primary">Generate Code</button></form>${state.generatedDevCode ? `<div class="dev-generated-code"><span>Shown once</span><strong>${escapeHtml(state.generatedDevCode.code)}</strong><small>Expires ${escapeHtml(state.generatedDevCode.expires_at)}</small></div>` : ""}<div class="dev-record-list">${codes.slice(0,12).map((x) => `<div class="dev-case"><span>••••-${escapeHtml(x.code_hint)} · ${escapeHtml(x.created_by_name)}</span><strong>${x.uses_remaining ? "available" : "used"}</strong></div>`).join("")}</div></section><section class="dev-card"><h2>Recent Links</h2>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card"><div class="row"><div><p class="eyebrow">Clickable investigation profiles</p><h2>All Linked Accounts</h2></div><span class="pill green">${users.filter((x) => x.arma_linked).length} loaded</span></div>${devLinkedAccounts(users)}</section></div>`;
   return `<section class="dev-card"><div class="row"><div><p class="eyebrow">Administrative accountability</p><h2>Audit Log</h2></div><span class="pill green">${logs.length} events</span></div>${devAudit(logs)}</section>`;
 }
 
 function devRecentLinks(links) {
-  return `<div class="dev-table">${links.slice(0,40).map((x) => `<div class="dev-table-row"><div><strong>${escapeHtml(x.account_name || x.player_name || "Unknown")}</strong><small>${escapeHtml(x.civ_number || "No CIV")} · ${escapeHtml(x.arma_id || "")}</small></div><span>${escapeHtml(x.linked_at || "")}</span></div>`).join("") || `<div class="empty">No completed links</div>`}</div>`;
+  return `<div class="dev-table">${links.slice(0,40).map((x) => `<button class="dev-table-row dev-account-row" data-dev-account="${x.account_id}"><div><strong>${escapeHtml(x.account_name || x.player_name || "Unknown")}</strong><small>${escapeHtml(x.civ_number || "No CIV")} · ${escapeHtml(x.arma_id || "")}</small></div><span>${escapeHtml(x.linked_at || "")}</span></button>`).join("") || `<div class="empty">No completed links</div>`}</div>`;
+}
+
+function devLinkedAccounts(users) {
+  return `<div class="dev-account-directory">${users.filter((x) => x.arma_linked).map((x) => `<button class="dev-account-tile" data-dev-account="${x.id}"><div><strong>${escapeHtml(x.name)}</strong><small>CIV ${escapeHtml(x.civ_number || "pending")} · ${escapeHtml(x.linked_arma_id || "")}</small></div><span class="pill green">linked</span></button>`).join("") || `<div class="empty">No linked accounts</div>`}</div>`;
+}
+
+function renderDevAccountModal(data) {
+  const a = data.account || {};
+  const sanctions = data.sanctions || [], warnings = data.warnings || [], tx = data.transactions || [];
+  const activity = data.arma_activity || [], characters = data.characters || [], jobs = data.jobs || [], citations = data.citations || [], properties = data.properties || [];
+  const gameBank = data.game_database?.bank;
+  return `<div class="dev-profile-backdrop" data-close-dev-account>
+    <section class="dev-profile-modal" role="dialog" aria-modal="true" aria-label="Linked account investigation profile">
+      <header class="dev-profile-header"><div><p class="eyebrow">Linked account intelligence file</p><h2>${escapeHtml(a.name || "Account")}</h2><p>CIV ${escapeHtml(a.civ_number || "pending")} · ${escapeHtml(a.player_name || "Unknown in-game name")}</p></div><div class="row"><button class="danger" data-dev-enforce="${a.id}">Ban / Timeout</button><button class="secondary" data-close-dev-account>Close</button></div></header>
+      <div class="dev-profile-scroll">
+        <div class="dev-profile-summary">
+          <div><span>Website status</span><strong>${a.verified ? "Verified" : "Unverified"}</strong></div>
+          <div><span>Account email</span><strong>${escapeHtml(a.email || "")}</strong></div>
+          <div><span>Platform</span><strong>${escapeHtml(a.platform || "Unknown")}</strong></div>
+          <div><span>Server</span><strong>${escapeHtml(a.server_id || "Unknown")}</strong></div>
+          <div><span>Bohemia Identity ID</span><strong>${escapeHtml(a.identity_id || "")}</strong></div>
+          <div><span>UID</span><strong>${escapeHtml(a.uid || "")}</strong></div>
+          <div><span>RPL identity</span><strong>${escapeHtml(a.rpl_identity || "")}</strong></div>
+          <div><span>Roles</span><strong>${escapeHtml((a.roles || []).join(", "))}</strong></div>
+          <div><span>Railway bank</span><strong>${money(a.bank_balance || 0)}</strong></div>
+          <div><span>Railway cash</span><strong>${money(a.cash_balance || 0)}</strong></div>
+          <div><span>Live in-game bank</span><strong>${gameBank ? money(gameBank.balance || 0) : "Awaiting sync"}</strong></div>
+          <div><span>Linked</span><strong>${escapeHtml(a.linked_at || "")}</strong></div>
+          <div><span>Last game sync</span><strong>${escapeHtml(a.last_sync_at || "Not reported")}</strong></div>
+        </div>
+        ${data.active_block ? `<div class="dev-alert red-tone"><strong>Active ${escapeHtml(data.active_block.sanction_type)}</strong><span>${escapeHtml(data.active_block.reason || "")}</span></div>` : ""}
+        <div class="dev-profile-grid">
+          <section class="dev-card"><div class="row"><h3>Characters</h3><span class="pill">${characters.length}</span></div>${devDetailList(characters, (x) => [x.character_name || x.name || "Character", `${x.is_active ? "Active" : "Inactive"} · updated ${x.updated_at || ""}`])}</section>
+          <section class="dev-card"><div class="row"><h3>Jobs</h3><span class="pill">${jobs.length}</span></div>${devDetailList(jobs, (x) => [x.title || "Job", `${x.market || ""} · ${x.status || ""} · started ${x.started_at || ""}`])}</section>
+          <section class="dev-card"><div class="row"><h3>Enforcement History</h3><span class="pill red">${sanctions.length}</span></div>${devDetailList(sanctions, (x) => [`${x.report_number || "Legacy"} · ${x.sanction_type}`, `${x.rule_code || ""} ${x.reason || ""}`])}</section>
+          <section class="dev-card"><div class="row"><h3>Internal Notes</h3><span class="pill amber">${warnings.length}</span></div>${devDetailList(warnings, (x) => [`${x.severity || ""} · ${x.subject || ""}`, `${x.body || ""}`])}</section>
+          <section class="dev-card"><div class="row"><h3>Citations / Cases</h3><span class="pill">${citations.length}</span></div>${devDetailList(citations, (x) => [`${x.charge_code || ""} · ${x.charge_title || "Case"}`, `${x.status || ""} · ${money(x.fine_amount || 0)} · ${x.location || ""}`])}</section>
+          <section class="dev-card"><div class="row"><h3>Properties</h3><span class="pill">${properties.length}</span></div>${devDetailList(properties, (x) => [x.name || "Property", `${x.address || ""} · ${money(x.price || 0)}`])}</section>
+        </div>
+        <section class="dev-card"><div class="row"><div><p class="eyebrow">Railway ledger</p><h3>Money Transactions</h3></div><span class="pill">${tx.length}</span></div>${devDetailList(tx, (x) => [`${x.type || "transaction"} · ${money(x.amount || 0)}`, `${x.description || ""} · ${x.created_at || ""}`])}</section>
+        <section class="dev-card"><div class="row"><div><p class="eyebrow">In-game bridge events</p><h3>Arma Activity</h3></div><span class="pill">${activity.length}</span></div>${devDetailList(activity, (x) => [`${x.event_type || "event"} · ${x.action || ""}`, `${x.reason || ""} · ${x.received_at || ""}`])}</section>
+        <section class="dev-card dev-game-db-status"><div><p class="eyebrow">FCRPMUSSALO source</p><h3>Native Game Database</h3><p class="muted">${gameBank ? `Live bank record synced from ${escapeHtml(gameBank.source_file || "BankManagerComponent")}. Last sync: ${escapeHtml(gameBank.synced_at || "")}.` : "The bank parser is ready; this linked identity will populate after the bridge posts the live BankManager JSON."} Inventory, criminal, police report, character, and vehicle parsers can use the same pipeline once their JSON shapes are inspected.</p></div><span class="pill ${gameBank ? "green" : "amber"}">${gameBank ? "bank synced" : "awaiting sync"}</span></section>
+      </div>
+    </section>
+  </div>`;
+}
+
+function devDetailList(items, mapper) {
+  return `<div class="dev-detail-list">${items.map((item) => { const [title, detail] = mapper(item); return `<div><strong>${escapeHtml(title)}</strong><small>${escapeHtml(detail)}</small></div>`; }).join("") || `<div class="empty">No records</div>`}</div>`;
 }
 
 function bindDevWorkspace() {
   bindDevTools();
   $$("[data-dev-tab], [data-dev-go]").forEach((button) => button.addEventListener("click", () => { state.devTab = button.dataset.devTab || button.dataset.devGo; render(); }));
+  $$("[data-dev-account]").forEach((button) => button.addEventListener("click", async () => {
+    try {
+      state.devAccount = await api(`/api/dev-tools/accounts/${button.dataset.devAccount}`);
+      render();
+    } catch (error) { toast(error.message); }
+  }));
+  $$("[data-close-dev-account]").forEach((button) => button.addEventListener("click", (event) => {
+    if (event.target !== event.currentTarget && event.currentTarget.classList.contains("dev-profile-backdrop")) return;
+    state.devAccount = null;
+    render();
+  }));
+  $("[data-dev-enforce]")?.addEventListener("click", () => {
+    const targetId = $("[data-dev-enforce]").dataset.devEnforce;
+    state.devAccount = null;
+    state.devTab = "enforcement";
+    render();
+    const select = $("#devSanctionForm select[name='user_id']");
+    if (select) select.value = targetId;
+  });
   $("[data-close-dev]")?.addEventListener("click", async () => { state.activeApp = null; await loadSession(); });
   $("[data-refresh-dev]")?.addEventListener("click", refreshDevTools);
 }

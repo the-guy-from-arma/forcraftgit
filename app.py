@@ -694,6 +694,15 @@ def ensure_schema() -> None:
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS arma_game_bank_balances (
+                identity_id TEXT PRIMARY KEY,
+                balance NUMERIC(18,2) NOT NULL DEFAULT 0,
+                source_file TEXT NOT NULL DEFAULT '',
+                source_saved_at TEXT,
+                raw_payload TEXT NOT NULL DEFAULT '{}',
+                synced_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS developer_unlink_codes (
                 id SERIAL PRIMARY KEY,
                 code_hash TEXT NOT NULL UNIQUE,
@@ -2660,6 +2669,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_arma_snapshot(db)
                 elif path == "/api/arma/events" and method == "POST":
                     self.api_arma_events(db)
+                elif path == "/api/arma/game-database/banks" and method == "POST":
+                    self.api_arma_game_banks(db)
                 elif path == "/api/jobs" and method == "GET":
                     self.api_jobs(db, user)
                 elif path == "/api/jobs/department-applications" and method == "POST":
@@ -2800,6 +2811,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_update_system_settings(db, user)
                 elif path == "/api/dev-tools" and method == "GET":
                     self.api_dev_tools(db, user)
+                elif path.startswith("/api/dev-tools/accounts/") and method == "GET":
+                    self.api_dev_account(db, user, self.path_int(path, 3))
                 elif path == "/api/dev-tools/unlink-codes" and method == "POST":
                     self.api_dev_generate_unlink_code(db, user)
                 elif path == "/api/dev-tools/sanctions" and method == "POST":
@@ -3632,6 +3645,49 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 db.execute("UPDATE arma_account_links SET last_seen_at = ?, last_sync_at = ? WHERE id = ?", (created_at, received_at, link["id"]))
             accepted.append(event_id)
         self.send_json(200, {"ok": True, "accepted_event_ids": accepted, "skipped_event_ids": skipped})
+
+    def api_arma_game_banks(self, db: Database) -> None:
+        err = self.bridge_error()
+        if err:
+            self.error(403, err)
+            return
+        payload = self.read_json()
+        data = self.bridge_payload_data(payload)
+        balances = data.get("Balances") or data.get("m_Banks") or {}
+        if not isinstance(balances, dict):
+            self.error(400, "Bank payload must contain a Balances map")
+            return
+        source_file = str(data.get("SourceFile") or "")[:255]
+        source_saved_at = str(data.get("SourceSavedAt") or data.get("m_iLastSaved") or "")[:80]
+        synced_at = now_iso()
+        accepted = 0
+        linked = 0
+        for identity_id, raw_balance in balances.items():
+            identity = str(identity_id or "").strip()[:160]
+            if not identity:
+                continue
+            try:
+                balance = round(float(raw_balance or 0), 2)
+            except (TypeError, ValueError):
+                continue
+            db.execute(
+                """
+                INSERT INTO arma_game_bank_balances
+                (identity_id, balance, source_file, source_saved_at, raw_payload, synced_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT (identity_id) DO UPDATE SET
+                    balance = EXCLUDED.balance,
+                    source_file = EXCLUDED.source_file,
+                    source_saved_at = EXCLUDED.source_saved_at,
+                    raw_payload = EXCLUDED.raw_payload,
+                    synced_at = EXCLUDED.synced_at
+                """,
+                (identity, balance, source_file, source_saved_at, json.dumps({"balance": balance}), synced_at),
+            )
+            if one(db, "SELECT id FROM arma_account_links WHERE identity_id = ?", (identity,)):
+                linked += 1
+            accepted += 1
+        self.send_json(200, {"ok": True, "accepted": accepted, "matched_linked_accounts": linked, "synced_at": synced_at})
 
     def api_jobs(self, db: Database, user: DbRow | None) -> None:
         if not user:
@@ -6848,7 +6904,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         recent_links = all_rows(
             db,
             """
-            SELECT l.id, l.linked_at, l.player_name, l.identity_id AS arma_id,
+            SELECT l.id, l.user_id AS account_id, l.linked_at, l.player_name, l.identity_id AS arma_id,
                    u.name AS account_name, u.civ_number
             FROM arma_account_links l
             JOIN users u ON u.id = l.user_id
@@ -6902,6 +6958,142 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         add_admin_audit(db, int(user["id"]), "dev.unlink_code.created", details={"code_hint": raw_code[-4:], "expires_at": expires_at.isoformat()})
         self.send_json(201, {"ok": True, "code": raw_code, "expires_at": expires_at.isoformat(), "uses": 1})
+
+    def api_dev_account(self, db: Database, user: DbRow | None, target_id: int) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        account = one(
+            db,
+            """
+            SELECT u.*, l.id AS link_id, l.server_id, l.identity_id, l.uid,
+                   l.rpl_identity, l.platform, l.player_name, l.linked_at,
+                   l.last_seen_at, l.last_sync_at
+            FROM users u
+            LEFT JOIN arma_account_links l ON l.user_id = u.id
+            WHERE u.id = ?
+            """,
+            (target_id,),
+        )
+        if not account:
+            self.error(404, "Account not found")
+            return
+        if not account.get("link_id"):
+            self.error(409, "This account does not have an active Arma link")
+            return
+        sanctions = all_rows(
+            db,
+            """
+            SELECT s.*, creator.name AS created_by_name, revoker.name AS revoked_by_name
+            FROM account_sanctions s
+            JOIN users creator ON creator.id = s.created_by
+            LEFT JOIN users revoker ON revoker.id = s.revoked_by
+            WHERE s.user_id = ? ORDER BY s.created_at DESC LIMIT 100
+            """,
+            (target_id,),
+        )
+        warnings = all_rows(
+            db,
+            """
+            SELECT w.*, creator.name AS created_by_name, resolver.name AS resolved_by_name
+            FROM account_internal_warnings w
+            JOIN users creator ON creator.id = w.created_by
+            LEFT JOIN users resolver ON resolver.id = w.resolved_by
+            WHERE w.user_id = ? ORDER BY w.created_at DESC LIMIT 100
+            """,
+            (target_id,),
+        )
+        transactions = all_rows(
+            db,
+            """
+            SELECT t.*, counterparty.name AS counterparty_name
+            FROM transactions t
+            LEFT JOIN users counterparty ON counterparty.id = t.counterparty_id
+            WHERE t.user_id = ? ORDER BY t.created_at DESC LIMIT 150
+            """,
+            (target_id,),
+        )
+        arma_activity = all_rows(
+            db,
+            """
+            SELECT * FROM arma_activity_logs
+            WHERE user_id = ? ORDER BY received_at DESC LIMIT 150
+            """,
+            (target_id,),
+        )
+        characters = all_rows(
+            db,
+            "SELECT * FROM user_characters WHERE user_id = ? ORDER BY is_active DESC, updated_at DESC",
+            (target_id,),
+        )
+        jobs = all_rows(
+            db,
+            """
+            SELECT uj.*, j.title, j.market
+            FROM user_jobs uj JOIN jobs j ON j.id = uj.job_id
+            WHERE uj.user_id = ? ORDER BY uj.started_at DESC
+            """,
+            (target_id,),
+        )
+        citations = all_rows(
+            db,
+            """
+            SELECT c.*
+            FROM citations c
+            WHERE c.civ_id = ? ORDER BY c.created_at DESC LIMIT 100
+            """,
+            (target_id,),
+        )
+        properties = all_rows(
+            db,
+            """
+            SELECT p.* FROM properties p
+            WHERE p.owner_id = ? ORDER BY p.created_at DESC
+            """,
+            (target_id,),
+        )
+        active_block = active_account_block(db, target_id)
+        game_bank = one(
+            db,
+            "SELECT * FROM arma_game_bank_balances WHERE identity_id = ?",
+            (account.get("identity_id") or "",),
+        )
+        response_account = public_user(account)
+        response_account.update(
+            {
+                "identity_id": account.get("identity_id") or "",
+                "uid": account.get("uid") or "",
+                "rpl_identity": account.get("rpl_identity") or "",
+                "platform": account.get("platform") or "",
+                "player_name": account.get("player_name") or "",
+                "server_id": account.get("server_id") or "",
+                "linked_at": account.get("linked_at"),
+                "last_seen_at": account.get("last_seen_at"),
+                "last_sync_at": account.get("last_sync_at"),
+            }
+        )
+        self.send_json(
+            200,
+            {
+                "account": response_account,
+                "active_block": dict(active_block) if active_block else None,
+                "sanctions": [dict(row) for row in sanctions],
+                "warnings": [dict(row) for row in warnings],
+                "transactions": [dict(row) for row in transactions],
+                "arma_activity": [dict(row) for row in arma_activity],
+                "characters": [dict(row) for row in characters],
+                "jobs": [dict(row) for row in jobs],
+                "citations": [dict(row) for row in citations],
+                "properties": [dict(row) for row in properties],
+                "game_database": {
+                    "status": "synced" if game_bank else "awaiting_bank_sync",
+                    "source": "FCRPMUSSALO",
+                    "collections": ["Banks", "Characters", "Criminals", "Items", "PoliceReports", "Vehicles"],
+                    "bank": dict(game_bank) if game_bank else None,
+                },
+            },
+        )
 
     def api_dev_create_sanction(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
