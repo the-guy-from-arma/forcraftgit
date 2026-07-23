@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.50";
+const OS_VERSION = "0.0.56";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -473,7 +473,6 @@ function renderAuth() {
       </div>
       <form id="authForm" class="form-grid">
         ${register ? `<label>Name<input name="name" autocomplete="name" required /></label>` : ""}
-        ${register ? `<label>Arma ID<input name="arma_id" autocomplete="off" required /></label>` : ""}
         ${register ? `<label>Car entry code<input name="car_entry_code" autocomplete="off" maxlength="32" pattern="[A-Za-z0-9_-]{2,32}" placeholder="In-game vehicle access code" required /></label>` : ""}
         ${register ? `<label>Referral code <span class="muted small">optional</span><input name="referral_code" autocomplete="off" maxlength="16" placeholder="Friend's referral code" /></label>` : ""}
         <label>Email<input name="email" type="email" autocomplete="email" required /></label>
@@ -1025,7 +1024,6 @@ function renderProfile() {
         <div><span>Roles</span><strong>${escapeHtml((user.roles || state.session.user.roles || []).join(", "))}</strong></div>
         <div><span>Agency</span><strong>${escapeHtml(user.primary_agency || "Civilian")}</strong></div>
         <div><span>Status</span><strong>${escapeHtml(user.verified ? "Verified civilian" : "Awaiting verification")}</strong></div>
-        <div><span>Registered Arma ID</span><strong>${escapeHtml(user.registered_arma_id || user.arma_id || "Not attached")}</strong></div>
         <div><span>Car Entry Code</span><strong>${escapeHtml(user.car_entry_code || "Required")}</strong></div>
         ${canSetCallsign ? `<div><span>Callsign</span><strong>${escapeHtml(user.callsign || "Not set")}</strong></div>` : ""}
         <div><span>Referral Code</span><strong>${escapeHtml(referrals.code || "Generating")}</strong></div>
@@ -6749,10 +6747,10 @@ function devMetrics(data, warnings) {
   return `<div class="dev-metrics">
     <div class="dev-metric red-tone"><span>Active bans</span><strong>${Number(data.active_bans || 0)}</strong><small>Denied access</small></div>
     <div class="dev-metric amber-tone"><span>Active timeouts</span><strong>${Number(data.active_timeouts || 0)}</strong><small>Temporary restrictions</small></div>
-    <div class="dev-metric"><span>Internal notes</span><strong>${warnings.filter((x) => !x.resolved_at).length}</strong><small>Open staff records</small></div>
-    <div class="dev-metric blue-tone"><span>Verified, unlinked</span><strong>${Number(data.verified_unlinked || 0)}</strong><small>Need Arma link</small></div>
-    <div class="dev-metric green-tone"><span>Linked accounts</span><strong>${Number(data.linked_accounts || 0)}</strong><small>Current total</small></div>
-    <div class="dev-metric"><span>Unverified</span><strong>${Number(data.unverified_accounts || 0)}</strong><small>Awaiting approval</small></div>
+    <div class="dev-metric green-tone"><span>Arma linked</span><strong>${Number(data.linked_accounts || 0)}</strong><small>Active link records</small></div>
+    <div class="dev-metric blue-tone"><span>Arma unlinked</span><strong>${Number(data.unlinked_accounts || 0)}</strong><small>No active link record</small></div>
+    <div class="dev-metric"><span>Verified accounts</span><strong>${Number(data.verified_accounts || 0)}</strong><small>Automatic verification status</small></div>
+    <div class="dev-metric"><span>Verified, unlinked</span><strong>${Number(data.verified_unlinked || 0)}</strong><small>Verified but needs Arma link</small></div>
   </div>`;
 }
 
@@ -7096,7 +7094,7 @@ function renderAdminDepartmentApplicationCard(item, mode = "admin") {
           </div>
           <div class="admin-application-strip">
             <span>CIV ${escapeHtml(item.applicant_civ_number || "pending")}</span>
-            <span>${escapeHtml(item.applicant_arma_id || "No Arma ID")}</span>
+            <span>${escapeHtml(item.applicant_arma_id || "Arma not linked")}</span>
             <span>${escapeHtml(item.reviewer_name || "Unassigned")}</span>
           </div>
         </summary>
@@ -7104,7 +7102,7 @@ function renderAdminDepartmentApplicationCard(item, mode = "admin") {
           <div class="profile-grid compact">
             <div><span>CIV</span><strong>${escapeHtml(item.applicant_civ_number || "pending")}</strong></div>
             <div><span>Email</span><strong>${escapeHtml(item.applicant_email || "unknown")}</strong></div>
-            <div><span>Arma ID</span><strong>${escapeHtml(item.applicant_arma_id || "not provided")}</strong></div>
+            <div><span>Linked Arma ID</span><strong>${escapeHtml(item.applicant_arma_id || "not linked")}</strong></div>
             <div><span>Reviewer</span><strong>${escapeHtml(item.reviewer_name || "Unassigned")}</strong></div>
           </div>
           ${renderDepartmentApplicationPacket(item)}
@@ -7179,7 +7177,7 @@ function renderAdminUsers(users) {
   const matches = users.filter((user) => !query || adminUserSearchText(user).includes(query));
   return `
     <section class="admin-account-search">
-      <label>Search accounts<input data-admin-account-search value="${escapeHtml(state.adminSearch)}" placeholder="Name, email, CIV, Arma ID, callsign, role" autocomplete="off" /></label>
+      <label>Search accounts<input data-admin-account-search value="${escapeHtml(state.adminSearch)}" placeholder="Name, email, CIV, linked Arma ID, callsign, role" autocomplete="off" /></label>
       <div class="admin-search-meta">
         <span data-admin-search-count>${matches.length} of ${users.length} accounts</span>
         <button class="secondary compact-action" type="button" data-clear-admin-search ${state.adminSearch ? "" : "disabled"}>Clear</button>
@@ -7224,7 +7222,7 @@ function renderAdminAccountModal(user) {
         </header>
         <div class="account-summary">
           <div><span>CIV</span><strong>${escapeHtml(user.civ_number || "pending")}</strong></div>
-          <div><span>Arma ID</span><strong>${escapeHtml(user.arma_id || "Not provided")}</strong></div>
+          <div><span>Linked Arma ID</span><strong>${escapeHtml(user.arma_id || "Not linked")}</strong></div>
           <div><span>Car Entry</span><strong>${escapeHtml(user.car_entry_code || "Required")}</strong></div>
           <div><span>Referral</span><strong>${escapeHtml(user.referral_code || "Generating")}</strong></div>
           <div><span>Email</span><strong>${escapeHtml(user.email)}</strong></div>

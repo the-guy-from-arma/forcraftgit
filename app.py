@@ -1406,6 +1406,19 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS staff_findings TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS player_statement TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS appeal_guidance TEXT NOT NULL DEFAULT ''")
+    # Legacy profile-entered IDs are not links. Preserve only IDs backed by the
+    # authoritative link table; new links are created exclusively by code claim.
+    db.execute(
+        """
+        UPDATE users
+        SET arma_id = NULL
+        WHERE arma_id IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM arma_account_links l
+              WHERE l.user_id = users.id AND l.identity_id = users.arma_id
+          )
+        """
+    )
     db.execute("UPDATE panic_alerts SET updated_at = created_at WHERE updated_at = ''")
     db.execute(
         """
@@ -1798,7 +1811,7 @@ def seed_owner(db: Database) -> None:
         VALUES (?, ?, ?, ?, ?, ?, 1, ?, 'Owner Command', 50000, 1000, ?, ?)
         RETURNING id
         """,
-        (generate_civ_number(db), OWNER_NAME, OWNER_EMAIL, os.environ.get("OWNER_ARMA_ID", "OWNER"), generate_referral_code(db), hash_password(OWNER_PASSWORD), json.dumps(owner_roles), ts, ts),
+        (generate_civ_number(db), OWNER_NAME, OWNER_EMAIL, None, generate_referral_code(db), hash_password(OWNER_PASSWORD), json.dumps(owner_roles), ts, ts),
     ).fetchone()
     ensure_default_character(db, int(created["id"]), OWNER_NAME)
 
@@ -2841,12 +2854,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
 
     def api_register(self, db: Database) -> None:
         payload = self.read_json()
-        missing = require_fields(payload, "name", "email", "arma_id", "car_entry_code", "password")
+        missing = require_fields(payload, "name", "email", "car_entry_code", "password")
         if missing:
             self.error(400, missing)
             return
         email = str(payload["email"]).strip().lower()
-        arma_id = str(payload["arma_id"]).strip()
         try:
             car_entry_code = clean_car_entry_code(payload.get("car_entry_code"))
         except ValueError as exc:
@@ -2855,9 +2867,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         password = str(payload["password"])
         if len(password) < 6:
             self.error(400, "Password must be at least 6 characters")
-            return
-        if len(arma_id) < 4:
-            self.error(400, "Arma ID must be at least 4 characters")
             return
         try:
             referral_code = clean_referral_code(payload.get("referral_code") or payload.get("referral"))
@@ -2884,7 +2893,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 generate_civ_number(db),
                 str(payload["name"]).strip(),
                 email,
-                arma_id,
+                None,
                 car_entry_code,
                 generate_referral_code(db),
                 referrer["id"] if referrer else None,
@@ -3116,7 +3125,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(
             200,
             {
-                "user": {**public_user(user), "registered_arma_id": user.get("arma_id") or ""},
+                "user": public_user(user),
                 "characters": [dict(row) for row in characters],
                 "active_character": dict(active_character) if active_character else None,
                 "name_change": name_change_status(db, int(user["id"])),
@@ -6762,8 +6771,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         users = all_rows(
             db,
             """
-            SELECT id, civ_number, name, email, verified, roles, arma_id, created_at
-            FROM users ORDER BY name, id LIMIT 500
+            SELECT u.id, u.civ_number, u.name, u.email, u.verified, u.roles, u.arma_id, u.created_at,
+                   CASE WHEN l.id IS NULL THEN 0 ELSE 1 END AS arma_linked,
+                   l.identity_id AS linked_arma_id, l.linked_at
+            FROM users u
+            LEFT JOIN arma_account_links l ON l.user_id = u.id
+            ORDER BY u.name, u.id LIMIT 500
             """,
         )
         sanctions = all_rows(
@@ -6818,18 +6831,28 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         ]
         active_bans = sum(1 for row in active_sanctions if row.get("sanction_type") == "ban")
         active_timeouts = sum(1 for row in active_sanctions if row.get("sanction_type") == "timeout")
-        verified_unlinked = sum(1 for row in users if row.get("verified") and not row.get("arma_id"))
-        unverified_accounts = sum(1 for row in users if not row.get("verified"))
-        linked_accounts = sum(1 for row in users if row.get("arma_id"))
+        account_stats = one(
+            db,
+            """
+            SELECT
+                COUNT(*) AS total_accounts,
+                COUNT(*) FILTER (WHERE u.verified <> 0) AS verified_accounts,
+                COUNT(*) FILTER (WHERE u.verified = 0) AS unverified_accounts,
+                COUNT(l.id) AS linked_accounts,
+                COUNT(*) FILTER (WHERE l.id IS NULL) AS unlinked_accounts,
+                COUNT(*) FILTER (WHERE u.verified <> 0 AND l.id IS NULL) AS verified_unlinked
+            FROM users u
+            LEFT JOIN arma_account_links l ON l.user_id = u.id
+            """,
+        )
         recent_links = all_rows(
             db,
             """
-            SELECT c.id, c.code, c.claimed_at AS linked_at, c.player_name,
-                   c.identity_id AS arma_id, u.name AS account_name, u.civ_number
-            FROM arma_link_codes c
-            LEFT JOIN users u ON u.id = c.claimed_by
-            WHERE c.status = 'claimed'
-            ORDER BY c.claimed_at DESC NULLS LAST LIMIT 40
+            SELECT l.id, l.linked_at, l.player_name, l.identity_id AS arma_id,
+                   u.name AS account_name, u.civ_number
+            FROM arma_account_links l
+            JOIN users u ON u.id = l.user_id
+            ORDER BY l.linked_at DESC LIMIT 40
             """,
         )
         self.send_json(
@@ -6840,9 +6863,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "active_sanctions": len(active_sanctions),
                 "active_bans": active_bans,
                 "active_timeouts": active_timeouts,
-                "verified_unlinked": verified_unlinked,
-                "unverified_accounts": unverified_accounts,
-                "linked_accounts": linked_accounts,
+                "total_accounts": int(account_stats["total_accounts"] or 0),
+                "verified_accounts": int(account_stats["verified_accounts"] or 0),
+                "verified_unlinked": int(account_stats["verified_unlinked"] or 0),
+                "unverified_accounts": int(account_stats["unverified_accounts"] or 0),
+                "linked_accounts": int(account_stats["linked_accounts"] or 0),
+                "unlinked_accounts": int(account_stats["unlinked_accounts"] or 0),
                 "recent_links": [dict(row) for row in recent_links],
                 "warnings": [dict(row) for row in warnings],
                 "audit_logs": [dict(row) for row in audit_logs],
@@ -7052,11 +7078,21 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err)
             return
-        rows = all_rows(db, "SELECT * FROM users ORDER BY verified ASC, created_at DESC")
+        rows = all_rows(
+            db,
+            """
+            SELECT u.*, l.identity_id AS linked_arma_id, l.linked_at AS arma_linked_at
+            FROM users u
+            LEFT JOIN arma_account_links l ON l.user_id = u.id
+            ORDER BY u.verified ASC, u.created_at DESC
+            """,
+        )
         users = []
         for row in rows:
             item = public_user(row)
-            item["arma_id"] = row.get("arma_id")
+            item["arma_id"] = row.get("linked_arma_id")
+            item["arma_linked"] = bool(row.get("linked_arma_id"))
+            item["arma_linked_at"] = row.get("arma_linked_at")
             item["presence_seconds_today"] = presence_seconds(db, row["id"])
             item["name_change"] = name_change_status(db, int(row["id"]))
             count = one(db, "SELECT COUNT(*) AS count FROM user_characters WHERE user_id = ?", (row["id"],))
@@ -7161,12 +7197,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                    applicant.name AS applicant_name,
                    applicant.email AS applicant_email,
                    applicant.civ_number AS applicant_civ_number,
-                   applicant.arma_id AS applicant_arma_id,
+                   arma_link.identity_id AS applicant_arma_id,
                    applicant.primary_agency AS applicant_primary_agency,
                    applicant.callsign AS applicant_callsign,
                    reviewer.name AS reviewer_name
             FROM department_applications a
             JOIN users applicant ON applicant.id = a.user_id
+            LEFT JOIN arma_account_links arma_link ON arma_link.user_id = applicant.id
             LEFT JOIN users reviewer ON reviewer.id = a.reviewed_by
             ORDER BY
                 CASE a.status
