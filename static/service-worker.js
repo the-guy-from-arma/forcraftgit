@@ -1,8 +1,8 @@
-const CACHE = "rp-command-v59-no-railway-cash";
+const CACHE = "rp-command-v60-staff-operations";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.59",
-  "/static/app.js?v=0.0.59",
+  "/static/styles.css?v=0.0.60",
+  "/static/app.js?v=0.0.60",
   "/static/icons/icon.svg",
   "/static/getting-started/used-cars.jpg",
   "/static/getting-started/dirty-pond.jpg",

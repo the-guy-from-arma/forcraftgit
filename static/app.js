@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.59";
+const OS_VERSION = "0.0.60";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -6723,14 +6723,22 @@ function devRuleOptions() {
 }
 
 function renderDevWorkspace() {
+  const activeTab = {
+    dashboard: ["Operations Overview", "Current account-linking and enforcement status"],
+    enforcement: ["Enforcement Cases", "File, review, and revoke player sanctions"],
+    warnings: ["Internal Notes", "Staff-only account history and observations"],
+    linking: ["Account Linking", "Linked identities, recent claims, and unlink authorization"],
+    audit: ["Activity Log", "Chronological record of staff actions"],
+  }[state.devTab] || ["Staff Operations", "Faircroft administrative console"];
   return `<section class="dev-workspace">
     <aside class="dev-sidebar">
-      <div class="dev-brand"><span>FC</span><div><strong>Faircroft</strong><small>Staff Operations</small></div></div>
-      <nav>${[["dashboard","Dashboard"],["enforcement","Enforcement"],["warnings","Internal Notes"],["linking","Account Linking"],["audit","Audit Log"]].map(([id,label]) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}">${label}</button>`).join("")}</nav>
-      <div class="dev-sidebar-footer"><span class="pill amber">Restricted</span><small>${escapeHtml(state.session?.user?.name || "Developer")}</small></div>
+      <div class="dev-brand"><span>FC</span><div><strong>Faircroft RP</strong><small>Staff Operations</small></div></div>
+      <p class="dev-nav-label">Workspace</p>
+      <nav>${[["dashboard","Overview"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["audit","Activity Log"]].map(([id,label]) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><span>${label}</span></button>`).join("")}</nav>
+      <div class="dev-sidebar-footer"><span class="dev-access-dot"></span><div><strong>Authorized Staff</strong><small>${escapeHtml(state.session?.user?.name || "Staff member")}</small></div></div>
     </aside>
     <main class="dev-main">
-      <header class="dev-topbar"><div><p class="eyebrow">Professional moderation console</p><h1>Developer Operations</h1></div><div class="row"><button class="secondary" data-refresh-dev>Refresh</button><button class="primary" data-close-dev>Return to Phone</button></div></header>
+      <header class="dev-topbar"><div><h1>${activeTab[0]}</h1><p>${activeTab[1]}</p></div><div class="dev-toolbar"><span class="dev-system-status"><i></i>System online</span><button class="secondary" data-refresh-dev>Refresh data</button><button class="primary" data-close-dev>Exit staff view</button></div></header>
       <div class="dev-content">${renderDevTools()}</div>
     </main>
     ${state.devAccount ? renderDevAccountModal(state.devAccount) : ""}
@@ -6739,12 +6747,12 @@ function renderDevWorkspace() {
 
 function devMetrics(data, warnings) {
   return `<div class="dev-metrics">
-    <div class="dev-metric red-tone"><span>Active bans</span><strong>${Number(data.active_bans || 0)}</strong><small>Denied access</small></div>
-    <div class="dev-metric amber-tone"><span>Active timeouts</span><strong>${Number(data.active_timeouts || 0)}</strong><small>Temporary restrictions</small></div>
-    <div class="dev-metric green-tone"><span>Arma linked</span><strong>${Number(data.linked_accounts || 0)}</strong><small>Active link records</small></div>
-    <div class="dev-metric blue-tone"><span>Arma unlinked</span><strong>${Number(data.unlinked_accounts || 0)}</strong><small>No active link record</small></div>
-    <div class="dev-metric"><span>Verified accounts</span><strong>${Number(data.verified_accounts || 0)}</strong><small>Automatic verification status</small></div>
-    <div class="dev-metric"><span>Verified, unlinked</span><strong>${Number(data.verified_unlinked || 0)}</strong><small>Verified but needs Arma link</small></div>
+    <div class="dev-metric red-tone"><span>Active bans</span><strong>${Number(data.active_bans || 0)}</strong><small>Currently blocked</small></div>
+    <div class="dev-metric amber-tone"><span>Timeouts</span><strong>${Number(data.active_timeouts || 0)}</strong><small>Currently active</small></div>
+    <div class="dev-metric green-tone"><span>Linked</span><strong>${Number(data.linked_accounts || 0)}</strong><small>Arma identities</small></div>
+    <div class="dev-metric blue-tone"><span>Unlinked</span><strong>${Number(data.unlinked_accounts || 0)}</strong><small>No Arma identity</small></div>
+    <div class="dev-metric"><span>Verified</span><strong>${Number(data.verified_accounts || 0)}</strong><small>Website accounts</small></div>
+    <div class="dev-metric"><span>Needs linking</span><strong>${Number(data.verified_unlinked || 0)}</strong><small>Verified accounts</small></div>
   </div>`;
 }
 
@@ -6760,7 +6768,7 @@ function renderDevTools() {
   const data = state.cache["dev-tools"] || {};
   const users = data.users || [], sanctions = data.sanctions || [], warnings = data.warnings || [], logs = data.audit_logs || [], codes = data.unlink_codes || [];
   const metrics = devMetrics(data, warnings);
-  if (state.devTab === "dashboard") return `<div class="stack">${metrics}<div class="dev-grid-2"><section class="dev-card"><div class="row"><div><p class="eyebrow">Live enforcement</p><h2>Active Cases</h2></div><button class="secondary" data-dev-go="enforcement">Open</button></div>${sanctions.filter((x) => !x.revoked_at).slice(0,8).map(devSanctionRow).join("") || `<div class="empty">No active cases</div>`}</section><section class="dev-card"><div class="row"><div><p class="eyebrow">Account activity</p><h2>Newest Arma Links</h2></div><button class="secondary" data-dev-go="linking">Open</button></div>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card"><div class="row"><h2>Recent Staff Activity</h2><button class="secondary" data-dev-go="audit">Full log</button></div>${devAudit(logs.slice(0,10))}</section></div>`;
+  if (state.devTab === "dashboard") return `<div class="stack">${metrics}<div class="dev-section-heading"><div><h2>Work queue</h2><p>Items requiring staff attention and recent review.</p></div></div><div class="dev-grid-2"><section class="dev-card"><div class="dev-card-header"><div><span>ENFORCEMENT</span><h2>Active cases</h2></div><button class="secondary" data-dev-go="enforcement">View cases</button></div>${sanctions.filter((x) => !x.revoked_at).slice(0,8).map(devSanctionRow).join("") || `<div class="empty">No active enforcement cases</div>`}</section><section class="dev-card"><div class="dev-card-header"><div><span>IDENTITY</span><h2>Recent Arma links</h2></div><button class="secondary" data-dev-go="linking">View accounts</button></div>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card"><div class="dev-card-header"><div><span>STAFF RECORD</span><h2>Latest activity</h2></div><button class="secondary" data-dev-go="audit">View complete log</button></div>${devAudit(logs.slice(0,10))}</section></div>`;
   if (state.devTab === "enforcement") return `<div class="dev-grid-enforcement"><section class="dev-card"><div class="row"><div><p class="eyebrow">Required incident documentation</p><h2>Enforcement Report</h2><p class="muted">A ban or timeout cannot be issued until this report is complete.</p></div><span class="pill red">required</span></div>
     <form id="devSanctionForm" class="dev-report-form">
       <label>Account<select name="user_id" required><option value="">Select account</option>${devUserOptions(users)}</select></label>
@@ -7595,7 +7603,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.50").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.60").catch(() => {}));
 }
 
 bootApp();
