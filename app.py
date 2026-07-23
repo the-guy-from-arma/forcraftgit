@@ -7626,7 +7626,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    ensure_schema()
+    schema_ready = False
+    for attempt in range(1, 31):
+        try:
+            ensure_schema()
+            schema_ready = True
+            break
+        except psycopg.OperationalError as exc:
+            print(f"Database unavailable during startup (attempt {attempt}/30): {exc}")
+            time.sleep(min(2 * attempt, 15))
+    if not schema_ready:
+        raise RuntimeError("Database remained unavailable after startup retries")
     threading.Thread(target=shadowhaven_bank_sync_worker, name="shadowhaven-bank-sync", daemon=True).start()
     port = int(os.environ.get("PORT", "8080"))
     host = os.environ.get("HOST", "0.0.0.0")
