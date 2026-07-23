@@ -37,6 +37,8 @@ Useful environment variables:
 
 - `SECRET_KEY`: required for production session signing.
 - `DATABASE_URL`: required PostgreSQL connection string.
+- `DATABASE_MAX_CONNECTIONS`: maximum concurrent app database connections, default `5`.
+- `DATABASE_CONNECT_TIMEOUT_SECONDS`: wait time for a database connection, default `10`.
 - `OWNER_EMAIL`: owner bootstrap email.
 - `OWNER_PASSWORD`: owner bootstrap password.
 - `OWNER_NAME`: owner display name.

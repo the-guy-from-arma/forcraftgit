@@ -24,6 +24,9 @@ from psycopg.rows import dict_row
 APP_ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = APP_ROOT / "static"
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+DATABASE_MAX_CONNECTIONS = max(2, int(os.environ.get("DATABASE_MAX_CONNECTIONS", "5")))
+DATABASE_CONNECT_TIMEOUT_SECONDS = max(3, int(os.environ.get("DATABASE_CONNECT_TIMEOUT_SECONDS", "10")))
+DATABASE_CONNECTION_SEMAPHORE = threading.BoundedSemaphore(DATABASE_MAX_CONNECTIONS)
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-before-production")
 COOKIE_NAME = "rp_session"
 SESSION_DAYS = 7
@@ -196,17 +199,35 @@ class Database:
     def __init__(self) -> None:
         if not DATABASE_URL:
             raise RuntimeError("DATABASE_URL is required. Attach a PostgreSQL database and set DATABASE_URL.")
-        self.raw = psycopg.connect(DATABASE_URL, row_factory=dict_row)
+        self._slot_acquired = DATABASE_CONNECTION_SEMAPHORE.acquire(timeout=DATABASE_CONNECT_TIMEOUT_SECONDS)
+        if not self._slot_acquired:
+            raise RuntimeError("Database is busy; no application connection slot became available")
+        try:
+            self.raw = psycopg.connect(
+                DATABASE_URL,
+                row_factory=dict_row,
+                connect_timeout=DATABASE_CONNECT_TIMEOUT_SECONDS,
+                application_name="faircroft-rp-os",
+            )
+        except Exception:
+            DATABASE_CONNECTION_SEMAPHORE.release()
+            self._slot_acquired = False
+            raise
 
     def __enter__(self) -> "Database":
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
-        if exc_type:
-            self.raw.rollback()
-        else:
-            self.raw.commit()
-        self.raw.close()
+        try:
+            if exc_type:
+                self.raw.rollback()
+            else:
+                self.raw.commit()
+        finally:
+            self.raw.close()
+            if self._slot_acquired:
+                DATABASE_CONNECTION_SEMAPHORE.release()
+                self._slot_acquired = False
 
     def sql(self, query: str) -> str:
         return query.replace("?", "%s")
