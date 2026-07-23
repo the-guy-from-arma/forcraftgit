@@ -1,8 +1,8 @@
-const CACHE = "rp-command-v50-mdt-booking-system";
+const CACHE = "rp-command-v51-arma-dev-unlink";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.50",
-  "/static/app.js?v=0.0.50",
+  "/static/styles.css?v=0.0.51",
+  "/static/app.js?v=0.0.51",
   "/static/icons/icon.svg",
   "/static/getting-started/used-cars.jpg",
   "/static/getting-started/dirty-pond.jpg",

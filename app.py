@@ -2509,6 +2509,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_profile_activate_character(db, user, self.path_int(path, 3))
                 elif path == "/api/profile/link-arma" and method == "POST":
                     self.api_claim_arma_link(db, user)
+                elif path == "/api/profile/unlink-arma" and method == "POST":
+                    self.api_unlink_arma(db, user)
                 elif path == "/api/arma/link-requests" and method == "POST":
                     self.api_arma_link_requests(db)
                 elif path == "/api/arma/snapshot" and method == "GET":
@@ -3146,6 +3148,32 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("UPDATE users SET arma_id = ? WHERE id = ?", (identity_id, user["id"]))
         db.execute("UPDATE arma_link_codes SET status = 'claimed', claimed_by = ?, claimed_at = ? WHERE id = ?", (user["id"], ts, request["id"]))
         add_message(db, user["id"], "Arma account linked", f"Linked Arma player {request.get('player_name') or identity_id} from {request['server_id']}.")
+        self.send_json(200, {"ok": True})
+
+    def api_unlink_arma(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        payload = self.read_json()
+        if payload.get("confirmation") != "UNLINK FOR DEVELOPMENT":
+            self.error(400, "Confirm that unlinking is for development reasons and is being done with server engineer guidance.")
+            return
+        link = one(db, "SELECT * FROM arma_account_links WHERE user_id = ?", (user["id"],))
+        if not link:
+            self.error(404, "No linked Arma account was found")
+            return
+        db.execute("DELETE FROM arma_account_links WHERE user_id = ?", (user["id"],))
+        db.execute("UPDATE users SET arma_id = NULL WHERE id = ?", (user["id"],))
+        db.execute(
+            "UPDATE arma_link_codes SET status = 'unlinked' WHERE claimed_by = ? AND status = 'claimed'",
+            (user["id"],),
+        )
+        add_message(
+            db,
+            user["id"],
+            "Arma account unlinked",
+            "The Arma account link was removed for development testing with server engineer guidance.",
+        )
         self.send_json(200, {"ok": True})
 
     def bridge_payload_data(self, payload: dict[str, Any]) -> dict[str, Any]:

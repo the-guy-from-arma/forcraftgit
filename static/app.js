@@ -1096,6 +1096,20 @@ function renderProfile() {
             <div><span>Identity</span><strong>${escapeHtml(link.identity_id || "Not provided")}</strong></div>
             <div><span>Last sync</span><strong>${escapeHtml(link.last_sync_at || link.linked_at || "Awaiting sync")}</strong></div>
           </div>
+          <form id="armaUnlinkForm" class="form-grid arma-unlink-form">
+            <div class="home-alert compact-alert">
+              ${iconSvg.shield}
+              <div>
+                <strong>Development use only</strong>
+                <p>Unlinking your Arma account is for development reasons only. Do this only with server engineer guidance.</p>
+              </div>
+            </div>
+            <label class="checkbox-row">
+              <input name="acknowledge" type="checkbox" required />
+              <span>I understand this will remove my live Arma account link.</span>
+            </label>
+            <button class="danger" type="submit">Unlink Arma Account</button>
+          </form>
         ` : `
           <p class="muted small">Enter the in-game link code shown by TBS RP LINKING SYSTEM after joining the server.</p>
           <form id="armaLinkForm" class="form-grid arma-link-form">
@@ -1230,6 +1244,31 @@ function bindProfile() {
         window.history.replaceState({}, "", "/");
       }
       await loadAppData("profile");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $("#armaUnlinkForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const acknowledge = form.querySelector('[name="acknowledge"]');
+    if (!acknowledge?.checked) {
+      toast("Confirm the development-use warning before unlinking");
+      return;
+    }
+    const confirmed = window.confirm(
+      "Development use only: unlink this Arma account with server engineer guidance?"
+    );
+    if (!confirmed) return;
+    try {
+      await api("/api/profile/unlink-arma", {
+        method: "POST",
+        body: { confirmation: "UNLINK FOR DEVELOPMENT" },
+      });
+      toast("Arma account unlinked for development");
+      await loadAppData("profile");
+      await loadSession();
       render();
     } catch (error) {
       toast(error.message);
