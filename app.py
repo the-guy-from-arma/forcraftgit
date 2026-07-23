@@ -255,14 +255,38 @@ def public_user(user: DbRow) -> dict[str, Any]:
         "car_entry_code_required": not bool(str(user.get("car_entry_code") or "").strip()),
         "callsign": user.get("callsign") or "",
         "callsign_required": not bool(str(user.get("callsign") or "").strip()),
-        "bank_balance": round(float(user["bank_balance"] or 0), 2),
-        "cash_balance": round(float(user["cash_balance"] or 0), 2),
+        # The legacy users.bank_balance column is intentionally not exposed.
+        # FCRPMUSSALO is the authoritative bank and is applied by
+        # public_user_with_game_bank where a database context is available.
+        "bank_balance": 0,
+        "bank_balance_source": "FCRPMUSSALO",
+        "bank_balance_synced": False,
+        "cash_balance": 0,
         "active_character_id": user.get("active_character_id"),
         "name_change_locked": bool(user.get("name_change_locked", 0)),
         "referral_code": user.get("referral_code") or "",
         "referred_by_user_id": user.get("referred_by_user_id"),
         "created_at": user["created_at"],
     }
+
+
+def public_user_with_game_bank(db: Database, user: DbRow) -> dict[str, Any]:
+    payload = public_user(user)
+    game_bank = one(
+        db,
+        """
+        SELECT b.balance, b.synced_at
+        FROM arma_account_links l
+        JOIN arma_game_bank_balances b ON b.identity_id = l.identity_id
+        WHERE l.user_id = ?
+        """,
+        (user["id"],),
+    )
+    payload["bank_balance"] = round(float(game_bank["balance"] or 0), 2) if game_bank else 0
+    payload["bank_balance_source"] = "FCRPMUSSALO"
+    payload["bank_balance_synced"] = bool(game_bank)
+    payload["bank_balance_synced_at"] = game_bank.get("synced_at") if game_bank else None
+    return payload
 
 
 def require_fields(payload: dict[str, Any], *fields: str) -> str | None:
@@ -2259,9 +2283,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         ("court", "COURT", "gavel", verified, False),
         ("business", "Business", "store", business_enabled, False),
         ("properties", "PROPERTIES", "home", False, True),
-        ("cash", "CASH APP", "send", False, True),
         ("bank", "BANK", "bank", verified, False),
-        ("treasury", "Faircroft Treasury", "treasury", verified, False),
         ("messages", "Messages", "message", verified, False),
         ("changelog", "Changelog", "scroll", True, False),
     ]
@@ -2933,14 +2955,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 db,
                 int(referrer["id"]),
                 "Referral payout pending",
-                f"{str(payload['name']).strip()} used your referral code. A ${REFERRAL_BONUS_AMOUNT:,.0f} cash ticket is waiting for admin deposit.",
+                f"{str(payload['name']).strip()} used your referral code. An in-game reward ticket is waiting for staff review.",
                 user_id,
             )
             add_message(
                 db,
                 user_id,
                 "Referral code accepted",
-                f"Your registration used {referrer['name']}'s referral code. Their ${REFERRAL_BONUS_AMOUNT:,.0f} referral cash ticket is pending admin deposit.",
+                f"Your registration used {referrer['name']}'s referral code. Their in-game reward ticket is pending staff review.",
                 int(referrer["id"]),
             )
             staff = all_rows(
@@ -2982,7 +3004,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             until = block.get("expires_at") or "indefinitely"
             self.error(403, f"Account {block['sanction_type']}: {block['reason']} (until {until})")
             return
-        self.send_json(200, {"ok": True, "user": public_user(user)}, {"Set-Cookie": self.session_header(user["id"])})
+        self.send_json(200, {"ok": True, "user": public_user_with_game_bank(db, user)}, {"Set-Cookie": self.session_header(user["id"])})
 
     def api_session(self, db: Database, user: DbRow | None) -> None:
         if not user:
@@ -3019,7 +3041,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(
             200,
             {
-                "user": public_user(user),
+                "user": public_user_with_game_bank(db, user),
                 "apps": apps,
                 "unread_messages": int(unread["count"] if unread else 0),
                 "income": income_snapshot(db, user),
@@ -3138,7 +3160,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(
             200,
             {
-                "user": public_user(user),
+                "user": public_user_with_game_bank(db, user),
                 "characters": [dict(row) for row in characters],
                 "active_character": dict(active_character) if active_character else None,
                 "name_change": name_change_status(db, int(user["id"])),
@@ -3505,9 +3527,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             db,
             """
             SELECT l.*, u.id AS website_user_id, u.name AS website_username, u.civ_number, u.verified, u.roles,
-                   u.primary_agency, u.cash_balance, u.bank_balance
+                   u.primary_agency, COALESCE(game_bank.balance, 0) AS game_bank_balance
             FROM arma_account_links l
             JOIN users u ON u.id = l.user_id
+            LEFT JOIN arma_game_bank_balances game_bank ON game_bank.identity_id = l.identity_id
             ORDER BY l.linked_at DESC
             """,
         )
@@ -3535,8 +3558,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "Whitelisted": 1 if bool(row["verified"]) or "owner" in user_roles or "admin" in user_roles else 0,
                     "Banned": 0,
                     "KickReason": "",
-                    "Cash": int(float(row["cash_balance"] or 0)),
-                    "Bank": int(float(row["bank_balance"] or 0)),
+                    "Cash": 0,
+                    "Bank": int(float(row["game_bank_balance"] or 0)),
                     "RoleIds": user_roles,
                     "PermissionIds": [],
                     "Metadata": metadata,
@@ -3636,10 +3659,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 ),
             )
             if user_id and event_type.startswith("money.") and amount:
-                if currency == "bank":
-                    db.execute("UPDATE users SET bank_balance = bank_balance + ? WHERE id = ?", (amount, user_id))
-                else:
-                    db.execute("UPDATE users SET cash_balance = cash_balance + ? WHERE id = ?", (amount, user_id))
                 add_transaction(db, user_id, f"arma_{action or 'money'}", amount, reason or source_system)
             if link:
                 db.execute("UPDATE arma_account_links SET last_seen_at = ?, last_sync_at = ? WHERE id = ?", (created_at, received_at, link["id"]))
@@ -3805,12 +3824,23 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 30",
             (user["id"],),
         )
+        game_bank = one(
+            db,
+            """
+            SELECT b.* FROM arma_account_links l
+            JOIN arma_game_bank_balances b ON b.identity_id = l.identity_id
+            WHERE l.user_id = ?
+            """,
+            (user["id"],),
+        )
         payload: dict[str, Any] = {
-            "balance": round(float(user["bank_balance"] or 0), 2),
-            "cash": round(float(user["cash_balance"] or 0), 2),
+            "balance": round(float(game_bank["balance"] or 0), 2) if game_bank else 0,
+            "balance_source": "FCRPMUSSALO",
+            "balance_synced": bool(game_bank),
+            "balance_synced_at": game_bank.get("synced_at") if game_bank else None,
             "income": income_snapshot(db, user),
             "transactions": [dict(row) for row in transactions],
-            "can_manage_treasury": admin_required(user) is None,
+            "can_manage_treasury": False,
         }
         if payload["can_manage_treasury"]:
             recent = all_rows(
@@ -3848,35 +3878,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         return
 
     def api_bank_treasury_adjust(self, db: Database, user: DbRow | None) -> None:
-        err = admin_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        payload = self.read_json()
-        missing = require_fields(payload, "user_id", "amount", "reason")
-        if missing:
-            self.error(400, missing)
-            return
-        target = one(db, "SELECT id, name FROM users WHERE id = ?", (int(payload["user_id"]),))
-        if not target:
-            self.error(404, "Treasury recipient not found")
-            return
-        amount = clean_treasury_amount(payload.get("amount"))
-        reason = str(payload.get("reason") or "Manual Faircroft Treasury compensation").strip()[:500]
-        ts = now_iso()
-        request_number = generate_record_number(db, "treasury_requests", "request_number", "TRS")
-        db.execute(
-            """
-            INSERT INTO treasury_requests
-            (request_number, user_id, request_type, requested_amount, approved_amount, status, reason, proof_images, proof_bypass, reviewer_id, reviewer_notes, created_at, updated_at, decided_at)
-            VALUES (?, ?, 'staff_adjustment', ?, ?, 'paid', ?, '[]', 1, ?, ?, ?, ?, ?)
-            """,
-            (request_number, target["id"], amount, amount, reason, user["id"], reason, ts, ts, ts),
-        )
-        db.execute("UPDATE users SET bank_balance = bank_balance + ? WHERE id = ?", (amount, target["id"]))
-        add_transaction(db, target["id"], "treasury_compensation", amount, f"Faircroft Treasury {request_number}: {reason}", user["id"])
-        add_message(db, target["id"], "Faircroft Treasury deposit", f"Treasury added {amount:,.2f} to your bank. Reason: {reason}", user["id"])
-        self.send_json(201, {"ok": True, "request_number": request_number})
+        self.error(410, "Railway bank adjustments are disabled. FCRPMUSSALO is the authoritative bank source.")
 
     def api_treasury(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -3993,23 +3995,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         notes = str(payload.get("reviewer_notes") or payload.get("notes") or "").strip()[:1200]
         ts = now_iso()
         if status in ("approve", "approved", "pay", "paid"):
-            if request["status"] == "paid":
-                self.error(409, "This Treasury request has already been paid")
-                return
-            amount = clean_treasury_amount(payload.get("approved_amount"), float(request["requested_amount"] or TREASURY_STIMULUS_AMOUNT))
-            db.execute("UPDATE users SET bank_balance = bank_balance + ? WHERE id = ?", (amount, request["user_id"]))
-            description = notes or f"{human_request_type(request['request_type'])} approved"
-            add_transaction(db, request["user_id"], "treasury_compensation", amount, f"Faircroft Treasury {request['request_number']}: {description}", user["id"])
-            db.execute(
-                """
-                UPDATE treasury_requests
-                SET status = 'paid', approved_amount = ?, reviewer_id = ?, reviewer_notes = ?, updated_at = ?, decided_at = ?
-                WHERE id = ?
-                """,
-                (amount, user["id"], notes, ts, ts, request_id),
-            )
-            add_message(db, request["user_id"], "Faircroft Treasury approved", f"Request {request['request_number']} was approved and {amount:,.2f} was deposited into your bank.", user["id"])
-            self.send_json(200, {"ok": True, "status": "paid", "approved_amount": amount})
+            self.error(410, "Treasury bank deposits are disabled while FCRPMUSSALO is authoritative. Apply the payment in-game.")
             return
         if status in ("deny", "denied"):
             if request["status"] == "paid":
@@ -4029,36 +4015,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.error(400, "Treasury review status must be approve or deny")
 
     def api_cash_transfer(self, db: Database, user: DbRow | None) -> None:
-        err = verified_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        payload = self.read_json()
-        missing = require_fields(payload, "recipient_email", "amount")
-        if missing:
-            self.error(400, missing)
-            return
-        amount = round(float(payload["amount"]), 2)
-        if amount <= 0:
-            self.error(400, "Amount must be positive")
-            return
-        if amount > float(user["bank_balance"] or 0):
-            self.error(409, "Insufficient bank balance")
-            return
-        recipient = one(db, "SELECT * FROM users WHERE email = ?", (str(payload["recipient_email"]).strip().lower(),))
-        if not recipient:
-            self.error(404, "Recipient not found")
-            return
-        if recipient["id"] == user["id"]:
-            self.error(400, "Cannot transfer to yourself")
-            return
-        note = str(payload.get("note") or "Cash App transfer").strip()[:120]
-        db.execute("UPDATE users SET bank_balance = bank_balance - ? WHERE id = ?", (amount, user["id"]))
-        db.execute("UPDATE users SET bank_balance = bank_balance + ? WHERE id = ?", (amount, recipient["id"]))
-        add_transaction(db, user["id"], "transfer_out", -amount, f"Sent to {recipient['name']}: {note}", recipient["id"])
-        add_transaction(db, recipient["id"], "transfer_in", amount, f"Received from {user['name']}: {note}", user["id"])
-        add_message(db, recipient["id"], "Cash App payment received", f"{user['name']} sent you ${amount:,.2f}. Note: {note}", user["id"])
-        self.send_json(200, {"ok": True})
+        self.error(410, "Website transfers are disabled. Use the in-game banking system.")
 
     def api_dmv_me(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -4939,24 +4896,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"properties": [dict(row) for row in rows]})
 
     def api_buy_property(self, db: Database, user: DbRow | None, property_id: int) -> None:
-        err = verified_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        prop = one(db, "SELECT * FROM properties WHERE id = ?", (property_id,))
-        if not prop:
-            self.error(404, "Property not found")
-            return
-        if prop["status"] != "available":
-            self.error(409, "Property is not available")
-            return
-        if float(user["bank_balance"] or 0) < float(prop["price"]):
-            self.error(409, "Insufficient bank balance")
-            return
-        db.execute("UPDATE users SET bank_balance = bank_balance - ? WHERE id = ?", (prop["price"], user["id"]))
-        db.execute("UPDATE properties SET owner_id = ?, status = 'owned' WHERE id = ?", (user["id"], property_id))
-        add_transaction(db, user["id"], "property_purchase", -float(prop["price"]), f"Purchased {prop['name']}")
-        self.send_json(200, {"ok": True})
+        self.error(410, "Website bank purchases are disabled. Complete this purchase through the in-game economy.")
 
     def api_my_cases(self, db: Database, user: DbRow | None) -> None:
         err = court_access_required(db, user)
@@ -5019,28 +4959,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
 
     def api_pay_case(self, db: Database, user: DbRow | None, case_id: int) -> None:
-        err = court_access_required(db, user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        case = one(db, "SELECT * FROM citations WHERE id = ? AND civ_id = ?", (case_id, user["id"]))
-        if not case:
-            self.error(404, "Case not found")
-            return
-        if case["status"] in ("paid", "dismissed"):
-            self.error(409, "Case is already closed")
-            return
-        amount = float(case["fine_amount"])
-        if float(user["bank_balance"] or 0) < amount:
-            self.error(409, "Insufficient bank balance")
-            return
-        db.execute("UPDATE users SET bank_balance = bank_balance - ? WHERE id = ?", (amount, user["id"]))
-        db.execute(
-            "UPDATE citations SET status = 'paid', final_result = ?, updated_at = ? WHERE id = ?",
-            (final_result_for("paid", case.get("judgment_notes"), amount), now_iso(), case_id),
-        )
-        add_transaction(db, user["id"], "fine_payment", -amount, f"Paid citation {case['charge_code']} - {case['charge_title']}")
-        self.send_json(200, {"ok": True})
+        self.error(410, "Website fine payments are disabled. Pay through the in-game economy.")
 
     def api_contest_case(self, db: Database, user: DbRow | None, case_id: int) -> None:
         err = court_access_required(db, user)
@@ -7326,56 +7245,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"stats": stats, "referrals": [dict(row) for row in rows]})
 
     def api_admin_deposit_referral(self, db: Database, user: DbRow | None, referral_id: int) -> None:
-        err = admin_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        referral = one(
-            db,
-            """
-            SELECT r.*, referrer.name AS referrer_name, referred.name AS referred_name
-            FROM referrals r
-            JOIN users referrer ON referrer.id = r.referrer_id
-            JOIN users referred ON referred.id = r.referred_user_id
-            WHERE r.id = ?
-            """,
-            (referral_id,),
-        )
-        if not referral:
-            self.error(404, "Referral ticket not found")
-            return
-        if referral["status"] == "deposited":
-            self.error(409, "Referral ticket has already been deposited")
-            return
-        payload = self.read_json()
-        notes = str(payload.get("admin_notes") or payload.get("notes") or "").strip()[:800]
-        amount = round(float(referral["bonus_amount"] or REFERRAL_BONUS_AMOUNT), 2)
-        ts = now_iso()
-        db.execute("UPDATE users SET cash_balance = cash_balance + ? WHERE id = ?", (amount, referral["referrer_id"]))
-        db.execute(
-            """
-            UPDATE referrals
-            SET status = 'deposited', deposited_by = ?, deposited_at = ?, admin_notes = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (user["id"], ts, notes, ts, referral_id),
-        )
-        add_transaction(
-            db,
-            int(referral["referrer_id"]),
-            "referral_bonus",
-            amount,
-            f"Referral bonus for {referral['referred_name']} deposited by {user['name']}",
-            int(referral["referred_user_id"]),
-        )
-        add_message(
-            db,
-            int(referral["referrer_id"]),
-            "Referral cash deposited",
-            f"Your ${amount:,.0f} referral ticket for {referral['referred_name']} was deposited by {user['name']}.",
-            user["id"],
-        )
-        self.send_json(200, {"ok": True, "status": "deposited", "amount": amount})
+        self.error(410, "Railway referral cash deposits are disabled. Apply approved rewards through the in-game economy.")
 
     def api_admin_department_applications(self, db: Database, user: DbRow | None) -> None:
         err = application_review_required(user)

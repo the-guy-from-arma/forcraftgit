@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.57";
+const OS_VERSION = "0.0.59";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -1034,8 +1034,8 @@ function renderProfile() {
         <div class="row">
           <div>
             <p class="eyebrow">Referral program</p>
-            <h3>${money(referrals.bonus_amount || 50000)} cash ticket</h3>
-            <p class="muted small">Share your code with a new player. When they register with it, a cash ticket is created and an admin must deposit it manually.</p>
+            <h3>In-game referral reward</h3>
+            <p class="muted small">Share your code with a new player. Staff may review the referral and apply any approved reward through the in-game economy.</p>
           </div>
           <span class="pill ${Number(referrals.pending_count || 0) ? "amber" : "green"}">${Number(referrals.pending_count || 0)} pending</span>
         </div>
@@ -2221,16 +2221,13 @@ function renderBank() {
     <div class="stack bank-app">
       <section class="bank-hero">
         <div>
-          <p class="eyebrow">Faircroft Bank</p>
-          <h3>${money(data.balance)}</h3>
-          <p>Account balance, deposits, and Treasury compensation activity.</p>
+          <p class="eyebrow">FCRPMUSSALO Live Bank</p>
+          <h3>${data.balance_synced ? money(data.balance) : "Awaiting game sync"}</h3>
+          <p>Authoritative in-game balance${data.balance_synced_at ? ` · synced ${escapeHtml(data.balance_synced_at)}` : ""}.</p>
         </div>
         <span>${iconSvg.bank}</span>
       </section>
-      <div class="grid-2">
-        <div class="metric"><span>Cash wallet</span><strong>${money(data.cash)}</strong></div>
-        <div class="metric"><span>Server time</span><strong>${minutes(data.income.presence_seconds_today)}m</strong></div>
-      </div>
+      <div class="metric"><span>Server time</span><strong>${minutes(data.income.presence_seconds_today)}m</strong></div>
       ${canManageTreasury ? `
         <section class="treasury-section bank-treasury-admin">
           <div class="row">
@@ -2297,15 +2294,10 @@ function renderCash() {
   return `
     <div class="stack">
       <div class="card">
-        <p class="eyebrow">Peer transfer</p>
-        <div class="money">${money(state.session.user.bank_balance)}</div>
+        <p class="eyebrow">In-game banking required</p>
+        <div class="money">${state.session.user.bank_balance_synced ? money(state.session.user.bank_balance) : "Awaiting sync"}</div>
+        <p class="muted">FCRPMUSSALO is the authoritative bank. Make transfers through the in-game banking system so the game balance remains accurate.</p>
       </div>
-      <form id="cashForm" class="card form-grid">
-        <label>Recipient email<input name="recipient_email" type="email" required /></label>
-        <label>Amount<input name="amount" type="number" min="1" step="0.01" required /></label>
-        <label>Note<input name="note" maxlength="120" /></label>
-        <button class="primary" type="submit">Send payment</button>
-      </form>
     </div>
   `;
 }
@@ -6818,8 +6810,6 @@ function renderDevAccountModal(data) {
           <div><span>UID</span><strong>${escapeHtml(a.uid || "")}</strong></div>
           <div><span>RPL identity</span><strong>${escapeHtml(a.rpl_identity || "")}</strong></div>
           <div><span>Roles</span><strong>${escapeHtml((a.roles || []).join(", "))}</strong></div>
-          <div><span>Railway bank</span><strong>${money(a.bank_balance || 0)}</strong></div>
-          <div><span>Railway cash</span><strong>${money(a.cash_balance || 0)}</strong></div>
           <div><span>Live in-game bank</span><strong>${gameBank ? money(gameBank.balance || 0) : "Awaiting sync"}</strong></div>
           <div><span>Linked</span><strong>${escapeHtml(a.linked_at || "")}</strong></div>
           <div><span>Last game sync</span><strong>${escapeHtml(a.last_sync_at || "Not reported")}</strong></div>
@@ -7207,26 +7197,21 @@ function renderAdminReferrals(data) {
         <span class="pill ${item.status === "pending" ? "amber" : "green"}">${escapeHtml(item.status)}</span>
       </div>
       <div class="profile-grid compact">
-        <div><span>Cash ticket</span><strong>${money(item.bonus_amount)}</strong></div>
+        <div><span>Legacy ticket value</span><strong>${money(item.bonus_amount)}</strong></div>
         <div><span>Created</span><strong>${new Date(item.created_at).toLocaleString()}</strong></div>
         <div><span>Referrer CIV</span><strong>${escapeHtml(item.referrer_civ_number || "pending")}</strong></div>
         <div><span>Deposited by</span><strong>${escapeHtml(item.deposited_by_name || "Not deposited")}</strong></div>
       </div>
-      ${item.status === "pending" ? `
-        <form class="referral-deposit-form form-grid" data-referral-id="${item.id}">
-          <label>Deposit notes<textarea name="admin_notes" maxlength="800" placeholder="Optional note for the referral payout ledger"></textarea></label>
-          <button class="primary" type="submit">Deposit ${money(item.bonus_amount)}</button>
-        </form>
-      ` : item.admin_notes ? `<p class="muted small">Notes: ${escapeHtml(item.admin_notes)}</p>` : ""}
+      ${item.status === "pending" ? `<p class="muted small">Railway payouts are disabled. Apply any approved reward through the in-game economy.</p>` : item.admin_notes ? `<p class="muted small">Legacy notes: ${escapeHtml(item.admin_notes)}</p>` : ""}
     </article>
   `;
   return `
     <section class="admin-referrals">
       <div class="grid-2">
         <div class="metric"><span>Pending tickets</span><strong>${pending.length}</strong></div>
-        <div class="metric"><span>Pending cash</span><strong>${money(data.stats?.pending_total || 0)}</strong></div>
+        <div class="metric"><span>Pending rewards</span><strong>${pending.length}</strong></div>
         <div class="metric"><span>Deposited tickets</span><strong>${deposited.length}</strong></div>
-        <div class="metric"><span>Deposited cash</span><strong>${money(data.stats?.deposited_total || 0)}</strong></div>
+        <div class="metric"><span>Legacy completed</span><strong>${deposited.length}</strong></div>
       </div>
       <div class="referral-ticket-list">
         ${pending.map(renderCard).join("") || `<div class="empty">No pending referral tickets</div>`}
