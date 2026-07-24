@@ -15,7 +15,9 @@
       "changed": [
         "Roadmap opens outside the phone frame as a dedicated animated workspace and returns users to the phone when closed.",
         "PWA cache versioning was bumped so installed devices receive the Roadmap icon, full-screen route, and dockless launcher.",
-        "Dev Tools visibility and API access are now restricted to owner and developer roles; standard admins retain their normal administrative tools without developer access."
+        "Dev Tools visibility and API access are now restricted to owner and developer roles; standard admins retain their normal administrative tools without developer access.",
+        "Rebuilt the Roadmap as the Faircroft Build Route with the real Faircroft crest, State of Faircroft identity, cyan and pink brand treatment, civic gold accents, a connected five-system platform rail, and a cleaner milestone sequence.",
+        "Roadmap opening, closing, route travel, progress, filter, refresh, build-brief, vote, and scroll-reveal motion now use a coordinated animation system across desktop and mobile."
       ],
       "fixed": [
         "Restored Dev Tools, developer-role access, sanctions, warnings, app visibility controls, audit tools, and guided Arma unlink codes from the 0.0.70 system.",

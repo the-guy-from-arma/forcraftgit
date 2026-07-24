@@ -2480,6 +2480,7 @@ function renderRoadmapWorkspace() {
   const visible = items.filter((item) => item.is_visible);
   const filtered = items.filter((item) => roadmapFilterMatches(item, state.roadmapFilter));
   const stats = data.stats || {};
+  const overallProgress = Math.max(0, Math.min(100, Number(stats.overall_progress || 0)));
   const filters = [
     ["all", "All phases"],
     ["building", "In build"],
@@ -2487,18 +2488,30 @@ function renderRoadmapWorkspace() {
     ["ideas", "Ideas"],
     ["shipped", "Live"],
   ];
+  const routeSystems = [
+    ["PWA Core", 0],
+    ["Game Link", 25],
+    ["Android", 50],
+    ["Banking", 75],
+    ["Properties", 95],
+  ];
+  const currentSystemIndex = routeSystems.findIndex(([, threshold]) => overallProgress < threshold);
   const androidTarget = stats.android_days === null || stats.android_days === undefined
     ? "Scheduling"
     : `${stats.android_days} day${Number(stats.android_days) === 1 ? "" : "s"}`;
   return `
     <section class="roadmap-workspace">
       <header class="roadmap-topbar">
-        <button class="roadmap-back" type="button" data-close-roadmap aria-label="Return to phone">
-          ${iconSvg.back}<span>Phone</span>
+        <button class="roadmap-back" type="button" data-close-roadmap aria-label="Return to launcher">
+          ${iconSvg.back}<span>Launcher</span>
         </button>
         <div class="roadmap-brand">
-          <span class="roadmap-brand-mark">FC</span>
-          <div><p>FAIRCROFT DEVELOPMENT</p><strong>Build Route</strong></div>
+          <img class="roadmap-brand-emblem" src="/static/brand/faircroft-emblem.webp" alt="" />
+          <div>
+            <p>STATE OF FAIRCROFT</p>
+            <strong>Build Route</strong>
+            <span>PUBLIC DEVELOPMENT NETWORK</span>
+          </div>
         </div>
         <div class="roadmap-top-actions">
           ${data.can_manage ? `<button class="roadmap-command" type="button" data-roadmap-edit="new" aria-label="Add milestone">${iconSvg.plus}<span>Add milestone</span></button>` : ""}
@@ -2509,33 +2522,66 @@ function renderRoadmapWorkspace() {
       <main class="roadmap-scroll">
         <section class="roadmap-intro">
           <div class="roadmap-intro-copy">
-            <p class="roadmap-kicker"><span></span> COMMUNITY ROADMAP / LIVE SIGNAL</p>
-            <h1>Building Faircroft,<br><em>one connected system at a time.</em></h1>
-            <p>The route from today’s PWA to live game integration, native mobile access, banking, properties, and a connected roleplay economy.</p>
+            <p class="roadmap-kicker"><span></span> COMMUNITY ROADMAP / LIVE BUILD SIGNAL</p>
+            <h1>Faircroft <em>Build Route</em></h1>
+            <p>Follow the connected platform from today's PWA through live game integration, native Android access, mobile banking, properties, and the Faircroft roleplay economy.</p>
+            <div class="roadmap-live-state">
+              <i></i>
+              <span>Public route online</span>
+              <b>RP OS ${OS_VERSION}</b>
+            </div>
           </div>
           <div class="roadmap-launch-countdown">
+            <img class="roadmap-launch-crest" src="/static/brand/faircroft-emblem.webp" alt="" />
             <span>ANDROID PARITY TARGET</span>
             <strong>${escapeHtml(androidTarget)}</strong>
             <p>${stats.android_target ? roadmapDateLabel(stats.android_target) : "Target window pending"}</p>
           </div>
         </section>
 
+        <section class="roadmap-program" aria-label="Faircroft platform route">
+          <header>
+            <div>
+              <span>CONNECTED PLATFORM</span>
+              <strong>One account. Every Faircroft system.</strong>
+            </div>
+            <b>${overallProgress}% route completion</b>
+          </header>
+          <div class="roadmap-program-track">
+            <div class="roadmap-program-fill" style="width:${overallProgress}%"></div>
+            <i class="roadmap-program-traveler" style="left:${overallProgress}%"></i>
+            ${routeSystems.map(([label, threshold], index) => `
+              <div class="roadmap-program-station ${index === 0 ? "is-first" : ""} ${index === routeSystems.length - 1 ? "is-last" : ""} ${overallProgress >= threshold ? "complete" : ""} ${index === currentSystemIndex ? "current" : ""}" style="left:${threshold}%">
+                <span></span>
+                <strong>${escapeHtml(label)}</strong>
+              </div>
+            `).join("")}
+          </div>
+        </section>
+
         <section class="roadmap-telemetry" aria-label="Roadmap progress">
-          <div><span>Route completion</span><strong>${Number(stats.overall_progress || 0)}%</strong></div>
+          <div><span>Route completion</span><strong>${overallProgress}%</strong></div>
           <div><span>Active phases</span><strong>${Number(stats.active_phases || 0)}</strong></div>
           <div><span>Systems live</span><strong>${Number(stats.shipped_phases || 0)}</strong></div>
           <div><span>Community signals</span><strong>${Number(stats.community_votes || 0)}</strong></div>
-          <div class="roadmap-master-progress"><span style="width:${Number(stats.overall_progress || 0)}%"></span></div>
+          <div class="roadmap-master-progress"><span style="width:${overallProgress}%"></span></div>
         </section>
 
-        <nav class="roadmap-filters" aria-label="Roadmap views">
-          ${filters.map(([id, label]) => `
-            <button class="${state.roadmapFilter === id ? "active" : ""}" type="button" data-roadmap-filter="${id}">
-              ${escapeHtml(label)}
-              <span>${id === "all" ? visible.length : items.filter((item) => roadmapFilterMatches(item, id)).length}</span>
-            </button>
-          `).join("")}
-        </nav>
+        <section class="roadmap-route-controls">
+          <div>
+            <p>DEVELOPMENT SEQUENCE</p>
+            <h2>Milestone route</h2>
+          </div>
+          <nav class="roadmap-filters" aria-label="Roadmap views">
+            ${filters.map(([id, label]) => `
+              <button class="${state.roadmapFilter === id ? "active" : ""}" type="button" data-roadmap-filter="${id}">
+                ${escapeHtml(label)}
+                <span>${id === "all" ? visible.length : items.filter((item) => roadmapFilterMatches(item, id)).length}</span>
+              </button>
+            `).join("")}
+          </nav>
+          <span class="roadmap-result-count">${filtered.length} phase${filtered.length === 1 ? "" : "s"} shown</span>
+        </section>
 
         <section class="roadmap-route" aria-label="Faircroft development milestones">
           <div class="roadmap-route-line" aria-hidden="true"><span></span><i></i></div>
@@ -2586,8 +2632,11 @@ function renderRoadmapWorkspace() {
         </section>
 
         <footer class="roadmap-footer">
-          <div><span class="roadmap-footer-mark">FC</span><strong>FAIRCROFT BUILD ROUTE</strong></div>
-          <p>RP OS ${OS_VERSION} / PostgreSQL live roadmap</p>
+          <div>
+            <img class="roadmap-footer-emblem" src="/static/brand/faircroft-emblem.webp" alt="" />
+            <span><strong>STATE OF FAIRCROFT</strong><small>Build Route / Public Development Network</small></span>
+          </div>
+          <p>RP OS ${OS_VERSION} / PostgreSQL live route</p>
         </footer>
       </main>
       ${state.roadmapEditorId !== null ? renderRoadmapEditor(data) : ""}
@@ -2662,17 +2711,31 @@ function animateRoadmapStops() {
 function bindRoadmapWorkspace() {
   animateRoadmapStops();
   $("[data-close-roadmap]")?.addEventListener("click", async () => {
+    $(".roadmap-workspace")?.classList.add("is-closing");
+    await new Promise((resolve) => window.setTimeout(resolve, 220));
     state.activeApp = null;
     state.roadmapEditorId = null;
     await loadSession();
   });
   $("[data-refresh-roadmap]")?.addEventListener("click", async () => {
-    await loadAppData("roadmap");
-    render();
+    const button = $("[data-refresh-roadmap]");
+    button?.classList.add("is-refreshing");
+    try {
+      await loadAppData("roadmap");
+      render();
+    } catch (error) {
+      button?.classList.remove("is-refreshing");
+      if (error.message) toast(error.message);
+    }
   });
   $$("[data-roadmap-filter]").forEach((button) => button.addEventListener("click", () => {
+    const scrollTop = $(".roadmap-scroll")?.scrollTop || 0;
     state.roadmapFilter = button.dataset.roadmapFilter;
     render();
+    requestAnimationFrame(() => {
+      const scroll = $(".roadmap-scroll");
+      if (scroll) scroll.scrollTop = scrollTop;
+    });
   }));
   $$("[data-roadmap-vote]").forEach((button) => button.addEventListener("click", async () => {
     const item = state.cache.roadmap?.items?.find((row) => String(row.id) === String(button.dataset.roadmapVote));
@@ -2680,6 +2743,8 @@ function bindRoadmapWorkspace() {
     const requested = Number(button.dataset.vote);
     const vote = Number(item.user_vote || 0) === requested ? 0 : requested;
     const scrollTop = $(".roadmap-scroll")?.scrollTop || 0;
+    button.classList.add("is-sending");
+    button.disabled = true;
     try {
       const result = await api(`/api/roadmap/items/${item.id}/vote`, { method: "POST", body: { vote } });
       Object.assign(item, result);
@@ -2690,8 +2755,12 @@ function bindRoadmapWorkspace() {
       requestAnimationFrame(() => {
         const scroll = $(".roadmap-scroll");
         if (scroll) scroll.scrollTop = scrollTop;
+        const updated = $(`[data-roadmap-vote="${item.id}"][data-vote="${requested}"]`);
+        updated?.classList.add("vote-confirmed");
       });
     } catch (error) {
+      button.classList.remove("is-sending");
+      button.disabled = false;
       if (error.message) toast(error.message);
     }
   }));

@@ -1,8 +1,9 @@
-const CACHE = "faircroft-rp-v71-dockless-launcher";
+const CACHE = "faircroft-rp-v71-faircroft-roadmap-v2";
 const ASSETS = [
   "/",
   "/static/styles.css?v=0.0.71-dockless",
-  "/static/app.js?v=0.0.71-dockless",
+  "/static/roadmap.css?v=0.0.71-route2",
+  "/static/app.js?v=0.0.71-route2",
   "/static/brand/faircroft-emblem.webp",
   "/static/brand/faircroft-light-sweep.mp4",
   "/static/brand/icon-192.png",
