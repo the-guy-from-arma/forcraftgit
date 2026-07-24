@@ -16,7 +16,10 @@
         "Roadmap opens outside the phone frame as a dedicated animated workspace and returns users to the phone when closed.",
         "PWA cache versioning was bumped so installed devices receive the Roadmap icon and full-screen route."
       ],
-      "fixed": [],
+      "fixed": [
+        "Restored Dev Tools, developer-role access, sanctions, warnings, app visibility controls, audit tools, and guided Arma unlink codes from the 0.0.70 system.",
+        "Restored the complete Arma bridge snapshot, event, game-bank sync, link/unlink routes, database tables, and Railway chunked-request handling while retaining the new Roadmap."
+      ],
       "removed": []
     },
     {

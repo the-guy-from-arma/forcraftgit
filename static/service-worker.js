@@ -1,9 +1,13 @@
-const CACHE = "rp-command-v71-community-roadmap";
+const CACHE = "faircroft-rp-v71-community-roadmap";
 const ASSETS = [
   "/",
   "/static/styles.css?v=0.0.71",
   "/static/app.js?v=0.0.71",
-  "/static/icons/icon.svg",
+  "/static/brand/faircroft-emblem.webp",
+  "/static/brand/faircroft-light-sweep.mp4",
+  "/static/brand/icon-192.png",
+  "/static/brand/icon-512.png",
+  "/static/brand/apple-touch-icon.png",
   "/static/getting-started/used-cars.jpg",
   "/static/getting-started/dirty-pond.jpg",
   "/static/getting-started/bag-store.jpg",
