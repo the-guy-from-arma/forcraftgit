@@ -696,12 +696,6 @@ function renderHome() {
           </button>
         `).join("")}
       </div>
-      <nav class="dock">
-        ${["messages", "contracts", "dmv", "court"].map((id) => {
-          const item = apps.find((appItem) => appItem.id === id);
-          return item ? `<button data-open-app="${id}" ${item.enabled ? "" : "disabled"} aria-label="${id}">${iconSvg[item.icon || "settings"]}</button>` : "";
-        }).join("")}
-      </nav>
     </section>
   `;
 }

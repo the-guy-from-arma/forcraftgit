@@ -14,13 +14,15 @@
       ],
       "changed": [
         "Roadmap opens outside the phone frame as a dedicated animated workspace and returns users to the phone when closed.",
-        "PWA cache versioning was bumped so installed devices receive the Roadmap icon and full-screen route."
+        "PWA cache versioning was bumped so installed devices receive the Roadmap icon, full-screen route, and dockless launcher."
       ],
       "fixed": [
         "Restored Dev Tools, developer-role access, sanctions, warnings, app visibility controls, audit tools, and guided Arma unlink codes from the 0.0.70 system.",
         "Restored the complete Arma bridge snapshot, event, game-bank sync, link/unlink routes, database tables, and Railway chunked-request handling while retaining the new Roadmap."
       ],
-      "removed": []
+      "removed": [
+        "Removed the persistent Messages, Contracts, DMV, and Court dock from the bottom of the PWA home screen; every app remains available from the main icon grid."
+      ]
     },
     {
       "date": "2026-07-23",
