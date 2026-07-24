@@ -14,7 +14,8 @@
       ],
       "changed": [
         "Roadmap opens outside the phone frame as a dedicated animated workspace and returns users to the phone when closed.",
-        "PWA cache versioning was bumped so installed devices receive the Roadmap icon, full-screen route, and dockless launcher."
+        "PWA cache versioning was bumped so installed devices receive the Roadmap icon, full-screen route, and dockless launcher.",
+        "Dev Tools visibility and API access are now restricted to owner and developer roles; standard admins retain their normal administrative tools without developer access."
       ],
       "fixed": [
         "Restored Dev Tools, developer-role access, sanctions, warnings, app visibility controls, audit tools, and guided Arma unlink codes from the 0.0.70 system.",

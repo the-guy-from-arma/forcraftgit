@@ -2540,8 +2540,8 @@ def admin_required(user: DbRow | None) -> str | None:
 def developer_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
-    if not has_any(user, "owner", "admin", "dev"):
-        return "Developer, owner, or admin access required"
+    if not has_any(user, "owner", "dev"):
+        return "Owner or developer access required"
     return None
 
 
@@ -2751,7 +2751,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps.append({"id": "indeed-admin", "label": "Indeed Admin", "icon": "briefcase", "enabled": True, "hidden": False})
     if has_any(user, "owner", "admin"):
         apps.append({"id": "admin", "label": "Admin", "icon": "settings", "enabled": True, "hidden": False})
-    if has_any(user, "owner", "admin", "dev"):
+    if has_any(user, "owner", "dev"):
         apps.append({"id": "dev-tools", "label": "Dev Tools", "icon": "code", "enabled": True, "hidden": False})
     if has_any(user, "owner", "dev"):
         apps.append({"id": "fine-settlement", "label": "Fine Settlement", "icon": "gavel", "enabled": True, "hidden": False})
