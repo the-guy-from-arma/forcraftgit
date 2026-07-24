@@ -57,7 +57,9 @@ const state = {
   dispatchFilter: "active",
   dispatchPastOpen: false,
   dispatchViewingPastCall: false,
-  courtTab: "mine",
+  myFaircroftTab: "overview",
+  courtTab: "docket",
+  courtSelectedCaseId: null,
   contractsTab: "open",
   contractsInfoOpen: false,
   contractProofId: null,
@@ -126,6 +128,7 @@ const iconSvg = {
   send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>',
   bank: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m3 10 9-6 9 6Z"/><path d="M5 10v9M9 10v9M15 10v9M19 10v9M3 19h18"/></svg>',
   treasury: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="M5 10v8M9 12v6M15 12v6M19 10v8M3 18h18"/><path d="M12 7v4"/></svg>',
+  civic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 21h16M6 18h12M7 9v9M11 9v9M15 9v9M19 9v9M3 8h18L12 3 3 8Z"/><path d="M12 5.5v1"/></svg>',
   store: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 10h16l-1-5H5Z"/><path d="M5 10v10h14V10"/><path d="M8 20v-6h8v6"/><path d="M4 10c0 2 3 2 4 0 1 2 5 2 6 0 1 2 4 2 6 0"/></svg>',
   user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/><path d="M16 11l2 2 4-5"/></svg>',
   map: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3Z"/><path d="M9 3v15M15 6v15"/><path d="M6 10h2M16 10h2M11 14h2"/></svg>',
@@ -154,6 +157,7 @@ const tileColors = {
   dmv: "linear-gradient(145deg, #4ecdc4, #1b6d69)",
   jobs: "linear-gradient(145deg, #f7b733, #704811)",
   court: "linear-gradient(145deg, #b78cff, #4f3175)",
+  "my-faircroft": "linear-gradient(145deg, #78e4d0, #2e628e 55%, #d5ab4e)",
   properties: "linear-gradient(145deg, #28d17c, #17623d)",
   cash: "linear-gradient(145deg, #f15f79, #7a1e31)",
   bank: "linear-gradient(145deg, #5c9cff, #21497e)",
@@ -762,6 +766,7 @@ function renderPanel(id) {
     "getting-started": "Getting Started",
     dmv: "DMV",
     jobs: "Jobs",
+    "my-faircroft": "MyFaircroft",
     court: "Court",
     properties: "Properties",
     cash: "Cash App",
@@ -786,6 +791,7 @@ function renderPanel(id) {
     "getting-started": renderGettingStarted,
     dmv: renderDmv,
     jobs: renderJobs,
+    "my-faircroft": renderMyFaircroft,
     court: renderCourt,
     properties: renderProperties,
     cash: renderCash,
@@ -823,7 +829,8 @@ async function loadAppData(id) {
     profile: () => api("/api/profile"),
     dmv: () => api("/api/dmv/me"),
     jobs: () => api("/api/jobs"),
-    court: async () => ({ mine: await api("/api/court/my-cases") }),
+    "my-faircroft": () => api("/api/my-faircroft"),
+    court: () => api("/api/court/cases"),
     properties: () => api("/api/properties"),
     bank: () => api("/api/bank"),
     treasury: () => api("/api/treasury"),
@@ -921,6 +928,7 @@ function bindPanel() {
     profile: bindProfile,
     dmv: bindDmv,
     jobs: bindJobs,
+    "my-faircroft": bindMyFaircroft,
     court: bindCourt,
     properties: bindProperties,
     cash: bindCash,
@@ -3706,93 +3714,324 @@ function renderCourtRules() {
   return `<div class="card"><h3>Citation workflow</h3><p class="muted">Officers issue citations from the MDT. Civilians can pay or contest them here. Judges see issued and contested cases, then review, reduce, dismiss, or mark paid.</p></div>`;
 }
 
-function renderCourt() {
-  const data = state.cache.court?.mine || {};
-  const isOfficer = canAny("leo", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "owner");
-  const isJudge = canAny("judge", "owner");
-  const tabs = [
-    ["defendant-active", "Active"],
-    ["defendant-previous", "Previous"],
-    ...(isOfficer ? [["officer-active", "Officer Active"], ["officer-previous", "Officer Previous"]] : []),
-    ...(isJudge ? [["judge-active", "Judge Docket"], ["judge-previous", "Judge Previous"]] : []),
-  ];
-  if (!tabs.some(([id]) => id === state.courtTab)) state.courtTab = "defendant-active";
-  const tabData = {
-    "defendant-active": data.defendant?.active || [],
-    "defendant-previous": data.defendant?.previous || [],
-    "officer-active": data.officer?.active || [],
-    "officer-previous": data.officer?.previous || [],
-    "judge-active": data.judge?.active || [],
-    "judge-previous": data.judge?.previous || [],
-  };
-  const previous = state.courtTab.includes("previous");
-  const judgeTab = state.courtTab.startsWith("judge");
-  const defendantTab = state.courtTab.startsWith("defendant");
-  const activeTotal = (data.defendant?.active || []).length + (data.officer?.active || []).length + (data.judge?.active || []).length;
-  const previousTotal = (data.defendant?.previous || []).length + (data.officer?.previous || []).length + (data.judge?.previous || []).length;
-  return `
-    <div class="stack court-app">
-      <section class="court-hero">
-        <div>
-          <p class="eyebrow">Court docket</p>
-          <h3>Citations & Cases</h3>
-          <p>MDT citations and filed criminal charges are routed here for defendants, officers, and judges.</p>
-        </div>
-        <div class="court-hero-stats">
-          <div><span>Active</span><strong>${activeTotal}</strong></div>
-          <div><span>Previous</span><strong>${previousTotal}</strong></div>
-        </div>
+function myFaircroftTaxAccounts(rows) {
+  const accounts = new Map();
+  rows.filter((item) => item.status === "unpaid").forEach((item) => {
+    if (!accounts.has(item.business_id)) {
+      accounts.set(item.business_id, {
+        business_id: item.business_id,
+        business_name: item.business_name,
+        license_number: item.license_number,
+        amount: 0,
+        assessments: 0,
+        payment_batch_status: item.payment_batch_status,
+        payment_batch_number: item.payment_batch_number,
+      });
+    }
+    const account = accounts.get(item.business_id);
+    account.amount += Number(item.amount || 0);
+    account.assessments += 1;
+    account.payment_batch_status ||= item.payment_batch_status;
+    account.payment_batch_number ||= item.payment_batch_number;
+  });
+  return Array.from(accounts.values());
+}
+
+function myFaircroftFineIsDue(item) {
+  return !["paid", "dismissed"].includes(item.status)
+    && !["not_guilty", "dismissed"].includes(item.disposition)
+    && Number(item.fine_amount || 0) > 0;
+}
+
+function paymentState(item) {
+  if (item.payment_item_status === "paid" || item.payment_batch_status === "completed") return "Paid";
+  if (item.payment_batch_status && item.payment_batch_status !== "cancelled") {
+    return item.payment_batch_status === "draft" ? "Awaiting clerk" : "Processing";
+  }
+  return "";
+}
+
+function renderMyFaircroft() {
+  const data = state.cache["my-faircroft"] || {};
+  const cases = data.cases || [];
+  const taxes = data.taxes || [];
+  const summary = data.summary || {};
+  const taxAccounts = myFaircroftTaxAccounts(taxes);
+  const dueFines = cases.filter(myFaircroftFineIsDue);
+  const historyCases = cases.filter((item) => !myFaircroftFineIsDue(item) || item.disposition);
+  const paidTaxes = taxes.filter((item) => item.status === "paid");
+  const tabs = [["overview", "Overview"], ["fines", "Fines"], ["taxes", "Taxes"], ["history", "Records"]];
+  const body = {
+    overview: `
+      <section class="myfc-action-ledger">
+        <button data-myfc-tab="fines"><span>Fine balance</span><strong>${money(summary.outstanding_fines)}</strong><small>${dueFines.length} open item${dueFines.length === 1 ? "" : "s"}</small></button>
+        <button data-myfc-tab="taxes"><span>Tax balance</span><strong>${money(summary.outstanding_taxes)}</strong><small>${taxAccounts.length} business account${taxAccounts.length === 1 ? "" : "s"}</small></button>
+        <button data-myfc-tab="history"><span>Payment queue</span><strong>${Number(summary.pending_payments || 0)}</strong><small>Awaiting verified game-bank settlement</small></button>
       </section>
-      <div class="court-tabs">
-        ${tabs.map(([id, label]) => `<button class="${state.courtTab === id ? "active" : ""}" data-court-tab="${id}">${label}</button>`).join("")}
-      </div>
-      ${judgeTab ? renderJudgeCases(tabData[state.courtTab], previous) : renderCaseList(tabData[state.courtTab], { previous, defendant: defendantTab })}
+      <section class="myfc-notice">
+        <span class="myfc-notice-mark">FC</span>
+        <div><strong>Verified payment process</strong><p>Payment requests lock the expected in-game balance. A clerk completes the transaction, and your record changes to paid only after the Arma bank sync confirms the exact balance.</p></div>
+      </section>
+    `,
+    fines: renderMyFaircroftFines(dueFines),
+    taxes: renderMyFaircroftTaxes(taxAccounts),
+    history: renderMyFaircroftHistory(historyCases, paidTaxes),
+  }[state.myFaircroftTab] || "";
+  return `
+    <div class="myfc-app">
+      <header class="myfc-identity">
+        <div class="myfc-seal">SF</div>
+        <div>
+          <p class="eyebrow">State of Faircroft resident services</p>
+          <h3>MyFaircroft</h3>
+          <p>One account for court obligations, business taxes, and verified payment records.</p>
+        </div>
+        <div class="myfc-bank">
+          <span>Synced game bank</span>
+          <strong>${money(data.bank?.bank_balance)}</strong>
+          <small>${data.bank?.bank_balance_synced ? "Connected" : "Awaiting account link"}</small>
+        </div>
+      </header>
+      <nav class="myfc-tabs">
+        ${tabs.map(([id, label]) => `<button class="${state.myFaircroftTab === id ? "active" : ""}" data-myfc-tab="${id}">${label}</button>`).join("")}
+      </nav>
+      <div class="myfc-content">${body}</div>
     </div>
   `;
 }
 
-function renderCaseList(cases, options = {}) {
-  const previous = Boolean(options.previous);
-  const defendant = Boolean(options.defendant);
+function renderMyFaircroftFines(cases) {
   return `
-    <div class="list">
-      ${cases.map((item) => `
-        <article class="case-card court-case-card">
-          <div class="row"><div><p class="eyebrow">Court case #${item.id} / Citation</p><h3>${escapeHtml(item.charge_code)} - ${escapeHtml(item.charge_title)}</h3></div><span class="pill ${["paid", "dismissed", "closed"].includes(item.status) ? "green" : item.status === "contested" ? "amber" : "red"}">${escapeHtml(item.status)}</span></div>
-          <p class="muted small">Defendant ${escapeHtml(item.civ_name || "You")} - Officer ${escapeHtml(item.officer_name)} - Judge ${escapeHtml(item.judge_name || "Pending assignment")} - ${money(item.fine_amount)}</p>
-          <p class="muted small">${escapeHtml(item.location)} - Court ${escapeHtml(item.court_date || "Pending")}</p>
-          <p>${escapeHtml(item.narrative)}</p>
-          ${previous ? `<div class="metric"><span>Final result</span><strong>${escapeHtml(item.final_result || item.judgment_notes || item.status)}</strong></div>` : ""}
-          ${defendant && !previous ? `<div class="row">
-            <button class="secondary" data-contest-case="${item.id}" ${["paid", "dismissed", "contested", "closed"].includes(item.status) ? "disabled" : ""}>Contest</button>
-            <button class="primary" data-pay-case="${item.id}" ${["paid", "dismissed", "closed"].includes(item.status) ? "disabled" : ""}>Pay fine</button>
-          </div>` : ""}
-        </article>
-      `).join("") || `<div class="empty">No cases at this time</div>`}
-    </div>
-  `;
-}
-
-function renderJudgeCases(cases, previous = false) {
-  return `
-    <div class="list">
-      ${cases.map((item) => `
-        <article class="case-card court-case-card">
-          <div class="row"><div><p class="eyebrow">Court case #${item.id} / Citation</p><h3>${escapeHtml(item.charge_code)}</h3></div><span class="pill ${["paid", "dismissed", "closed"].includes(item.status) ? "green" : item.status === "contested" ? "amber" : "red"}">${escapeHtml(item.status)}</span></div>
-          <p class="muted small">Defendant ${escapeHtml(item.civ_name)} - ${escapeHtml(item.civ_email)} - Officer ${escapeHtml(item.officer_name)} - Presiding ${escapeHtml(item.judge_name || "Unassigned")}</p>
-          <p><strong>${escapeHtml(item.charge_title)}</strong> - ${money(item.fine_amount)}</p>
-          <p>${escapeHtml(item.narrative)}</p>
-          ${previous ? `<div class="metric"><span>Final result</span><strong>${escapeHtml(item.final_result || item.judgment_notes || item.status)}</strong></div>` : `<form class="form-grid judge-form" data-case-id="${item.id}">
-            <div class="grid-2">
-              <label>Status<select name="status"><option>reviewed</option><option>reduced</option><option>dismissed</option><option>paid</option><option>contested</option><option>closed</option></select></label>
-              <label>Fine<input name="fine_amount" type="number" step="0.01" value="${escapeHtml(item.fine_amount)}" /></label>
+    <section class="myfc-ledger">
+      <header><div><p class="eyebrow">Court obligations</p><h3>Fines & citations</h3></div><span>${cases.length} open</span></header>
+      ${cases.map((item) => {
+        const pending = paymentState(item);
+        const canContest = ["issued", "reviewed", "reduced"].includes(item.status) && !item.payment_batch_status;
+        const canPay = item.status !== "contested" && !item.payment_batch_status;
+        return `
+          <article class="myfc-ledger-row">
+            <div class="myfc-ledger-code"><strong>${escapeHtml(item.charge_code)}</strong><small>Case #${item.id}</small></div>
+            <div class="myfc-ledger-main">
+              <h4>${escapeHtml(item.charge_title)}</h4>
+              <p>${escapeHtml(item.location)} / Court ${escapeHtml(item.court_date || "date pending")}</p>
+              <small>Issued by ${escapeHtml(item.officer_name)}${item.judge_name ? ` / Assigned to ${escapeHtml(item.judge_name)}` : ""}</small>
+              ${item.kind === "criminal" ? `<small class="sentence-line">RP sentencing standard: ${item.minimum_sentence_minutes}-${item.maximum_sentence_minutes} minutes if convicted</small>` : ""}
             </div>
-            <label>Judgment notes<input name="judgment_notes" value="${escapeHtml(item.judgment_notes || "")}" /></label>
-            <button class="primary" type="submit">Update case</button>
-          </form>`}
+            <div class="myfc-ledger-money"><strong>${money(item.fine_amount)}</strong><span>${pending || escapeHtml(item.status)}</span></div>
+            <div class="myfc-ledger-actions">
+              <button class="secondary" data-contest-case="${item.id}" ${canContest ? "" : "disabled"}>Contest</button>
+              <button class="primary" data-pay-case="${item.id}" ${canPay ? "" : "disabled"}>${pending || "Request payment"}</button>
+            </div>
+          </article>
+        `;
+      }).join("") || `<div class="empty">No outstanding fines or citations</div>`}
+    </section>
+  `;
+}
+
+function renderMyFaircroftTaxes(accounts) {
+  return `
+    <section class="myfc-ledger">
+      <header><div><p class="eyebrow">Department of revenue</p><h3>Business taxes</h3></div><span>${accounts.length} account${accounts.length === 1 ? "" : "s"}</span></header>
+      ${accounts.map((item) => {
+        const pending = item.payment_batch_status && item.payment_batch_status !== "cancelled"
+          ? (item.payment_batch_status === "draft" ? "Awaiting clerk" : "Processing")
+          : "";
+        return `
+          <article class="myfc-ledger-row tax">
+            <div class="myfc-ledger-code"><strong>TAX</strong><small>${escapeHtml(item.license_number)}</small></div>
+            <div class="myfc-ledger-main"><h4>${escapeHtml(item.business_name)}</h4><p>${item.assessments} unpaid assessment${item.assessments === 1 ? "" : "s"}</p><small>${pending ? `Payment request ${escapeHtml(item.payment_batch_number || "")}` : "Eligible for verified game-bank settlement"}</small></div>
+            <div class="myfc-ledger-money"><strong>${money(item.amount)}</strong><span>${pending || "Due"}</span></div>
+            <div class="myfc-ledger-actions"><button class="primary" data-pay-tax="${item.business_id}" ${pending ? "disabled" : ""}>${pending || "Request payment"}</button></div>
+          </article>
+        `;
+      }).join("") || `<div class="empty">No unpaid business taxes</div>`}
+    </section>
+  `;
+}
+
+function renderMyFaircroftHistory(cases, taxes) {
+  const entries = [
+    ...cases.map((item) => ({
+      date: item.updated_at,
+      reference: `CASE-${item.id}`,
+      title: `${item.charge_code} / ${item.charge_title}`,
+      result: item.final_result || item.disposition || item.status,
+      amount: item.fine_amount,
+    })),
+    ...taxes.map((item) => ({
+      date: item.settled_at || item.assessed_at,
+      reference: item.payment_batch_number || item.license_number,
+      title: `${item.business_name} / ${item.period_label}`,
+      result: "Business tax paid",
+      amount: item.amount,
+    })),
+  ].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+  return `
+    <section class="myfc-ledger">
+      <header><div><p class="eyebrow">Official account record</p><h3>Decisions & receipts</h3></div><span>${entries.length} records</span></header>
+      ${entries.map((item) => `
+        <article class="myfc-history-row">
+          <div><strong>${escapeHtml(item.reference)}</strong><small>${item.date ? new Date(item.date).toLocaleDateString() : "Date pending"}</small></div>
+          <div><h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.result)}</p></div>
+          <strong>${money(item.amount)}</strong>
         </article>
-      `).join("") || `<div class="empty">No cases at this time</div>`}
+      `).join("") || `<div class="empty">No previous court or tax records</div>`}
+    </section>
+  `;
+}
+
+function bindMyFaircroft() {
+  $$("[data-myfc-tab]").forEach((button) => button.addEventListener("click", () => {
+    state.myFaircroftTab = button.dataset.myfcTab;
+    render();
+  }));
+  $$("[data-pay-case]").forEach((button) => button.addEventListener("click", async () => {
+    try {
+      const result = await api(`/api/my-faircroft/fines/${button.dataset.payCase}/pay`, { method: "POST" });
+      toast(`Payment request ${result.batch_number} sent`);
+      await loadAppData("my-faircroft");
+      render();
+    } catch (error) {
+      if (error.message) toast(error.message);
+    }
+  }));
+  $$("[data-contest-case]").forEach((button) => button.addEventListener("click", async () => {
+    try {
+      await api(`/api/my-faircroft/fines/${button.dataset.contestCase}/contest`, { method: "POST" });
+      toast("Case sent to the Court docket");
+      await loadAppData("my-faircroft");
+      render();
+    } catch (error) {
+      if (error.message) toast(error.message);
+    }
+  }));
+  $$("[data-pay-tax]").forEach((button) => button.addEventListener("click", async () => {
+    try {
+      const result = await api(`/api/my-faircroft/taxes/${button.dataset.payTax}/pay`, { method: "POST" });
+      toast(`Tax payment request ${result.batch_number} sent`);
+      await loadAppData("my-faircroft");
+      render();
+    } catch (error) {
+      if (error.message) toast(error.message);
+    }
+  }));
+}
+
+function renderCourt() {
+  const data = state.cache.court || {};
+  const active = data.active || [];
+  const decided = data.decided || [];
+  const stats = data.stats || {};
+  const tabs = [["docket", "Active docket"], ["decisions", "Decisions"], ["standards", "Sentencing"]];
+  if (!tabs.some(([id]) => id === state.courtTab)) state.courtTab = "docket";
+  if (!active.some((item) => Number(item.id) === Number(state.courtSelectedCaseId))) {
+    state.courtSelectedCaseId = active[0]?.id || null;
+  }
+  const content = state.courtTab === "docket"
+    ? renderCourtDocket(active)
+    : state.courtTab === "decisions"
+      ? renderCourtDecisions(decided)
+      : renderCourtStandards(data.standards || []);
+  return `
+    <div class="court-app court-bench">
+      <header class="court-identity">
+        <div class="court-seal">SF</div>
+        <div><p class="eyebrow">State of Faircroft judiciary</p><h3>Court Operations</h3><p>Official judicial docket. Personal fines and taxes remain in MyFaircroft.</p></div>
+        <dl>
+          <div><dt>Open</dt><dd>${Number(stats.active || 0)}</dd></div>
+          <div><dt>Contested</dt><dd>${Number(stats.contested || 0)}</dd></div>
+          <div><dt>Criminal</dt><dd>${Number(stats.criminal || 0)}</dd></div>
+        </dl>
+      </header>
+      <nav class="court-bench-tabs">${tabs.map(([id, label]) => `<button class="${state.courtTab === id ? "active" : ""}" data-court-tab="${id}">${label}</button>`).join("")}</nav>
+      ${content}
     </div>
+  `;
+}
+
+function renderCourtDocket(cases) {
+  const selected = cases.find((item) => Number(item.id) === Number(state.courtSelectedCaseId));
+  return `
+    <div class="court-bench-layout">
+      <aside class="court-docket-list">
+        <header><span>Assigned docket</span><strong>${cases.length}</strong></header>
+        ${cases.map((item) => `
+          <button class="${selected?.id === item.id ? "active" : ""}" data-court-select="${item.id}">
+            <span><strong>#${item.id} ${escapeHtml(item.charge_code)}</strong><small>${escapeHtml(item.civ_name)} / ${escapeHtml(item.kind)}</small></span>
+            <i class="${item.status === "contested" ? "amber" : ""}">${escapeHtml(item.status)}</i>
+          </button>
+        `).join("") || `<div class="empty">No cases awaiting court action</div>`}
+      </aside>
+      <section class="court-case-file">${selected ? renderCourtCaseFile(selected) : `<div class="court-file-empty"><span>COURT</span><h3>Docket clear</h3><p>No case is waiting for judicial action.</p></div>`}</section>
+    </div>
+  `;
+}
+
+function renderCourtCaseFile(item) {
+  const criminal = item.kind === "criminal";
+  const dispositions = criminal
+    ? [["under_review", "Place under review"], ["continued", "Continue hearing"], ["guilty", "Guilty"], ["plea_agreement", "Accept plea agreement"], ["not_guilty", "Not guilty"], ["dismissed", "Dismiss case"]]
+    : [["under_review", "Place under review"], ["continued", "Continue hearing"], ["liable", "Liable"], ["not_guilty", "Not liable"], ["dismissed", "Dismiss citation"]];
+  return `
+    <article class="court-file">
+      <header>
+        <div><p class="eyebrow">Case file FC-${item.id}</p><h3>${escapeHtml(item.charge_code)} / ${escapeHtml(item.charge_title)}</h3></div>
+        <span class="pill ${item.status === "contested" ? "amber" : "red"}">${escapeHtml(item.status)}</span>
+      </header>
+      <dl class="court-file-meta">
+        <div><dt>Defendant</dt><dd>${escapeHtml(item.civ_name)} <small>CIV ${escapeHtml(item.civ_number)}</small></dd></div>
+        <div><dt>Filing officer</dt><dd>${escapeHtml(item.officer_name)}</dd></div>
+        <div><dt>Hearing date</dt><dd>${escapeHtml(item.court_date || "Pending")}</dd></div>
+        <div><dt>Matter</dt><dd>${criminal ? "Criminal" : "Citation"} / ${escapeHtml(item.severity)}</dd></div>
+      </dl>
+      <section class="court-allegation"><span>Filed narrative</span><p>${escapeHtml(item.narrative)}</p><small>${escapeHtml(item.location)}</small></section>
+      ${criminal ? `
+        <section class="court-sentence-band">
+          <div><span>Mandatory RP minimum</span><strong>${Number(item.minimum_sentence_minutes || 0)} min</strong></div>
+          <div><span>Guideline maximum</span><strong>${Number(item.maximum_sentence_minutes || 0)} min</strong></div>
+          <p>These are gameplay minutes for Faircroft RP. They are not real-world years or real legal sentencing.</p>
+        </section>
+      ` : ""}
+      <form class="court-decision-form" data-case-id="${item.id}">
+        <header><div><p class="eyebrow">Judicial action</p><h4>Findings & disposition</h4></div><span>Digitally filed to both parties</span></header>
+        <div class="grid-2">
+          <label>Disposition<select name="disposition">${dispositions.map(([value, label]) => `<option value="${value}"${selectedAttr(value, item.disposition || "under_review")}>${label}</option>`).join("")}</select></label>
+          <label>Fine amount<input name="fine_amount" type="number" min="0" step="0.01" value="${escapeHtml(item.fine_amount)}" required /></label>
+        </div>
+        ${criminal ? `<label>RP sentence in minutes<input name="sentence_minutes" type="number" min="0" max="${Number(item.maximum_sentence_minutes || 999)}" value="${Number(item.sentence_minutes || item.minimum_sentence_minutes || 0)}" required /><small>Convictions cannot be filed below ${Number(item.minimum_sentence_minutes || 0)} minutes or above ${Number(item.maximum_sentence_minutes || 0)} minutes.</small></label>` : `<input name="sentence_minutes" type="hidden" value="0" />`}
+        <label>Written findings<textarea name="judgment_notes" rows="5" maxlength="2000" placeholder="State the finding, evidence considered, and reason for the disposition.">${escapeHtml(item.judgment_notes || "")}</textarea></label>
+        ${criminal ? `<label>Sentence conditions<textarea name="sentence_notes" rows="3" maxlength="1200" placeholder="Time served, release conditions, probation RP, or other court direction.">${escapeHtml(item.sentence_notes || "")}</textarea></label>` : ""}
+        <button class="primary" type="submit">Sign & file court action</button>
+      </form>
+    </article>
+  `;
+}
+
+function renderCourtDecisions(cases) {
+  return `
+    <section class="court-decisions">
+      <header><div><p class="eyebrow">Filed orders</p><h3>Previous decisions</h3></div><span>${cases.length} records</span></header>
+      ${cases.map((item) => `
+        <article>
+          <div><strong>FC-${item.id}</strong><small>${escapeHtml(item.decided_at ? new Date(item.decided_at).toLocaleDateString() : item.updated_at ? new Date(item.updated_at).toLocaleDateString() : "")}</small></div>
+          <div><h4>${escapeHtml(item.charge_code)} / ${escapeHtml(item.civ_name)}</h4><p>${escapeHtml(item.final_result || item.disposition || item.status)}</p></div>
+          <span>${item.sentence_minutes ? `${item.sentence_minutes} min` : money(item.fine_amount)}</span>
+        </article>
+      `).join("") || `<div class="empty">No filed decisions</div>`}
+    </section>
+  `;
+}
+
+function renderCourtStandards(standards) {
+  return `
+    <section class="court-standards">
+      <header><div><p class="eyebrow">Faircroft RP standard</p><h3>Mandatory sentencing schedule</h3></div><p>Custodial time is measured in playable RP minutes. Non-custodial findings, dismissals, and not-guilty decisions carry no jail time.</p></header>
+      <div class="court-standard-table">
+        <div class="head"><span>Offense class</span><span>Minimum</span><span>Maximum</span><span>Codes</span></div>
+        ${standards.map((item) => `<div><strong>${escapeHtml(item.severity)}</strong><span>${Number(item.minimum_sentence_minutes || 0)} min</span><span>${Number(item.maximum_sentence_minutes || 0)} min</span><span>${Number(item.code_count || 0)}</span></div>`).join("")}
+      </div>
+    </section>
   `;
 }
 
@@ -3801,35 +4040,23 @@ function bindCourt() {
     state.courtTab = button.dataset.courtTab;
     render();
   }));
-  $$("[data-pay-case]").forEach((button) => button.addEventListener("click", async () => {
-    try {
-      await api(`/api/court/my-cases/${button.dataset.payCase}/pay`, { method: "POST" });
-      toast("Fine paid");
-      await loadAppData("court");
-      render();
-    } catch (error) {
-      toast(error.message);
-    }
+  $$("[data-court-select]").forEach((button) => button.addEventListener("click", () => {
+    state.courtSelectedCaseId = Number(button.dataset.courtSelect);
+    render();
   }));
-  $$("[data-contest-case]").forEach((button) => button.addEventListener("click", async () => {
-    try {
-      await api(`/api/court/my-cases/${button.dataset.contestCase}/contest`, { method: "POST" });
-      toast("Case contested");
-      await loadAppData("court");
-      render();
-    } catch (error) {
-      toast(error.message);
-    }
-  }));
-  $$(".judge-form").forEach((form) => form.addEventListener("submit", async (event) => {
+  $$(".court-decision-form").forEach((form) => form.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
-      await api(`/api/court/cases/${form.dataset.caseId}`, { method: "PATCH", body: Object.fromEntries(new FormData(form).entries()) });
-      toast("Case updated");
+      const result = await api(`/api/court/cases/${form.dataset.caseId}`, {
+        method: "PATCH",
+        body: Object.fromEntries(new FormData(form).entries()),
+      });
+      toast(result.final_result || "Court action filed");
+      state.courtSelectedCaseId = null;
       await loadAppData("court");
       render();
     } catch (error) {
-      toast(error.message);
+      if (error.message) toast(error.message);
     }
   }));
 }

@@ -673,6 +673,7 @@ APP_VISIBILITY_OPTIONS = (
     ("getting-started", "Getting Started"),
     ("dmv", "DMV"),
     ("jobs", "Jobs"),
+    ("my-faircroft", "MyFaircroft"),
     ("court", "Court"),
     ("business", "Business"),
     ("properties", "Properties"),
@@ -1089,7 +1090,9 @@ def ensure_schema() -> None:
                 fine_amount NUMERIC(12,2) NOT NULL,
                 points INTEGER NOT NULL DEFAULT 0,
                 severity TEXT NOT NULL DEFAULT 'Infraction',
-                kind TEXT NOT NULL DEFAULT 'criminal'
+                kind TEXT NOT NULL DEFAULT 'criminal',
+                minimum_sentence_minutes INTEGER NOT NULL DEFAULT 0,
+                maximum_sentence_minutes INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS citations (
@@ -1110,6 +1113,12 @@ def ensure_schema() -> None:
                 court_date TEXT,
                 judgment_notes TEXT,
                 final_result TEXT NOT NULL DEFAULT '',
+                disposition TEXT NOT NULL DEFAULT '',
+                sentence_minutes INTEGER NOT NULL DEFAULT 0,
+                sentence_notes TEXT NOT NULL DEFAULT '',
+                minimum_sentence_minutes INTEGER NOT NULL DEFAULT 0,
+                maximum_sentence_minutes INTEGER NOT NULL DEFAULT 0,
+                decided_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (civ_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -1595,10 +1604,30 @@ def ensure_migrations(db: Database) -> None:
     for existing_user in all_rows(db, "SELECT id, name FROM users ORDER BY id"):
         ensure_default_character(db, int(existing_user["id"]), str(existing_user["name"] or "Civilian"))
     db.execute("ALTER TABLE charge_catalog ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'criminal'")
+    db.execute("ALTER TABLE charge_catalog ADD COLUMN IF NOT EXISTS minimum_sentence_minutes INTEGER NOT NULL DEFAULT 0")
+    db.execute("ALTER TABLE charge_catalog ADD COLUMN IF NOT EXISTS maximum_sentence_minutes INTEGER NOT NULL DEFAULT 0")
     db.execute("UPDATE charge_catalog SET kind = 'citation' WHERE code LIKE ?", ("TRF-%",))
     db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS judge_id INTEGER")
     db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS final_result TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS disposition TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS sentence_minutes INTEGER NOT NULL DEFAULT 0")
+    db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS sentence_notes TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS minimum_sentence_minutes INTEGER NOT NULL DEFAULT 0")
+    db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS maximum_sentence_minutes INTEGER NOT NULL DEFAULT 0")
+    db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS decided_at TEXT")
+    db.execute("UPDATE citations SET judge_id = NULL WHERE judge_id = civ_id")
     db.execute("UPDATE citations SET final_result = status WHERE final_result = '' AND status NOT IN ('issued','contested','reviewed','reduced')")
+    db.execute(
+        """
+        UPDATE citations c
+        SET minimum_sentence_minutes = catalog.minimum_sentence_minutes,
+            maximum_sentence_minutes = catalog.maximum_sentence_minutes
+        FROM charge_catalog catalog
+        WHERE c.charge_id = catalog.id
+          AND c.minimum_sentence_minutes = 0
+          AND c.maximum_sentence_minutes = 0
+        """
+    )
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS fine_settlement_batches (
@@ -2325,6 +2354,53 @@ def seed_charges(db: Database) -> None:
         """,
         charges,
     )
+    db.execute(
+        """
+        UPDATE charge_catalog
+        SET minimum_sentence_minutes = CASE
+                WHEN kind <> 'criminal' THEN 0
+                WHEN severity = 'Class A-I Felony' THEN 45
+                WHEN severity = 'Class A-II Felony' THEN 40
+                WHEN severity = 'Class B Felony' THEN 30
+                WHEN severity = 'Class C Felony' THEN 24
+                WHEN severity = 'Class D Felony' THEN 18
+                WHEN severity = 'Class E Felony' THEN 12
+                WHEN severity = 'Felony' THEN 18
+                WHEN severity = 'Class A Misdemeanor' THEN 6
+                WHEN severity = 'Class B Misdemeanor' THEN 3
+                WHEN severity = 'Misdemeanor' THEN 5
+                WHEN severity = 'Offense Class Varies' THEN 0
+                ELSE 0
+            END,
+            maximum_sentence_minutes = CASE
+                WHEN kind <> 'criminal' THEN 0
+                WHEN severity = 'Class A-I Felony' THEN 90
+                WHEN severity = 'Class A-II Felony' THEN 80
+                WHEN severity = 'Class B Felony' THEN 65
+                WHEN severity = 'Class C Felony' THEN 50
+                WHEN severity = 'Class D Felony' THEN 40
+                WHEN severity = 'Class E Felony' THEN 30
+                WHEN severity = 'Felony' THEN 45
+                WHEN severity = 'Class A Misdemeanor' THEN 20
+                WHEN severity = 'Class B Misdemeanor' THEN 12
+                WHEN severity = 'Misdemeanor' THEN 18
+                WHEN severity = 'Offense Class Varies' THEN 45
+                WHEN severity = 'Violation' THEN 5
+                ELSE 0
+            END
+        """
+    )
+    db.execute(
+        """
+        UPDATE citations c
+        SET minimum_sentence_minutes = catalog.minimum_sentence_minutes,
+            maximum_sentence_minutes = catalog.maximum_sentence_minutes
+        FROM charge_catalog catalog
+        WHERE c.charge_id = catalog.id
+          AND c.minimum_sentence_minutes = 0
+          AND c.maximum_sentence_minutes = 0
+        """
+    )
 
 
 def seed_properties(db: Database) -> None:
@@ -2726,7 +2802,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         ("roadmap", "Roadmap", "route", True, False),
         ("dmv", "DMV", "id-card", verified, False),
         ("jobs", "JOB", "briefcase", True, False),
-        ("court", "COURT", "gavel", verified, False),
+        ("my-faircroft", "MyFaircroft", "civic", True, False),
         ("business", "Business", "store", business_enabled, False),
         ("properties", "PROPERTIES", "home", False, True),
         ("bank", "BANK", "bank", verified, False),
@@ -2741,6 +2817,8 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps.append({"id": "contracts", "label": "Contracts", "icon": "target", "enabled": True, "coming_soon": False, "hidden": False})
     if has_any(user, *LAW_SERVICE_ROLES, "owner"):
         apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "hidden": False})
+    if has_any(user, "judge", "owner"):
+        apps.append({"id": "court", "label": "Court", "icon": "gavel", "enabled": True, "hidden": False})
     if has_any(user, *FIRE_SERVICE_ROLES, "owner"):
         apps.append({"id": "fire", "label": "Fire MDT", "icon": "flame", "enabled": True, "hidden": False})
     if has_any(user, *FIRE_COMMAND_ROLES, "owner"):
@@ -2858,14 +2936,17 @@ def human_request_type(value: Any) -> str:
     return str(value or "treasury request").replace("_", " ").title()
 
 
-ACTIVE_CASE_STATUSES = ("issued", "contested", "reviewed", "reduced")
+ACTIVE_CASE_STATUSES = ("issued", "contested", "reviewed", "reduced", "continued")
 CLOSED_CASE_STATUSES = ("paid", "dismissed", "closed")
+COURT_DISPOSITIONS = ("under_review", "continued", "liable", "guilty", "plea_agreement", "not_guilty", "dismissed")
+CONVICTION_DISPOSITIONS = ("guilty", "plea_agreement")
+NONPAYABLE_DISPOSITIONS = ("not_guilty", "dismissed")
 
 
 def case_status_clause(active: bool) -> str:
     if active:
-        return "c.status IN ('issued','contested','reviewed','reduced')"
-    return "c.status NOT IN ('issued','contested','reviewed','reduced')"
+        return "c.status IN ('issued','contested','reviewed','reduced','continued')"
+    return "c.status NOT IN ('issued','contested','reviewed','reduced','continued')"
 
 
 def final_result_for(status: str, notes: str | None = None, fine_amount: float | None = None) -> str:
@@ -2881,14 +2962,42 @@ def final_result_for(status: str, notes: str | None = None, fine_amount: float |
     return clean
 
 
-def pick_presiding_judge(db: Database) -> DbRow | None:
-    judge = one(db, "SELECT id, name FROM users WHERE roles LIKE ? ORDER BY id LIMIT 1", ("%judge%",))
+def court_decision_result(disposition: str, fine_amount: float, sentence_minutes: int, notes: str) -> str:
+    labels = {
+        "liable": "Liable",
+        "guilty": "Guilty",
+        "plea_agreement": "Plea agreement accepted",
+        "not_guilty": "Not guilty",
+        "dismissed": "Dismissed by court",
+        "continued": "Hearing continued",
+        "under_review": "Under judicial review",
+    }
+    result = labels.get(disposition, disposition.replace("_", " ").title())
+    details: list[str] = []
+    if disposition not in NONPAYABLE_DISPOSITIONS and fine_amount > 0:
+        details.append(f"fine ${fine_amount:,.2f}")
+    if sentence_minutes > 0:
+        details.append(f"{sentence_minutes} RP minute sentence")
+    if details:
+        result = f"{result} - {', '.join(details)}"
+    if notes:
+        result = f"{result}: {notes}"
+    return result
+
+
+def pick_presiding_judge(db: Database, defendant_id: int | None = None) -> DbRow | None:
+    excluded = int(defendant_id or 0)
+    judge = one(
+        db,
+        "SELECT id, name FROM users WHERE roles LIKE ? AND id <> ? ORDER BY id LIMIT 1",
+        ("%judge%", excluded),
+    )
     if judge:
         return judge
     return one(
         db,
-        "SELECT id, name FROM users WHERE roles LIKE ? ORDER BY id LIMIT 1",
-        ("%owner%",),
+        "SELECT id, name FROM users WHERE roles LIKE ? AND id <> ? ORDER BY id LIMIT 1",
+        ("%owner%", excluded),
     )
 
 
@@ -3207,6 +3316,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_properties(db, user)
                 elif path.startswith("/api/properties/") and path.endswith("/buy") and method == "POST":
                     self.api_buy_property(db, user, self.path_int(path, 2))
+                elif path == "/api/my-faircroft" and method == "GET":
+                    self.api_my_faircroft(db, user)
+                elif path.startswith("/api/my-faircroft/fines/") and path.endswith("/pay") and method == "POST":
+                    self.api_pay_case(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/my-faircroft/fines/") and path.endswith("/contest") and method == "POST":
+                    self.api_contest_case(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/my-faircroft/taxes/") and path.endswith("/pay") and method == "POST":
+                    self.api_pay_business_tax(db, user, self.path_int(path, 3))
                 elif path == "/api/court/my-cases" and method == "GET":
                     self.api_my_cases(db, user)
                 elif path.startswith("/api/court/my-cases/") and path.endswith("/pay") and method == "POST":
@@ -5608,86 +5725,305 @@ class RoleplayHandler(BaseHTTPRequestHandler):
     def api_buy_property(self, db: Database, user: DbRow | None, property_id: int) -> None:
         self.error(410, "Website bank purchases are disabled. Complete this purchase through the in-game economy.")
 
+    def my_faircroft_payload(self, db: Database, user: DbRow) -> dict[str, Any]:
+        cases = all_rows(
+            db,
+            """
+            SELECT c.*, catalog.kind, officer.name AS officer_name, judge.name AS judge_name,
+                   settlement.status AS payment_item_status, batch.status AS payment_batch_status,
+                   batch.batch_number AS payment_batch_number, batch.created_at AS payment_requested_at
+            FROM citations c
+            JOIN charge_catalog catalog ON catalog.id = c.charge_id
+            JOIN users officer ON officer.id = c.officer_id
+            LEFT JOIN users judge ON judge.id = c.judge_id
+            LEFT JOIN fine_settlement_items settlement ON settlement.citation_id = c.id
+            LEFT JOIN fine_settlement_batches batch ON batch.id = settlement.batch_id
+            WHERE c.civ_id = ?
+            ORDER BY c.created_at DESC
+            """,
+            (user["id"],),
+        )
+        taxes = all_rows(
+            db,
+            """
+            SELECT tax.*, business.business_name, business.license_number,
+                   item.status AS payment_item_status, batch.status AS payment_batch_status,
+                   batch.batch_number AS payment_batch_number, batch.created_at AS payment_requested_at
+            FROM business_tax_assessments tax
+            JOIN businesses business ON business.id = tax.business_id
+            LEFT JOIN business_tax_settlement_items item
+                   ON item.batch_id = tax.settlement_batch_id AND item.business_id = tax.business_id
+            LEFT JOIN business_tax_settlement_batches batch ON batch.id = tax.settlement_batch_id
+            WHERE business.owner_id = ?
+            ORDER BY tax.assessed_at DESC
+            """,
+            (user["id"],),
+        )
+        case_payload = [dict(row) for row in cases]
+        tax_payload = [dict(row) for row in taxes]
+        outstanding_fines = [
+            item
+            for item in case_payload
+            if item["status"] not in ("paid", "dismissed")
+            and item.get("disposition") not in NONPAYABLE_DISPOSITIONS
+            and float(item.get("fine_amount") or 0) > 0
+        ]
+        outstanding_taxes = [item for item in tax_payload if item["status"] == "unpaid"]
+        pending_fine_ids = {
+            int(item["id"])
+            for item in outstanding_fines
+            if item.get("payment_batch_status") not in (None, "completed", "cancelled")
+        }
+        pending_tax_ids = {
+            int(item["id"])
+            for item in outstanding_taxes
+            if item.get("payment_batch_status") not in (None, "completed", "cancelled")
+        }
+        return {
+            "cases": case_payload,
+            "taxes": tax_payload,
+            "bank": public_user_with_game_bank(db, user),
+            "summary": {
+                "outstanding_fines": round(sum(float(item["fine_amount"] or 0) for item in outstanding_fines), 2),
+                "outstanding_taxes": round(sum(float(item["amount"] or 0) for item in outstanding_taxes), 2),
+                "open_cases": sum(1 for item in case_payload if item["status"] in ACTIVE_CASE_STATUSES),
+                "pending_payments": len(pending_fine_ids) + len(pending_tax_ids),
+            },
+        }
+
+    def api_my_faircroft(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        self.send_json(200, self.my_faircroft_payload(db, user))
+
     def api_my_cases(self, db: Database, user: DbRow | None) -> None:
         err = court_access_required(db, user)
         if err:
             self.error(403 if user else 401, err)
             return
-        base_select = """
-            SELECT c.*, civ.name AS civ_name, civ.email AS civ_email,
-                   officer.name AS officer_name, judge.name AS judge_name
-            FROM citations c
-            JOIN users civ ON civ.id = c.civ_id
-            JOIN users officer ON officer.id = c.officer_id
-            LEFT JOIN users judge ON judge.id = c.judge_id
-        """
-
-        defendant_active = all_rows(
-            db,
-            f"{base_select} WHERE c.civ_id = ? AND {case_status_clause(True)} ORDER BY c.created_at DESC",
-            (user["id"],),
-        )
-        defendant_previous = all_rows(
-            db,
-            f"{base_select} WHERE c.civ_id = ? AND {case_status_clause(False)} ORDER BY c.updated_at DESC",
-            (user["id"],),
-        )
-        officer_active: list[DbRow] = []
-        officer_previous: list[DbRow] = []
-        if has_any(user, *LAW_SERVICE_ROLES, "owner"):
-            officer_active = all_rows(
-                db,
-                f"{base_select} WHERE c.officer_id = ? AND {case_status_clause(True)} ORDER BY c.created_at DESC",
-                (user["id"],),
-            )
-            officer_previous = all_rows(
-                db,
-                f"{base_select} WHERE c.officer_id = ? AND {case_status_clause(False)} ORDER BY c.updated_at DESC",
-                (user["id"],),
-            )
-        judge_active = None
-        judge_previous = None
-        if has_any(user, "judge", "owner"):
-            judge_active = all_rows(
-                db,
-                f"{base_select} WHERE (c.judge_id = ? OR c.judge_id IS NULL) AND {case_status_clause(True)} ORDER BY CASE c.status WHEN 'contested' THEN 0 WHEN 'issued' THEN 1 ELSE 2 END, c.created_at DESC",
-                (user["id"],),
-            )
-            judge_previous = all_rows(
-                db,
-                f"{base_select} WHERE (c.judge_id = ? OR c.judge_id IS NULL) AND {case_status_clause(False)} ORDER BY c.updated_at DESC",
-                (user["id"],),
-            )
+        assert user is not None
+        payload = self.my_faircroft_payload(db, user)
+        active = [item for item in payload["cases"] if item["status"] in ACTIVE_CASE_STATUSES]
+        previous = [item for item in payload["cases"] if item["status"] not in ACTIVE_CASE_STATUSES]
         self.send_json(
             200,
             {
-                "cases": [dict(row) for row in defendant_active],
-                "defendant": {"active": defendant_active, "previous": defendant_previous},
-                "officer": {"active": officer_active, "previous": officer_previous},
-                "judge": {"active": judge_active, "previous": judge_previous} if judge_active is not None else None,
+                "cases": active,
+                "defendant": {"active": active, "previous": previous},
+                "officer": {"active": [], "previous": []},
+                "judge": None,
             },
         )
 
     def api_pay_case(self, db: Database, user: DbRow | None, case_id: int) -> None:
-        self.error(410, "Website fine payments are disabled. Pay through the in-game economy.")
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        case = one(
+            db,
+            """
+            SELECT c.*, settlement.id AS settlement_item_id, batch.batch_number AS existing_batch_number,
+                   link.identity_id, bank.balance
+            FROM citations c
+            LEFT JOIN fine_settlement_items settlement ON settlement.citation_id = c.id
+            LEFT JOIN fine_settlement_batches batch ON batch.id = settlement.batch_id
+            LEFT JOIN arma_account_links link ON link.user_id = c.civ_id
+            LEFT JOIN arma_game_bank_balances bank ON bank.identity_id = link.identity_id
+            WHERE c.id = ? AND c.civ_id = ?
+            """,
+            (case_id, user["id"]),
+        )
+        if not case:
+            self.error(404, "Fine not found")
+            return
+        if case["status"] in ("paid", "dismissed") or case.get("disposition") in NONPAYABLE_DISPOSITIONS:
+            self.error(409, "This case has no payable fine")
+            return
+        if case["status"] == "contested":
+            self.error(409, "This citation is contested. Wait for a court decision before requesting payment.")
+            return
+        fine = round(float(case["fine_amount"] or 0), 2)
+        if fine <= 0:
+            self.error(409, "This case has no payable balance")
+            return
+        if case.get("settlement_item_id"):
+            self.error(409, f"Payment already requested in {case.get('existing_batch_number') or 'an existing settlement'}")
+            return
+        if not case.get("identity_id") or case.get("balance") is None:
+            self.error(409, "Link your Arma account and wait for a synced game-bank balance before paying")
+            return
+        pending_fine = one(
+            db,
+            """
+            SELECT batch.batch_number
+            FROM fine_settlement_items item
+            JOIN fine_settlement_batches batch ON batch.id = item.batch_id
+            WHERE item.identity_id = ? AND batch.status NOT IN ('completed', 'cancelled')
+            LIMIT 1
+            """,
+            (case["identity_id"],),
+        )
+        pending_tax = one(
+            db,
+            """
+            SELECT batch.batch_number
+            FROM business_tax_settlement_items item
+            JOIN business_tax_settlement_batches batch ON batch.id = item.batch_id
+            WHERE item.identity_id = ? AND batch.status NOT IN ('completed', 'cancelled')
+            LIMIT 1
+            """,
+            (case["identity_id"],),
+        )
+        pending_batch = pending_fine or pending_tax
+        if pending_batch:
+            self.error(409, f"Complete existing payment request {pending_batch['batch_number']} before starting another")
+            return
+        balance = round(float(case["balance"]), 2)
+        if balance < fine:
+            self.error(409, f"Insufficient synced game-bank funds. Required ${fine:,.2f}; available ${balance:,.2f}")
+            return
+        created_at = utcnow()
+        batch_number = f"FC-PAY-{created_at.strftime('%Y%m%d')}-{secrets.randbelow(900000) + 100000}"
+        batch = db.execute(
+            """
+            INSERT INTO fine_settlement_batches (batch_number, created_by, created_at, notes)
+            VALUES (?, ?, ?, ?) RETURNING id
+            """,
+            (batch_number, user["id"], created_at.isoformat(), f"MyFaircroft payment request for court case #{case_id}"),
+        ).fetchone()
+        db.execute(
+            """
+            INSERT INTO fine_settlement_items
+            (batch_id, citation_id, user_id, identity_id, fine_amount, balance_before, expected_balance)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (batch["id"], case_id, user["id"], case["identity_id"], fine, balance, round(balance - fine, 2)),
+        )
+        for staff in all_rows(db, "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ?", ("%owner%", "%dev%")):
+            add_message(db, staff["id"], "MyFaircroft fine payment", f"{user['name']} requested payment of ${fine:,.2f} for case #{case_id}. Batch {batch_number}.", user["id"])
+        add_admin_audit(db, int(user["id"]), "myfaircroft.fine.payment_requested", int(user["id"]), {"case_id": case_id, "batch_number": batch_number, "amount": fine})
+        self.send_json(201, {"ok": True, "batch_number": batch_number, "amount": fine})
+
+    def api_pay_business_tax(self, db: Database, user: DbRow | None, business_id: int) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        existing = one(
+            db,
+            """
+            SELECT batch.batch_number
+            FROM business_tax_assessments tax
+            JOIN businesses business ON business.id = tax.business_id
+            JOIN business_tax_settlement_batches batch ON batch.id = tax.settlement_batch_id
+            WHERE business.id = ? AND business.owner_id = ? AND tax.status = 'unpaid'
+            LIMIT 1
+            """,
+            (business_id, user["id"]),
+        )
+        if existing:
+            self.error(409, f"Tax payment already requested in {existing['batch_number']}")
+            return
+        account = one(
+            db,
+            """
+            SELECT business.id AS business_id, business.business_name, business.license_number,
+                   link.identity_id, bank.balance, SUM(tax.amount) AS tax_amount
+            FROM businesses business
+            JOIN business_tax_assessments tax ON tax.business_id = business.id
+            LEFT JOIN arma_account_links link ON link.user_id = business.owner_id
+            LEFT JOIN arma_game_bank_balances bank ON bank.identity_id = link.identity_id
+            WHERE business.id = ? AND business.owner_id = ?
+              AND tax.status = 'unpaid' AND tax.settlement_batch_id IS NULL
+            GROUP BY business.id, business.business_name, business.license_number, link.identity_id, bank.balance
+            """,
+            (business_id, user["id"]),
+        )
+        if not account or float(account.get("tax_amount") or 0) <= 0:
+            self.error(404, "No unpaid tax balance was found for this business")
+            return
+        amount = round(float(account["tax_amount"]), 2)
+        if not account.get("identity_id") or account.get("balance") is None:
+            self.error(409, "Link your Arma account and wait for a synced game-bank balance before paying")
+            return
+        pending_fine = one(
+            db,
+            """
+            SELECT batch.batch_number
+            FROM fine_settlement_items item
+            JOIN fine_settlement_batches batch ON batch.id = item.batch_id
+            WHERE item.identity_id = ? AND batch.status NOT IN ('completed', 'cancelled')
+            LIMIT 1
+            """,
+            (account["identity_id"],),
+        )
+        pending_tax = one(
+            db,
+            """
+            SELECT batch.batch_number
+            FROM business_tax_settlement_items item
+            JOIN business_tax_settlement_batches batch ON batch.id = item.batch_id
+            WHERE item.identity_id = ? AND batch.status NOT IN ('completed', 'cancelled')
+            LIMIT 1
+            """,
+            (account["identity_id"],),
+        )
+        pending_batch = pending_fine or pending_tax
+        if pending_batch:
+            self.error(409, f"Complete existing payment request {pending_batch['batch_number']} before starting another")
+            return
+        balance = round(float(account["balance"]), 2)
+        if balance < amount:
+            self.error(409, f"Insufficient synced game-bank funds. Required ${amount:,.2f}; available ${balance:,.2f}")
+            return
+        created_at = utcnow()
+        batch_number = f"FC-TAX-{created_at.strftime('%Y%m%d')}-{secrets.randbelow(900000) + 100000}"
+        batch = db.execute(
+            """
+            INSERT INTO business_tax_settlement_batches (batch_number, created_by, created_at, notes)
+            VALUES (?, ?, ?, ?) RETURNING id
+            """,
+            (batch_number, user["id"], created_at.isoformat(), f"MyFaircroft tax payment for {account['business_name']}"),
+        ).fetchone()
+        db.execute(
+            """
+            INSERT INTO business_tax_settlement_items
+            (batch_id, business_id, user_id, identity_id, tax_amount, balance_before, expected_balance)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (batch["id"], business_id, user["id"], account["identity_id"], amount, balance, round(balance - amount, 2)),
+        )
+        db.execute(
+            """
+            UPDATE business_tax_assessments SET settlement_batch_id = ?
+            WHERE business_id = ? AND status = 'unpaid' AND settlement_batch_id IS NULL
+            """,
+            (batch["id"], business_id),
+        )
+        for staff in all_rows(db, "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ?", ("%owner%", "%dev%")):
+            add_message(db, staff["id"], "MyFaircroft tax payment", f"{user['name']} requested payment of ${amount:,.2f} for {account['business_name']}. Batch {batch_number}.", user["id"])
+        add_admin_audit(db, int(user["id"]), "myfaircroft.tax.payment_requested", int(user["id"]), {"business_id": business_id, "batch_number": batch_number, "amount": amount})
+        self.send_json(201, {"ok": True, "batch_number": batch_number, "amount": amount})
 
     def api_contest_case(self, db: Database, user: DbRow | None, case_id: int) -> None:
-        err = court_access_required(db, user)
-        if err:
-            self.error(403 if user else 401, err)
+        if not user:
+            self.error(401, "Authentication required")
             return
         case = one(db, "SELECT * FROM citations WHERE id = ? AND civ_id = ?", (case_id, user["id"]))
         if not case:
             self.error(404, "Case not found")
             return
-        db.execute("UPDATE citations SET status = 'contested', updated_at = ? WHERE id = ?", (now_iso(), case_id))
-        judges = all_rows(
-            db,
-            "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ?",
-            ("%judge%", "%owner%"),
-        )
+        if case["status"] not in ("issued", "reviewed", "reduced"):
+            self.error(409, "This case can no longer be contested")
+            return
+        if one(db, "SELECT id FROM fine_settlement_items WHERE citation_id = ?", (case_id,)):
+            self.error(409, "A payment request already exists for this fine")
+            return
+        db.execute("UPDATE citations SET status = 'contested', disposition = '', updated_at = ? WHERE id = ?", (now_iso(), case_id))
+        judges = all_rows(db, "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ?", ("%judge%", "%owner%"))
         for judge in judges:
-            add_message(db, judge["id"], "Citation contested", f"{user['name']} contested {case['charge_code']} - {case['charge_title']}.", user["id"])
+            if int(judge["id"]) != int(user["id"]):
+                add_message(db, judge["id"], "Citation contested", f"{user['name']} contested {case['charge_code']} - {case['charge_title']}.", user["id"])
         self.send_json(200, {"ok": True})
 
     def api_judge_cases(self, db: Database, user: DbRow | None) -> None:
@@ -5695,54 +6031,198 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err)
             return
+        assert user is not None
         base_query = """
-            SELECT c.*, civ.name AS civ_name, civ.email AS civ_email, officer.name AS officer_name, judge.name AS judge_name
+            SELECT c.*, catalog.kind, civ.name AS civ_name, civ.email AS civ_email,
+                   civ.civ_number, officer.name AS officer_name, judge.name AS judge_name
             FROM citations c
+            JOIN charge_catalog catalog ON catalog.id = c.charge_id
             JOIN users civ ON civ.id = c.civ_id
             JOIN users officer ON officer.id = c.officer_id
             LEFT JOIN users judge ON judge.id = c.judge_id
         """
         if has_any(user, "owner"):
-            rows = all_rows(
-                db,
-                f"{base_query} ORDER BY CASE c.status WHEN 'contested' THEN 0 WHEN 'issued' THEN 1 ELSE 2 END, c.created_at DESC LIMIT 100",
-            )
+            scope = "c.civ_id <> ?"
+            params: tuple[Any, ...] = (user["id"],)
         else:
-            rows = all_rows(
-                db,
-                f"{base_query} WHERE c.judge_id = ? OR c.judge_id IS NULL ORDER BY CASE c.status WHEN 'contested' THEN 0 WHEN 'issued' THEN 1 ELSE 2 END, c.created_at DESC LIMIT 100",
-                (user["id"],),
-            )
-        self.send_json(200, {"cases": [dict(row) for row in rows]})
+            scope = "c.civ_id <> ? AND (c.judge_id = ? OR c.judge_id IS NULL)"
+            params = (user["id"], user["id"])
+        active = all_rows(
+            db,
+            f"""
+            {base_query}
+            WHERE {scope} AND {case_status_clause(True)}
+            ORDER BY CASE c.status WHEN 'contested' THEN 0 WHEN 'issued' THEN 1 ELSE 2 END,
+                     c.court_date ASC NULLS LAST, c.created_at ASC
+            LIMIT 160
+            """,
+            params,
+        )
+        decided = all_rows(
+            db,
+            f"""
+            {base_query}
+            WHERE {scope} AND {case_status_clause(False)}
+            ORDER BY c.decided_at DESC NULLS LAST, c.updated_at DESC
+            LIMIT 160
+            """,
+            params,
+        )
+        standards = all_rows(
+            db,
+            """
+            SELECT severity, minimum_sentence_minutes, maximum_sentence_minutes, COUNT(*) AS code_count
+            FROM charge_catalog
+            WHERE kind = 'criminal'
+            GROUP BY severity, minimum_sentence_minutes, maximum_sentence_minutes
+            ORDER BY maximum_sentence_minutes, minimum_sentence_minutes, severity
+            """,
+        )
+        self.send_json(
+            200,
+            {
+                "active": [dict(row) for row in active],
+                "decided": [dict(row) for row in decided],
+                "standards": [dict(row) for row in standards],
+                "stats": {
+                    "active": len(active),
+                    "contested": sum(1 for row in active if row["status"] == "contested"),
+                    "criminal": sum(1 for row in active if row["kind"] == "criminal"),
+                    "decided": len(decided),
+                },
+            },
+        )
 
     def api_update_case(self, db: Database, user: DbRow | None, case_id: int) -> None:
         err = judge_required(user)
         if err:
             self.error(403 if user else 401, err)
             return
-        payload = self.read_json()
-        status = str(payload.get("status") or "").strip().lower()
-        if status not in ("issued", "reviewed", "reduced", "dismissed", "paid", "contested", "closed"):
-            self.error(400, "Invalid case status")
+        assert user is not None
+        case = one(
+            db,
+            """
+            SELECT c.*, catalog.kind
+            FROM citations c
+            JOIN charge_catalog catalog ON catalog.id = c.charge_id
+            WHERE c.id = ?
+            """,
+            (case_id,),
+        )
+        if not case:
+            self.error(404, "Court case not found")
             return
-        amount = payload.get("fine_amount")
-        notes = str(payload.get("judgment_notes") or "")[:600]
-        final_result = final_result_for(status, notes, float(amount)) if status in CLOSED_CASE_STATUSES and amount is not None else final_result_for(status, notes)
-        if amount is not None:
-            db.execute(
-                "UPDATE citations SET status = ?, fine_amount = ?, judgment_notes = ?, judge_id = ?, final_result = ?, updated_at = ? WHERE id = ?",
-                (status, float(amount), notes, user["id"], final_result if status in CLOSED_CASE_STATUSES else "", now_iso(), case_id),
-            )
+        if int(case["civ_id"]) == int(user["id"]):
+            self.error(403, "You cannot preside over a case filed against your own account. Use MyFaircroft for personal matters.")
+            return
+        payload = self.read_json()
+        disposition = str(payload.get("disposition") or "").strip().lower()
+        if not disposition:
+            legacy_status = str(payload.get("status") or "").strip().lower()
+            disposition = {
+                "reviewed": "under_review",
+                "reduced": "liable",
+                "dismissed": "dismissed",
+                "closed": "liable" if case["kind"] == "citation" else "guilty",
+            }.get(legacy_status, legacy_status)
+        if disposition not in COURT_DISPOSITIONS:
+            self.error(400, "Select a valid court disposition")
+            return
+        if case["kind"] == "citation" and disposition in CONVICTION_DISPOSITIONS:
+            self.error(400, "Traffic and civil citations use a liable or not-liable disposition")
+            return
+        if case["kind"] == "criminal" and disposition == "liable":
+            self.error(400, "Criminal matters require a guilty, plea agreement, not guilty, or dismissal disposition")
+            return
+        try:
+            amount = round(float(payload.get("fine_amount", case["fine_amount"])), 2)
+            sentence_minutes = int(payload.get("sentence_minutes") or 0)
+        except (TypeError, ValueError):
+            self.error(400, "Fine and sentence must be valid numbers")
+            return
+        if amount < 0 or sentence_minutes < 0:
+            self.error(400, "Fine and sentence cannot be negative")
+            return
+        minimum = int(case.get("minimum_sentence_minutes") or 0)
+        maximum = int(case.get("maximum_sentence_minutes") or 0)
+        if case["kind"] == "citation" and sentence_minutes:
+            self.error(400, "Citations cannot carry a custodial RP sentence")
+            return
+        if disposition in CONVICTION_DISPOSITIONS:
+            if sentence_minutes < minimum:
+                self.error(400, f"Mandatory RP minimum is {minimum} minute(s) for this charge")
+                return
+            if maximum > 0 and sentence_minutes > maximum:
+                self.error(400, f"RP sentence cannot exceed the {maximum}-minute guideline maximum")
+                return
         else:
+            sentence_minutes = 0
+        notes = str(payload.get("judgment_notes") or "").strip()[:2000]
+        sentence_notes = str(payload.get("sentence_notes") or "").strip()[:1200]
+        final_decision = disposition not in ("under_review", "continued")
+        if final_decision and len(notes) < 3:
+            self.error(400, "A short written finding is required for a final decision")
+            return
+        payment = one(
+            db,
+            """
+            SELECT item.id AS item_id, item.status AS item_status, batch.id AS batch_id, batch.status AS batch_status
+            FROM fine_settlement_items item
+            JOIN fine_settlement_batches batch ON batch.id = item.batch_id
+            WHERE item.citation_id = ?
+            """,
+            (case_id,),
+        )
+        fine_changed = abs(amount - float(case["fine_amount"] or 0)) > 0.009
+        void_payment = disposition in NONPAYABLE_DISPOSITIONS or fine_changed
+        if payment and void_payment:
+            if payment["item_status"] == "paid" or payment["batch_status"] == "completed":
+                self.error(409, "This fine was already settled; staff review is required before changing the decision")
+                return
+            if payment["batch_status"] != "draft":
+                self.error(409, "This fine has an approved settlement in progress and cannot be changed")
+                return
+            db.execute("DELETE FROM fine_settlement_items WHERE id = ?", (payment["item_id"],))
+            db.execute("UPDATE fine_settlement_batches SET status = 'cancelled', completed_at = ? WHERE id = ?", (now_iso(), payment["batch_id"]))
+        status = {
+            "under_review": "reviewed",
+            "continued": "continued",
+            "not_guilty": "dismissed",
+            "dismissed": "dismissed",
+        }.get(disposition, "closed")
+        decided_at = now_iso() if final_decision else None
+        final_result = court_decision_result(disposition, amount, sentence_minutes, notes) if final_decision else ""
+        db.execute(
+            """
+            UPDATE citations
+            SET status = ?, disposition = ?, fine_amount = ?, sentence_minutes = ?, sentence_notes = ?,
+                judgment_notes = ?, judge_id = ?, final_result = ?, decided_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                status,
+                disposition,
+                amount,
+                sentence_minutes,
+                sentence_notes,
+                notes,
+                user["id"],
+                final_result,
+                decided_at,
+                now_iso(),
+                case_id,
+            ),
+        )
+        if final_decision and case["kind"] == "criminal":
+            booking_status = "sentenced" if disposition in CONVICTION_DISPOSITIONS else "released"
             db.execute(
-                "UPDATE citations SET status = ?, judgment_notes = ?, judge_id = ?, final_result = ?, updated_at = ? WHERE id = ?",
-                (status, notes, user["id"], final_result if status in CLOSED_CASE_STATUSES else "", now_iso(), case_id),
+                "UPDATE mdt_bookings SET status = ?, release_notes = ?, updated_at = ?, completed_at = ? WHERE court_case_id = ?",
+                (booking_status, final_result, now_iso(), now_iso(), case_id),
             )
-        case = one(db, "SELECT * FROM citations WHERE id = ?", (case_id,))
-        if case:
-            add_message(db, case["civ_id"], "Court case updated", f"Your case {case['charge_code']} is now marked {status}.", user["id"])
-            add_message(db, case["officer_id"], "Officer case updated", f"Case #{case_id} for {case['charge_code']} is now marked {status}.", user["id"])
-        self.send_json(200, {"ok": True})
+        add_message(db, case["civ_id"], "Court decision updated", f"Case #{case_id} / {case['charge_code']}: {final_result or disposition.replace('_', ' ')}. Open MyFaircroft for your record.", user["id"])
+        add_message(db, case["officer_id"], "Officer case updated", f"Case #{case_id} / {case['charge_code']}: {final_result or disposition.replace('_', ' ')}.", user["id"])
+        add_admin_audit(db, int(user["id"]), "court.case.decided" if final_decision else "court.case.updated", int(case["civ_id"]), {"case_id": case_id, "disposition": disposition, "sentence_minutes": sentence_minutes, "fine_amount": amount})
+        self.send_json(200, {"ok": True, "status": status, "disposition": disposition, "final_result": final_result})
 
     def api_mdt_search(self, db: Database, user: DbRow | None, query: dict[str, list[str]]) -> None:
         err = emergency_required(user)
@@ -5904,7 +6384,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if charge.get("kind") != "criminal":
             self.error(400, "Charge warrant requires a criminal charge")
             return
-        presiding_judge = pick_presiding_judge(db)
+        presiding_judge = pick_presiding_judge(db, int(civ["id"]))
         ts = now_iso()
         default_court_date = (utcnow() + dt.timedelta(days=3)).date().isoformat()
         court_date = str(payload.get("court_date") or "").strip() or default_court_date
@@ -5916,8 +6396,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             citation = db.execute(
                 """
                 INSERT INTO citations
-                (civ_id, officer_id, judge_id, charge_id, charge_code, charge_title, category, fine_amount, points, severity, location, narrative, court_date, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (civ_id, officer_id, judge_id, charge_id, charge_code, charge_title, category, fine_amount, points, severity,
+                 minimum_sentence_minutes, maximum_sentence_minutes, location, narrative, court_date, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 RETURNING id
                 """,
                 (
@@ -5931,6 +6412,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     float(charge["fine_amount"]),
                     int(charge["points"]),
                     charge["severity"],
+                    int(charge["minimum_sentence_minutes"]),
+                    int(charge["maximum_sentence_minutes"]),
                     location,
                     probable_cause,
                     court_date,
@@ -6022,13 +6505,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         default_court_date = (utcnow() + dt.timedelta(days=3)).date().isoformat()
         court_date = str(payload.get("court_date") or "").strip() or default_court_date
-        presiding_judge = pick_presiding_judge(db)
+        presiding_judge = pick_presiding_judge(db, int(civ["id"]))
         ts = now_iso()
         cur = db.execute(
             """
             INSERT INTO citations
-            (civ_id, officer_id, judge_id, charge_id, charge_code, charge_title, category, fine_amount, points, severity, location, narrative, court_date, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (civ_id, officer_id, judge_id, charge_id, charge_code, charge_title, category, fine_amount, points, severity,
+             minimum_sentence_minutes, maximum_sentence_minutes, location, narrative, court_date, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING id
             """,
             (
@@ -6042,6 +6526,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 charge["fine_amount"],
                 charge["points"],
                 charge["severity"],
+                int(charge["minimum_sentence_minutes"]),
+                int(charge["maximum_sentence_minutes"]),
                 str(payload["location"])[:120],
                 str(payload["narrative"])[:1000],
                 court_date,
@@ -6055,10 +6541,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             db,
             civ["id"],
             f"New citation {charge['code']}",
-            f"{user['name']} issued {charge['title']} for ${float(charge['fine_amount']):,.2f}. Open COURT to pay or contest.",
+            f"{user['name']} issued {charge['title']} for ${float(charge['fine_amount']):,.2f}. Open MyFaircroft to pay or contest.",
             user["id"],
         )
-        add_message(db, user["id"], "Officer case filed", f"Case #{citation_id} was filed against {civ['name']} and is now in your COURT officer docket.", user["id"])
+        add_message(db, user["id"], "Officer case filed", f"Case #{citation_id} was filed against {civ['name']} and routed to the Court docket.", user["id"])
         if presiding_judge:
             add_message(
                 db,
@@ -6148,12 +6634,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not arrest_location or not probable_cause:
             self.error(400, "Arrest location and probable cause are required")
             return
-        presiding_judge = pick_presiding_judge(db)
+        presiding_judge = pick_presiding_judge(db, int(civ["id"]))
         court_case = db.execute(
             """
             INSERT INTO citations
-            (civ_id, officer_id, judge_id, charge_id, charge_code, charge_title, category, fine_amount, points, severity, location, narrative, court_date, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (civ_id, officer_id, judge_id, charge_id, charge_code, charge_title, category, fine_amount, points, severity,
+             minimum_sentence_minutes, maximum_sentence_minutes, location, narrative, court_date, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING id
             """,
             (
@@ -6167,6 +6654,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 float(charge["fine_amount"]),
                 int(charge["points"]),
                 charge["severity"],
+                int(charge["minimum_sentence_minutes"]),
+                int(charge["maximum_sentence_minutes"]),
                 arrest_location,
                 probable_cause,
                 court_date,
@@ -7948,7 +8437,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             LEFT JOIN arma_account_links l ON l.user_id = u.id
             LEFT JOIN arma_game_bank_balances b ON b.identity_id = l.identity_id
             LEFT JOIN fine_settlement_items i ON i.citation_id = c.id
-            WHERE c.status IN ('issued', 'reviewed', 'reduced') AND i.id IS NULL
+            WHERE c.status IN ('issued', 'reviewed', 'reduced', 'closed') AND i.id IS NULL
+              AND COALESCE(c.disposition, '') NOT IN ('not_guilty', 'dismissed')
               AND l.identity_id IS NOT NULL AND b.balance IS NOT NULL
               AND b.balance >= c.fine_amount
             ORDER BY c.created_at ASC
@@ -8085,7 +8575,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             JOIN arma_game_bank_balances b ON b.identity_id = l.identity_id
             LEFT JOIN fine_settlement_items i ON i.citation_id = c.id
             WHERE c.id IN ({placeholders})
-              AND c.status IN ('issued', 'reviewed', 'reduced') AND i.id IS NULL
+              AND c.status IN ('issued', 'reviewed', 'reduced', 'closed') AND i.id IS NULL
+              AND COALESCE(c.disposition, '') NOT IN ('not_guilty', 'dismissed')
               AND b.balance >= c.fine_amount
             """,
             tuple(citation_ids),
@@ -8196,13 +8687,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             expected = round(float(item["expected_balance"]), 2)
             if actual is not None and abs(actual - expected) <= 0.01:
                 verified_at = now_iso()
+                court_case = one(db, "SELECT final_result, disposition FROM citations WHERE id = ?", (item["citation_id"],))
+                paid_result = final_result_for("paid", f"Settled through {batch['batch_number']}", float(item["fine_amount"]))
+                if court_case and court_case.get("final_result") and court_case.get("disposition"):
+                    paid_result = f"{court_case['final_result']} | Fine satisfied through {batch['batch_number']}"
                 db.execute(
                     "UPDATE fine_settlement_items SET status = 'paid', verified_balance = ?, verified_at = ?, failure_reason = '' WHERE id = ?",
                     (actual, verified_at, item["id"]),
                 )
                 db.execute(
                     "UPDATE citations SET status = 'paid', final_result = ?, updated_at = ? WHERE id = ?",
-                    (final_result_for("paid", f"Settled through {batch['batch_number']}", float(item["fine_amount"])), verified_at, item["citation_id"]),
+                    (paid_result, verified_at, item["citation_id"]),
                 )
                 add_transaction(
                     db, int(item["user_id"]), "dcjs_fine_settlement", -float(item["fine_amount"]),
