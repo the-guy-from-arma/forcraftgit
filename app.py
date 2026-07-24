@@ -8,8 +8,6 @@ import json
 import mimetypes
 import os
 import secrets
-import threading
-import time
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -17,16 +15,12 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 import psycopg
-import paramiko
 from psycopg.rows import dict_row
 
 
 APP_ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = APP_ROOT / "static"
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
-DATABASE_MAX_CONNECTIONS = max(2, int(os.environ.get("DATABASE_MAX_CONNECTIONS", "5")))
-DATABASE_CONNECT_TIMEOUT_SECONDS = max(3, int(os.environ.get("DATABASE_CONNECT_TIMEOUT_SECONDS", "10")))
-DATABASE_CONNECTION_SEMAPHORE = threading.BoundedSemaphore(DATABASE_MAX_CONNECTIONS)
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-before-production")
 COOKIE_NAME = "rp_session"
 SESSION_DAYS = 7
@@ -35,15 +29,6 @@ OWNER_PASSWORD = os.environ.get("OWNER_PASSWORD", "owner1234")
 OWNER_NAME = os.environ.get("OWNER_NAME", "Server Owner")
 ARMA_BRIDGE_API_KEY = os.environ.get("ARMA_BRIDGE_API_KEY", "").strip()
 ARMA_LINK_CODE_TTL_MINUTES = int(os.environ.get("ARMA_LINK_CODE_TTL_MINUTES", "30"))
-SHADOWHAVEN_SFTP_HOST = os.environ.get("SHADOWHAVEN_SFTP_HOST", "").strip()
-SHADOWHAVEN_SFTP_PORT = int(os.environ.get("SHADOWHAVEN_SFTP_PORT", "2022"))
-SHADOWHAVEN_SFTP_USERNAME = os.environ.get("SHADOWHAVEN_SFTP_USERNAME", "").strip()
-SHADOWHAVEN_SFTP_PASSWORD = os.environ.get("SHADOWHAVEN_SFTP_PASSWORD", "")
-SHADOWHAVEN_BANK_FILE = os.environ.get(
-    "SHADOWHAVEN_BANK_FILE",
-    "profile/profile/.db/FCRPMUSSALO/Banks/00bb0001-1e42-6138-7e90-c04752d4fab6.json",
-).strip()
-SHADOWHAVEN_BANK_SYNC_SECONDS = max(5, int(os.environ.get("SHADOWHAVEN_BANK_SYNC_SECONDS", "15")))
 NAME_CHANGE_LIMIT = 3
 NAME_CHANGE_WINDOW_DAYS = 3
 TREASURY_STIMULUS_AMOUNT = 75000.00
@@ -199,35 +184,17 @@ class Database:
     def __init__(self) -> None:
         if not DATABASE_URL:
             raise RuntimeError("DATABASE_URL is required. Attach a PostgreSQL database and set DATABASE_URL.")
-        self._slot_acquired = DATABASE_CONNECTION_SEMAPHORE.acquire(timeout=DATABASE_CONNECT_TIMEOUT_SECONDS)
-        if not self._slot_acquired:
-            raise RuntimeError("Database is busy; no application connection slot became available")
-        try:
-            self.raw = psycopg.connect(
-                DATABASE_URL,
-                row_factory=dict_row,
-                connect_timeout=DATABASE_CONNECT_TIMEOUT_SECONDS,
-                application_name="faircroft-rp-os",
-            )
-        except Exception:
-            DATABASE_CONNECTION_SEMAPHORE.release()
-            self._slot_acquired = False
-            raise
+        self.raw = psycopg.connect(DATABASE_URL, row_factory=dict_row)
 
     def __enter__(self) -> "Database":
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
-        try:
-            if exc_type:
-                self.raw.rollback()
-            else:
-                self.raw.commit()
-        finally:
-            self.raw.close()
-            if self._slot_acquired:
-                DATABASE_CONNECTION_SEMAPHORE.release()
-                self._slot_acquired = False
+        if exc_type:
+            self.raw.rollback()
+        else:
+            self.raw.commit()
+        self.raw.close()
 
     def sql(self, query: str) -> str:
         return query.replace("?", "%s")
@@ -260,89 +227,6 @@ def all_rows(db: Database, sql: str, params: tuple[Any, ...] = ()) -> list[DbRow
     return db.execute(sql, params).fetchall()
 
 
-def extract_shadowhaven_bank_data(payload: Any) -> tuple[dict[str, Any], str]:
-    if not isinstance(payload, dict):
-        return {}, ""
-    source_saved_at = str(payload.get("m_iLastSaved") or "")
-    components = payload.get("m_aComponents")
-    if not isinstance(components, list):
-        return {}, source_saved_at
-    for component in components:
-        if not isinstance(component, dict) or component.get("_type") != "BankManagerComponent":
-            continue
-        data = component.get("m_pData")
-        if isinstance(data, dict) and isinstance(data.get("m_Banks"), dict):
-            return data["m_Banks"], source_saved_at
-    return {}, source_saved_at
-
-
-def sync_shadowhaven_bank_once() -> int:
-    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
-        return 0
-    transport = paramiko.Transport((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_PORT))
-    try:
-        transport.connect(username=SHADOWHAVEN_SFTP_USERNAME, password=SHADOWHAVEN_SFTP_PASSWORD)
-        sftp = paramiko.SFTPClient.from_transport(transport)
-        try:
-            with sftp.open(SHADOWHAVEN_BANK_FILE, "r") as remote_file:
-                payload = json.loads(remote_file.read().decode("utf-8-sig"))
-        finally:
-            sftp.close()
-    finally:
-        transport.close()
-
-    balances, source_saved_at = extract_shadowhaven_bank_data(payload)
-    if not balances:
-        raise RuntimeError("BankManagerComponent contained no balances")
-    synced_at = now_iso()
-    accepted = 0
-    with conn() as db:
-        for identity_id, raw_balance in balances.items():
-            identity = str(identity_id or "").strip()[:160]
-            if not identity:
-                continue
-            try:
-                balance = round(float(raw_balance or 0), 2)
-            except (TypeError, ValueError):
-                continue
-            db.execute(
-                """
-                INSERT INTO arma_game_bank_balances
-                (identity_id, balance, source_file, source_saved_at, raw_payload, synced_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT (identity_id) DO UPDATE SET
-                    balance = EXCLUDED.balance,
-                    source_file = EXCLUDED.source_file,
-                    source_saved_at = EXCLUDED.source_saved_at,
-                    raw_payload = EXCLUDED.raw_payload,
-                    synced_at = EXCLUDED.synced_at
-                """,
-                (
-                    identity,
-                    balance,
-                    SHADOWHAVEN_BANK_FILE[:255],
-                    source_saved_at[:80],
-                    json.dumps({"balance": balance}),
-                    synced_at,
-                ),
-            )
-            accepted += 1
-    return accepted
-
-
-def shadowhaven_bank_sync_worker() -> None:
-    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
-        print("Shadowhaven SFTP bank sync disabled: credentials are not configured")
-        return
-    while True:
-        try:
-            accepted = sync_shadowhaven_bank_once()
-            print(f"Shadowhaven SFTP bank sync updated {accepted} balance(s)")
-        except Exception as exc:
-            print(f"Shadowhaven SFTP bank sync failed: {type(exc).__name__}: {exc}")
-        time.sleep(SHADOWHAVEN_BANK_SYNC_SECONDS)
-
-
 def roles_for(user: DbRow) -> list[str]:
     raw = user.get("roles", "[]")
     try:
@@ -371,38 +255,14 @@ def public_user(user: DbRow) -> dict[str, Any]:
         "car_entry_code_required": not bool(str(user.get("car_entry_code") or "").strip()),
         "callsign": user.get("callsign") or "",
         "callsign_required": not bool(str(user.get("callsign") or "").strip()),
-        # The legacy users.bank_balance column is intentionally not exposed.
-        # FCRPMUSSALO is the authoritative bank and is applied by
-        # public_user_with_game_bank where a database context is available.
-        "bank_balance": 0,
-        "bank_balance_source": "FCRPMUSSALO",
-        "bank_balance_synced": False,
-        "cash_balance": 0,
+        "bank_balance": round(float(user["bank_balance"] or 0), 2),
+        "cash_balance": round(float(user["cash_balance"] or 0), 2),
         "active_character_id": user.get("active_character_id"),
         "name_change_locked": bool(user.get("name_change_locked", 0)),
         "referral_code": user.get("referral_code") or "",
         "referred_by_user_id": user.get("referred_by_user_id"),
         "created_at": user["created_at"],
     }
-
-
-def public_user_with_game_bank(db: Database, user: DbRow) -> dict[str, Any]:
-    payload = public_user(user)
-    game_bank = one(
-        db,
-        """
-        SELECT b.balance, b.synced_at
-        FROM arma_account_links l
-        JOIN arma_game_bank_balances b ON b.identity_id = l.identity_id
-        WHERE l.user_id = ?
-        """,
-        (user["id"],),
-    )
-    payload["bank_balance"] = round(float(game_bank["balance"] or 0), 2) if game_bank else 0
-    payload["bank_balance_source"] = "FCRPMUSSALO"
-    payload["bank_balance_synced"] = bool(game_bank)
-    payload["bank_balance_synced_at"] = game_bank.get("synced_at") if game_bank else None
-    return payload
 
 
 def require_fields(payload: dict[str, Any], *fields: str) -> str | None:
@@ -501,6 +361,9 @@ BUSINESS_APPLICATION_STATUSES = ("submitted", "under_review", "interview_request
 BUSINESS_LICENSE_STATUSES = ("active", "suspended", "revoked", "expired")
 BUSINESS_LICENSE_CATEGORIES = ("basic", "commercial", "restricted", "government_contract")
 BUSINESS_MAX_ACTIVE_PER_OWNER = 2
+ROADMAP_STATUSES = ("shipped", "building", "next", "planned", "exploring", "paused")
+ROADMAP_ACCENTS = ("mint", "gold", "coral", "cyan", "violet")
+ROADMAP_ICONS = ("route", "shield", "link", "bank", "home", "rocket", "settings")
 FIRE_COMMAND_ROLES = ("fire_chief", "deputy_chief", "fire_marshal")
 FIRE_SERVICE_ROLES = ("fireman", "ems", *FIRE_COMMAND_ROLES)
 FIRE_RIG_NAMES = ("Engine 1", "Ladder 1", "Truck 1", "Rescue 1", "Battalion 1", "Battalion 2", "Battalion 3", "Battalion 4", "Battalion 5")
@@ -514,6 +377,57 @@ LAW_ENFORCEMENT_COMMAND_ROLES = {
     "cid": ("cid_director",),
     "iu": ("iu_director",),
 }
+
+
+def roadmap_payload_values(payload: dict[str, Any], current: DbRow | None = None) -> dict[str, Any]:
+    current = current or {}
+
+    def value(key: str, default: Any) -> Any:
+        return payload[key] if key in payload else current.get(key, default)
+
+    title = " ".join(str(value("title", "") or "").strip().split())[:120]
+    category = " ".join(str(value("category", "Platform") or "Platform").strip().split())[:60]
+    summary = str(value("summary", "") or "").strip()[:500]
+    details = str(value("details", "") or "").strip()[:5000]
+    status = str(value("status", "planned") or "planned").strip().lower()
+    accent = str(value("accent", "mint") or "mint").strip().lower()
+    icon = str(value("icon", "route") or "route").strip().lower()
+    if not title:
+        raise ValueError("Roadmap title is required")
+    if not summary:
+        raise ValueError("Roadmap summary is required")
+    if status not in ROADMAP_STATUSES:
+        raise ValueError("Invalid roadmap status")
+    if accent not in ROADMAP_ACCENTS:
+        raise ValueError("Invalid roadmap accent")
+    if icon not in ROADMAP_ICONS:
+        raise ValueError("Invalid roadmap icon")
+    try:
+        progress = max(0, min(100, int(value("progress", 0))))
+        sort_order = max(0, min(9999, int(value("sort_order", 0))))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Progress and route order must be whole numbers") from exc
+    target_date = str(value("target_date", "") or "").strip()
+    if target_date:
+        try:
+            dt.date.fromisoformat(target_date)
+        except ValueError as exc:
+            raise ValueError("Target date must use YYYY-MM-DD") from exc
+    visible_raw = value("is_visible", 1)
+    is_visible = 1 if str(visible_raw).lower() in ("1", "true", "yes", "on") else 0
+    return {
+        "title": title,
+        "category": category,
+        "summary": summary,
+        "details": details,
+        "status": status,
+        "progress": progress,
+        "target_date": target_date or None,
+        "sort_order": sort_order,
+        "accent": accent,
+        "icon": icon,
+        "is_visible": is_visible,
+    }
 LAW_ENFORCEMENT_APPLICATION_FIELDS = (
     {"key": "in_game_name", "label": "What is your in-game name?", "kind": "text", "min": 2, "max": 120},
     {"key": "discord_name", "label": "Discord Name", "kind": "text", "min": 2, "max": 120},
@@ -605,6 +519,15 @@ DEPARTMENT_POSTINGS = (
         "schedule": "Medical calls, triage, transport RP, scene coordination, and hospital handoff.",
         "requirements": "Calm communication, medical RP standards, patient reports, and incident coordination.",
     },
+    {
+        "key": "dispatcher",
+        "label": "Dispatcher",
+        "division": "Communications",
+        "role_key": "dispatcher",
+        "badge": "Dispatcher Applicant",
+        "schedule": "911 call intake, unit dispatching, status tracking, and interagency coordination.",
+        "requirements": "Strong radio presence, multitasking, map awareness, and professional call handling.",
+    },
 )
 SYSTEM_SETTING_DEFAULTS = {
     "autopilot_verify_enabled": "0",
@@ -613,27 +536,7 @@ SYSTEM_SETTING_DEFAULTS = {
     "autopilot_license_minutes": "6",
     "update_lockdown_enabled": "0",
     "update_lockdown_message": "System update in progress. Driver License and LEO MDT remain available.",
-    "app_visibility": "{}",
 }
-APP_VISIBILITY_OPTIONS = (
-    ("getting-started", "Getting Started"),
-    ("dmv", "DMV"),
-    ("jobs", "Jobs"),
-    ("court", "Court"),
-    ("business", "Business"),
-    ("properties", "Properties"),
-    ("bank", "Bank"),
-    ("messages", "Messages"),
-    ("changelog", "Changelog"),
-    ("contracts", "Contracts"),
-    ("mdt", "MDT"),
-    ("fire", "Fire MDT"),
-    ("fire-settings", "Fire Settings"),
-    ("indeed-admin", "Indeed Admin"),
-    ("admin", "Admin"),
-    ("fine-settlement", "Fine Settlement"),
-)
-PROTECTED_APP_IDS = frozenset(("profile", "dev-tools", "system", "restriction"))
 
 
 def posting_command_roles(posting: dict[str, Any]) -> tuple[str, ...]:
@@ -843,85 +746,6 @@ def ensure_schema() -> None:
                 created_at TEXT NOT NULL,
                 received_at TEXT NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS arma_game_bank_balances (
-                identity_id TEXT PRIMARY KEY,
-                balance NUMERIC(18,2) NOT NULL DEFAULT 0,
-                source_file TEXT NOT NULL DEFAULT '',
-                source_saved_at TEXT,
-                raw_payload TEXT NOT NULL DEFAULT '{}',
-                synced_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS developer_unlink_codes (
-                id SERIAL PRIMARY KEY,
-                code_hash TEXT NOT NULL UNIQUE,
-                code_hint TEXT NOT NULL,
-                created_by INTEGER NOT NULL,
-                expires_at TEXT NOT NULL,
-                uses_remaining INTEGER NOT NULL DEFAULT 1,
-                used_by INTEGER,
-                used_at TEXT,
-                revoked_at TEXT,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE,
-                FOREIGN KEY (used_by) REFERENCES users(id) ON DELETE SET NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS account_sanctions (
-                id SERIAL PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                sanction_type TEXT NOT NULL,
-                reason TEXT NOT NULL,
-                report_number TEXT NOT NULL DEFAULT '',
-                rule_code TEXT NOT NULL DEFAULT '',
-                incident_at TEXT NOT NULL DEFAULT '',
-                incident_summary TEXT NOT NULL DEFAULT '',
-                evidence TEXT NOT NULL DEFAULT '',
-                witness_names TEXT NOT NULL DEFAULT '',
-                staff_findings TEXT NOT NULL DEFAULT '',
-                player_statement TEXT NOT NULL DEFAULT '',
-                appeal_guidance TEXT NOT NULL DEFAULT '',
-                internal_notes TEXT NOT NULL DEFAULT '',
-                bail_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
-                starts_at TEXT NOT NULL,
-                expires_at TEXT,
-                created_by INTEGER NOT NULL,
-                created_at TEXT NOT NULL,
-                revoked_by INTEGER,
-                revoked_at TEXT,
-                revoke_reason TEXT NOT NULL DEFAULT '',
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE,
-                FOREIGN KEY (revoked_by) REFERENCES users(id) ON DELETE SET NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS account_internal_warnings (
-                id SERIAL PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                severity TEXT NOT NULL DEFAULT 'standard',
-                subject TEXT NOT NULL,
-                body TEXT NOT NULL,
-                created_by INTEGER NOT NULL,
-                created_at TEXT NOT NULL,
-                resolved_by INTEGER,
-                resolved_at TEXT,
-                resolution_notes TEXT NOT NULL DEFAULT '',
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE,
-                FOREIGN KEY (resolved_by) REFERENCES users(id) ON DELETE SET NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS admin_audit_logs (
-                id SERIAL PRIMARY KEY,
-                actor_id INTEGER,
-                target_user_id INTEGER,
-                action TEXT NOT NULL,
-                details TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE SET NULL,
-                FOREIGN KEY (target_user_id) REFERENCES users(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS jobs (
@@ -1437,6 +1261,36 @@ def ensure_schema() -> None:
                 FOREIGN KEY (ia_id) REFERENCES cid_internal_affairs(id) ON DELETE CASCADE,
                 FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS roadmap_items (
+                id SERIAL PRIMARY KEY,
+                slug TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'Platform',
+                summary TEXT NOT NULL,
+                details TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'planned',
+                progress INTEGER NOT NULL DEFAULT 0,
+                target_date TEXT,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                accent TEXT NOT NULL DEFAULT 'mint',
+                icon TEXT NOT NULL DEFAULT 'route',
+                is_visible INTEGER NOT NULL DEFAULT 1,
+                created_by INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS roadmap_votes (
+                item_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                vote INTEGER NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (item_id, user_id),
+                FOREIGN KEY (item_id) REFERENCES roadmap_items(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
             """
         )
         ensure_migrations(db)
@@ -1444,6 +1298,7 @@ def ensure_schema() -> None:
         seed_jobs(db)
         seed_charges(db)
         seed_properties(db)
+        seed_roadmap(db)
 
 
 def ensure_migrations(db: Database) -> None:
@@ -1516,111 +1371,6 @@ def ensure_migrations(db: Database) -> None:
     db.execute("UPDATE citations SET final_result = status WHERE final_result = '' AND status NOT IN ('issued','contested','reviewed','reduced')")
     db.execute(
         """
-        CREATE TABLE IF NOT EXISTS fine_settlement_batches (
-            id SERIAL PRIMARY KEY,
-            batch_number TEXT NOT NULL UNIQUE,
-            status TEXT NOT NULL DEFAULT 'draft',
-            approval_code_hash TEXT NOT NULL DEFAULT '',
-            approval_code_hint TEXT NOT NULL DEFAULT '',
-            approval_expires_at TEXT,
-            approved_by INTEGER,
-            approved_at TEXT,
-            processing_started_at TEXT,
-            completed_at TEXT,
-            created_by INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            notes TEXT NOT NULL DEFAULT '',
-            FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL,
-            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT
-        )
-        """
-    )
-    db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS fine_settlement_items (
-            id SERIAL PRIMARY KEY,
-            batch_id INTEGER NOT NULL,
-            citation_id INTEGER NOT NULL UNIQUE,
-            user_id INTEGER NOT NULL,
-            identity_id TEXT NOT NULL,
-            fine_amount NUMERIC(12,2) NOT NULL,
-            balance_before NUMERIC(12,2) NOT NULL,
-            expected_balance NUMERIC(12,2) NOT NULL,
-            verified_balance NUMERIC(12,2),
-            status TEXT NOT NULL DEFAULT 'pending',
-            failure_reason TEXT NOT NULL DEFAULT '',
-            verified_at TEXT,
-            FOREIGN KEY (batch_id) REFERENCES fine_settlement_batches(id) ON DELETE CASCADE,
-            FOREIGN KEY (citation_id) REFERENCES citations(id) ON DELETE RESTRICT,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        )
-        """
-    )
-    db.execute("CREATE INDEX IF NOT EXISTS fine_settlement_batch_idx ON fine_settlement_items (batch_id)")
-    db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS business_tax_assessments (
-            id SERIAL PRIMARY KEY,
-            business_id INTEGER NOT NULL,
-            amount NUMERIC(12,2) NOT NULL,
-            period_label TEXT NOT NULL,
-            notes TEXT NOT NULL DEFAULT '',
-            status TEXT NOT NULL DEFAULT 'unpaid',
-            assessed_by INTEGER NOT NULL,
-            assessed_at TEXT NOT NULL,
-            settlement_batch_id INTEGER,
-            settled_at TEXT,
-            FOREIGN KEY (business_id) REFERENCES businesses(id) ON DELETE CASCADE,
-            FOREIGN KEY (assessed_by) REFERENCES users(id) ON DELETE RESTRICT
-        )
-        """
-    )
-    db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS business_tax_settlement_batches (
-            id SERIAL PRIMARY KEY,
-            batch_number TEXT NOT NULL UNIQUE,
-            status TEXT NOT NULL DEFAULT 'draft',
-            approval_code_hash TEXT NOT NULL DEFAULT '',
-            approval_code_hint TEXT NOT NULL DEFAULT '',
-            approval_expires_at TEXT,
-            approved_by INTEGER,
-            approved_at TEXT,
-            completed_at TEXT,
-            created_by INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            notes TEXT NOT NULL DEFAULT '',
-            FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL,
-            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT
-        )
-        """
-    )
-    db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS business_tax_settlement_items (
-            id SERIAL PRIMARY KEY,
-            batch_id INTEGER NOT NULL,
-            business_id INTEGER NOT NULL,
-            user_id INTEGER NOT NULL,
-            identity_id TEXT NOT NULL,
-            tax_amount NUMERIC(12,2) NOT NULL,
-            balance_before NUMERIC(12,2) NOT NULL,
-            expected_balance NUMERIC(12,2) NOT NULL,
-            verified_balance NUMERIC(12,2),
-            status TEXT NOT NULL DEFAULT 'pending',
-            failure_reason TEXT NOT NULL DEFAULT '',
-            verified_at TEXT,
-            FOREIGN KEY (batch_id) REFERENCES business_tax_settlement_batches(id) ON DELETE CASCADE,
-            FOREIGN KEY (business_id) REFERENCES businesses(id) ON DELETE RESTRICT,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-            UNIQUE (batch_id, business_id)
-        )
-        """
-    )
-    db.execute("ALTER TABLE business_tax_assessments ADD COLUMN IF NOT EXISTS settlement_batch_id INTEGER")
-    db.execute("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS tax_last_assessed_at TEXT")
-    db.execute(
-        """
         CREATE TABLE IF NOT EXISTS mdt_bookings (
             id SERIAL PRIMARY KEY,
             booking_number TEXT NOT NULL UNIQUE,
@@ -1663,29 +1413,6 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE panic_alerts ADD COLUMN IF NOT EXISTS call_type TEXT NOT NULL DEFAULT 'Emergency Call'")
     db.execute("ALTER TABLE panic_alerts ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'standard'")
     db.execute("ALTER TABLE panic_alerts ADD COLUMN IF NOT EXISTS updated_at TEXT NOT NULL DEFAULT ''")
-    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS report_number TEXT NOT NULL DEFAULT ''")
-    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS rule_code TEXT NOT NULL DEFAULT ''")
-    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS incident_at TEXT NOT NULL DEFAULT ''")
-    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS incident_summary TEXT NOT NULL DEFAULT ''")
-    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS evidence TEXT NOT NULL DEFAULT ''")
-    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS witness_names TEXT NOT NULL DEFAULT ''")
-    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS staff_findings TEXT NOT NULL DEFAULT ''")
-    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS player_statement TEXT NOT NULL DEFAULT ''")
-    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS appeal_guidance TEXT NOT NULL DEFAULT ''")
-    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS bail_amount NUMERIC(12,2) NOT NULL DEFAULT 0")
-    # Legacy profile-entered IDs are not links. Preserve only IDs backed by the
-    # authoritative link table; new links are created exclusively by code claim.
-    db.execute(
-        """
-        UPDATE users
-        SET arma_id = NULL
-        WHERE arma_id IS NOT NULL
-          AND NOT EXISTS (
-              SELECT 1 FROM arma_account_links l
-              WHERE l.user_id = users.id AND l.identity_id = users.arma_id
-          )
-        """
-    )
     db.execute("UPDATE panic_alerts SET updated_at = created_at WHERE updated_at = ''")
     db.execute(
         """
@@ -1801,9 +1528,6 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS arma_link_codes_code_idx ON arma_link_codes (code)")
     db.execute("CREATE INDEX IF NOT EXISTS arma_link_codes_status_idx ON arma_link_codes (status)")
     db.execute("CREATE INDEX IF NOT EXISTS arma_activity_logs_user_idx ON arma_activity_logs (user_id)")
-    db.execute("CREATE INDEX IF NOT EXISTS account_sanctions_user_idx ON account_sanctions (user_id, created_at DESC)")
-    db.execute("CREATE INDEX IF NOT EXISTS account_warnings_user_idx ON account_internal_warnings (user_id, created_at DESC)")
-    db.execute("CREATE INDEX IF NOT EXISTS admin_audit_logs_created_idx ON admin_audit_logs (created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS panic_alerts_department_idx ON panic_alerts (department)")
     db.execute("CREATE INDEX IF NOT EXISTS panic_alerts_status_idx ON panic_alerts (status, priority, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS dispatch_call_units_alert_idx ON dispatch_call_units (alert_id, detached_at)")
@@ -1819,6 +1543,8 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS mdt_bookings_officer_idx ON mdt_bookings (officer_id, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS department_applications_user_idx ON department_applications (user_id, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS department_applications_department_idx ON department_applications (department_key, status)")
+    db.execute("CREATE INDEX IF NOT EXISTS roadmap_items_route_idx ON roadmap_items (is_visible, sort_order, id)")
+    db.execute("CREATE INDEX IF NOT EXISTS roadmap_votes_item_idx ON roadmap_votes (item_id, vote)")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS referrals (
@@ -1906,14 +1632,6 @@ def get_system_settings(db: Database) -> dict[str, Any]:
     except (TypeError, ValueError):
         license_minutes = int(SYSTEM_SETTING_DEFAULTS["autopilot_license_minutes"])
     license_minutes = max(1, min(license_minutes, 10080))
-    try:
-        app_visibility_raw = json.loads(str(raw.get("app_visibility") or "{}"))
-    except (TypeError, json.JSONDecodeError):
-        app_visibility_raw = {}
-    app_visibility = {
-        app_id: bool(app_visibility_raw.get(app_id, True))
-        for app_id, _label in APP_VISIBILITY_OPTIONS
-    }
     return {
         "autopilot_verify_enabled": str(raw.get("autopilot_verify_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "autopilot_verify_minutes": minutes,
@@ -1921,7 +1639,6 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "autopilot_license_minutes": license_minutes,
         "update_lockdown_enabled": str(raw.get("update_lockdown_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "update_lockdown_message": str(raw.get("update_lockdown_message") or SYSTEM_SETTING_DEFAULTS["update_lockdown_message"]).strip()[:240],
-        "app_visibility": app_visibility,
     }
 
 
@@ -2087,7 +1804,7 @@ def seed_owner(db: Database) -> None:
         VALUES (?, ?, ?, ?, ?, ?, 1, ?, 'Owner Command', 50000, 1000, ?, ?)
         RETURNING id
         """,
-        (generate_civ_number(db), OWNER_NAME, OWNER_EMAIL, None, generate_referral_code(db), hash_password(OWNER_PASSWORD), json.dumps(owner_roles), ts, ts),
+        (generate_civ_number(db), OWNER_NAME, OWNER_EMAIL, os.environ.get("OWNER_ARMA_ID", "OWNER"), generate_referral_code(db), hash_password(OWNER_PASSWORD), json.dumps(owner_roles), ts, ts),
     ).fetchone()
     ensure_default_character(db, int(created["id"]), OWNER_NAME)
 
@@ -2257,6 +1974,112 @@ def seed_properties(db: Database) -> None:
     )
 
 
+def seed_roadmap(db: Database) -> None:
+    ts = now_iso()
+    milestones = [
+        (
+            "pwa-command-core",
+            "Faircroft PWA Command Core",
+            "Foundation",
+            "The live phone OS, civilian services, role-based workspaces, CAD, courts, DMV, and staff tools.",
+            "The shared account and roleplay foundation is online. Future roadmap phases build on this profile, permissions, messaging, court, DMV, and PostgreSQL core.",
+            "shipped",
+            100,
+            "2026-07-23",
+            10,
+            "mint",
+            "shield",
+        ),
+        (
+            "tbs-account-link",
+            "TBS RP Linking Expansion",
+            "Game Link",
+            "Finish the account bridge that joins Arma identities to Faircroft online profiles.",
+            "The mod already generates identity-linked codes and the API foundation is partially complete. This phase hardens claiming, presence, event delivery, retry behavior, and link diagnostics.",
+            "building",
+            42,
+            "2026-07-30",
+            20,
+            "cyan",
+            "link",
+        ),
+        (
+            "live-cad-game-sync",
+            "Live CAD and Game Sync",
+            "Public Safety",
+            "Move active CAD events, callsigns, dispatch assignments, and roleplay outcomes between the game and the PWA.",
+            "The goal is a reliable two-way operational bridge: server events enter CAD, authorized CAD actions can be reflected in game systems, and every update retains an audit trail.",
+            "building",
+            31,
+            "2026-08-03",
+            30,
+            "coral",
+            "route",
+        ),
+        (
+            "android-app-parity",
+            "Faircroft Android App",
+            "Mobile",
+            "Package a native-feeling Android APK with the same working systems as the PWA.",
+            "The first Android release targets installable parity with the current PWA, secure session handling, push-ready notifications, native back behavior, and a polished small-screen shell.",
+            "building",
+            18,
+            "2026-08-07",
+            40,
+            "gold",
+            "rocket",
+        ),
+        (
+            "mobile-banking-sync",
+            "Connected Mobile Banking",
+            "Economy",
+            "Connect Faircroft bank balances and approved transactions to live roleplay activity.",
+            "Banking will move beyond a display page into a controlled ledger shared by the PWA and approved game events, with staff adjustments, transfer safeguards, and transaction audit history.",
+            "next",
+            12,
+            "2026-08-12",
+            50,
+            "mint",
+            "bank",
+        ),
+        (
+            "property-ownership",
+            "Properties and Ownership",
+            "World",
+            "Launch searchable properties, ownership records, access rights, sales, leases, and staff controls.",
+            "This phase turns the coming-soon Properties icon into a complete RP ownership system designed to connect with banking and later in-game entry and persistence events.",
+            "next",
+            7,
+            "2026-08-19",
+            60,
+            "violet",
+            "home",
+        ),
+        (
+            "connected-economy",
+            "Connected Faircroft Economy",
+            "Long Range",
+            "Unify jobs, businesses, banking, properties, contracts, and game events into one balanced economy.",
+            "The long-range system will give staff clear economic controls while players see consistent balances, ownership, reputation, applications, and activity across every Faircroft surface.",
+            "planned",
+            3,
+            None,
+            70,
+            "cyan",
+            "settings",
+        ),
+    ]
+    db.executemany(
+        """
+        INSERT INTO roadmap_items
+        (slug, title, category, summary, details, status, progress, target_date, sort_order, accent, icon, is_visible, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        ON CONFLICT (slug) DO NOTHING
+        """,
+        [(*item, ts, ts) for item in milestones],
+    )
+
+
 def create_default_dmv(db: Database, user_id: int) -> None:
     plate = f"RP{user_id:04d}{secrets.randbelow(90) + 10}"
     db.execute(
@@ -2342,56 +2165,6 @@ def admin_required(user: DbRow | None) -> str | None:
     if not has_any(user, "owner", "admin"):
         return "Owner or admin access required"
     return None
-
-
-def developer_required(user: DbRow | None) -> str | None:
-    if not user:
-        return "Authentication required"
-    if not has_any(user, "owner", "admin", "dev"):
-        return "Developer, owner, or admin access required"
-    return None
-
-
-def fine_settlement_required(user: DbRow | None) -> str | None:
-    if not user:
-        return "Authentication required"
-    if not has_any(user, "owner", "dev"):
-        return "Owner or developer access required"
-    return None
-
-
-def active_account_block(db: Database, user_id: int) -> DbRow | None:
-    now = now_iso()
-    return one(
-        db,
-        """
-        SELECT * FROM account_sanctions
-        WHERE user_id = ?
-          AND revoked_at IS NULL
-          AND sanction_type IN ('ban', 'timeout')
-          AND starts_at <= ?
-          AND (expires_at IS NULL OR expires_at > ?)
-        ORDER BY CASE sanction_type WHEN 'ban' THEN 0 ELSE 1 END, created_at DESC
-        LIMIT 1
-        """,
-        (user_id, now, now),
-    )
-
-
-def add_admin_audit(
-    db: Database,
-    actor_id: int,
-    action: str,
-    target_user_id: int | None = None,
-    details: dict[str, Any] | None = None,
-) -> None:
-    db.execute(
-        """
-        INSERT INTO admin_audit_logs (actor_id, target_user_id, action, details, created_at)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (actor_id, target_user_id, action[:100], json.dumps(details or {}, separators=(",", ":"), default=str)[:4000], now_iso()),
-    )
 
 
 def application_review_required(user: DbRow | None) -> str | None:
@@ -2525,17 +2298,19 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
             apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "coming_soon": False, "hidden": False})
         if has_any(user, "owner"):
             apps.append({"id": "system", "label": "System", "icon": "settings", "enabled": True, "coming_soon": False, "hidden": False})
-        visibility = settings.get("app_visibility") or {}
-        return [item for item in apps if item["id"] in PROTECTED_APP_IDS or visibility.get(item["id"], True)]
+        return apps
     base = [
         ("profile", "Profile", "user", True, False),
         ("getting-started", "Getting Started", "map", True, False),
+        ("roadmap", "Roadmap", "route", True, False),
         ("dmv", "DMV", "id-card", verified, False),
         ("jobs", "JOB", "briefcase", True, False),
         ("court", "COURT", "gavel", verified, False),
         ("business", "Business", "store", business_enabled, False),
         ("properties", "PROPERTIES", "home", False, True),
+        ("cash", "CASH APP", "send", False, True),
         ("bank", "BANK", "bank", verified, False),
+        ("treasury", "Faircroft Treasury", "treasury", verified, False),
         ("messages", "Messages", "message", verified, False),
         ("changelog", "Changelog", "scroll", True, False),
     ]
@@ -2545,6 +2320,8 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
     ]
     if contracts_enabled:
         apps.append({"id": "contracts", "label": "Contracts", "icon": "target", "enabled": True, "coming_soon": False, "hidden": False})
+    if has_any(user, "dispatcher", "owner"):
+        apps.append({"id": "dispatch", "label": "Dispatch", "icon": "radio", "enabled": True, "hidden": False})
     if has_any(user, *LAW_SERVICE_ROLES, "owner"):
         apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "hidden": False})
     if has_any(user, *FIRE_SERVICE_ROLES, "owner"):
@@ -2557,12 +2334,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps.append({"id": "indeed-admin", "label": "Indeed Admin", "icon": "briefcase", "enabled": True, "hidden": False})
     if has_any(user, "owner", "admin"):
         apps.append({"id": "admin", "label": "Admin", "icon": "settings", "enabled": True, "hidden": False})
-    if has_any(user, "owner", "admin", "dev"):
-        apps.append({"id": "dev-tools", "label": "Dev Tools", "icon": "code", "enabled": True, "hidden": False})
-    if has_any(user, "owner", "dev"):
-        apps.append({"id": "fine-settlement", "label": "Fine Settlement", "icon": "gavel", "enabled": True, "hidden": False})
-    visibility = settings.get("app_visibility") or {}
-    return [item for item in apps if item["id"] in PROTECTED_APP_IDS or visibility.get(item["id"], True)]
+    return apps
 
 
 def add_message(db: Database, recipient_id: int, subject: str, body: str, sender_id: int | None = None) -> None:
@@ -2783,29 +2555,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(status, {"error": message})
 
     def read_json(self) -> dict[str, Any]:
-        transfer_encoding = (self.headers.get("Transfer-Encoding") or "").lower()
-        if "chunked" in transfer_encoding:
-            chunks = bytearray()
-            while True:
-                size_line = self.rfile.readline().strip()
-                if not size_line:
-                    return {}
-                try:
-                    chunk_size = int(size_line.split(b";", 1)[0], 16)
-                except ValueError:
-                    return {}
-                if chunk_size == 0:
-                    while self.rfile.readline() not in (b"\r\n", b"\n", b""):
-                        pass
-                    break
-                chunks.extend(self.rfile.read(chunk_size))
-                self.rfile.read(2)
-            raw = bytes(chunks)
-        else:
-            length = int(self.headers.get("Content-Length") or 0)
-            if length <= 0:
-                return {}
-            raw = self.rfile.read(length)
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0:
+            return {}
+        raw = self.rfile.read(length)
         text = raw.decode("utf-8", errors="replace").strip()
         try:
             payload = json.loads(text)
@@ -2903,12 +2656,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         try:
             with conn() as db:
                 user = self.current_user(db)
-                if user and path not in ("/api/session", "/api/auth/logout"):
-                    block = active_account_block(db, int(user["id"]))
-                    timeout_allowed = path in ("/api/health", "/api/profile", "/api/bank", "/api/presence")
-                    if block and (block["sanction_type"] == "ban" or not timeout_allowed):
-                        self.error(403, f"Account {block['sanction_type']}: {block['reason']}")
-                        return
                 if path == "/api/health" and method == "GET":
                     self.send_json(200, {"ok": True, "time": now_iso()})
                 elif path == "/api/auth/register" and method == "POST":
@@ -2921,6 +2668,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_session(db, user)
                 elif path == "/api/changelog" and method == "GET":
                     self.api_changelog(user)
+                elif path == "/api/roadmap" and method == "GET":
+                    self.api_roadmap(db, user)
+                elif path == "/api/roadmap/items" and method == "POST":
+                    self.api_create_roadmap_item(db, user)
+                elif path.startswith("/api/roadmap/items/") and path.endswith("/vote") and method == "POST":
+                    self.api_vote_roadmap_item(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/roadmap/items/") and method == "PATCH":
+                    self.api_update_roadmap_item(db, user, self.path_int(path, 3))
                 elif path == "/api/presence" and method == "POST":
                     self.api_presence(db, user)
                 elif path == "/api/profile" and method == "GET":
@@ -2937,16 +2692,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_profile_activate_character(db, user, self.path_int(path, 3))
                 elif path == "/api/profile/link-arma" and method == "POST":
                     self.api_claim_arma_link(db, user)
-                elif path == "/api/profile/unlink-arma" and method == "POST":
-                    self.api_unlink_arma(db, user)
                 elif path == "/api/arma/link-requests" and method == "POST":
                     self.api_arma_link_requests(db)
                 elif path == "/api/arma/snapshot" and method == "GET":
                     self.api_arma_snapshot(db)
                 elif path == "/api/arma/events" and method == "POST":
                     self.api_arma_events(db)
-                elif path == "/api/arma/game-database/banks" and method == "POST":
-                    self.api_arma_game_banks(db)
                 elif path == "/api/jobs" and method == "GET":
                     self.api_jobs(db, user)
                 elif path == "/api/jobs/department-applications" and method == "POST":
@@ -2997,8 +2748,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_create_business_inspection(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/business/licenses/") and path.endswith("/violations") and method == "POST":
                     self.api_create_business_violation(db, user, self.path_int(path, 3))
-                elif path.startswith("/api/business/licenses/") and path.endswith("/taxes") and method == "POST":
-                    self.api_create_business_tax(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/business/licenses/") and method == "PATCH":
                     self.api_update_business_license(db, user, self.path_int(path, 3))
                 elif path == "/api/properties" and method == "GET":
@@ -3047,6 +2796,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_alerts(db, user)
                 elif path.startswith("/api/mdt/alerts/") and method == "PATCH":
                     self.api_clear_alert(db, user, self.path_int(path, 3))
+                elif path == "/api/dispatch/overview" and method == "GET":
+                    self.api_dispatch_overview(db, user)
+                elif path == "/api/dispatch/calls" and method == "POST":
+                    self.api_dispatch_create_call(db, user)
+                elif path.startswith("/api/dispatch/calls/") and path.endswith("/units") and method == "POST":
+                    self.api_dispatch_attach_unit(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/dispatch/calls/") and path.endswith("/notes") and method == "POST":
+                    self.api_dispatch_add_note(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/dispatch/calls/") and method == "PATCH":
+                    self.api_dispatch_update_call(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/dispatch/assignments/") and method == "PATCH":
+                    self.api_dispatch_update_assignment(db, user, self.path_int(path, 3))
                 elif path == "/api/fire/overview" and method == "GET":
                     self.api_fire_overview(db, user)
                 elif path == "/api/fire/rigs" and method == "PATCH":
@@ -3075,40 +2836,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_system_settings(db, user)
                 elif path == "/api/system/settings" and method == "PATCH":
                     self.api_update_system_settings(db, user)
-                elif path == "/api/dev-tools" and method == "GET":
-                    self.api_dev_tools(db, user)
-                elif path.startswith("/api/dev-tools/accounts/") and method == "GET":
-                    self.api_dev_account(db, user, self.path_int(path, 3))
-                elif path == "/api/dev-tools/unlink-codes" and method == "POST":
-                    self.api_dev_generate_unlink_code(db, user)
-                elif path == "/api/dev-tools/sanctions" and method == "POST":
-                    self.api_dev_create_sanction(db, user)
-                elif path.startswith("/api/dev-tools/sanctions/") and path.endswith("/revoke") and method == "POST":
-                    self.api_dev_revoke_sanction(db, user, self.path_int(path, 3))
-                elif path == "/api/dev-tools/warnings" and method == "POST":
-                    self.api_dev_create_warning(db, user)
-                elif path == "/api/dev-tools/app-visibility" and method == "PATCH":
-                    self.api_dev_update_app_visibility(db, user)
-                elif path.startswith("/api/dev-tools/warnings/") and path.endswith("/resolve") and method == "POST":
-                    self.api_dev_resolve_warning(db, user, self.path_int(path, 3))
-                elif path == "/api/fine-settlement" and method == "GET":
-                    self.api_fine_settlement(db, user)
-                elif path == "/api/fine-settlement/batches" and method == "POST":
-                    self.api_create_fine_settlement_batch(db, user)
-                elif path.startswith("/api/fine-settlement/batches/") and path.endswith("/code") and method == "POST":
-                    self.api_fine_settlement_code(db, user, self.path_int(path, 3))
-                elif path.startswith("/api/fine-settlement/batches/") and path.endswith("/approve") and method == "POST":
-                    self.api_approve_fine_settlement(db, user, self.path_int(path, 3))
-                elif path.startswith("/api/fine-settlement/batches/") and path.endswith("/complete") and method == "POST":
-                    self.api_complete_fine_settlement(db, user, self.path_int(path, 3))
-                elif path == "/api/fine-settlement/tax-batches" and method == "POST":
-                    self.api_create_tax_settlement_batch(db, user)
-                elif path.startswith("/api/fine-settlement/tax-batches/") and path.endswith("/code") and method == "POST":
-                    self.api_tax_settlement_code(db, user, self.path_int(path, 3))
-                elif path.startswith("/api/fine-settlement/tax-batches/") and path.endswith("/approve") and method == "POST":
-                    self.api_approve_tax_settlement(db, user, self.path_int(path, 3))
-                elif path.startswith("/api/fine-settlement/tax-batches/") and path.endswith("/complete") and method == "POST":
-                    self.api_complete_tax_settlement(db, user, self.path_int(path, 3))
                 elif path == "/api/admin/overview" and method == "GET":
                     self.api_admin_overview(db, user)
                 elif path == "/api/admin/users" and method == "GET":
@@ -3153,11 +2880,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
 
     def api_register(self, db: Database) -> None:
         payload = self.read_json()
-        missing = require_fields(payload, "name", "email", "car_entry_code", "password")
+        missing = require_fields(payload, "name", "email", "arma_id", "car_entry_code", "password")
         if missing:
             self.error(400, missing)
             return
         email = str(payload["email"]).strip().lower()
+        arma_id = str(payload["arma_id"]).strip()
         try:
             car_entry_code = clean_car_entry_code(payload.get("car_entry_code"))
         except ValueError as exc:
@@ -3166,6 +2894,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         password = str(payload["password"])
         if len(password) < 6:
             self.error(400, "Password must be at least 6 characters")
+            return
+        if len(arma_id) < 4:
+            self.error(400, "Arma ID must be at least 4 characters")
             return
         try:
             referral_code = clean_referral_code(payload.get("referral_code") or payload.get("referral"))
@@ -3192,7 +2923,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 generate_civ_number(db),
                 str(payload["name"]).strip(),
                 email,
-                None,
+                arma_id,
                 car_entry_code,
                 generate_referral_code(db),
                 referrer["id"] if referrer else None,
@@ -3219,14 +2950,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 db,
                 int(referrer["id"]),
                 "Referral payout pending",
-                f"{str(payload['name']).strip()} used your referral code. An in-game reward ticket is waiting for staff review.",
+                f"{str(payload['name']).strip()} used your referral code. A ${REFERRAL_BONUS_AMOUNT:,.0f} cash ticket is waiting for admin deposit.",
                 user_id,
             )
             add_message(
                 db,
                 user_id,
                 "Referral code accepted",
-                f"Your registration used {referrer['name']}'s referral code. Their in-game reward ticket is pending staff review.",
+                f"Your registration used {referrer['name']}'s referral code. Their ${REFERRAL_BONUS_AMOUNT:,.0f} referral cash ticket is pending admin deposit.",
                 int(referrer["id"]),
             )
             staff = all_rows(
@@ -3263,12 +2994,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not user or not verify_password(str(payload["password"]), user["password_hash"]):
             self.error(401, "Invalid email or password")
             return
-        block = active_account_block(db, int(user["id"]))
-        if block and block["sanction_type"] == "ban":
-            until = block.get("expires_at") or "indefinitely"
-            self.error(403, f"Account {block['sanction_type']}: {block['reason']} (until {until})")
-            return
-        self.send_json(200, {"ok": True, "user": public_user_with_game_bank(db, user)}, {"Set-Cookie": self.session_header(user["id"])})
+        self.send_json(200, {"ok": True, "user": public_user(user)}, {"Set-Cookie": self.session_header(user["id"])})
 
     def api_session(self, db: Database, user: DbRow | None) -> None:
         if not user:
@@ -3278,30 +3004,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         apply_auto_license_approval(db)
         settings = get_system_settings(db)
         user = one(db, "SELECT * FROM users WHERE id = ?", (user["id"],)) or user
-        block = active_account_block(db, int(user["id"]))
-        if block and block["sanction_type"] == "ban":
-            self.send_json(
-                403,
-                {
-                    "error": f"Account {block['sanction_type']}: {block['reason']}",
-                    "sanction": {
-                        "type": block["sanction_type"],
-                        "reason": block["reason"],
-                        "expires_at": block.get("expires_at"),
-                    },
-                },
-                {"Set-Cookie": self.clear_session_header()},
-            )
-            return
         unread = one(db, "SELECT COUNT(*) AS count FROM messages WHERE recipient_id = ? AND read_at IS NULL", (user["id"],))
-        arma_linked = bool(one(db, "SELECT id FROM arma_account_links WHERE user_id = ?", (user["id"],)))
         apps = app_catalog(user, settings)
-        if block and block["sanction_type"] == "timeout":
-            apps = [
-                {"id": "profile", "label": "Profile", "icon": "user", "enabled": True, "coming_soon": False, "hidden": False},
-                {"id": "bank", "label": "Bank", "icon": "bank", "enabled": True, "coming_soon": False, "hidden": False},
-                {"id": "restriction", "label": "Restriction", "icon": "lock", "enabled": True, "coming_soon": False, "hidden": False},
-            ]
         if court_access_required(db, user) is None:
             for item in apps:
                 if item["id"] == "court":
@@ -3311,23 +3015,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(
             200,
             {
-                "user": public_user_with_game_bank(db, user),
+                "user": public_user(user),
                 "apps": apps,
                 "unread_messages": int(unread["count"] if unread else 0),
                 "income": income_snapshot(db, user),
-                "arma_linked": arma_linked,
-                "requires_arma_link": bool(user["verified"]) and not arma_linked,
-                "sanction": (
-                    {
-                        "type": block["sanction_type"],
-                        "reason": block["reason"],
-                        "report_number": block.get("report_number") or "",
-                        "expires_at": block.get("expires_at"),
-                        "bail_amount": float(block.get("bail_amount") or 0),
-                    }
-                    if block and block["sanction_type"] == "timeout"
-                    else None
-                ),
                 "system": {
                     "update_lockdown_enabled": settings["update_lockdown_enabled"],
                     "update_lockdown_message": settings["update_lockdown_message"],
@@ -3345,6 +3036,186 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         except (OSError, json.JSONDecodeError):
             payload = {"version": "unavailable", "entries": []}
         self.send_json(200, payload)
+
+    def api_roadmap(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        can_manage = has_any(user, "owner", "admin")
+        visibility_sql = "" if can_manage else "WHERE i.is_visible = 1"
+        rows = all_rows(
+            db,
+            f"""
+            SELECT i.*,
+                   (SELECT COUNT(*) FROM roadmap_votes rv WHERE rv.item_id = i.id AND rv.vote = 1) AS upvotes,
+                   (SELECT COUNT(*) FROM roadmap_votes rv WHERE rv.item_id = i.id AND rv.vote = -1) AS downvotes,
+                   COALESCE((SELECT rv.vote FROM roadmap_votes rv WHERE rv.item_id = i.id AND rv.user_id = ?), 0) AS user_vote
+            FROM roadmap_items i
+            {visibility_sql}
+            ORDER BY i.sort_order, i.id
+            """,
+            (user["id"],),
+        )
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["progress"] = int(item.get("progress") or 0)
+            item["sort_order"] = int(item.get("sort_order") or 0)
+            item["is_visible"] = bool(item.get("is_visible"))
+            item["upvotes"] = int(item.get("upvotes") or 0)
+            item["downvotes"] = int(item.get("downvotes") or 0)
+            item["score"] = item["upvotes"] - item["downvotes"]
+            item["user_vote"] = int(item.get("user_vote") or 0)
+            items.append(item)
+        public_items = [item for item in items if item["is_visible"]]
+        active = [item for item in public_items if item["status"] in ("building", "next")]
+        shipped = [item for item in public_items if item["status"] == "shipped"]
+        total_votes = sum(item["upvotes"] + item["downvotes"] for item in public_items)
+        overall_progress = round(sum(item["progress"] for item in public_items) / max(len(public_items), 1))
+        android = next((item for item in public_items if item["slug"] == "android-app-parity"), None)
+        android_days = None
+        if android and android.get("target_date"):
+            android_days = max(0, (dt.date.fromisoformat(str(android["target_date"])) - utcnow().date()).days)
+        self.send_json(
+            200,
+            {
+                "items": items,
+                "can_manage": can_manage,
+                "stats": {
+                    "overall_progress": overall_progress,
+                    "active_phases": len(active),
+                    "shipped_phases": len(shipped),
+                    "community_votes": total_votes,
+                    "android_days": android_days,
+                    "android_target": android.get("target_date") if android else None,
+                },
+                "options": {
+                    "statuses": list(ROADMAP_STATUSES),
+                    "accents": list(ROADMAP_ACCENTS),
+                    "icons": list(ROADMAP_ICONS),
+                },
+            },
+        )
+
+    def api_vote_roadmap_item(self, db: Database, user: DbRow | None, item_id: int) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        item = one(db, "SELECT id, is_visible FROM roadmap_items WHERE id = ?", (item_id,))
+        if not item or (not bool(item["is_visible"]) and not has_any(user, "owner", "admin")):
+            self.error(404, "Roadmap milestone not found")
+            return
+        payload = self.read_json()
+        try:
+            vote = int(payload.get("vote", 0))
+        except (TypeError, ValueError):
+            self.error(400, "Vote must be up, down, or cleared")
+            return
+        if vote not in (-1, 0, 1):
+            self.error(400, "Vote must be up, down, or cleared")
+            return
+        if vote == 0:
+            db.execute("DELETE FROM roadmap_votes WHERE item_id = ? AND user_id = ?", (item_id, user["id"]))
+        else:
+            db.execute(
+                """
+                INSERT INTO roadmap_votes (item_id, user_id, vote, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (item_id, user_id)
+                DO UPDATE SET vote = excluded.vote, updated_at = excluded.updated_at
+                """,
+                (item_id, user["id"], vote, now_iso()),
+            )
+        counts = one(
+            db,
+            """
+            SELECT
+                (SELECT COUNT(*) FROM roadmap_votes WHERE item_id = ? AND vote = 1) AS upvotes,
+                (SELECT COUNT(*) FROM roadmap_votes WHERE item_id = ? AND vote = -1) AS downvotes
+            """,
+            (item_id, item_id),
+        ) or {"upvotes": 0, "downvotes": 0}
+        upvotes = int(counts["upvotes"] or 0)
+        downvotes = int(counts["downvotes"] or 0)
+        self.send_json(200, {"ok": True, "item_id": item_id, "user_vote": vote, "upvotes": upvotes, "downvotes": downvotes, "score": upvotes - downvotes})
+
+    def api_create_roadmap_item(self, db: Database, user: DbRow | None) -> None:
+        err = admin_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        values = roadmap_payload_values(payload)
+        slug_base = "".join(character.lower() if character.isalnum() else "-" for character in values["title"])
+        slug_base = "-".join(part for part in slug_base.split("-") if part)[:70] or "milestone"
+        slug = slug_base
+        suffix = 2
+        while one(db, "SELECT id FROM roadmap_items WHERE slug = ?", (slug,)):
+            slug = f"{slug_base[:64]}-{suffix}"
+            suffix += 1
+        ts = now_iso()
+        created = db.execute(
+            """
+            INSERT INTO roadmap_items
+            (slug, title, category, summary, details, status, progress, target_date, sort_order, accent, icon, is_visible, created_by, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id
+            """,
+            (
+                slug,
+                values["title"],
+                values["category"],
+                values["summary"],
+                values["details"],
+                values["status"],
+                values["progress"],
+                values["target_date"],
+                values["sort_order"],
+                values["accent"],
+                values["icon"],
+                values["is_visible"],
+                user["id"],
+                ts,
+                ts,
+            ),
+        ).fetchone()
+        self.send_json(201, {"ok": True, "id": int(created["id"]), "slug": slug})
+
+    def api_update_roadmap_item(self, db: Database, user: DbRow | None, item_id: int) -> None:
+        err = admin_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        item = one(db, "SELECT * FROM roadmap_items WHERE id = ?", (item_id,))
+        if not item:
+            self.error(404, "Roadmap milestone not found")
+            return
+        values = roadmap_payload_values(self.read_json(), item)
+        db.execute(
+            """
+            UPDATE roadmap_items
+            SET title = ?, category = ?, summary = ?, details = ?, status = ?, progress = ?,
+                target_date = ?, sort_order = ?, accent = ?, icon = ?, is_visible = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                values["title"],
+                values["category"],
+                values["summary"],
+                values["details"],
+                values["status"],
+                values["progress"],
+                values["target_date"],
+                values["sort_order"],
+                values["accent"],
+                values["icon"],
+                values["is_visible"],
+                now_iso(),
+                item_id,
+            ),
+        )
+        self.send_json(200, {"ok": True, "id": item_id})
 
     def api_presence(self, db: Database, user: DbRow | None) -> None:
         if not user:
@@ -3441,7 +3312,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(
             200,
             {
-                "user": public_user_with_game_bank(db, user),
+                "user": {**public_user(user), "registered_arma_id": user.get("arma_id") or ""},
                 "characters": [dict(row) for row in characters],
                 "active_character": dict(active_character) if active_character else None,
                 "name_change": name_change_status(db, int(user["id"])),
@@ -3640,66 +3511,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         add_message(db, user["id"], "Arma account linked", f"Linked Arma player {request.get('player_name') or identity_id} from {request['server_id']}.")
         self.send_json(200, {"ok": True})
 
-    def api_unlink_arma(self, db: Database, user: DbRow | None) -> None:
-        if not user:
-            self.error(401, "Authentication required")
-            return
-        payload = self.read_json()
-        if payload.get("confirmation") != "UNLINK FOR DEVELOPMENT":
-            self.error(400, "Confirm that unlinking is for development reasons and is being done with server engineer guidance.")
-            return
-        dev_code = str(payload.get("dev_code") or "").strip().upper()
-        if not dev_code:
-            self.error(400, "A specialized developer unlink code is required")
-            return
-        code_hash = hashlib.sha256(dev_code.encode("utf-8")).hexdigest()
-        code_record = one(
-            db,
-            """
-            SELECT * FROM developer_unlink_codes
-            WHERE code_hash = ?
-              AND revoked_at IS NULL
-              AND uses_remaining > 0
-              AND expires_at > ?
-            """,
-            (code_hash, now_iso()),
-        )
-        if not code_record:
-            self.error(403, "Developer unlink code is invalid, expired, or already used")
-            return
-        link = one(db, "SELECT * FROM arma_account_links WHERE user_id = ?", (user["id"],))
-        if not link:
-            self.error(404, "No linked Arma account was found")
-            return
-        db.execute("DELETE FROM arma_account_links WHERE user_id = ?", (user["id"],))
-        db.execute("UPDATE users SET arma_id = NULL WHERE id = ?", (user["id"],))
-        db.execute(
-            "UPDATE arma_link_codes SET status = 'unlinked' WHERE claimed_by = ? AND status = 'claimed'",
-            (user["id"],),
-        )
-        db.execute(
-            """
-            UPDATE developer_unlink_codes
-            SET uses_remaining = uses_remaining - 1, used_by = ?, used_at = ?
-            WHERE id = ?
-            """,
-            (user["id"], now_iso(), code_record["id"]),
-        )
-        add_admin_audit(
-            db,
-            int(code_record["created_by"]),
-            "arma.development_unlink",
-            int(user["id"]),
-            {"code_hint": code_record["code_hint"], "identity_id": link["identity_id"]},
-        )
-        add_message(
-            db,
-            user["id"],
-            "Arma account unlinked",
-            "The Arma account link was removed for development testing with server engineer guidance.",
-        )
-        self.send_json(200, {"ok": True})
-
     def bridge_payload_data(self, payload: dict[str, Any]) -> dict[str, Any]:
         data = payload.get("Data")
         return data if isinstance(data, dict) else payload
@@ -3808,10 +3619,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             db,
             """
             SELECT l.*, u.id AS website_user_id, u.name AS website_username, u.civ_number, u.verified, u.roles,
-                   u.primary_agency, COALESCE(game_bank.balance, 0) AS game_bank_balance
+                   u.primary_agency, u.cash_balance, u.bank_balance
             FROM arma_account_links l
             JOIN users u ON u.id = l.user_id
-            LEFT JOIN arma_game_bank_balances game_bank ON game_bank.identity_id = l.identity_id
             ORDER BY l.linked_at DESC
             """,
         )
@@ -3839,8 +3649,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "Whitelisted": 1 if bool(row["verified"]) or "owner" in user_roles or "admin" in user_roles else 0,
                     "Banned": 0,
                     "KickReason": "",
-                    "Cash": 0,
-                    "Bank": int(float(row["game_bank_balance"] or 0)),
+                    "Cash": int(float(row["cash_balance"] or 0)),
+                    "Bank": int(float(row["bank_balance"] or 0)),
                     "RoleIds": user_roles,
                     "PermissionIds": [],
                     "Metadata": metadata,
@@ -3940,54 +3750,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 ),
             )
             if user_id and event_type.startswith("money.") and amount:
+                if currency == "bank":
+                    db.execute("UPDATE users SET bank_balance = bank_balance + ? WHERE id = ?", (amount, user_id))
+                else:
+                    db.execute("UPDATE users SET cash_balance = cash_balance + ? WHERE id = ?", (amount, user_id))
                 add_transaction(db, user_id, f"arma_{action or 'money'}", amount, reason or source_system)
             if link:
                 db.execute("UPDATE arma_account_links SET last_seen_at = ?, last_sync_at = ? WHERE id = ?", (created_at, received_at, link["id"]))
             accepted.append(event_id)
         self.send_json(200, {"ok": True, "accepted_event_ids": accepted, "skipped_event_ids": skipped})
-
-    def api_arma_game_banks(self, db: Database) -> None:
-        err = self.bridge_error()
-        if err:
-            self.error(403, err)
-            return
-        payload = self.read_json()
-        data = self.bridge_payload_data(payload)
-        balances = data.get("Balances") or data.get("m_Banks") or {}
-        if not isinstance(balances, dict):
-            self.error(400, "Bank payload must contain a Balances map")
-            return
-        source_file = str(data.get("SourceFile") or "")[:255]
-        source_saved_at = str(data.get("SourceSavedAt") or data.get("m_iLastSaved") or "")[:80]
-        synced_at = now_iso()
-        accepted = 0
-        linked = 0
-        for identity_id, raw_balance in balances.items():
-            identity = str(identity_id or "").strip()[:160]
-            if not identity:
-                continue
-            try:
-                balance = round(float(raw_balance or 0), 2)
-            except (TypeError, ValueError):
-                continue
-            db.execute(
-                """
-                INSERT INTO arma_game_bank_balances
-                (identity_id, balance, source_file, source_saved_at, raw_payload, synced_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT (identity_id) DO UPDATE SET
-                    balance = EXCLUDED.balance,
-                    source_file = EXCLUDED.source_file,
-                    source_saved_at = EXCLUDED.source_saved_at,
-                    raw_payload = EXCLUDED.raw_payload,
-                    synced_at = EXCLUDED.synced_at
-                """,
-                (identity, balance, source_file, source_saved_at, json.dumps({"balance": balance}), synced_at),
-            )
-            if one(db, "SELECT id FROM arma_account_links WHERE identity_id = ?", (identity,)):
-                linked += 1
-            accepted += 1
-        self.send_json(200, {"ok": True, "accepted": accepted, "matched_linked_accounts": linked, "synced_at": synced_at})
 
     def api_jobs(self, db: Database, user: DbRow | None) -> None:
         if not user:
@@ -4105,23 +3876,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 30",
             (user["id"],),
         )
-        game_bank = one(
-            db,
-            """
-            SELECT b.* FROM arma_account_links l
-            JOIN arma_game_bank_balances b ON b.identity_id = l.identity_id
-            WHERE l.user_id = ?
-            """,
-            (user["id"],),
-        )
         payload: dict[str, Any] = {
-            "balance": round(float(game_bank["balance"] or 0), 2) if game_bank else 0,
-            "balance_source": "FCRPMUSSALO",
-            "balance_synced": bool(game_bank),
-            "balance_synced_at": game_bank.get("synced_at") if game_bank else None,
+            "balance": round(float(user["bank_balance"] or 0), 2),
+            "cash": round(float(user["cash_balance"] or 0), 2),
             "income": income_snapshot(db, user),
             "transactions": [dict(row) for row in transactions],
-            "can_manage_treasury": False,
+            "can_manage_treasury": admin_required(user) is None,
         }
         if payload["can_manage_treasury"]:
             recent = all_rows(
@@ -4159,7 +3919,35 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         return
 
     def api_bank_treasury_adjust(self, db: Database, user: DbRow | None) -> None:
-        self.error(410, "Railway bank adjustments are disabled. FCRPMUSSALO is the authoritative bank source.")
+        err = admin_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        missing = require_fields(payload, "user_id", "amount", "reason")
+        if missing:
+            self.error(400, missing)
+            return
+        target = one(db, "SELECT id, name FROM users WHERE id = ?", (int(payload["user_id"]),))
+        if not target:
+            self.error(404, "Treasury recipient not found")
+            return
+        amount = clean_treasury_amount(payload.get("amount"))
+        reason = str(payload.get("reason") or "Manual Faircroft Treasury compensation").strip()[:500]
+        ts = now_iso()
+        request_number = generate_record_number(db, "treasury_requests", "request_number", "TRS")
+        db.execute(
+            """
+            INSERT INTO treasury_requests
+            (request_number, user_id, request_type, requested_amount, approved_amount, status, reason, proof_images, proof_bypass, reviewer_id, reviewer_notes, created_at, updated_at, decided_at)
+            VALUES (?, ?, 'staff_adjustment', ?, ?, 'paid', ?, '[]', 1, ?, ?, ?, ?, ?)
+            """,
+            (request_number, target["id"], amount, amount, reason, user["id"], reason, ts, ts, ts),
+        )
+        db.execute("UPDATE users SET bank_balance = bank_balance + ? WHERE id = ?", (amount, target["id"]))
+        add_transaction(db, target["id"], "treasury_compensation", amount, f"Faircroft Treasury {request_number}: {reason}", user["id"])
+        add_message(db, target["id"], "Faircroft Treasury deposit", f"Treasury added {amount:,.2f} to your bank. Reason: {reason}", user["id"])
+        self.send_json(201, {"ok": True, "request_number": request_number})
 
     def api_treasury(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -4276,7 +4064,23 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         notes = str(payload.get("reviewer_notes") or payload.get("notes") or "").strip()[:1200]
         ts = now_iso()
         if status in ("approve", "approved", "pay", "paid"):
-            self.error(410, "Treasury bank deposits are disabled while FCRPMUSSALO is authoritative. Apply the payment in-game.")
+            if request["status"] == "paid":
+                self.error(409, "This Treasury request has already been paid")
+                return
+            amount = clean_treasury_amount(payload.get("approved_amount"), float(request["requested_amount"] or TREASURY_STIMULUS_AMOUNT))
+            db.execute("UPDATE users SET bank_balance = bank_balance + ? WHERE id = ?", (amount, request["user_id"]))
+            description = notes or f"{human_request_type(request['request_type'])} approved"
+            add_transaction(db, request["user_id"], "treasury_compensation", amount, f"Faircroft Treasury {request['request_number']}: {description}", user["id"])
+            db.execute(
+                """
+                UPDATE treasury_requests
+                SET status = 'paid', approved_amount = ?, reviewer_id = ?, reviewer_notes = ?, updated_at = ?, decided_at = ?
+                WHERE id = ?
+                """,
+                (amount, user["id"], notes, ts, ts, request_id),
+            )
+            add_message(db, request["user_id"], "Faircroft Treasury approved", f"Request {request['request_number']} was approved and {amount:,.2f} was deposited into your bank.", user["id"])
+            self.send_json(200, {"ok": True, "status": "paid", "approved_amount": amount})
             return
         if status in ("deny", "denied"):
             if request["status"] == "paid":
@@ -4296,7 +4100,36 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.error(400, "Treasury review status must be approve or deny")
 
     def api_cash_transfer(self, db: Database, user: DbRow | None) -> None:
-        self.error(410, "Website transfers are disabled. Use the in-game banking system.")
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        missing = require_fields(payload, "recipient_email", "amount")
+        if missing:
+            self.error(400, missing)
+            return
+        amount = round(float(payload["amount"]), 2)
+        if amount <= 0:
+            self.error(400, "Amount must be positive")
+            return
+        if amount > float(user["bank_balance"] or 0):
+            self.error(409, "Insufficient bank balance")
+            return
+        recipient = one(db, "SELECT * FROM users WHERE email = ?", (str(payload["recipient_email"]).strip().lower(),))
+        if not recipient:
+            self.error(404, "Recipient not found")
+            return
+        if recipient["id"] == user["id"]:
+            self.error(400, "Cannot transfer to yourself")
+            return
+        note = str(payload.get("note") or "Cash App transfer").strip()[:120]
+        db.execute("UPDATE users SET bank_balance = bank_balance - ? WHERE id = ?", (amount, user["id"]))
+        db.execute("UPDATE users SET bank_balance = bank_balance + ? WHERE id = ?", (amount, recipient["id"]))
+        add_transaction(db, user["id"], "transfer_out", -amount, f"Sent to {recipient['name']}: {note}", recipient["id"])
+        add_transaction(db, recipient["id"], "transfer_in", amount, f"Received from {user['name']}: {note}", user["id"])
+        add_message(db, recipient["id"], "Cash App payment received", f"{user['name']} sent you ${amount:,.2f}. Note: {note}", user["id"])
+        self.send_json(200, {"ok": True})
 
     def api_dmv_me(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -4739,13 +4572,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         }
 
     def business_license_payload(self, row: DbRow) -> dict[str, Any]:
-        tax_anchor = parse_iso(str(row.get("tax_last_assessed_at") or row.get("created_at") or now_iso()))
-        accrued_weeks = max(0, int((utcnow() - tax_anchor).total_seconds() // (7 * 24 * 60 * 60)))
-        weekly_tax = round(float(row["weekly_tax"] or 0), 2)
-        payload = {
+        return {
             **dict(row),
             "startup_budget": round(float(row["startup_budget"] or 0), 2),
-            "weekly_tax": weekly_tax,
+            "weekly_tax": round(float(row["weekly_tax"] or 0), 2),
             "planned_employees": int(row["planned_employees"] or 0),
             "activity_requirement_minutes": int(row["activity_requirement_minutes"] or 0),
             "reputation_score": int(row["reputation_score"] or 0),
@@ -4753,16 +4583,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "open_violations": int(row.get("open_violations") or 0),
             "inspection_count": int(row.get("inspection_count") or 0),
         }
-        if row.get("identity_id"):
-            payload.update(
-                {
-                    "unpaid_tax": round(float(row.get("unpaid_tax") or 0), 2),
-                    "accrued_tax": round(weekly_tax * accrued_weeks, 2),
-                    "accrued_weeks": accrued_weeks,
-                    "tax_available_at": (tax_anchor + dt.timedelta(days=7)).isoformat(),
-                }
-            )
-        return payload
 
     def business_staff_rows(self, db: Database) -> list[DbRow]:
         return all_rows(
@@ -4813,6 +4633,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             """,
             (user["id"],),
         )
+
         payload: dict[str, Any] = {
             "staff_view": staff_view,
             "categories": list(BUSINESS_LICENSE_CATEGORIES),
@@ -5172,41 +4993,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         add_message(db, business["owner_id"], "Business violation issued", f"A {payload['severity']} violation was issued for {business['business_name']}.", user["id"])
         self.send_json(201, {"ok": True})
 
-    def api_create_business_tax(self, db: Database, user: DbRow | None, business_id: int) -> None:
-        err = fine_settlement_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        assert user is not None
-        business = one(db, "SELECT * FROM businesses WHERE id = ?", (business_id,))
-        if not business:
-            self.error(404, "Business license not found")
-            return
-        payload = self.read_json()
-        anchor = parse_iso(str(business.get("tax_last_assessed_at") or business.get("created_at") or now_iso()))
-        assessed_at = utcnow()
-        accrued_weeks = max(0, int((assessed_at - anchor).total_seconds() // (7 * 24 * 60 * 60)))
-        weekly_tax = round(float(business["weekly_tax"] or 0), 2)
-        amount = round(weekly_tax * accrued_weeks, 2)
-        if accrued_weeks < 1 or amount <= 0:
-            available_at = anchor + dt.timedelta(days=7)
-            self.error(409, f"No full weekly tax period has accrued. Next assessment: {available_at.isoformat()}")
-            return
-        period_end = anchor + dt.timedelta(days=7 * accrued_weeks)
-        period_label = f"{accrued_weeks} week(s): {anchor.date().isoformat()} through {period_end.date().isoformat()}"
-        created = db.execute(
-            """
-            INSERT INTO business_tax_assessments
-            (business_id, amount, period_label, notes, assessed_by, assessed_at)
-            VALUES (?, ?, ?, ?, ?, ?) RETURNING id
-            """,
-            (business_id, amount, period_label, str(payload.get("notes") or "").strip()[:1200], user["id"], assessed_at.isoformat()),
-        ).fetchone()
-        db.execute("UPDATE businesses SET tax_last_assessed_at = ?, updated_at = ? WHERE id = ?", (period_end.isoformat(), assessed_at.isoformat(), business_id))
-        add_message(db, business["owner_id"], "Business tax assessed", f"{business['business_name']} received a {amount:.2f} tax assessment for {period_label}.", user["id"])
-        add_admin_audit(db, int(user["id"]), "business.tax.assessed", int(business["owner_id"]), {"business_id": business_id, "amount": amount, "period": period_label})
-        self.send_json(201, {"ok": True, "id": int(created["id"])})
-
     def api_properties(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
         if err:
@@ -5224,7 +5010,24 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"properties": [dict(row) for row in rows]})
 
     def api_buy_property(self, db: Database, user: DbRow | None, property_id: int) -> None:
-        self.error(410, "Website bank purchases are disabled. Complete this purchase through the in-game economy.")
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        prop = one(db, "SELECT * FROM properties WHERE id = ?", (property_id,))
+        if not prop:
+            self.error(404, "Property not found")
+            return
+        if prop["status"] != "available":
+            self.error(409, "Property is not available")
+            return
+        if float(user["bank_balance"] or 0) < float(prop["price"]):
+            self.error(409, "Insufficient bank balance")
+            return
+        db.execute("UPDATE users SET bank_balance = bank_balance - ? WHERE id = ?", (prop["price"], user["id"]))
+        db.execute("UPDATE properties SET owner_id = ?, status = 'owned' WHERE id = ?", (user["id"], property_id))
+        add_transaction(db, user["id"], "property_purchase", -float(prop["price"]), f"Purchased {prop['name']}")
+        self.send_json(200, {"ok": True})
 
     def api_my_cases(self, db: Database, user: DbRow | None) -> None:
         err = court_access_required(db, user)
@@ -5287,7 +5090,28 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
 
     def api_pay_case(self, db: Database, user: DbRow | None, case_id: int) -> None:
-        self.error(410, "Website fine payments are disabled. Pay through the in-game economy.")
+        err = court_access_required(db, user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        case = one(db, "SELECT * FROM citations WHERE id = ? AND civ_id = ?", (case_id, user["id"]))
+        if not case:
+            self.error(404, "Case not found")
+            return
+        if case["status"] in ("paid", "dismissed"):
+            self.error(409, "Case is already closed")
+            return
+        amount = float(case["fine_amount"])
+        if float(user["bank_balance"] or 0) < amount:
+            self.error(409, "Insufficient bank balance")
+            return
+        db.execute("UPDATE users SET bank_balance = bank_balance - ? WHERE id = ?", (amount, user["id"]))
+        db.execute(
+            "UPDATE citations SET status = 'paid', final_result = ?, updated_at = ? WHERE id = ?",
+            (final_result_for("paid", case.get("judgment_notes"), amount), now_iso(), case_id),
+        )
+        add_transaction(db, user["id"], "fine_payment", -amount, f"Paid citation {case['charge_code']} - {case['charge_title']}")
+        self.send_json(200, {"ok": True})
 
     def api_contest_case(self, db: Database, user: DbRow | None, case_id: int) -> None:
         err = court_access_required(db, user)
@@ -7066,938 +6890,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         stats = {**auto_verify_stats(db, settings), **auto_license_stats(db, settings)}
         self.send_json(200, {"ok": True, "settings": settings, "stats": stats, "auto_verified_now": auto_verified, "auto_licensed_now": auto_licensed})
 
-    def api_dev_tools(self, db: Database, user: DbRow | None) -> None:
-        err = developer_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        users = all_rows(
-            db,
-            """
-            SELECT u.id, u.civ_number, u.name, u.email, u.verified, u.roles, u.arma_id, u.created_at,
-                   CASE WHEN l.id IS NULL THEN 0 ELSE 1 END AS arma_linked,
-                   l.identity_id AS linked_arma_id, l.linked_at
-            FROM users u
-            LEFT JOIN arma_account_links l ON l.user_id = u.id
-            ORDER BY u.name, u.id LIMIT 500
-            """,
-        )
-        sanctions = all_rows(
-            db,
-            """
-            SELECT s.*, target.name AS target_name, target.civ_number,
-                   creator.name AS created_by_name, revoker.name AS revoked_by_name
-            FROM account_sanctions s
-            JOIN users target ON target.id = s.user_id
-            JOIN users creator ON creator.id = s.created_by
-            LEFT JOIN users revoker ON revoker.id = s.revoked_by
-            ORDER BY s.created_at DESC LIMIT 250
-            """,
-        )
-        warnings = all_rows(
-            db,
-            """
-            SELECT w.*, target.name AS target_name, target.civ_number,
-                   creator.name AS created_by_name, resolver.name AS resolved_by_name
-            FROM account_internal_warnings w
-            JOIN users target ON target.id = w.user_id
-            JOIN users creator ON creator.id = w.created_by
-            LEFT JOIN users resolver ON resolver.id = w.resolved_by
-            ORDER BY w.created_at DESC LIMIT 250
-            """,
-        )
-        audit_logs = all_rows(
-            db,
-            """
-            SELECT l.*, actor.name AS actor_name, target.name AS target_name, target.civ_number
-            FROM admin_audit_logs l
-            LEFT JOIN users actor ON actor.id = l.actor_id
-            LEFT JOIN users target ON target.id = l.target_user_id
-            ORDER BY l.created_at DESC LIMIT 300
-            """,
-        )
-        codes = all_rows(
-            db,
-            """
-            SELECT c.id, c.code_hint, c.expires_at, c.uses_remaining, c.used_at, c.revoked_at, c.created_at,
-                   creator.name AS created_by_name, used.name AS used_by_name
-            FROM developer_unlink_codes c
-            JOIN users creator ON creator.id = c.created_by
-            LEFT JOIN users used ON used.id = c.used_by
-            ORDER BY c.created_at DESC LIMIT 100
-            """,
-        )
-        now = utcnow()
-        active_sanctions = [
-            row for row in sanctions
-            if not row.get("revoked_at") and (not row.get("expires_at") or parse_iso(row["expires_at"]) > now)
-        ]
-        active_bans = sum(1 for row in active_sanctions if row.get("sanction_type") == "ban")
-        active_timeouts = sum(1 for row in active_sanctions if row.get("sanction_type") == "timeout")
-        account_stats = one(
-            db,
-            """
-            SELECT
-                COUNT(*) AS total_accounts,
-                COUNT(*) FILTER (WHERE u.verified <> 0) AS verified_accounts,
-                COUNT(*) FILTER (WHERE u.verified = 0) AS unverified_accounts,
-                COUNT(l.id) AS linked_accounts,
-                COUNT(*) FILTER (WHERE l.id IS NULL) AS unlinked_accounts,
-                COUNT(*) FILTER (WHERE u.verified <> 0 AND l.id IS NULL) AS verified_unlinked
-            FROM users u
-            LEFT JOIN arma_account_links l ON l.user_id = u.id
-            """,
-        )
-        recent_links = all_rows(
-            db,
-            """
-            SELECT l.id, l.user_id AS account_id, l.linked_at, l.player_name, l.identity_id AS arma_id,
-                   u.name AS account_name, u.civ_number
-            FROM arma_account_links l
-            JOIN users u ON u.id = l.user_id
-            ORDER BY l.linked_at DESC LIMIT 40
-            """,
-        )
-        app_visibility = get_system_settings(db)["app_visibility"]
-        self.send_json(
-            200,
-            {
-                "users": [dict(row) for row in users],
-                "sanctions": [dict(row) for row in sanctions],
-                "active_sanctions": len(active_sanctions),
-                "active_bans": active_bans,
-                "active_timeouts": active_timeouts,
-                "total_accounts": int(account_stats["total_accounts"] or 0),
-                "verified_accounts": int(account_stats["verified_accounts"] or 0),
-                "verified_unlinked": int(account_stats["verified_unlinked"] or 0),
-                "unverified_accounts": int(account_stats["unverified_accounts"] or 0),
-                "linked_accounts": int(account_stats["linked_accounts"] or 0),
-                "unlinked_accounts": int(account_stats["unlinked_accounts"] or 0),
-                "recent_links": [dict(row) for row in recent_links],
-                "warnings": [dict(row) for row in warnings],
-                "audit_logs": [dict(row) for row in audit_logs],
-                "unlink_codes": [dict(row) for row in codes],
-                "app_visibility": {
-                    "apps": [
-                        {"id": app_id, "label": label, "enabled": app_visibility.get(app_id, True)}
-                        for app_id, label in APP_VISIBILITY_OPTIONS
-                    ],
-                    "protected": sorted(PROTECTED_APP_IDS),
-                },
-            },
-        )
-
-    def api_dev_update_app_visibility(self, db: Database, user: DbRow | None) -> None:
-        err = developer_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        assert user is not None
-        payload = self.read_json()
-        visibility_payload = payload.get("visibility")
-        if not isinstance(visibility_payload, dict):
-            self.error(400, "App visibility must be an object")
-            return
-        allowed = {app_id for app_id, _label in APP_VISIBILITY_OPTIONS}
-        visibility = {
-            app_id: bool(visibility_payload.get(app_id, True))
-            for app_id in allowed
-        }
-        set_system_setting(db, "app_visibility", json.dumps(visibility, separators=(",", ":"), sort_keys=True))
-        add_admin_audit(
-            db,
-            int(user["id"]),
-            "system.app_visibility.updated",
-            details={"disabled": sorted(app_id for app_id, enabled in visibility.items() if not enabled)},
-        )
-        self.send_json(
-            200,
-            {
-                "ok": True,
-                "apps": [
-                    {"id": app_id, "label": label, "enabled": visibility.get(app_id, True)}
-                    for app_id, label in APP_VISIBILITY_OPTIONS
-                ],
-            },
-        )
-
-    def api_dev_generate_unlink_code(self, db: Database, user: DbRow | None) -> None:
-        err = developer_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        payload = self.read_json()
-        try:
-            expiry_minutes = max(5, min(int(payload.get("expiry_minutes") or 30), 1440))
-        except (TypeError, ValueError):
-            self.error(400, "Expiry must be a number of minutes")
-            return
-        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-        raw_code = "DEV-" + "".join(secrets.choice(alphabet) for _ in range(4)) + "-" + "".join(secrets.choice(alphabet) for _ in range(4))
-        code_hash = hashlib.sha256(raw_code.encode("utf-8")).hexdigest()
-        created_at = utcnow()
-        expires_at = created_at + dt.timedelta(minutes=expiry_minutes)
-        db.execute(
-            """
-            INSERT INTO developer_unlink_codes
-            (code_hash, code_hint, created_by, expires_at, uses_remaining, created_at)
-            VALUES (?, ?, ?, ?, 1, ?)
-            """,
-            (code_hash, raw_code[-4:], user["id"], expires_at.isoformat(), created_at.isoformat()),
-        )
-        add_admin_audit(db, int(user["id"]), "dev.unlink_code.created", details={"code_hint": raw_code[-4:], "expires_at": expires_at.isoformat()})
-        self.send_json(201, {"ok": True, "code": raw_code, "expires_at": expires_at.isoformat(), "uses": 1})
-
-    def api_dev_account(self, db: Database, user: DbRow | None, target_id: int) -> None:
-        err = developer_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        account = one(
-            db,
-            """
-            SELECT u.*, l.id AS link_id, l.server_id, l.identity_id, l.uid,
-                   l.rpl_identity, l.platform, l.player_name, l.linked_at,
-                   l.last_seen_at, l.last_sync_at
-            FROM users u
-            LEFT JOIN arma_account_links l ON l.user_id = u.id
-            WHERE u.id = ?
-            """,
-            (target_id,),
-        )
-        if not account:
-            self.error(404, "Account not found")
-            return
-        if not account.get("link_id"):
-            self.error(409, "This account does not have an active Arma link")
-            return
-        sanctions = all_rows(
-            db,
-            """
-            SELECT s.*, creator.name AS created_by_name, revoker.name AS revoked_by_name
-            FROM account_sanctions s
-            JOIN users creator ON creator.id = s.created_by
-            LEFT JOIN users revoker ON revoker.id = s.revoked_by
-            WHERE s.user_id = ? ORDER BY s.created_at DESC LIMIT 100
-            """,
-            (target_id,),
-        )
-        warnings = all_rows(
-            db,
-            """
-            SELECT w.*, creator.name AS created_by_name, resolver.name AS resolved_by_name
-            FROM account_internal_warnings w
-            JOIN users creator ON creator.id = w.created_by
-            LEFT JOIN users resolver ON resolver.id = w.resolved_by
-            WHERE w.user_id = ? ORDER BY w.created_at DESC LIMIT 100
-            """,
-            (target_id,),
-        )
-        transactions = all_rows(
-            db,
-            """
-            SELECT t.*, counterparty.name AS counterparty_name
-            FROM transactions t
-            LEFT JOIN users counterparty ON counterparty.id = t.counterparty_id
-            WHERE t.user_id = ? ORDER BY t.created_at DESC LIMIT 150
-            """,
-            (target_id,),
-        )
-        arma_activity = all_rows(
-            db,
-            """
-            SELECT * FROM arma_activity_logs
-            WHERE user_id = ? ORDER BY received_at DESC LIMIT 150
-            """,
-            (target_id,),
-        )
-        characters = all_rows(
-            db,
-            "SELECT * FROM user_characters WHERE user_id = ? ORDER BY is_active DESC, updated_at DESC",
-            (target_id,),
-        )
-        jobs = all_rows(
-            db,
-            """
-            SELECT uj.*, j.title, j.market
-            FROM user_jobs uj JOIN jobs j ON j.id = uj.job_id
-            WHERE uj.user_id = ? ORDER BY uj.started_at DESC
-            """,
-            (target_id,),
-        )
-        citations = all_rows(
-            db,
-            """
-            SELECT c.*
-            FROM citations c
-            WHERE c.civ_id = ? ORDER BY c.created_at DESC LIMIT 100
-            """,
-            (target_id,),
-        )
-        properties = all_rows(
-            db,
-            """
-            SELECT p.* FROM properties p
-            WHERE p.owner_id = ? ORDER BY p.created_at DESC
-            """,
-            (target_id,),
-        )
-        active_block = active_account_block(db, target_id)
-        game_bank = one(
-            db,
-            "SELECT * FROM arma_game_bank_balances WHERE identity_id = ?",
-            (account.get("identity_id") or "",),
-        )
-        response_account = public_user(account)
-        response_account.update(
-            {
-                "identity_id": account.get("identity_id") or "",
-                "uid": account.get("uid") or "",
-                "rpl_identity": account.get("rpl_identity") or "",
-                "platform": account.get("platform") or "",
-                "player_name": account.get("player_name") or "",
-                "server_id": account.get("server_id") or "",
-                "linked_at": account.get("linked_at"),
-                "last_seen_at": account.get("last_seen_at"),
-                "last_sync_at": account.get("last_sync_at"),
-            }
-        )
-        self.send_json(
-            200,
-            {
-                "account": response_account,
-                "active_block": dict(active_block) if active_block else None,
-                "sanctions": [dict(row) for row in sanctions],
-                "warnings": [dict(row) for row in warnings],
-                "transactions": [dict(row) for row in transactions],
-                "arma_activity": [dict(row) for row in arma_activity],
-                "characters": [dict(row) for row in characters],
-                "jobs": [dict(row) for row in jobs],
-                "citations": [dict(row) for row in citations],
-                "properties": [dict(row) for row in properties],
-                "game_database": {
-                    "status": "synced" if game_bank else "awaiting_bank_sync",
-                    "source": "FCRPMUSSALO",
-                    "collections": ["Banks", "Characters", "Criminals", "Items", "PoliceReports", "Vehicles"],
-                    "bank": dict(game_bank) if game_bank else None,
-                },
-            },
-        )
-
-    def api_dev_create_sanction(self, db: Database, user: DbRow | None) -> None:
-        err = developer_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        payload = self.read_json()
-        missing = require_fields(payload, "user_id", "sanction_type", "reason")
-        if missing:
-            self.error(400, missing)
-            return
-        sanction_type = str(payload["sanction_type"]).strip().lower()
-        if sanction_type not in ("ban", "timeout", "sanction"):
-            self.error(400, "Sanction type must be ban, timeout, or sanction")
-            return
-        report_fields = (
-            "rule_code",
-            "incident_at",
-            "incident_summary",
-            "evidence",
-            "staff_findings",
-            "appeal_guidance",
-        )
-        if sanction_type in ("ban", "timeout"):
-            report_missing = require_fields(payload, *report_fields)
-            if report_missing:
-                self.error(400, f"A complete enforcement report is required: {report_missing}")
-                return
-            if len(str(payload.get("incident_summary") or "").strip()) < 40:
-                self.error(400, "Incident summary must contain at least 40 characters")
-                return
-            if len(str(payload.get("staff_findings") or "").strip()) < 30:
-                self.error(400, "Staff findings must contain at least 30 characters")
-                return
-            if len(str(payload.get("evidence") or "").strip()) < 10:
-                self.error(400, "Evidence and log references must contain at least 10 characters")
-                return
-        target_id = int(payload["user_id"])
-        target = one(db, "SELECT * FROM users WHERE id = ?", (target_id,))
-        if not target:
-            self.error(404, "Target account not found")
-            return
-        if has_any(target, "owner") and not has_any(user, "owner"):
-            self.error(403, "Only the owner can sanction an owner account")
-            return
-        starts_at = utcnow()
-        report_number = f"FR-{starts_at.strftime('%Y%m%d')}-{secrets.randbelow(900000) + 100000}"
-        expires_at: str | None = None
-        try:
-            bail_amount = max(0.0, min(float(payload.get("bail_amount") or 0), 10_000_000.0))
-        except (TypeError, ValueError):
-            self.error(400, "Bail amount must be a valid number")
-            return
-        if sanction_type == "timeout":
-            try:
-                duration_minutes = max(1, min(int(payload.get("duration_minutes") or 60), 525600))
-            except (TypeError, ValueError):
-                self.error(400, "Timeout duration must be a number of minutes")
-                return
-            expires_at = (starts_at + dt.timedelta(minutes=duration_minutes)).isoformat()
-        elif sanction_type == "sanction" and payload.get("duration_minutes"):
-            expires_at = (starts_at + dt.timedelta(minutes=max(1, int(payload["duration_minutes"])))).isoformat()
-        created = db.execute(
-            """
-            INSERT INTO account_sanctions
-            (user_id, sanction_type, reason, report_number, rule_code, incident_at,
-             incident_summary, evidence, witness_names, staff_findings, player_statement,
-             appeal_guidance, internal_notes, bail_amount, starts_at, expires_at, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
-            """,
-            (
-                target_id,
-                sanction_type,
-                str(payload["reason"]).strip()[:1200],
-                report_number,
-                str(payload.get("rule_code") or "").strip()[:40],
-                str(payload.get("incident_at") or "").strip()[:80],
-                str(payload.get("incident_summary") or "").strip()[:5000],
-                str(payload.get("evidence") or "").strip()[:5000],
-                str(payload.get("witness_names") or "").strip()[:1200],
-                str(payload.get("staff_findings") or "").strip()[:5000],
-                str(payload.get("player_statement") or "").strip()[:3000],
-                str(payload.get("appeal_guidance") or "").strip()[:2000],
-                str(payload.get("internal_notes") or "").strip()[:2000],
-                bail_amount,
-                starts_at.isoformat(),
-                expires_at,
-                user["id"],
-                starts_at.isoformat(),
-            ),
-        ).fetchone()
-        add_admin_audit(db, int(user["id"]), f"account.{sanction_type}.created", target_id, {"report_number": report_number, "rule_code": payload.get("rule_code"), "reason": payload["reason"], "expires_at": expires_at})
-        self.send_json(
-            201,
-            {
-                "ok": True,
-                "id": int(created["id"]),
-                "report_number": report_number,
-                "expires_at": expires_at,
-                "game_enforcement_status": "rcon_not_configured",
-            },
-        )
-
-    def api_dev_revoke_sanction(self, db: Database, user: DbRow | None, sanction_id: int) -> None:
-        err = developer_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        sanction = one(db, "SELECT * FROM account_sanctions WHERE id = ?", (sanction_id,))
-        if not sanction:
-            self.error(404, "Sanction not found")
-            return
-        if sanction.get("revoked_at"):
-            self.error(409, "Sanction is already revoked")
-            return
-        payload = self.read_json()
-        reason = str(payload.get("reason") or "Revoked by staff").strip()[:1000]
-        db.execute(
-            "UPDATE account_sanctions SET revoked_by = ?, revoked_at = ?, revoke_reason = ? WHERE id = ?",
-            (user["id"], now_iso(), reason, sanction_id),
-        )
-        add_admin_audit(db, int(user["id"]), "account.sanction.revoked", int(sanction["user_id"]), {"sanction_id": sanction_id, "reason": reason})
-        self.send_json(200, {"ok": True})
-
-    def api_dev_create_warning(self, db: Database, user: DbRow | None) -> None:
-        err = developer_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        payload = self.read_json()
-        missing = require_fields(payload, "user_id", "subject", "body")
-        if missing:
-            self.error(400, missing)
-            return
-        target_id = int(payload["user_id"])
-        if not one(db, "SELECT id FROM users WHERE id = ?", (target_id,)):
-            self.error(404, "Target account not found")
-            return
-        severity = str(payload.get("severity") or "standard").strip().lower()
-        if severity not in ("low", "standard", "high", "critical"):
-            self.error(400, "Invalid warning severity")
-            return
-        created = db.execute(
-            """
-            INSERT INTO account_internal_warnings
-            (user_id, severity, subject, body, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?) RETURNING id
-            """,
-            (target_id, severity, str(payload["subject"]).strip()[:160], str(payload["body"]).strip()[:3000], user["id"], now_iso()),
-        ).fetchone()
-        add_admin_audit(db, int(user["id"]), "account.internal_warning.created", target_id, {"severity": severity, "subject": payload["subject"]})
-        self.send_json(201, {"ok": True, "id": int(created["id"])})
-
-    def api_dev_resolve_warning(self, db: Database, user: DbRow | None, warning_id: int) -> None:
-        err = developer_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        warning = one(db, "SELECT * FROM account_internal_warnings WHERE id = ?", (warning_id,))
-        if not warning:
-            self.error(404, "Warning not found")
-            return
-        payload = self.read_json()
-        notes = str(payload.get("notes") or "Resolved by staff").strip()[:1200]
-        db.execute(
-            "UPDATE account_internal_warnings SET resolved_by = ?, resolved_at = ?, resolution_notes = ? WHERE id = ?",
-            (user["id"], now_iso(), notes, warning_id),
-        )
-        add_admin_audit(db, int(user["id"]), "account.internal_warning.resolved", int(warning["user_id"]), {"warning_id": warning_id, "notes": notes})
-        self.send_json(200, {"ok": True})
-
-    def fine_settlement_payload(self, db: Database) -> dict[str, Any]:
-        unpaid = all_rows(
-            db,
-            """
-            SELECT c.id, c.charge_code, c.charge_title, c.fine_amount, c.status,
-                   c.created_at, u.id AS user_id, u.name, u.civ_number,
-                   l.identity_id, b.balance, b.synced_at
-            FROM citations c
-            JOIN users u ON u.id = c.civ_id
-            LEFT JOIN arma_account_links l ON l.user_id = u.id
-            LEFT JOIN arma_game_bank_balances b ON b.identity_id = l.identity_id
-            LEFT JOIN fine_settlement_items i ON i.citation_id = c.id
-            WHERE c.status IN ('issued', 'reviewed', 'reduced') AND i.id IS NULL
-              AND l.identity_id IS NOT NULL AND b.balance IS NOT NULL
-              AND b.balance >= c.fine_amount
-            ORDER BY c.created_at ASC
-            """
-        )
-        batches = all_rows(
-            db,
-            """
-            SELECT b.*, creator.name AS created_by_name, approver.name AS approved_by_name,
-                   COUNT(i.id) AS item_count, COALESCE(SUM(i.fine_amount), 0) AS total_amount
-            FROM fine_settlement_batches b
-            JOIN users creator ON creator.id = b.created_by
-            LEFT JOIN users approver ON approver.id = b.approved_by
-            LEFT JOIN fine_settlement_items i ON i.batch_id = b.id
-            GROUP BY b.id, creator.name, approver.name
-            ORDER BY b.created_at DESC LIMIT 30
-            """
-        )
-        result_batches: list[dict[str, Any]] = []
-        for batch in batches:
-            item = dict(batch)
-            item["items"] = [
-                dict(row)
-                for row in all_rows(
-                    db,
-                    """
-                    SELECT i.*, c.charge_code, c.charge_title, u.name, u.civ_number
-                    FROM fine_settlement_items i
-                    JOIN citations c ON c.id = i.citation_id
-                    JOIN users u ON u.id = i.user_id
-                    WHERE i.batch_id = ? ORDER BY i.id
-                    """,
-                    (batch["id"],),
-                )
-            ]
-            result_batches.append(item)
-        tax_ready = all_rows(
-            db,
-            """
-            SELECT b.id AS business_id, b.business_name, b.license_number, u.id AS user_id,
-                   u.name AS owner_name, u.civ_number, l.identity_id, bank.balance, bank.synced_at,
-                   COUNT(t.id) AS assessment_count, SUM(t.amount) AS tax_amount
-            FROM business_tax_assessments t
-            JOIN businesses b ON b.id = t.business_id
-            JOIN users u ON u.id = b.owner_id
-            JOIN arma_account_links l ON l.user_id = u.id
-            JOIN arma_game_bank_balances bank ON bank.identity_id = l.identity_id
-            WHERE t.status = 'unpaid' AND t.settlement_batch_id IS NULL
-            GROUP BY b.id, b.business_name, b.license_number, u.id, u.name, u.civ_number,
-                     l.identity_id, bank.balance, bank.synced_at
-            HAVING bank.balance >= SUM(t.amount)
-            ORDER BY b.business_name
-            """
-        )
-        tax_license_rows = all_rows(
-            db,
-            """
-            SELECT b.*, u.name AS owner_name, u.civ_number AS owner_civ_number,
-                   l.identity_id, bank.balance, bank.synced_at,
-                   (SELECT COALESCE(SUM(t.amount), 0) FROM business_tax_assessments t
-                    WHERE t.business_id = b.id AND t.status = 'unpaid') AS unpaid_tax
-            FROM businesses b
-            JOIN users u ON u.id = b.owner_id
-            JOIN arma_account_links l ON l.user_id = u.id
-            LEFT JOIN arma_game_bank_balances bank ON bank.identity_id = l.identity_id
-            WHERE b.status IN ('active', 'suspended')
-            ORDER BY b.business_name
-            """
-        )
-        tax_licenses = [self.business_license_payload(row) for row in tax_license_rows]
-        tax_batches = all_rows(
-            db,
-            """
-            SELECT b.*, creator.name AS created_by_name, approver.name AS approved_by_name,
-                   COUNT(i.id) AS item_count, COALESCE(SUM(i.tax_amount), 0) AS total_amount
-            FROM business_tax_settlement_batches b
-            JOIN users creator ON creator.id = b.created_by
-            LEFT JOIN users approver ON approver.id = b.approved_by
-            LEFT JOIN business_tax_settlement_items i ON i.batch_id = b.id
-            GROUP BY b.id, creator.name, approver.name
-            ORDER BY b.created_at DESC LIMIT 30
-            """
-        )
-        result_tax_batches: list[dict[str, Any]] = []
-        for batch in tax_batches:
-            item = dict(batch)
-            item["items"] = [
-                dict(row) for row in all_rows(
-                    db,
-                    """
-                    SELECT i.*, b.business_name, b.license_number, u.name AS owner_name
-                    FROM business_tax_settlement_items i
-                    JOIN businesses b ON b.id = i.business_id
-                    JOIN users u ON u.id = i.user_id
-                    WHERE i.batch_id = ? ORDER BY i.id
-                    """,
-                    (batch["id"],),
-                )
-            ]
-            result_tax_batches.append(item)
-        return {
-            "unpaid": [dict(row) for row in unpaid],
-            "batches": result_batches,
-            "tax_ready": [dict(row) for row in tax_ready],
-            "tax_licenses": tax_licenses,
-            "tax_batches": result_tax_batches,
-        }
-
-    def api_fine_settlement(self, db: Database, user: DbRow | None) -> None:
-        err = fine_settlement_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        self.send_json(200, self.fine_settlement_payload(db))
-
-    def api_create_fine_settlement_batch(self, db: Database, user: DbRow | None) -> None:
-        err = fine_settlement_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        payload = self.read_json()
-        raw_ids = payload.get("citation_ids")
-        if not isinstance(raw_ids, list) or not raw_ids:
-            self.error(400, "Select at least one unpaid fine")
-            return
-        citation_ids = list(dict.fromkeys(int(value) for value in raw_ids))[:100]
-        placeholders = ",".join("?" for _ in citation_ids)
-        rows = all_rows(
-            db,
-            f"""
-            SELECT c.id, c.civ_id, c.fine_amount, c.status, l.identity_id, b.balance
-            FROM citations c
-            JOIN arma_account_links l ON l.user_id = c.civ_id
-            JOIN arma_game_bank_balances b ON b.identity_id = l.identity_id
-            LEFT JOIN fine_settlement_items i ON i.citation_id = c.id
-            WHERE c.id IN ({placeholders})
-              AND c.status IN ('issued', 'reviewed', 'reduced') AND i.id IS NULL
-              AND b.balance >= c.fine_amount
-            """,
-            tuple(citation_ids),
-        )
-        if len(rows) != len(citation_ids):
-            self.error(409, "Every selected fine must be unpaid, unbatched, linked, and have a synced game balance")
-            return
-        created_at = utcnow()
-        batch_number = f"DCJS-{created_at.strftime('%Y%m%d')}-{secrets.randbelow(900000) + 100000}"
-        batch = db.execute(
-            """
-            INSERT INTO fine_settlement_batches (batch_number, created_by, created_at, notes)
-            VALUES (?, ?, ?, ?) RETURNING id
-            """,
-            (batch_number, user["id"], created_at.isoformat(), str(payload.get("notes") or "").strip()[:2000]),
-        ).fetchone()
-        for row in rows:
-            fine = round(float(row["fine_amount"]), 2)
-            before = round(float(row["balance"]), 2)
-            db.execute(
-                """
-                INSERT INTO fine_settlement_items
-                (batch_id, citation_id, user_id, identity_id, fine_amount, balance_before, expected_balance)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (batch["id"], row["id"], row["civ_id"], row["identity_id"], fine, before, round(before - fine, 2)),
-            )
-        add_admin_audit(db, int(user["id"]), "fine_settlement.batch.created", details={"batch_number": batch_number, "citation_ids": citation_ids})
-        self.send_json(201, {"ok": True, "batch_id": int(batch["id"]), "batch_number": batch_number})
-
-    def api_fine_settlement_code(self, db: Database, user: DbRow | None, batch_id: int) -> None:
-        err = fine_settlement_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        batch = one(db, "SELECT * FROM fine_settlement_batches WHERE id = ?", (batch_id,))
-        if not batch:
-            self.error(404, "Settlement batch not found")
-            return
-        if batch["status"] != "draft":
-            self.error(409, "Only a draft batch can receive a new approval code")
-            return
-        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-        raw_code = "DCJS-" + "".join(secrets.choice(alphabet) for _ in range(8))
-        expires_at = (utcnow() + dt.timedelta(minutes=10)).isoformat()
-        db.execute(
-            "UPDATE fine_settlement_batches SET approval_code_hash = ?, approval_code_hint = ?, approval_expires_at = ? WHERE id = ?",
-            (hash_password(raw_code), raw_code[-4:], expires_at, batch_id),
-        )
-        add_admin_audit(db, int(user["id"]), "fine_settlement.code.created", details={"batch_id": batch_id, "hint": raw_code[-4:]})
-        self.send_json(201, {"ok": True, "code": raw_code, "expires_at": expires_at})
-
-    def api_approve_fine_settlement(self, db: Database, user: DbRow | None, batch_id: int) -> None:
-        err = fine_settlement_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        payload = self.read_json()
-        batch = one(db, "SELECT * FROM fine_settlement_batches WHERE id = ?", (batch_id,))
-        code = str(payload.get("code") or "").strip().upper()
-        if not batch or batch["status"] != "draft":
-            self.error(409, "Settlement batch is not awaiting approval")
-            return
-        if not batch["approval_code_hash"] or not verify_password(code, batch["approval_code_hash"]):
-            self.error(403, "Invalid settlement authorization code")
-            return
-        if not batch["approval_expires_at"] or dt.datetime.fromisoformat(batch["approval_expires_at"]) <= utcnow():
-            self.error(403, "Settlement authorization code has expired")
-            return
-        approved_at = now_iso()
-        db.execute(
-            """
-            UPDATE fine_settlement_batches
-            SET status = 'awaiting_codex', approved_by = ?, approved_at = ?,
-                processing_started_at = ?, approval_code_hash = ''
-            WHERE id = ?
-            """,
-            (user["id"], approved_at, approved_at, batch_id),
-        )
-        prompt = (
-            f"Process approved DCJS fine settlement batch {batch['batch_number']} (database batch ID {batch_id}). "
-            "Use the signed-in Shadowhaven panel and configured SFTP access. Stop the Arma server manually, "
-            "wait the full 120 seconds, confirm it is offline, then edit only the matching live FCRPMUSSALO/Banks "
-            "JSON balances to the locked expected values shown in Fine Settlement. Do not create a backup. "
-            "Start the server, wait for Railway bank sync, then use Verify synced balances in the Fine Settlement app. "
-            "Never mark fines paid unless every actual synced balance matches its expected value."
-        )
-        add_admin_audit(db, int(user["id"]), "fine_settlement.batch.approved", details={"batch_id": batch_id})
-        self.send_json(200, {"ok": True, "codex_prompt": prompt})
-
-    def api_complete_fine_settlement(self, db: Database, user: DbRow | None, batch_id: int) -> None:
-        err = fine_settlement_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        batch = one(db, "SELECT * FROM fine_settlement_batches WHERE id = ?", (batch_id,))
-        if not batch or batch["status"] not in ("awaiting_codex", "needs_review"):
-            self.error(409, "Batch is not ready for balance verification")
-            return
-        items = all_rows(db, "SELECT * FROM fine_settlement_items WHERE batch_id = ?", (batch_id,))
-        paid = 0
-        for item in items:
-            if item["status"] == "paid":
-                paid += 1
-                continue
-            bank = one(db, "SELECT balance FROM arma_game_bank_balances WHERE identity_id = ?", (item["identity_id"],))
-            actual = round(float(bank["balance"]), 2) if bank else None
-            expected = round(float(item["expected_balance"]), 2)
-            if actual is not None and abs(actual - expected) <= 0.01:
-                verified_at = now_iso()
-                db.execute(
-                    "UPDATE fine_settlement_items SET status = 'paid', verified_balance = ?, verified_at = ?, failure_reason = '' WHERE id = ?",
-                    (actual, verified_at, item["id"]),
-                )
-                db.execute(
-                    "UPDATE citations SET status = 'paid', final_result = ?, updated_at = ? WHERE id = ?",
-                    (final_result_for("paid", f"Settled through {batch['batch_number']}", float(item["fine_amount"])), verified_at, item["citation_id"]),
-                )
-                add_transaction(
-                    db, int(item["user_id"]), "dcjs_fine_settlement", -float(item["fine_amount"]),
-                    f"State of Faircroft DCJS · Fine settlement · Case {item['citation_id']} · Batch {batch['batch_number']}",
-                )
-                paid += 1
-            else:
-                reason = "Live bank balance has not synced" if actual is None else f"Expected {expected:.2f}; synced {actual:.2f}"
-                db.execute(
-                    "UPDATE fine_settlement_items SET status = 'needs_review', verified_balance = ?, verified_at = ?, failure_reason = ? WHERE id = ?",
-                    (actual, now_iso(), reason, item["id"]),
-                )
-        status = "completed" if paid == len(items) else "needs_review"
-        db.execute(
-            "UPDATE fine_settlement_batches SET status = ?, completed_at = ? WHERE id = ?",
-            (status, now_iso() if status == "completed" else None, batch_id),
-        )
-        add_admin_audit(db, int(user["id"]), "fine_settlement.batch.verified", details={"batch_id": batch_id, "paid": paid, "total": len(items), "status": status})
-        self.send_json(200, {"ok": status == "completed", "status": status, "paid": paid, "total": len(items)})
-
-    def api_create_tax_settlement_batch(self, db: Database, user: DbRow | None) -> None:
-        err = fine_settlement_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        payload = self.read_json()
-        raw_ids = payload.get("business_ids")
-        if not isinstance(raw_ids, list) or not raw_ids:
-            self.error(400, "Select at least one business tax account")
-            return
-        business_ids = list(dict.fromkeys(int(value) for value in raw_ids))[:100]
-        placeholders = ",".join("?" for _ in business_ids)
-        rows = all_rows(
-            db,
-            f"""
-            SELECT b.id AS business_id, b.owner_id, l.identity_id, bank.balance, SUM(t.amount) AS tax_amount
-            FROM businesses b
-            JOIN business_tax_assessments t ON t.business_id = b.id
-            JOIN arma_account_links l ON l.user_id = b.owner_id
-            JOIN arma_game_bank_balances bank ON bank.identity_id = l.identity_id
-            WHERE b.id IN ({placeholders}) AND t.status = 'unpaid' AND t.settlement_batch_id IS NULL
-            GROUP BY b.id, b.owner_id, l.identity_id, bank.balance
-            HAVING bank.balance >= SUM(t.amount)
-            """,
-            tuple(business_ids),
-        )
-        if len(rows) != len(business_ids):
-            self.error(409, "Every business must have unpaid taxes, a linked owner, and sufficient synced game funds")
-            return
-        identities = [str(row["identity_id"]) for row in rows]
-        if len(set(identities)) != len(identities):
-            self.error(409, "Select only one business per Arma account in each batch")
-            return
-        created_at = utcnow()
-        batch_number = f"DCJS-TAX-{created_at.strftime('%Y%m%d')}-{secrets.randbelow(900000) + 100000}"
-        batch = db.execute(
-            "INSERT INTO business_tax_settlement_batches (batch_number, created_by, created_at, notes) VALUES (?, ?, ?, ?) RETURNING id",
-            (batch_number, user["id"], created_at.isoformat(), str(payload.get("notes") or "").strip()[:2000]),
-        ).fetchone()
-        for row in rows:
-            amount = round(float(row["tax_amount"]), 2)
-            before = round(float(row["balance"]), 2)
-            db.execute(
-                """
-                INSERT INTO business_tax_settlement_items
-                (batch_id, business_id, user_id, identity_id, tax_amount, balance_before, expected_balance)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (batch["id"], row["business_id"], row["owner_id"], row["identity_id"], amount, before, round(before - amount, 2)),
-            )
-            db.execute(
-                """
-                UPDATE business_tax_assessments SET settlement_batch_id = ?
-                WHERE business_id = ? AND status = 'unpaid' AND settlement_batch_id IS NULL
-                """,
-                (batch["id"], row["business_id"]),
-            )
-        add_admin_audit(db, int(user["id"]), "business_tax.batch.created", details={"batch_number": batch_number, "business_ids": business_ids})
-        self.send_json(201, {"ok": True, "batch_id": int(batch["id"]), "batch_number": batch_number})
-
-    def api_tax_settlement_code(self, db: Database, user: DbRow | None, batch_id: int) -> None:
-        err = fine_settlement_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        batch = one(db, "SELECT * FROM business_tax_settlement_batches WHERE id = ?", (batch_id,))
-        if not batch or batch["status"] != "draft":
-            self.error(409, "Tax settlement batch is not a draft")
-            return
-        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-        raw_code = "TAX-" + "".join(secrets.choice(alphabet) for _ in range(8))
-        expires_at = (utcnow() + dt.timedelta(minutes=10)).isoformat()
-        db.execute(
-            "UPDATE business_tax_settlement_batches SET approval_code_hash = ?, approval_code_hint = ?, approval_expires_at = ? WHERE id = ?",
-            (hash_password(raw_code), raw_code[-4:], expires_at, batch_id),
-        )
-        self.send_json(201, {"ok": True, "code": raw_code, "expires_at": expires_at})
-
-    def api_approve_tax_settlement(self, db: Database, user: DbRow | None, batch_id: int) -> None:
-        err = fine_settlement_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        payload = self.read_json()
-        batch = one(db, "SELECT * FROM business_tax_settlement_batches WHERE id = ?", (batch_id,))
-        code = str(payload.get("code") or "").strip().upper()
-        if not batch or batch["status"] != "draft":
-            self.error(409, "Tax settlement batch is not awaiting approval")
-            return
-        if not batch["approval_code_hash"] or not verify_password(code, batch["approval_code_hash"]):
-            self.error(403, "Invalid tax authorization code")
-            return
-        if not batch["approval_expires_at"] or dt.datetime.fromisoformat(batch["approval_expires_at"]) <= utcnow():
-            self.error(403, "Tax authorization code has expired")
-            return
-        db.execute(
-            "UPDATE business_tax_settlement_batches SET status = 'awaiting_codex', approved_by = ?, approved_at = ?, approval_code_hash = '' WHERE id = ?",
-            (user["id"], now_iso(), batch_id),
-        )
-        prompt = (
-            f"Process approved State of Faircroft DCJS business-tax batch {batch['batch_number']} (database batch ID {batch_id}). "
-            "Use the signed-in Shadowhaven panel and configured SFTP access. Stop the Arma server manually, wait the full "
-            "120 seconds, confirm it is offline, then change only the matching live FCRPMUSSALO/Banks JSON balances to the "
-            "locked expected values in Fine Settlement. Do not create a backup. Start the server, wait for Railway bank sync, "
-            "then select Verify synced tax balances. Do not mark taxes paid unless every synced balance matches."
-        )
-        add_admin_audit(db, int(user["id"]), "business_tax.batch.approved", details={"batch_id": batch_id})
-        self.send_json(200, {"ok": True, "codex_prompt": prompt})
-
-    def api_complete_tax_settlement(self, db: Database, user: DbRow | None, batch_id: int) -> None:
-        err = fine_settlement_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        batch = one(db, "SELECT * FROM business_tax_settlement_batches WHERE id = ?", (batch_id,))
-        if not batch or batch["status"] not in ("awaiting_codex", "needs_review"):
-            self.error(409, "Tax batch is not ready for verification")
-            return
-        items = all_rows(db, "SELECT * FROM business_tax_settlement_items WHERE batch_id = ?", (batch_id,))
-        paid = 0
-        for item in items:
-            if item["status"] == "paid":
-                paid += 1
-                continue
-            bank = one(db, "SELECT balance FROM arma_game_bank_balances WHERE identity_id = ?", (item["identity_id"],))
-            actual = round(float(bank["balance"]), 2) if bank else None
-            expected = round(float(item["expected_balance"]), 2)
-            if actual is not None and abs(actual - expected) <= 0.01:
-                verified_at = now_iso()
-                db.execute(
-                    "UPDATE business_tax_settlement_items SET status = 'paid', verified_balance = ?, verified_at = ?, failure_reason = '' WHERE id = ?",
-                    (actual, verified_at, item["id"]),
-                )
-                db.execute(
-                    "UPDATE business_tax_assessments SET status = 'paid', settled_at = ? WHERE settlement_batch_id = ? AND business_id = ?",
-                    (verified_at, batch_id, item["business_id"]),
-                )
-                business = one(db, "SELECT business_name, license_number FROM businesses WHERE id = ?", (item["business_id"],))
-                add_transaction(
-                    db, int(item["user_id"]), "dcjs_business_tax", -float(item["tax_amount"]),
-                    f"State of Faircroft DCJS · Business tax · {business['business_name']} ({business['license_number']}) · Batch {batch['batch_number']}",
-                )
-                paid += 1
-            else:
-                reason = "Live bank balance has not synced" if actual is None else f"Expected {expected:.2f}; synced {actual:.2f}"
-                db.execute(
-                    "UPDATE business_tax_settlement_items SET status = 'needs_review', verified_balance = ?, verified_at = ?, failure_reason = ? WHERE id = ?",
-                    (actual, now_iso(), reason, item["id"]),
-                )
-        status = "completed" if paid == len(items) else "needs_review"
-        db.execute(
-            "UPDATE business_tax_settlement_batches SET status = ?, completed_at = ? WHERE id = ?",
-            (status, now_iso() if status == "completed" else None, batch_id),
-        )
-        add_admin_audit(db, int(user["id"]), "business_tax.batch.verified", details={"batch_id": batch_id, "paid": paid, "total": len(items), "status": status})
-        self.send_json(200, {"ok": status == "completed", "status": status, "paid": paid, "total": len(items)})
-
     def api_admin_overview(self, db: Database, user: DbRow | None) -> None:
         err = admin_required(user)
         if err:
@@ -8018,21 +6910,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err)
             return
-        rows = all_rows(
-            db,
-            """
-            SELECT u.*, l.identity_id AS linked_arma_id, l.linked_at AS arma_linked_at
-            FROM users u
-            LEFT JOIN arma_account_links l ON l.user_id = u.id
-            ORDER BY u.verified ASC, u.created_at DESC
-            """,
-        )
+        rows = all_rows(db, "SELECT * FROM users ORDER BY verified ASC, created_at DESC")
         users = []
         for row in rows:
             item = public_user(row)
-            item["arma_id"] = row.get("linked_arma_id")
-            item["arma_linked"] = bool(row.get("linked_arma_id"))
-            item["arma_linked_at"] = row.get("arma_linked_at")
+            item["arma_id"] = row.get("arma_id")
             item["presence_seconds_today"] = presence_seconds(db, row["id"])
             item["name_change"] = name_change_status(db, int(row["id"]))
             count = one(db, "SELECT COUNT(*) AS count FROM user_characters WHERE user_id = ?", (row["id"],))
@@ -8074,7 +6956,56 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"stats": stats, "referrals": [dict(row) for row in rows]})
 
     def api_admin_deposit_referral(self, db: Database, user: DbRow | None, referral_id: int) -> None:
-        self.error(410, "Railway referral cash deposits are disabled. Apply approved rewards through the in-game economy.")
+        err = admin_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        referral = one(
+            db,
+            """
+            SELECT r.*, referrer.name AS referrer_name, referred.name AS referred_name
+            FROM referrals r
+            JOIN users referrer ON referrer.id = r.referrer_id
+            JOIN users referred ON referred.id = r.referred_user_id
+            WHERE r.id = ?
+            """,
+            (referral_id,),
+        )
+        if not referral:
+            self.error(404, "Referral ticket not found")
+            return
+        if referral["status"] == "deposited":
+            self.error(409, "Referral ticket has already been deposited")
+            return
+        payload = self.read_json()
+        notes = str(payload.get("admin_notes") or payload.get("notes") or "").strip()[:800]
+        amount = round(float(referral["bonus_amount"] or REFERRAL_BONUS_AMOUNT), 2)
+        ts = now_iso()
+        db.execute("UPDATE users SET cash_balance = cash_balance + ? WHERE id = ?", (amount, referral["referrer_id"]))
+        db.execute(
+            """
+            UPDATE referrals
+            SET status = 'deposited', deposited_by = ?, deposited_at = ?, admin_notes = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (user["id"], ts, notes, ts, referral_id),
+        )
+        add_transaction(
+            db,
+            int(referral["referrer_id"]),
+            "referral_bonus",
+            amount,
+            f"Referral bonus for {referral['referred_name']} deposited by {user['name']}",
+            int(referral["referred_user_id"]),
+        )
+        add_message(
+            db,
+            int(referral["referrer_id"]),
+            "Referral cash deposited",
+            f"Your ${amount:,.0f} referral ticket for {referral['referred_name']} was deposited by {user['name']}.",
+            user["id"],
+        )
+        self.send_json(200, {"ok": True, "status": "deposited", "amount": amount})
 
     def api_admin_department_applications(self, db: Database, user: DbRow | None) -> None:
         err = application_review_required(user)
@@ -8088,13 +7019,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                    applicant.name AS applicant_name,
                    applicant.email AS applicant_email,
                    applicant.civ_number AS applicant_civ_number,
-                   arma_link.identity_id AS applicant_arma_id,
+                   applicant.arma_id AS applicant_arma_id,
                    applicant.primary_agency AS applicant_primary_agency,
                    applicant.callsign AS applicant_callsign,
                    reviewer.name AS reviewer_name
             FROM department_applications a
             JOIN users applicant ON applicant.id = a.user_id
-            LEFT JOIN arma_account_links arma_link ON arma_link.user_id = applicant.id
             LEFT JOIN users reviewer ON reviewer.id = a.reviewed_by
             ORDER BY
                 CASE a.status
@@ -8304,18 +7234,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    schema_ready = False
-    for attempt in range(1, 31):
-        try:
-            ensure_schema()
-            schema_ready = True
-            break
-        except psycopg.OperationalError as exc:
-            print(f"Database unavailable during startup (attempt {attempt}/30): {exc}")
-            time.sleep(min(2 * attempt, 15))
-    if not schema_ready:
-        raise RuntimeError("Database remained unavailable after startup retries")
-    threading.Thread(target=shadowhaven_bank_sync_worker, name="shadowhaven-bank-sync", daemon=True).start()
+    ensure_schema()
     port = int(os.environ.get("PORT", "8080"))
     host = os.environ.get("HOST", "0.0.0.0")
     server = ThreadingHTTPServer((host, port), RoleplayHandler)

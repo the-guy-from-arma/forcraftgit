@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.70";
+const OS_VERSION = "0.0.71";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -18,15 +18,6 @@ const state = {
   activeApp: null,
   returnToMdtOnClose: false,
   pendingArmaCode: new URL(window.location.href).searchParams.get("code") || "",
-  armaUnlinkOpen: false,
-  armaLinkPromptDismissed: false,
-  generatedDevCode: null,
-  fineSettlementCode: null,
-  taxSettlementCode: null,
-  settlementTab: "fines",
-  fineSettlementPrompt: "",
-  devTab: "dashboard",
-  devAccount: null,
   dmvTab: "overview",
   jobsTab: "state_police",
   mdtTab: "search",
@@ -61,10 +52,10 @@ const state = {
   contractsTab: "open",
   contractsInfoOpen: false,
   contractProofId: null,
+  roadmapFilter: "all",
+  roadmapEditorId: null,
   businessTab: "apply",
   businessReviewFilter: "active",
-  businessLicensePage: 1,
-  businessRegistryPage: 1,
   treasuryProofs: [],
   adminTab: "users",
   adminApplicationFilter: "active",
@@ -134,7 +125,12 @@ const iconSvg = {
   target: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
   scroll: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 21h9a3 3 0 0 0 3-3V5a2 2 0 0 0-2-2H7a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3h1Z"/><path d="M8 21a3 3 0 0 1-3-3V7h13"/><path d="M9 11h6M9 15h5"/></svg>',
   settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V22a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 18l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1A2 2 0 1 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>',
-  code: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M14 5l-4 14"/><circle cx="19" cy="5" r="2"/></svg>',
+  route: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M8.5 19h3a3 3 0 0 0 3-3v-1a3 3 0 0 0-3-3h-1a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3h5"/></svg>',
+  link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.2 1.2"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.2-1.2"/></svg>',
+  rocket: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 5c3-3 6-3 7-2 1 1 1 4-2 7l-6 6-5-5 6-6Z"/><path d="m9 10-4 1-2 3 5 1M14 15l-1 4-3 2-1-5M15 6l3 3"/><path d="M5 18c-1 0-2 1-2 3 2 0 3-1 3-2"/></svg>',
+  "thumb-up": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M7 10v11H3V10h4ZM7 19h10a3 3 0 0 0 2.9-2.3l1-4A3 3 0 0 0 18 9h-4l1-4c.3-1.3-.7-2-1.5-2L7 10"/></svg>',
+  "thumb-down": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M7 14V3H3v11h4ZM7 5h10a3 3 0 0 1 2.9 2.3l1 4A3 3 0 0 1 18 15h-4l1 4c.3 1.3-.7 2-1.5 2L7 14"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14M5 12h14"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m15 18-6-6 6-6"/></svg>',
   logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M10 17l5-5-5-5M15 12H3M21 3v18"/></svg>',
@@ -149,12 +145,12 @@ const tileColors = {
   properties: "linear-gradient(145deg, #28d17c, #17623d)",
   cash: "linear-gradient(145deg, #f15f79, #7a1e31)",
   bank: "linear-gradient(145deg, #5c9cff, #21497e)",
-  restriction: "linear-gradient(145deg, #ff9f5c, #7d281f)",
   treasury: "linear-gradient(145deg, #f8d572, #0f806f)",
   business: "linear-gradient(145deg, #58e6a5, #2457a8)",
   messages: "linear-gradient(145deg, #ffffff, #6d7779)",
   contracts: "linear-gradient(145deg, #ff5d7d, #4120a4)",
   changelog: "linear-gradient(145deg, #7ee7ff, #3158e8)",
+  roadmap: "linear-gradient(145deg, #56e3a2, #e8b84a 58%, #e45f55)",
   dispatch: "linear-gradient(145deg, #58f0e6, #1e3248)",
   mdt: "linear-gradient(145deg, #28343c, #050709)",
   fire: "linear-gradient(145deg, #ff6b4a, #2d1b1b)",
@@ -162,7 +158,6 @@ const tileColors = {
   system: "linear-gradient(145deg, #35e0b6, #22485c)",
   "indeed-admin": "linear-gradient(145deg, #2fd38f, #172f28)",
   admin: "linear-gradient(145deg, #ffcf5a, #6c5010)",
-  "dev-tools": "linear-gradient(145deg, #8bffcf, #3156d8)",
 };
 
 function money(value) {
@@ -357,15 +352,13 @@ function renderBootScreen() {
   const attempting = state.boot.attempt || 1;
   return phone(`
     <section class="boot-screen ${connecting ? "booting" : ""}">
-      <video class="faircroft-entrance-media" autoplay muted loop playsinline poster="/static/brand/faircroft-emblem.webp">
-        <source src="/static/brand/faircroft-light-sweep.mp4" type="video/mp4" />
-      </video>
+      <div class="boot-brand">RP</div>
       <div class="boot-orb" aria-hidden="true">
         <span class="boot-orb-core"></span>
         <span class="boot-orb-ring"></span>
         <span class="boot-orb-ring"></span>
       </div>
-      <p class="boot-title">${connecting ? "Entering Faircroft..." : "Cannot contact Faircroft services"}</p>
+      <p class="boot-title">${connecting ? "Loading roleplay core..." : "Cannot contact server"}</p>
       <p class="boot-subtitle">
         ${connecting ? "Syncing your account and loading modules. This usually takes just a second." : escapeHtml(state.boot.lastError || "Server response could not be loaded right now.")}
       </p>
@@ -436,25 +429,21 @@ function render() {
       state.dmvTab = "license";
     }
   }
-  if (state.activeApp === "mdt" || state.activeApp === "fire") {
+  if (state.activeApp === "roadmap") {
+    app.innerHTML = renderRoadmapWorkspace() + renderRequiredProfileModals();
+    bindRoadmapWorkspace();
+    bindRequiredProfileModals();
+    return;
+  }
+  if (state.activeApp === "mdt" || state.activeApp === "fire" || state.activeApp === "dispatch") {
     app.innerHTML = (
       state.activeApp === "fire"
         ? renderFireWorkspace()
-        : renderMdtWorkspace()
+        : state.activeApp === "dispatch"
+          ? renderDispatchWorkspace()
+          : renderMdtWorkspace()
     ) + renderRequiredProfileModals();
-    state.activeApp === "fire" ? bindFireWorkspace() : bindMdtWorkspace();
-    bindRequiredProfileModals();
-    return;
-  }
-  if (state.activeApp === "dev-tools") {
-    app.innerHTML = renderDevWorkspace() + renderRequiredProfileModals();
-    bindDevWorkspace();
-    bindRequiredProfileModals();
-    return;
-  }
-  if (state.activeApp === "business") {
-    app.innerHTML = renderBusinessWorkspace() + renderRequiredProfileModals();
-    bindBusinessWorkspace();
+    state.activeApp === "fire" ? bindFireWorkspace() : state.activeApp === "dispatch" ? bindDispatchWorkspace() : bindMdtWorkspace();
     bindRequiredProfileModals();
     return;
   }
@@ -475,10 +464,10 @@ function renderAuth() {
   return `
     <section class="auth-card">
       <div class="brand-lockup">
-        <img class="app-mark faircroft-emblem" src="/static/brand/faircroft-emblem.webp" alt="Faircroft emblem" />
+        <div class="app-mark">RP</div>
         <div>
-          <p class="eyebrow">Official roleplay system</p>
-          <h1>Faircroft RP</h1>
+          <p class="eyebrow">Roleplay PWA</p>
+          <h1>Command phone</h1>
         </div>
       </div>
       <div class="auth-tabs">
@@ -487,6 +476,7 @@ function renderAuth() {
       </div>
       <form id="authForm" class="form-grid">
         ${register ? `<label>Name<input name="name" autocomplete="name" required /></label>` : ""}
+        ${register ? `<label>Arma ID<input name="arma_id" autocomplete="off" required /></label>` : ""}
         ${register ? `<label>Car entry code<input name="car_entry_code" autocomplete="off" maxlength="32" pattern="[A-Za-z0-9_-]{2,32}" placeholder="In-game vehicle access code" required /></label>` : ""}
         ${register ? `<label>Referral code <span class="muted small">optional</span><input name="referral_code" autocomplete="off" maxlength="16" placeholder="Friend's referral code" /></label>` : ""}
         <label>Email<input name="email" type="email" autocomplete="email" required /></label>
@@ -578,8 +568,8 @@ function renderCallsignRequiredModal() {
           <h2>Set Your Callsign</h2>
         </header>
         <div class="notice-body">
-          <p>Your account has department access. A callsign can identify you in department records.</p>
-          <p>Use the callsign your command staff expects to see in MDT records.</p>
+          <p>Your account has department access. Dispatch needs a callsign before you can be reliably assigned to CAD calls.</p>
+          <p>Use the callsign your command staff expects to see on the dispatch board.</p>
         </div>
         <form id="forcedCallsignForm" class="form-grid">
           <label>Callsign<input name="callsign" value="${escapeHtml(user.callsign || "")}" maxlength="24" pattern="[A-Za-z0-9_-]{2,24}" placeholder="UNIT-1, ALPHA-2, 2B-12" autocomplete="off" required autofocus /></label>
@@ -591,30 +581,7 @@ function renderCallsignRequiredModal() {
 }
 
 function renderRequiredProfileModals() {
-  if (state.session?.sanction?.type === "timeout") return "";
-  return renderCarEntryRequiredModal() || renderArmaLinkRequiredModal();
-}
-
-function renderArmaLinkRequiredModal() {
-  if (!state.session?.requires_arma_link || state.armaLinkPromptDismissed) return "";
-  return `
-    <div class="modal-backdrop force-code-backdrop">
-      <section class="mdt-modal force-code-modal" role="dialog" aria-modal="true" aria-label="Link Arma account">
-        <header>
-          <p class="eyebrow">Verified account setup</p>
-          <h2>Link Your Arma Account</h2>
-        </header>
-        <div class="notice-body">
-          <p>Your Faircroft account is verified but no live Arma Reforger account is linked.</p>
-          <p>Join the game, request a linking code, then enter it from the Profile app.</p>
-        </div>
-        <div class="row">
-          <button class="primary" type="button" data-open-arma-link>Open Profile Linking</button>
-          <button class="secondary" type="button" data-dismiss-arma-link>Later</button>
-        </div>
-      </section>
-    </div>
-  `;
+  return renderCarEntryRequiredModal() || renderCallsignRequiredModal();
 }
 
 function bindRequiredProfileModals() {
@@ -629,16 +596,6 @@ function bindRequiredProfileModals() {
       toast(error.message);
     }
   });
-  $("[data-open-arma-link]")?.addEventListener("click", async () => {
-    state.armaLinkPromptDismissed = true;
-    state.activeApp = "profile";
-    await loadAppData("profile");
-    render();
-  });
-  $("[data-dismiss-arma-link]")?.addEventListener("click", () => {
-    state.armaLinkPromptDismissed = true;
-    render();
-  });
 }
 
 function renderHome() {
@@ -648,22 +605,13 @@ function renderHome() {
   return `
     <section class="home-stack">
       <header class="home-header">
-        <div class="home-identity">
-          <img class="home-emblem" src="/static/brand/faircroft-emblem.webp" alt="" />
-          <div>
+        <div>
           <p class="eyebrow">${user.primary_agency || (user.verified ? "Civilian" : "Unverified civilian")}</p>
           <h1>${escapeHtml(user.name.split(" ")[0] || user.name)}</h1>
-          </div>
         </div>
         <button class="icon-action" data-logout aria-label="Sign out">${iconSvg.logout}</button>
       </header>
       <div class="user-chip"><span class="user-dot ${locked ? "" : "ok"}"></span>${locked ? "Waiting on verification" : "Verified"} · CIV ${escapeHtml(user.civ_number || "pending")} · ${escapeHtml(user.roles.join(", "))}</div>
-      ${state.session?.sanction?.type === "timeout" ? `
-        <div class="home-alert restriction-alert">
-          ${iconSvg.lock}
-          <div><strong>Account access temporarily limited</strong><p>${escapeHtml(state.session.sanction.reason || "A staff timeout is active.")} Open the Restriction app for the remaining time and bail instructions.</p></div>
-        </div>
-      ` : ""}
       ${locked ? `
         <div class="home-alert">
           ${iconSvg.lock}
@@ -757,7 +705,6 @@ function renderPanel(id) {
     properties: "Properties",
     cash: "Cash App",
     bank: "Bank",
-    restriction: "Restriction Notice",
     treasury: "Faircroft Treasury",
     business: "Business",
     messages: "Messages",
@@ -769,8 +716,6 @@ function renderPanel(id) {
     system: "System",
     "indeed-admin": "Indeed Admin",
     admin: "Admin",
-    "dev-tools": "Dev Tools",
-    "fine-settlement": "Fine Settlement",
   };
   const body = {
     profile: renderProfile,
@@ -781,7 +726,6 @@ function renderPanel(id) {
     properties: renderProperties,
     cash: renderCash,
     bank: renderBank,
-    restriction: renderRestrictionNotice,
     treasury: renderTreasury,
     business: renderBusiness,
     messages: renderMessages,
@@ -793,8 +737,6 @@ function renderPanel(id) {
     system: renderSystem,
     "indeed-admin": renderIndeedAdmin,
     admin: renderAdmin,
-    "dev-tools": renderDevTools,
-    "fine-settlement": renderFineSettlement,
   }[id]?.() || `<div class="empty">Module unavailable</div>`;
 
   return `
@@ -822,6 +764,8 @@ async function loadAppData(id) {
     messages: () => api("/api/messages"),
     contracts: () => api("/api/contracts"),
     changelog: () => api("/api/changelog"),
+    roadmap: () => api("/api/roadmap"),
+    dispatch: () => api("/api/dispatch/overview"),
     mdt: async () => {
       const data = {
         charges: await api("/api/mdt/charges"),
@@ -841,8 +785,6 @@ async function loadAppData(id) {
     "fire-settings": () => api("/api/fire/overview"),
     system: () => api("/api/system/settings"),
     "indeed-admin": () => api("/api/indeed-admin/applications"),
-    "dev-tools": () => api("/api/dev-tools"),
-    "fine-settlement": () => api("/api/fine-settlement"),
     admin: async () => ({
       overview: await api("/api/admin/overview"),
       users: await api("/api/admin/users"),
@@ -858,35 +800,6 @@ async function loadAppData(id) {
       toast(error.message);
     }
   }
-}
-
-function renderRestrictionNotice() {
-  const sanction = state.session?.sanction || {};
-  const expires = sanction.expires_at ? new Date(sanction.expires_at) : null;
-  const expiryText = expires && !Number.isNaN(expires.getTime()) ? expires.toLocaleString() : "Pending staff review";
-  const bail = Number(sanction.bail_amount || 0);
-  return `
-    <div class="stack restriction-notice">
-      <section class="profile-hero restriction-hero">
-        <div>
-          <p class="eyebrow">Temporary account restriction</p>
-          <h3>Limited Access Active</h3>
-          <p>Your account remains available for Profile, Bank, and this notice.</p>
-        </div>
-        <span class="pill amber">TIMEOUT</span>
-      </section>
-      <section class="profile-link-card">
-        <div class="restriction-detail"><span>Reason</span><strong>${escapeHtml(sanction.reason || "No public reason supplied")}</strong></div>
-        <div class="restriction-detail"><span>Report</span><strong>${escapeHtml(sanction.report_number || "Not available")}</strong></div>
-        <div class="restriction-detail"><span>Restriction ends</span><strong>${escapeHtml(expiryText)}</strong></div>
-        <div class="restriction-detail"><span>Bail amount</span><strong>${bail > 0 ? money(bail) : "No bail set"}</strong></div>
-      </section>
-      <section class="profile-link-card">
-        <h3>How access is restored</h3>
-        <p>${bail > 0 ? `A friend may arrange payment of ${money(bail)} with Faircroft staff on your behalf. Staff must confirm payment and release the restriction.` : "No bail amount was assigned. You must serve the timeout or contact staff if you believe it was issued incorrectly."}</p>
-        <p class="muted small">Otherwise, serve the full timeout. Access returns automatically after the listed expiration time.</p>
-      </section>
-    </div>`;
 }
 
 function bindPanel() {
@@ -919,14 +832,13 @@ function bindPanel() {
     business: bindBusiness,
     messages: bindMessages,
     contracts: bindContracts,
+    dispatch: bindDispatch,
     mdt: bindMdt,
     fire: bindFireMdt,
     "fire-settings": bindFireSettings,
     system: bindSystem,
     "indeed-admin": bindIndeedAdmin,
     admin: bindAdmin,
-    "dev-tools": bindDevTools,
-    "fine-settlement": bindFineSettlement,
   };
   binders[state.activeApp]?.();
 }
@@ -937,6 +849,10 @@ function can(role) {
 
 function canAny(...roles) {
   return roles.some((role) => can(role));
+}
+
+function canUseMdtDispatch() {
+  return canAny(...MDT_DISPATCH_ROLES);
 }
 
 function canUseMdtMessages() {
@@ -969,8 +885,8 @@ const TRAFFIC_STOP_STEPS = [
   {
     key: "radio",
     title: "Radio the stop",
-    callout: "Document the stop",
-    body: "Record the location/postal, vehicle description, plate if visible, reason for stop, and occupant count before contact.",
+    callout: "Dispatch first",
+    body: "Advise dispatch of the stop before contact: unit callsign, location/postal, vehicle description, plate if visible, reason for stop, and occupant count.",
   },
   {
     key: "position",
@@ -1000,13 +916,13 @@ const TRAFFIC_STOP_STEPS = [
     key: "arrest",
     title: "Arrest protocol",
     callout: "Custody sequence",
-    body: "If the stop becomes an arrest or criminal offense, slow the scene down: call backup or a supervisor when needed, secure the driver, document probable cause, and route charges through the criminal writer.",
+    body: "If the stop becomes an arrest or criminal offense, slow the scene down: notify dispatch, call backup or supervisor when needed, secure the driver, document probable cause, and route charges through the criminal writer.",
   },
   {
     key: "close",
     title: "Close and document",
     callout: "Clear the stop",
-    body: "Explain the outcome to the driver, return documents when appropriate, and file an after-action report if the stop became an incident, pursuit, arrest, or use-of-force event.",
+    body: "Explain the outcome to the driver, return documents when appropriate, and clear the stop with dispatch. File an after-call report if the stop became an incident, pursuit, arrest, or use-of-force event.",
   },
 ];
 
@@ -1077,6 +993,7 @@ function renderProfile() {
         <div><span>Roles</span><strong>${escapeHtml((user.roles || state.session.user.roles || []).join(", "))}</strong></div>
         <div><span>Agency</span><strong>${escapeHtml(user.primary_agency || "Civilian")}</strong></div>
         <div><span>Status</span><strong>${escapeHtml(user.verified ? "Verified civilian" : "Awaiting verification")}</strong></div>
+        <div><span>Registered Arma ID</span><strong>${escapeHtml(user.registered_arma_id || user.arma_id || "Not attached")}</strong></div>
         <div><span>Car Entry Code</span><strong>${escapeHtml(user.car_entry_code || "Required")}</strong></div>
         ${canSetCallsign ? `<div><span>Callsign</span><strong>${escapeHtml(user.callsign || "Not set")}</strong></div>` : ""}
         <div><span>Referral Code</span><strong>${escapeHtml(referrals.code || "Generating")}</strong></div>
@@ -1086,8 +1003,8 @@ function renderProfile() {
         <div class="row">
           <div>
             <p class="eyebrow">Referral program</p>
-            <h3>In-game referral reward</h3>
-            <p class="muted small">Share your code with a new player. Staff may review the referral and apply any approved reward through the in-game economy.</p>
+            <h3>${money(referrals.bonus_amount || 50000)} cash ticket</h3>
+            <p class="muted small">Share your code with a new player. When they register with it, a cash ticket is created and an admin must deposit it manually.</p>
           </div>
           <span class="pill ${Number(referrals.pending_count || 0) ? "amber" : "green"}">${Number(referrals.pending_count || 0)} pending</span>
         </div>
@@ -1135,7 +1052,7 @@ function renderProfile() {
             <div>
               <p class="eyebrow">Radio identity</p>
               <h3>Department Callsign</h3>
-              <p class="muted small">This optional handle identifies you in department and MDT records.</p>
+              <p class="muted small">Dispatch will use this handle for quick unit tracking and unit checks.</p>
             </div>
             <span class="pill ${user.callsign ? "green" : "red"}">${user.callsign ? "set" : "missing"}</span>
           </div>
@@ -1195,32 +1112,6 @@ function renderProfile() {
             <div><span>Identity</span><strong>${escapeHtml(link.identity_id || "Not provided")}</strong></div>
             <div><span>Last sync</span><strong>${escapeHtml(link.last_sync_at || link.linked_at || "Awaiting sync")}</strong></div>
           </div>
-          <button class="danger" type="button" data-open-arma-unlink>Unlink Arma Account</button>
-          ${state.armaUnlinkOpen ? `
-            <div class="modal-backdrop" data-close-arma-unlink>
-              <section class="mdt-modal force-code-modal" role="dialog" aria-modal="true" aria-label="Developer Arma unlink">
-                <header class="row">
-                  <div><p class="eyebrow">Development use only</p><h2>Unlink Arma Account</h2></div>
-                  <button class="icon-action" type="button" data-close-arma-unlink aria-label="Close">${iconSvg.back}</button>
-                </header>
-                <div class="home-alert compact-alert">
-                  ${iconSvg.shield}
-                  <div>
-                    <strong>Server engineer guidance required</strong>
-                    <p>Unlinking is for development reasons only. A developer must generate a specialized one-time code for this action.</p>
-                  </div>
-                </div>
-                <form id="armaUnlinkForm" class="form-grid arma-unlink-form">
-                  <label>Developer unlink code<input name="dev_code" placeholder="DEV-XXXX-XXXX" autocomplete="off" required /></label>
-                  <label class="checkbox-row">
-                    <input name="acknowledge" type="checkbox" required />
-                    <span>I understand this removes my live Arma account link.</span>
-                  </label>
-                  <button class="danger" type="submit">Confirm Development Unlink</button>
-                </form>
-              </section>
-            </div>
-          ` : ""}
         ` : `
           <p class="muted small">Enter the in-game link code shown by TBS RP LINKING SYSTEM after joining the server.</p>
           <form id="armaLinkForm" class="form-grid arma-link-form">
@@ -1355,43 +1246,6 @@ function bindProfile() {
         window.history.replaceState({}, "", "/");
       }
       await loadAppData("profile");
-      render();
-    } catch (error) {
-      toast(error.message);
-    }
-  });
-  $("[data-open-arma-unlink]")?.addEventListener("click", () => {
-    state.armaUnlinkOpen = true;
-    render();
-  });
-  $$("[data-close-arma-unlink]").forEach((button) => button.addEventListener("click", (event) => {
-    if (event.currentTarget.classList?.contains("modal-backdrop") && event.target !== event.currentTarget) return;
-    state.armaUnlinkOpen = false;
-    render();
-  }));
-  $("#armaUnlinkForm")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const acknowledge = form.querySelector('[name="acknowledge"]');
-    if (!acknowledge?.checked) {
-      toast("Confirm the development-use warning before unlinking");
-      return;
-    }
-    const confirmed = window.confirm(
-      "Development use only: unlink this Arma account with server engineer guidance?"
-    );
-    if (!confirmed) return;
-    try {
-      const devCode = String(new FormData(form).get("dev_code") || "").trim().toUpperCase();
-      await api("/api/profile/unlink-arma", {
-        method: "POST",
-        body: { confirmation: "UNLINK FOR DEVELOPMENT", dev_code: devCode },
-      });
-      toast("Arma account unlinked for development");
-      state.armaUnlinkOpen = false;
-      state.armaLinkPromptDismissed = false;
-      await loadAppData("profile");
-      await loadSession();
       render();
     } catch (error) {
       toast(error.message);
@@ -2273,13 +2127,16 @@ function renderBank() {
     <div class="stack bank-app">
       <section class="bank-hero">
         <div>
-          <p class="eyebrow">FCRPMUSSALO Live Bank</p>
-          <h3>${data.balance_synced ? money(data.balance) : "Awaiting game sync"}</h3>
-          <p>Authoritative in-game balance${data.balance_synced_at ? ` · synced ${escapeHtml(data.balance_synced_at)}` : ""}.</p>
+          <p class="eyebrow">Faircroft Bank</p>
+          <h3>${money(data.balance)}</h3>
+          <p>Account balance, deposits, and Treasury compensation activity.</p>
         </div>
         <span>${iconSvg.bank}</span>
       </section>
-      <div class="metric"><span>Server time</span><strong>${minutes(data.income.presence_seconds_today)}m</strong></div>
+      <div class="grid-2">
+        <div class="metric"><span>Cash wallet</span><strong>${money(data.cash)}</strong></div>
+        <div class="metric"><span>Server time</span><strong>${minutes(data.income.presence_seconds_today)}m</strong></div>
+      </div>
       ${canManageTreasury ? `
         <section class="treasury-section bank-treasury-admin">
           <div class="row">
@@ -2346,10 +2203,15 @@ function renderCash() {
   return `
     <div class="stack">
       <div class="card">
-        <p class="eyebrow">In-game banking required</p>
-        <div class="money">${state.session.user.bank_balance_synced ? money(state.session.user.bank_balance) : "Awaiting sync"}</div>
-        <p class="muted">FCRPMUSSALO is the authoritative bank. Make transfers through the in-game banking system so the game balance remains accurate.</p>
+        <p class="eyebrow">Peer transfer</p>
+        <div class="money">${money(state.session.user.bank_balance)}</div>
       </div>
+      <form id="cashForm" class="card form-grid">
+        <label>Recipient email<input name="recipient_email" type="email" required /></label>
+        <label>Amount<input name="amount" type="number" min="1" step="0.01" required /></label>
+        <label>Note<input name="note" maxlength="120" /></label>
+        <button class="primary" type="submit">Send payment</button>
+      </form>
     </div>
   `;
 }
@@ -2435,6 +2297,294 @@ function bindMessages() {
       render();
     } catch (error) {
       toast(error.message);
+    }
+  });
+}
+
+function roadmapDateLabel(value) {
+  if (!value) return "Open horizon";
+  const parsed = new Date(`${value}T12:00:00`);
+  return Number.isNaN(parsed.getTime())
+    ? String(value)
+    : parsed.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+}
+
+function roadmapFilterMatches(item, filter) {
+  if (filter === "all") return item.is_visible;
+  if (filter === "ideas") return item.is_visible && ["planned", "exploring"].includes(item.status);
+  return item.is_visible && item.status === filter;
+}
+
+function roadmapStatusLabel(status) {
+  return {
+    shipped: "Live",
+    building: "In build",
+    next: "Up next",
+    planned: "Planned",
+    exploring: "Exploring",
+    paused: "Paused",
+  }[status] || humanLabel(status);
+}
+
+function renderRoadmapWorkspace() {
+  const data = state.cache.roadmap || { items: [], stats: {}, options: {} };
+  const items = data.items || [];
+  const visible = items.filter((item) => item.is_visible);
+  const filtered = items.filter((item) => roadmapFilterMatches(item, state.roadmapFilter));
+  const stats = data.stats || {};
+  const filters = [
+    ["all", "All phases"],
+    ["building", "In build"],
+    ["next", "Up next"],
+    ["ideas", "Ideas"],
+    ["shipped", "Live"],
+  ];
+  const androidTarget = stats.android_days === null || stats.android_days === undefined
+    ? "Scheduling"
+    : `${stats.android_days} day${Number(stats.android_days) === 1 ? "" : "s"}`;
+  return `
+    <section class="roadmap-workspace">
+      <header class="roadmap-topbar">
+        <button class="roadmap-back" type="button" data-close-roadmap aria-label="Return to phone">
+          ${iconSvg.back}<span>Phone</span>
+        </button>
+        <div class="roadmap-brand">
+          <span class="roadmap-brand-mark">FC</span>
+          <div><p>FAIRCROFT DEVELOPMENT</p><strong>Build Route</strong></div>
+        </div>
+        <div class="roadmap-top-actions">
+          ${data.can_manage ? `<button class="roadmap-command" type="button" data-roadmap-edit="new" aria-label="Add milestone">${iconSvg.plus}<span>Add milestone</span></button>` : ""}
+          <button class="roadmap-refresh" type="button" data-refresh-roadmap aria-label="Refresh roadmap">↻</button>
+        </div>
+      </header>
+
+      <main class="roadmap-scroll">
+        <section class="roadmap-intro">
+          <div class="roadmap-intro-copy">
+            <p class="roadmap-kicker"><span></span> COMMUNITY ROADMAP / LIVE SIGNAL</p>
+            <h1>Building Faircroft,<br><em>one connected system at a time.</em></h1>
+            <p>The route from today’s PWA to live game integration, native mobile access, banking, properties, and a connected roleplay economy.</p>
+          </div>
+          <div class="roadmap-launch-countdown">
+            <span>ANDROID PARITY TARGET</span>
+            <strong>${escapeHtml(androidTarget)}</strong>
+            <p>${stats.android_target ? roadmapDateLabel(stats.android_target) : "Target window pending"}</p>
+          </div>
+        </section>
+
+        <section class="roadmap-telemetry" aria-label="Roadmap progress">
+          <div><span>Route completion</span><strong>${Number(stats.overall_progress || 0)}%</strong></div>
+          <div><span>Active phases</span><strong>${Number(stats.active_phases || 0)}</strong></div>
+          <div><span>Systems live</span><strong>${Number(stats.shipped_phases || 0)}</strong></div>
+          <div><span>Community signals</span><strong>${Number(stats.community_votes || 0)}</strong></div>
+          <div class="roadmap-master-progress"><span style="width:${Number(stats.overall_progress || 0)}%"></span></div>
+        </section>
+
+        <nav class="roadmap-filters" aria-label="Roadmap views">
+          ${filters.map(([id, label]) => `
+            <button class="${state.roadmapFilter === id ? "active" : ""}" type="button" data-roadmap-filter="${id}">
+              ${escapeHtml(label)}
+              <span>${id === "all" ? visible.length : items.filter((item) => roadmapFilterMatches(item, id)).length}</span>
+            </button>
+          `).join("")}
+        </nav>
+
+        <section class="roadmap-route" aria-label="Faircroft development milestones">
+          <div class="roadmap-route-line" aria-hidden="true"><span></span><i></i></div>
+          ${filtered.map((item) => {
+            const routeIndex = visible.findIndex((row) => String(row.id) === String(item.id));
+            const vote = Number(item.user_vote || 0);
+            return `
+              <article class="roadmap-stop accent-${escapeHtml(item.accent)} status-${escapeHtml(item.status)}" style="--stop-index:${Math.max(routeIndex, 0)}" data-roadmap-stop="${item.id}">
+                <div class="roadmap-node" aria-hidden="true">
+                  <span>${String(Math.max(routeIndex + 1, 1)).padStart(2, "0")}</span>
+                </div>
+                <div class="roadmap-stop-content">
+                  <div class="roadmap-stop-head">
+                    <div class="roadmap-stop-icon">${iconSvg[item.icon] || iconSvg.route}</div>
+                    <div>
+                      <p>${escapeHtml(item.category)} / ${escapeHtml(roadmapDateLabel(item.target_date))}</p>
+                      <h2>${escapeHtml(item.title)}</h2>
+                    </div>
+                    <span class="roadmap-status">${escapeHtml(roadmapStatusLabel(item.status))}</span>
+                  </div>
+                  <p class="roadmap-summary">${escapeHtml(item.summary)}</p>
+                  <div class="roadmap-progress-row">
+                    <div class="roadmap-progress-track"><span style="width:${Number(item.progress || 0)}%"></span></div>
+                    <strong>${Number(item.progress || 0)}%</strong>
+                  </div>
+                  ${item.details ? `
+                    <details class="roadmap-notes">
+                      <summary>Build brief</summary>
+                      <p>${escapeHtml(item.details)}</p>
+                    </details>
+                  ` : ""}
+                  <footer class="roadmap-stop-footer">
+                    <div class="roadmap-votes" aria-label="Community voting">
+                      <button class="${vote === 1 ? "active up" : ""}" type="button" data-roadmap-vote="${item.id}" data-vote="1" aria-label="Upvote ${escapeHtml(item.title)}">
+                        ${iconSvg["thumb-up"]}<span>${Number(item.upvotes || 0)}</span>
+                      </button>
+                      <strong class="${Number(item.score || 0) < 0 ? "negative" : ""}">${Number(item.score || 0) > 0 ? "+" : ""}${Number(item.score || 0)}</strong>
+                      <button class="${vote === -1 ? "active down" : ""}" type="button" data-roadmap-vote="${item.id}" data-vote="-1" aria-label="Downvote ${escapeHtml(item.title)}">
+                        ${iconSvg["thumb-down"]}<span>${Number(item.downvotes || 0)}</span>
+                      </button>
+                    </div>
+                    ${data.can_manage ? `<button class="roadmap-edit" type="button" data-roadmap-edit="${item.id}">${iconSvg.settings}<span>Edit phase</span></button>` : `<span class="roadmap-signal-label">COMMUNITY SIGNAL</span>`}
+                  </footer>
+                </div>
+              </article>
+            `;
+          }).join("") || `<div class="roadmap-empty">No phases match this route view.</div>`}
+        </section>
+
+        <footer class="roadmap-footer">
+          <div><span class="roadmap-footer-mark">FC</span><strong>FAIRCROFT BUILD ROUTE</strong></div>
+          <p>RP OS ${OS_VERSION} / PostgreSQL live roadmap</p>
+        </footer>
+      </main>
+      ${state.roadmapEditorId !== null ? renderRoadmapEditor(data) : ""}
+    </section>
+  `;
+}
+
+function renderRoadmapEditor(data) {
+  const isNew = state.roadmapEditorId === "new";
+  const item = isNew ? null : (data.items || []).find((row) => String(row.id) === String(state.roadmapEditorId));
+  if (!isNew && !item) return "";
+  const model = item || {
+    title: "",
+    category: "Platform",
+    summary: "",
+    details: "",
+    status: "planned",
+    progress: 0,
+    target_date: "",
+    sort_order: ((data.items || []).length + 1) * 10,
+    accent: "mint",
+    icon: "route",
+    is_visible: true,
+  };
+  const options = data.options || {};
+  return `
+    <div class="roadmap-editor-backdrop">
+      <section class="roadmap-editor" role="dialog" aria-modal="true" aria-label="${isNew ? "Add roadmap milestone" : "Edit roadmap milestone"}">
+        <header>
+          <div><p>ROUTE CONTROL</p><h2>${isNew ? "Add milestone" : "Edit milestone"}</h2></div>
+          <button type="button" data-close-roadmap-editor aria-label="Close editor">×</button>
+        </header>
+        <form id="roadmapEditorForm" data-roadmap-item-id="${isNew ? "" : item.id}">
+          <label>Title<input name="title" value="${escapeHtml(model.title)}" maxlength="120" required /></label>
+          <label>Category<input name="category" value="${escapeHtml(model.category)}" maxlength="60" required /></label>
+          <label class="roadmap-editor-wide">Public summary<textarea name="summary" maxlength="500" required>${escapeHtml(model.summary)}</textarea></label>
+          <label class="roadmap-editor-wide">Build brief<textarea name="details" maxlength="5000">${escapeHtml(model.details)}</textarea></label>
+          <label>Status<select name="status">${(options.statuses || ["shipped", "building", "next", "planned", "exploring", "paused"]).map((value) => `<option value="${value}"${selectedAttr(value, model.status)}>${roadmapStatusLabel(value)}</option>`).join("")}</select></label>
+          <label>Target date<input name="target_date" type="date" value="${escapeHtml(model.target_date || "")}" /></label>
+          <label>Accent<select name="accent">${(options.accents || ["mint", "gold", "coral", "cyan", "violet"]).map((value) => `<option value="${value}"${selectedAttr(value, model.accent)}>${humanLabel(value)}</option>`).join("")}</select></label>
+          <label>Icon<select name="icon">${(options.icons || ["route", "shield", "link", "bank", "home", "rocket", "settings"]).map((value) => `<option value="${value}"${selectedAttr(value, model.icon)}>${humanLabel(value)}</option>`).join("")}</select></label>
+          <label>Route order<input name="sort_order" type="number" min="0" max="9999" value="${Number(model.sort_order || 0)}" required /></label>
+          <label class="roadmap-progress-input">Progress <output>${Number(model.progress || 0)}%</output><input name="progress" type="range" min="0" max="100" value="${Number(model.progress || 0)}" /></label>
+          <label class="roadmap-visibility"><input name="is_visible" type="checkbox" ${model.is_visible ? "checked" : ""} /> Visible to community</label>
+          <div class="roadmap-editor-actions">
+            <button class="secondary" type="button" data-close-roadmap-editor>Cancel</button>
+            <button class="primary" type="submit">${isNew ? "Add to route" : "Save milestone"}</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+function animateRoadmapStops() {
+  const stops = $$(".roadmap-stop");
+  if (!("IntersectionObserver" in window)) {
+    stops.forEach((stop) => stop.classList.add("in-view"));
+    return;
+  }
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add("in-view");
+        observer.unobserve(entry.target);
+      }
+    });
+  }, { root: $(".roadmap-scroll"), threshold: 0.12 });
+  stops.forEach((stop) => observer.observe(stop));
+}
+
+function bindRoadmapWorkspace() {
+  animateRoadmapStops();
+  $("[data-close-roadmap]")?.addEventListener("click", async () => {
+    state.activeApp = null;
+    state.roadmapEditorId = null;
+    await loadSession();
+  });
+  $("[data-refresh-roadmap]")?.addEventListener("click", async () => {
+    await loadAppData("roadmap");
+    render();
+  });
+  $$("[data-roadmap-filter]").forEach((button) => button.addEventListener("click", () => {
+    state.roadmapFilter = button.dataset.roadmapFilter;
+    render();
+  }));
+  $$("[data-roadmap-vote]").forEach((button) => button.addEventListener("click", async () => {
+    const item = state.cache.roadmap?.items?.find((row) => String(row.id) === String(button.dataset.roadmapVote));
+    if (!item) return;
+    const requested = Number(button.dataset.vote);
+    const vote = Number(item.user_vote || 0) === requested ? 0 : requested;
+    const scrollTop = $(".roadmap-scroll")?.scrollTop || 0;
+    try {
+      const result = await api(`/api/roadmap/items/${item.id}/vote`, { method: "POST", body: { vote } });
+      Object.assign(item, result);
+      if (state.cache.roadmap?.stats) {
+        state.cache.roadmap.stats.community_votes = (state.cache.roadmap.items || []).reduce((total, row) => total + Number(row.upvotes || 0) + Number(row.downvotes || 0), 0);
+      }
+      render();
+      requestAnimationFrame(() => {
+        const scroll = $(".roadmap-scroll");
+        if (scroll) scroll.scrollTop = scrollTop;
+      });
+    } catch (error) {
+      if (error.message) toast(error.message);
+    }
+  }));
+  $$("[data-roadmap-edit]").forEach((button) => button.addEventListener("click", () => {
+    state.roadmapEditorId = button.dataset.roadmapEdit;
+    render();
+  }));
+  $$("[data-close-roadmap-editor]").forEach((button) => button.addEventListener("click", () => {
+    state.roadmapEditorId = null;
+    render();
+  }));
+  $(".roadmap-editor-backdrop")?.addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) {
+      state.roadmapEditorId = null;
+      render();
+    }
+  });
+  const progressInput = $("#roadmapEditorForm input[name='progress']");
+  progressInput?.addEventListener("input", () => {
+    const output = $("#roadmapEditorForm output");
+    if (output) output.textContent = `${progressInput.value}%`;
+  });
+  $("#roadmapEditorForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const payload = Object.fromEntries(new FormData(form).entries());
+    payload.is_visible = form.elements.is_visible.checked;
+    payload.progress = Number(payload.progress || 0);
+    payload.sort_order = Number(payload.sort_order || 0);
+    const itemId = form.dataset.roadmapItemId;
+    try {
+      await api(itemId ? `/api/roadmap/items/${itemId}` : "/api/roadmap/items", {
+        method: itemId ? "PATCH" : "POST",
+        body: payload,
+      });
+      toast(itemId ? "Roadmap milestone saved" : "Milestone added to route");
+      state.roadmapEditorId = null;
+      await loadAppData("roadmap");
+      render();
+    } catch (error) {
+      if (error.message) toast(error.message);
     }
   });
 }
@@ -2570,54 +2720,6 @@ function renderBusiness() {
   `;
 }
 
-function renderBusinessWorkspace() {
-  const data = state.cache.business || {};
-  const staff = Boolean(data.staff_view);
-  const tabs = [
-    ["apply", "New Application"],
-    ["licenses", "My Licenses"],
-    ...(staff ? [["review", "Application Review"], ["market", "License Registry"]] : []),
-  ];
-  if (!tabs.some(([id]) => id === state.businessTab)) state.businessTab = "apply";
-  const active = tabs.find(([id]) => id === state.businessTab) || tabs[0];
-  return `
-    <section class="business-workspace">
-      <aside class="business-workspace-sidebar">
-        <div class="dev-brand"><img class="dev-emblem" src="/static/brand/faircroft-emblem.webp" alt="" /><div><strong>Faircroft RP</strong><small>Business Registry</small></div></div>
-        <p class="dev-nav-label">Registry workspace</p>
-        <nav>
-          ${tabs.map(([id, label]) => `<button type="button" class="${state.businessTab === id ? "active" : ""}" data-business-tab="${id}">${escapeHtml(label)}</button>`).join("")}
-        </nav>
-        <div class="business-workspace-sidebar-note">
-          <span class="dev-access-dot"></span>
-          <div><strong>${staff ? "Registry Staff" : "Business Owner"}</strong><small>${escapeHtml(state.session?.user?.name || "")}</small></div>
-        </div>
-      </aside>
-      <main class="business-workspace-main">
-        <header class="business-workspace-topbar">
-          <div><p class="eyebrow">${staff ? "City Hall Commerce Division" : "Faircroft Commerce Portal"}</p><h1>${escapeHtml(active[1])}</h1></div>
-          <div class="business-workspace-actions">
-            <button type="button" class="secondary" data-refresh-business-workspace>Refresh registry</button>
-            <button type="button" class="primary" data-close-business-workspace>Return to phone</button>
-          </div>
-        </header>
-        <div class="business-workspace-content">${renderBusiness()}</div>
-      </main>
-    </section>`;
-}
-
-function bindBusinessWorkspace() {
-  bindBusiness();
-  $("[data-close-business-workspace]")?.addEventListener("click", async () => {
-    state.activeApp = null;
-    await loadSession();
-  });
-  $("[data-refresh-business-workspace]")?.addEventListener("click", async () => {
-    await loadAppData("business");
-    render();
-  });
-}
-
 function renderBusinessApply(data) {
   const activeApplications = (data.applications || []).filter((item) => !["approved", "denied"].includes(item.status)).slice(0, 2);
   return `
@@ -2674,18 +2776,11 @@ function renderBusinessApply(data) {
 function renderBusinessLicenses(data) {
   const businesses = data.businesses || [];
   const applications = data.applications || [];
-  const page = businessPageSlice(businesses, state.businessLicensePage);
-  state.businessLicensePage = page.page;
   return `
     <div class="stack">
-      <div class="business-license-heading">
-        <div><p class="eyebrow">License cabinet</p><h3>Your registered businesses</h3></div>
-        <span class="pill">${businesses.length} file${businesses.length === 1 ? "" : "s"}</span>
+      <div class="list">
+        ${businesses.map((item) => renderBusinessLicenseCard(item, false, data)).join("") || `<div class="empty">No approved business licenses yet</div>`}
       </div>
-      <div class="business-license-folders">
-        ${page.rows.map((item) => renderBusinessLicenseFolder(item, false, data)).join("") || `<div class="empty">No approved business licenses yet</div>`}
-      </div>
-      ${renderBusinessPager(page, "licenses")}
       <div class="business-section">
         <div class="row"><h3>Application History</h3><span class="pill">${applications.length}</span></div>
         <div class="list">
@@ -2756,66 +2851,15 @@ function renderBusinessRecentReviews(rows) {
 
 function renderBusinessRegistry(data) {
   const businesses = data.all_businesses || [];
-  const page = businessPageSlice(businesses, state.businessRegistryPage);
-  state.businessRegistryPage = page.page;
   return `
     <div class="stack">
-      <div class="business-license-heading">
-        <div><p class="eyebrow">City Hall records</p><h3>Business license cabinet</h3></div>
-        <span class="pill">${businesses.length} files</span>
+      <div class="list">
+        ${businesses.map((item) => renderBusinessLicenseCard(item, true, data)).join("") || `<div class="empty">No business licenses issued yet</div>`}
       </div>
-      <div class="business-license-folders">
-        ${page.rows.map((item) => renderBusinessLicenseFolder(item, true, data)).join("") || `<div class="empty">No business licenses issued yet</div>`}
-      </div>
-      ${renderBusinessPager(page, "registry")}
       ${renderBusinessLedger("Recent Inspections", data.staff_inspections || [], "inspection")}
       ${renderBusinessLedger("Recent Violations", data.staff_violations || [], "violation")}
     </div>
   `;
-}
-
-const BUSINESS_LICENSES_PER_PAGE = 6;
-
-function businessPageSlice(rows, requestedPage) {
-  const pages = Math.max(1, Math.ceil(rows.length / BUSINESS_LICENSES_PER_PAGE));
-  const page = Math.max(1, Math.min(Number(requestedPage) || 1, pages));
-  const start = (page - 1) * BUSINESS_LICENSES_PER_PAGE;
-  return { rows: rows.slice(start, start + BUSINESS_LICENSES_PER_PAGE), page, pages, total: rows.length };
-}
-
-function renderBusinessPager(page, scope) {
-  if (page.pages <= 1) return "";
-  return `
-    <nav class="business-pager" aria-label="Business license pages">
-      <button type="button" class="secondary" data-business-page="${page.page - 1}" data-business-page-scope="${scope}" ${page.page <= 1 ? "disabled" : ""}>Previous</button>
-      <span>Page <strong>${page.page}</strong> of ${page.pages}</span>
-      <button type="button" class="secondary" data-business-page="${page.page + 1}" data-business-page-scope="${scope}" ${page.page >= page.pages ? "disabled" : ""}>Next</button>
-    </nav>`;
-}
-
-function renderBusinessLicenseFolder(item, manage, data) {
-  return `
-    <details class="business-license-folder">
-      <summary>
-        <div class="business-folder-tab">LICENSE FILE</div>
-        <div class="row tight">
-          <div>
-            <p class="eyebrow">${escapeHtml(item.license_number)}</p>
-            <h3>${escapeHtml(item.business_name)}</h3>
-            <p class="muted small">${escapeHtml(item.owner_name || "Owner")} · ${escapeHtml(item.location)}</p>
-          </div>
-          <span class="pill ${businessStatusClass(item.status)}">${humanLabel(item.status)}</span>
-        </div>
-        <div class="business-folder-strip">
-          <span>${humanLabel(item.license_category)}</span>
-          <span>${escapeHtml(item.business_type)}</span>
-          <span>${money(item.weekly_tax)}/week</span>
-          <span>${item.open_violations || 0} violation(s)</span>
-        </div>
-        <div class="business-folder-open">Open license file <span>+</span></div>
-      </summary>
-      <div class="business-license-folder-body">${renderBusinessLicenseCard(item, manage, data)}</div>
-    </details>`;
 }
 
 function renderBusinessApplicationReviewFolder(item, data) {
@@ -3012,12 +3056,6 @@ function bindBusiness() {
   }));
   $$("[data-business-review-filter]").forEach((button) => button.addEventListener("click", () => {
     state.businessReviewFilter = button.dataset.businessReviewFilter;
-    render();
-  }));
-  $$("[data-business-page]").forEach((button) => button.addEventListener("click", () => {
-    const page = Number(button.dataset.businessPage) || 1;
-    if (button.dataset.businessPageScope === "registry") state.businessRegistryPage = page;
-    else state.businessLicensePage = page;
     render();
   }));
   $("#businessApplicationForm")?.addEventListener("submit", async (event) => {
@@ -3623,6 +3661,7 @@ function renderMdtWorkspace() {
     ["panic", "Panic"],
   ];
   const activeNavLabel = navItems.find(([id]) => id === state.mdtTab)?.[1] || "NCIC / DMV";
+  const unitCallsign = state.session.user.callsign || "No callsign";
   const terminalTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   return `
     <section class="mdt-workspace mdt-redesign ${mdtCommandEnabledNow ? "cid-workspace" : ""}">
@@ -3630,13 +3669,15 @@ function renderMdtWorkspace() {
         <div>
           <p class="eyebrow">${mdtCommandEnabledNow ? commandLabel : "Law Enforcement"}</p>
           <h1>${mdtCommandEnabledNow ? `${commandLabel} Command MDT` : "Mobile Data Terminal"}</h1>
-          <p class="mdt-subtitle">${mdtCommandEnabledNow ? "Investigations / warrants / booking / internal affairs" : "NCIC / DMV / citations / reports / booking"}</p>
+          <p class="mdt-subtitle">${mdtCommandEnabledNow ? "Investigations / warrants / booking / internal affairs" : "NCIC / DMV / citations / booking / dispatch"}</p>
           <div class="mdt-status-line">
+            <span>${escapeHtml(unitCallsign)}</span>
             <span>${escapeHtml(activeNavLabel)}</span>
             <span>${escapeHtml(terminalTime)}</span>
           </div>
         </div>
         <div class="mdt-top-actions">
+          ${canUseMdtDispatch() ? `<button class="ghost mdt-mobile-action" data-open-mdt-dispatch>Dispatch</button>` : ""}
           <button class="ghost mdt-mobile-action" data-open-mdt-nav>Menu</button>
           <button class="ghost mdt-mobile-action" data-open-mdt-side>Watch</button>
           ${canUseMdtMessages() ? `<button class="ghost mdt-mobile-action" data-open-mdt-messages>Messages</button>` : ""}
@@ -3705,6 +3746,12 @@ function renderMdtQuickRail() {
   const unread = Number(state.session?.unread_messages || 0);
   return `
     <nav class="mdt-quick-rail" aria-label="MDT quick access">
+      ${canUseMdtDispatch() ? `
+        <button type="button" data-open-mdt-dispatch aria-label="Open dispatch">
+          ${iconSvg.radio}
+          <span>Dispatch</span>
+        </button>
+      ` : ""}
       ${canUseMdtMessages() ? `
         <button type="button" data-open-mdt-messages aria-label="Open messages">
           ${iconSvg.message}
@@ -3728,6 +3775,18 @@ function bindMdtWorkspace() {
     state.mdtSideOpen = false;
     await loadSession();
   });
+  $$("[data-open-mdt-dispatch]")?.forEach((button) => button.addEventListener("click", async () => {
+    if (!canUseMdtDispatch()) {
+      toast("You do not have permission to open Dispatch from MDT.");
+      return;
+    }
+    state.returnToMdtOnClose = true;
+    state.activeApp = "dispatch";
+    state.mdtNavOpen = false;
+    state.mdtSideOpen = false;
+    await loadAppData("dispatch");
+    render();
+  }));
   $$("[data-open-mdt-messages]")?.forEach((button) => button.addEventListener("click", async () => {
     if (!canUseMdtMessages()) {
       toast("You must be verified to open Messages.");
@@ -4485,7 +4544,9 @@ function renderFireWorkspace() {
                 <span class="pill ${panicStatusClass(alert.status)}">${escapeHtml(alert.status)}</span>
               </div>
               <p>${escapeHtml(alert.note || "No notes supplied")}</p>
+              ${alert.dispatch_last_note ? `<div class="dispatch-card-note"><strong>${escapeHtml(alert.dispatch_last_note_type || "dispatch update")}</strong><p>${escapeHtml(alert.dispatch_last_note)}</p></div>` : ""}
               <p class="muted small">Reported by ${escapeHtml(alert.officer_name || "Unknown")} - ${new Date(alert.created_at).toLocaleString()}</p>
+              <p class="muted small">${Number(alert.assigned_unit_count || 0)} units attached</p>
               <div class="row">
                 ${alert.status !== "responding" && alert.status !== "cleared" ? `<button class="secondary" data-fire-alert="${alert.id}" data-fire-status="responding">Responding</button>` : ""}
                 ${alert.status !== "cleared" ? `<button class="primary" data-fire-alert="${alert.id}" data-fire-status="cleared">Clear</button>` : ""}
@@ -4661,11 +4722,13 @@ function renderMdtSide() {
   const cid = state.cache.mdt?.cid;
   const priorityCases = (cid?.investigations || []).filter((item) => ["critical", "elevated"].includes(item.priority));
   const activeWarrants = (cid?.warrants || []).filter((item) => item.status === "active");
+  const canOpenDispatch = canUseMdtDispatch();
   const canOpenMessages = canUseMdtMessages();
   return `
     <div class="mdt-side-panel">
       <h3>Quick Access</h3>
       <div class="list compact-list">
+        ${canOpenDispatch ? `<button class="secondary" type="button" data-open-mdt-dispatch>Dispatch CAD</button>` : `<p class="muted small">Dispatch unavailable</p>`}
         ${canOpenMessages ? `<button class="secondary" type="button" data-open-mdt-messages>Messages</button>` : `<p class="muted small">Messages unavailable</p>`}
         ${state.mdtProtocolAssistantEnabled ? `<button class="secondary" type="button" data-start-traffic-stop>Initiate Traffic Stop</button>` : ""}
         <button class="secondary" type="button" data-mdt-tab="ticket">Write Ticket</button>
@@ -6154,6 +6217,8 @@ function renderPanic() {
           <div class="row"><h3>${escapeHtml(alert.officer_name)}</h3><span class="pill ${panicStatusClass(alert.status)}">${escapeHtml(alert.department || "police")} - ${escapeHtml(alert.status)}</span></div>
           <p>${escapeHtml(alert.location)}</p>
           <p class="muted small">${escapeHtml(alert.note)}</p>
+          ${alert.dispatch_last_note ? `<div class="dispatch-card-note"><strong>${escapeHtml(alert.dispatch_last_note_type || "dispatch update")}</strong><p>${escapeHtml(alert.dispatch_last_note)}</p></div>` : ""}
+          <p class="muted small">${Number(alert.assigned_unit_count || 0)} units attached</p>
           <p class="muted small">Activated ${new Date(alert.created_at).toLocaleString()}${alert.resolved_at ? ` - Cleared ${new Date(alert.resolved_at).toLocaleString()}` : ""}</p>
           <div class="row-actions">
             <button class="secondary" type="button" data-use-alert-report="${alert.id}">Write report</button>
@@ -6745,546 +6810,6 @@ function bindMdt() {
   }));
 }
 
-function devUserOptions(users) {
-  return (users || []).map((user) => (
-    `<option value="${user.id}">${escapeHtml(user.name)} / CIV ${escapeHtml(user.civ_number || "pending")} / ${escapeHtml(user.email)}</option>`
-  )).join("");
-}
-
-function renderDevToolsLegacy() {
-  const data = state.cache["dev-tools"] || {};
-  const users = data.users || [];
-  const sanctions = data.sanctions || [];
-  const warnings = data.warnings || [];
-  const logs = data.audit_logs || [];
-  const codes = data.unlink_codes || [];
-  return `
-    <div class="stack dev-tools-app">
-      <section class="profile-hero dev-tools-hero">
-        <div><p class="eyebrow">Restricted engineering console</p><h3>Developer Tools</h3><p>Account linking support, moderation controls, internal warnings, and immutable staff activity.</p></div>
-        <span class="pill amber">DEV</span>
-      </section>
-      <div class="profile-grid">
-        <div><span>Accounts</span><strong>${users.length}</strong></div>
-        <div><span>Active sanctions</span><strong>${Number(data.active_sanctions || 0)}</strong></div>
-        <div><span>Open warnings</span><strong>${warnings.filter((item) => !item.resolved_at).length}</strong></div>
-        <div><span>Audit events</span><strong>${logs.length}</strong></div>
-      </div>
-
-      <section class="profile-link-card">
-        <div class="row"><div><p class="eyebrow">Secure account unlink</p><h3>One-time Developer Code</h3><p class="muted small">Codes are shown once, stored as hashes, and expire automatically.</p></div><span class="pill red">restricted</span></div>
-        <form id="devCodeForm" class="form-grid">
-          <label>Expires in minutes<input name="expiry_minutes" type="number" min="5" max="1440" value="30" required /></label>
-          <button class="primary" type="submit">Generate One-Time Code</button>
-        </form>
-        ${state.generatedDevCode ? `<div class="referral-code-box dev-generated-code"><span>Give this code directly to the guided user</span><strong>${escapeHtml(state.generatedDevCode.code)}</strong><small>Expires ${escapeHtml(state.generatedDevCode.expires_at)}</small></div>` : ""}
-        <div class="list">${codes.slice(0, 8).map((item) => `<div class="row"><span>••••-${escapeHtml(item.code_hint)} / ${escapeHtml(item.created_by_name)}</span><strong>${item.uses_remaining ? "available" : "used"}</strong></div>`).join("") || `<div class="empty">No developer codes generated</div>`}</div>
-      </section>
-
-      <section class="profile-link-card">
-        <div class="row"><div><p class="eyebrow">Account enforcement</p><h3>Create Sanction</h3></div><span class="pill red">staff action</span></div>
-        <form id="devSanctionForm" class="form-grid">
-          <label>Account<select name="user_id" required><option value="">Select account</option>${devUserOptions(users)}</select></label>
-          <label>Action<select name="sanction_type" required><option value="timeout">Timeout</option><option value="ban">Ban</option><option value="sanction">Recorded sanction</option></select></label>
-          <label>Duration minutes<input name="duration_minutes" type="number" min="1" max="525600" value="60" /></label>
-          <label>Public reason<textarea name="reason" maxlength="1200" required></textarea></label>
-          <label>Internal notes<textarea name="internal_notes" maxlength="2000"></textarea></label>
-          <button class="danger" type="submit">Apply Enforcement Action</button>
-        </form>
-        <div class="list dev-record-list">${sanctions.slice(0, 30).map((item) => `
-          <article class="card">
-            <div class="row"><strong>${escapeHtml(item.target_name)} / ${escapeHtml(item.sanction_type)}</strong><span class="pill ${item.revoked_at ? "" : "red"}">${item.revoked_at ? "revoked" : "active"}</span></div>
-            <p>${escapeHtml(item.reason)}</p>
-            <p class="muted small">By ${escapeHtml(item.created_by_name)} · ${escapeHtml(item.created_at)}${item.expires_at ? ` · expires ${escapeHtml(item.expires_at)}` : ""}</p>
-            ${item.revoked_at ? "" : `<button class="secondary" type="button" data-revoke-sanction="${item.id}">Revoke / Unban</button>`}
-          </article>
-        `).join("") || `<div class="empty">No sanctions recorded</div>`}</div>
-      </section>
-
-      <section class="profile-link-card">
-        <div class="row"><div><p class="eyebrow">Staff-only case notes</p><h3>Internal Warning</h3></div><span class="pill amber">not player-visible</span></div>
-        <form id="devWarningForm" class="form-grid">
-          <label>Account<select name="user_id" required><option value="">Select account</option>${devUserOptions(users)}</select></label>
-          <label>Severity<select name="severity"><option>low</option><option selected>standard</option><option>high</option><option>critical</option></select></label>
-          <label>Subject<input name="subject" maxlength="160" required /></label>
-          <label>Internal warning<textarea name="body" maxlength="3000" required></textarea></label>
-          <button class="secondary" type="submit">Record Internal Warning</button>
-        </form>
-        <div class="list dev-record-list">${warnings.slice(0, 30).map((item) => `
-          <article class="card">
-            <div class="row"><strong>${escapeHtml(item.target_name)} / ${escapeHtml(item.subject)}</strong><span class="pill ${item.severity === "critical" ? "red" : "amber"}">${escapeHtml(item.severity)}</span></div>
-            <p>${escapeHtml(item.body)}</p>
-            <p class="muted small">By ${escapeHtml(item.created_by_name)} · ${escapeHtml(item.created_at)}</p>
-            ${item.resolved_at ? `<span class="pill green">resolved</span>` : `<button class="secondary" type="button" data-resolve-warning="${item.id}">Resolve Warning</button>`}
-          </article>
-        `).join("") || `<div class="empty">No internal warnings</div>`}</div>
-      </section>
-
-      <section class="profile-link-card">
-        <div class="row"><div><p class="eyebrow">Administrative accountability</p><h3>Audit Log</h3></div><span class="pill green">${logs.length} events</span></div>
-        <div class="list dev-audit-list">${logs.map((item) => `
-          <div class="card"><div class="row"><strong>${escapeHtml(item.action)}</strong><span>${escapeHtml(item.actor_name)}</span></div><p class="muted small">${escapeHtml(item.target_name || "System")} · ${escapeHtml(item.created_at)}</p><code>${escapeHtml(item.details || "{}")}</code></div>
-        `).join("") || `<div class="empty">No audited actions yet</div>`}</div>
-      </section>
-    </div>
-  `;
-}
-
-const FAIRCRAFT_RULES = [
-  ["1.1", "Respect", "Harassment, discrimination, hate speech, excessive toxicity, and real-life threats are prohibited."],
-  ["1.2", "Staff Authority", "Respect staff decisions; use the designated support system for appeals instead of arguing publicly."],
-  ["1.3", "Exploiting", "Do not use bugs, glitches, or unintended mechanics for an advantage; report discovered exploits."],
-  ["1.4", "Cheating", "Hacks, cheats, macros, scripts, and unfair third-party software are forbidden."],
-  ["2.1", "Stay In Character", "Remain in character, use OOC only when necessary, and avoid breaking immersion."],
-  ["2.2", "FearRP", "Value your character's life and respond realistically to overwhelming force."],
-  ["2.3", "Metagaming", "Do not use information learned outside roleplay, including streams or Discord, in character."],
-  ["2.5", "Random Deathmatch (RDM)", "Do not kill or attack players without a valid roleplay reason."],
-  ["2.6", "Vehicle Deathmatch (VDM)", "Do not use a vehicle as a weapon without a valid roleplay reason."],
-  ["2.7", "New Life Rule (NLR)", "Forget events leading to death and do not return to the scene for 15 minutes unless roleplay justifies it."],
-  ["2.8", "Combat Logging", "Do not disconnect to avoid roleplay, arrest, injury, or consequences."],
-  ["3.1", "Character Names", "Use realistic names; troll and celebrity names are not allowed."],
-  ["3.2", "Character Development", "Maintain a consistent character and complete two interactions before a shootout."],
-  ["3.3", "Character Knowledge", "Use only information your character learned through roleplay."],
-  ["4.1", "Robberies", "Robberies require roleplay interaction; instant robbery demands are prohibited."],
-  ["4.2", "Hostage Situations", "Use real players when possible, treat hostages realistically, and avoid unjustified excessive harm."],
-  ["4.3", "Gang Activity", "Gang wars require roleplay buildup; constant kill-on-sight behavior is prohibited."],
-  ["4.4", "Kidnapping", "Kidnapping requires a valid roleplay reason and victims cannot be held indefinitely."],
-  ["4.5", "After Killing a Cop", "Only the pistol and rifle may be taken; uniform theft and police impersonation are prohibited."],
-  ["4.6", "Lockers and Arsenals", "Do not take items from arsenals, boxes, or lockers without admin permission or faction authorization."],
-];
-
-function devRuleOptions() {
-  return FAIRCRAFT_RULES.map(([code, title, description]) =>
-    `<option value="${code}" data-title="${escapeHtml(title)}" data-description="${escapeHtml(description)}">${code} — ${escapeHtml(title)}</option>`
-  ).join("");
-}
-
-function renderDevWorkspace() {
-  const activeTab = {
-    dashboard: ["Operations Overview", "Current account-linking and enforcement status"],
-    enforcement: ["Enforcement Cases", "File, review, and revoke player sanctions"],
-    warnings: ["Internal Notes", "Staff-only account history and observations"],
-    linking: ["Account Linking", "Linked identities, recent claims, and unlink authorization"],
-    audit: ["Activity Log", "Chronological record of staff actions"],
-    settings: ["App Visibility", "Control which application icons appear for users"],
-  }[state.devTab] || ["Staff Operations", "Faircroft administrative console"];
-  return `<section class="dev-workspace">
-    <aside class="dev-sidebar">
-      <div class="dev-brand"><img class="dev-emblem" src="/static/brand/faircroft-emblem.webp" alt="" /><div><strong>Faircroft RP</strong><small>Staff Operations</small></div></div>
-      <p class="dev-nav-label">Workspace</p>
-      <nav>${[["dashboard","Overview"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["audit","Activity Log"],["settings","Settings"]].map(([id,label]) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><span>${label}</span></button>`).join("")}</nav>
-      <div class="dev-sidebar-footer"><span class="dev-access-dot"></span><div><strong>Authorized Staff</strong><small>${escapeHtml(state.session?.user?.name || "Staff member")}</small></div></div>
-    </aside>
-    <main class="dev-main">
-      <header class="dev-topbar"><div><h1>${activeTab[0]}</h1><p>${activeTab[1]}</p></div><div class="dev-toolbar"><span class="dev-system-status"><i></i>System online</span><button class="secondary" data-refresh-dev>Refresh data</button><button class="primary" data-close-dev>Exit staff view</button></div></header>
-      <div class="dev-content">${renderDevTools()}</div>
-    </main>
-    ${state.devAccount ? renderDevAccountModal(state.devAccount) : ""}
-  </section>`;
-}
-
-function devMetrics(data, warnings) {
-  return `<div class="dev-metrics">
-    <div class="dev-metric red-tone"><span>Active bans</span><strong>${Number(data.active_bans || 0)}</strong><small>Currently blocked</small></div>
-    <div class="dev-metric amber-tone"><span>Timeouts</span><strong>${Number(data.active_timeouts || 0)}</strong><small>Currently active</small></div>
-    <div class="dev-metric green-tone"><span>Linked</span><strong>${Number(data.linked_accounts || 0)}</strong><small>Arma identities</small></div>
-    <div class="dev-metric blue-tone"><span>Unlinked</span><strong>${Number(data.unlinked_accounts || 0)}</strong><small>No Arma identity</small></div>
-    <div class="dev-metric"><span>Verified</span><strong>${Number(data.verified_accounts || 0)}</strong><small>Website accounts</small></div>
-    <div class="dev-metric"><span>Needs linking</span><strong>${Number(data.verified_unlinked || 0)}</strong><small>Verified accounts</small></div>
-  </div>`;
-}
-
-function devSanctionRow(item) {
-  return `<article class="dev-case"><div><div class="row"><strong>${escapeHtml(item.report_number || "Legacy record")} · ${escapeHtml(item.target_name)}</strong><span class="pill ${item.revoked_at ? "" : "red"}">${item.revoked_at ? "revoked" : escapeHtml(item.sanction_type)}</span></div><p>${escapeHtml(item.rule_code || "No rule")} — ${escapeHtml(item.reason)}</p><small>By ${escapeHtml(item.created_by_name)} · ${escapeHtml(item.created_at)}${item.expires_at ? ` · expires ${escapeHtml(item.expires_at)}` : ""}</small></div>${item.revoked_at ? "" : `<button class="secondary" type="button" data-revoke-sanction="${item.id}">Revoke</button>`}</article>`;
-}
-
-function devAudit(logs) {
-  return `<div class="dev-audit-list">${logs.map((item) => `<div class="dev-audit-event"><div><strong>${escapeHtml(item.action)}</strong><small>${escapeHtml(item.target_name || "System")} · ${escapeHtml(item.created_at)}</small></div><span>${escapeHtml(item.actor_name || "Deleted account")}</span><code>${escapeHtml(item.details || "{}")}</code></div>`).join("") || `<div class="empty">No audited actions yet</div>`}</div>`;
-}
-
-function renderDevTools() {
-  const data = state.cache["dev-tools"] || {};
-  const users = data.users || [], sanctions = data.sanctions || [], warnings = data.warnings || [], logs = data.audit_logs || [], codes = data.unlink_codes || [];
-  const metrics = devMetrics(data, warnings);
-  if (state.devTab === "dashboard") return `<div class="stack">${metrics}<div class="dev-section-heading"><div><h2>Work queue</h2><p>Items requiring staff attention and recent review.</p></div></div><div class="dev-grid-2"><section class="dev-card"><div class="dev-card-header"><div><span>ENFORCEMENT</span><h2>Active cases</h2></div><button class="secondary" data-dev-go="enforcement">View cases</button></div>${sanctions.filter((x) => !x.revoked_at).slice(0,8).map(devSanctionRow).join("") || `<div class="empty">No active enforcement cases</div>`}</section><section class="dev-card"><div class="dev-card-header"><div><span>IDENTITY</span><h2>Recent Arma links</h2></div><button class="secondary" data-dev-go="linking">View accounts</button></div>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card"><div class="dev-card-header"><div><span>STAFF RECORD</span><h2>Latest activity</h2></div><button class="secondary" data-dev-go="audit">View complete log</button></div>${devAudit(logs.slice(0,10))}</section></div>`;
-  if (state.devTab === "enforcement") return `<div class="dev-grid-enforcement"><section class="dev-card"><div class="row"><div><p class="eyebrow">Required incident documentation</p><h2>Enforcement Report</h2><p class="muted">A ban or timeout cannot be issued until this report is complete.</p></div><span class="pill red">required</span></div>
-    <form id="devSanctionForm" class="dev-report-form">
-      <label>Account<select name="user_id" required><option value="">Select account</option>${devUserOptions(users)}</select></label>
-      <label>Action<select name="sanction_type" required><option value="timeout">Timeout</option><option value="ban">Ban</option><option value="sanction">Recorded sanction</option></select></label>
-      <label>Duration (minutes)<input name="duration_minutes" type="number" min="1" max="525600" value="60" /></label>
-      <label>Bail amount<input name="bail_amount" type="number" min="0" max="10000000" step="0.01" value="0" /></label>
-      <label>Rule violated<select name="rule_code" id="devRuleSelect" required><option value="">Select rule</option>${devRuleOptions()}</select></label>
-      <label class="wide">Public reason<textarea name="reason" id="devPublicReason" maxlength="1200" required></textarea></label>
-      <label>Incident date/time<input name="incident_at" type="datetime-local" required /></label>
-      <label>Witnesses / staff<input name="witness_names" maxlength="1200" placeholder="Names, callsigns, or none" /></label>
-      <label class="wide">Detailed incident narrative<textarea name="incident_summary" minlength="40" maxlength="5000" required placeholder="Sequence of events, location, player actions, staff response, and context."></textarea></label>
-      <label class="wide">Evidence and log references<textarea name="evidence" minlength="10" maxlength="5000" required placeholder="Video, screenshots, server timestamps, witnesses, case IDs."></textarea></label>
-      <label class="wide">Staff findings and proportionality<textarea name="staff_findings" minlength="30" maxlength="5000" required placeholder="What was substantiated and why this action is proportionate."></textarea></label>
-      <label>Player statement<textarea name="player_statement" maxlength="3000" placeholder="Response, admission, denial, or not available."></textarea></label>
-      <label>Appeal guidance<textarea name="appeal_guidance" maxlength="2000" required>Appeal through the designated Faircroft support system. Include the report number and counter-evidence.</textarea></label>
-      <label class="wide">Confidential staff notes<textarea name="internal_notes" maxlength="2000"></textarea></label>
-      <label class="dev-certify wide"><input type="checkbox" required /> I certify this report is accurate, evidence-based, and complete.</label>
-      <button class="danger wide" type="submit">Submit Report and Apply Action</button>
-    </form></section><section class="dev-card"><h2>Enforcement Records</h2><div class="dev-record-list">${sanctions.map(devSanctionRow).join("") || `<div class="empty">No reports</div>`}</div></section></div>`;
-  if (state.devTab === "warnings") return `<div class="dev-grid-2"><section class="dev-card"><div class="row"><div><p class="eyebrow">Staff-only intelligence</p><h2>Internal Note</h2></div><span class="pill amber">not player-visible</span></div><form id="devWarningForm" class="form-grid"><label>Account<select name="user_id" required><option value="">Select account</option>${devUserOptions(users)}</select></label><label>Severity<select name="severity"><option>low</option><option selected>standard</option><option>high</option><option>critical</option></select></label><label>Subject<input name="subject" maxlength="160" required /></label><label>Internal note<textarea name="body" maxlength="3000" required></textarea></label><button class="primary">Record Note</button></form></section><section class="dev-card"><h2>Note History</h2><div class="dev-record-list">${warnings.map((x) => `<article class="dev-case"><div><strong>${escapeHtml(x.target_name)} · ${escapeHtml(x.subject)}</strong><p>${escapeHtml(x.body)}</p><small>${escapeHtml(x.created_by_name)} · ${escapeHtml(x.created_at)}</small></div>${x.resolved_at ? `<span class="pill green">resolved</span>` : `<button class="secondary" data-resolve-warning="${x.id}">Resolve</button>`}</article>`).join("") || `<div class="empty">No internal notes</div>`}</div></section></div>`;
-  if (state.devTab === "linking") return `<div class="stack">${metrics}<div class="dev-grid-2"><section class="dev-card"><p class="eyebrow">Secure unlink authorization</p><h2>One-time Developer Code</h2><form id="devCodeForm" class="form-grid"><label>Expires in minutes<input name="expiry_minutes" type="number" min="5" max="1440" value="30" required /></label><button class="primary">Generate Code</button></form>${state.generatedDevCode ? `<div class="dev-generated-code"><span>Shown once</span><strong>${escapeHtml(state.generatedDevCode.code)}</strong><small>Expires ${escapeHtml(state.generatedDevCode.expires_at)}</small></div>` : ""}<div class="dev-record-list">${codes.slice(0,12).map((x) => `<div class="dev-case"><span>••••-${escapeHtml(x.code_hint)} · ${escapeHtml(x.created_by_name)}</span><strong>${x.uses_remaining ? "available" : "used"}</strong></div>`).join("")}</div></section><section class="dev-card"><h2>Recent Links</h2>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card"><div class="row"><div><p class="eyebrow">Clickable investigation profiles</p><h2>All Linked Accounts</h2></div><span class="pill green">${users.filter((x) => x.arma_linked).length} loaded</span></div>${devLinkedAccounts(users)}</section></div>`;
-  if (state.devTab === "settings") {
-    const visibilityApps = data.app_visibility?.apps || [];
-    return `<div class="stack">
-      <section class="dev-card dev-visibility-intro">
-        <div><p class="eyebrow">Global user interface controls</p><h2>Application Icon Visibility</h2><p class="muted">Checked applications appear for users who have permission. Unchecked applications vanish from every user home screen.</p></div>
-        <span class="pill amber">global setting</span>
-      </section>
-      <form id="devAppVisibilityForm" class="dev-card">
-        <div class="dev-visibility-grid">
-          ${visibilityApps.map((item) => `
-            <label class="dev-visibility-toggle">
-              <span><strong>${escapeHtml(item.label)}</strong><small>${item.enabled ? "Visible to eligible users" : "Hidden from all users"}</small></span>
-              <input type="checkbox" name="${escapeHtml(item.id)}" ${item.enabled ? "checked" : ""} />
-              <i aria-hidden="true"></i>
-            </label>`).join("") || `<div class="empty">No configurable applications found.</div>`}
-        </div>
-        <div class="dev-visibility-footer">
-          <p><strong>Protected:</strong> Profile, Dev Tools, System Settings, and Restriction access cannot be hidden.</p>
-          <button class="primary" type="submit">Save icon visibility</button>
-        </div>
-      </form>
-    </div>`;
-  }
-  return `<section class="dev-card"><div class="row"><div><p class="eyebrow">Administrative accountability</p><h2>Audit Log</h2></div><span class="pill green">${logs.length} events</span></div>${devAudit(logs)}</section>`;
-}
-
-function devRecentLinks(links) {
-  return `<div class="dev-table">${links.slice(0,40).map((x) => `<button class="dev-table-row dev-account-row" data-dev-account="${x.account_id}"><div><strong>${escapeHtml(x.account_name || x.player_name || "Unknown")}</strong><small>${escapeHtml(x.civ_number || "No CIV")} · ${escapeHtml(x.arma_id || "")}</small></div><span>${escapeHtml(x.linked_at || "")}</span></button>`).join("") || `<div class="empty">No completed links</div>`}</div>`;
-}
-
-function devLinkedAccounts(users) {
-  return `<div class="dev-account-directory">${users.filter((x) => x.arma_linked).map((x) => `<button class="dev-account-tile" data-dev-account="${x.id}"><div><strong>${escapeHtml(x.name)}</strong><small>CIV ${escapeHtml(x.civ_number || "pending")} · ${escapeHtml(x.linked_arma_id || "")}</small></div><span class="pill green">linked</span></button>`).join("") || `<div class="empty">No linked accounts</div>`}</div>`;
-}
-
-function renderDevAccountModal(data) {
-  const a = data.account || {};
-  const sanctions = data.sanctions || [], warnings = data.warnings || [], tx = data.transactions || [];
-  const activity = data.arma_activity || [], characters = data.characters || [], jobs = data.jobs || [], citations = data.citations || [], properties = data.properties || [];
-  const gameBank = data.game_database?.bank;
-  return `<div class="dev-profile-backdrop" data-close-dev-account>
-    <section class="dev-profile-modal" role="dialog" aria-modal="true" aria-label="Linked account investigation profile">
-      <header class="dev-profile-header"><div><p class="eyebrow">Linked account intelligence file</p><h2>${escapeHtml(a.name || "Account")}</h2><p>CIV ${escapeHtml(a.civ_number || "pending")} · ${escapeHtml(a.player_name || "Unknown in-game name")}</p></div><div class="row"><button class="danger" data-dev-enforce="${a.id}">Ban / Timeout</button><button class="secondary" data-close-dev-account>Close</button></div></header>
-      <div class="dev-profile-scroll">
-        <div class="dev-profile-summary">
-          <div><span>Website status</span><strong>${a.verified ? "Verified" : "Unverified"}</strong></div>
-          <div><span>Account email</span><strong>${escapeHtml(a.email || "")}</strong></div>
-          <div><span>Platform</span><strong>${escapeHtml(a.platform || "Unknown")}</strong></div>
-          <div><span>Server</span><strong>${escapeHtml(a.server_id || "Unknown")}</strong></div>
-          <div><span>Bohemia Identity ID</span><strong>${escapeHtml(a.identity_id || "")}</strong></div>
-          <div><span>UID</span><strong>${escapeHtml(a.uid || "")}</strong></div>
-          <div><span>RPL identity</span><strong>${escapeHtml(a.rpl_identity || "")}</strong></div>
-          <div><span>Roles</span><strong>${escapeHtml((a.roles || []).join(", "))}</strong></div>
-          <div><span>Live in-game bank</span><strong>${gameBank ? money(gameBank.balance || 0) : "Awaiting sync"}</strong></div>
-          <div><span>Linked</span><strong>${escapeHtml(a.linked_at || "")}</strong></div>
-          <div><span>Last game sync</span><strong>${escapeHtml(a.last_sync_at || "Not reported")}</strong></div>
-        </div>
-        ${data.active_block ? `<div class="dev-alert red-tone"><strong>Active ${escapeHtml(data.active_block.sanction_type)}</strong><span>${escapeHtml(data.active_block.reason || "")}</span></div>` : ""}
-        <div class="dev-profile-grid">
-          <section class="dev-card"><div class="row"><h3>Characters</h3><span class="pill">${characters.length}</span></div>${devDetailList(characters, (x) => [x.character_name || x.name || "Character", `${x.is_active ? "Active" : "Inactive"} · updated ${x.updated_at || ""}`])}</section>
-          <section class="dev-card"><div class="row"><h3>Jobs</h3><span class="pill">${jobs.length}</span></div>${devDetailList(jobs, (x) => [x.title || "Job", `${x.market || ""} · ${x.status || ""} · started ${x.started_at || ""}`])}</section>
-          <section class="dev-card"><div class="row"><h3>Enforcement History</h3><span class="pill red">${sanctions.length}</span></div>${devDetailList(sanctions, (x) => [`${x.report_number || "Legacy"} · ${x.sanction_type}`, `${x.rule_code || ""} ${x.reason || ""}`])}</section>
-          <section class="dev-card"><div class="row"><h3>Internal Notes</h3><span class="pill amber">${warnings.length}</span></div>${devDetailList(warnings, (x) => [`${x.severity || ""} · ${x.subject || ""}`, `${x.body || ""}`])}</section>
-          <section class="dev-card"><div class="row"><h3>Citations / Cases</h3><span class="pill">${citations.length}</span></div>${devDetailList(citations, (x) => [`${x.charge_code || ""} · ${x.charge_title || "Case"}`, `${x.status || ""} · ${money(x.fine_amount || 0)} · ${x.location || ""}`])}</section>
-          <section class="dev-card"><div class="row"><h3>Properties</h3><span class="pill">${properties.length}</span></div>${devDetailList(properties, (x) => [x.name || "Property", `${x.address || ""} · ${money(x.price || 0)}`])}</section>
-        </div>
-        <section class="dev-card"><div class="row"><div><p class="eyebrow">Railway ledger</p><h3>Money Transactions</h3></div><span class="pill">${tx.length}</span></div>${devDetailList(tx, (x) => [`${x.type || "transaction"} · ${money(x.amount || 0)}`, `${x.description || ""} · ${x.created_at || ""}`])}</section>
-        <section class="dev-card"><div class="row"><div><p class="eyebrow">In-game bridge events</p><h3>Arma Activity</h3></div><span class="pill">${activity.length}</span></div>${devDetailList(activity, (x) => [`${x.event_type || "event"} · ${x.action || ""}`, `${x.reason || ""} · ${x.received_at || ""}`])}</section>
-        <section class="dev-card dev-game-db-status"><div><p class="eyebrow">FCRPMUSSALO source</p><h3>Native Game Database</h3><p class="muted">${gameBank ? `Live bank record synced from ${escapeHtml(gameBank.source_file || "BankManagerComponent")}. Last sync: ${escapeHtml(gameBank.synced_at || "")}.` : "The bank parser is ready; this linked identity will populate after the bridge posts the live BankManager JSON."} Inventory, criminal, police report, character, and vehicle parsers can use the same pipeline once their JSON shapes are inspected.</p></div><span class="pill ${gameBank ? "green" : "amber"}">${gameBank ? "bank synced" : "awaiting sync"}</span></section>
-      </div>
-    </section>
-  </div>`;
-}
-
-function devDetailList(items, mapper) {
-  return `<div class="dev-detail-list">${items.map((item) => { const [title, detail] = mapper(item); return `<div><strong>${escapeHtml(title)}</strong><small>${escapeHtml(detail)}</small></div>`; }).join("") || `<div class="empty">No records</div>`}</div>`;
-}
-
-function bindDevWorkspace() {
-  bindDevTools();
-  $$("[data-dev-tab], [data-dev-go]").forEach((button) => button.addEventListener("click", () => { state.devTab = button.dataset.devTab || button.dataset.devGo; render(); }));
-  $$("[data-dev-account]").forEach((button) => button.addEventListener("click", async () => {
-    try {
-      state.devAccount = await api(`/api/dev-tools/accounts/${button.dataset.devAccount}`);
-      render();
-    } catch (error) { toast(error.message); }
-  }));
-  $$("[data-close-dev-account]").forEach((button) => button.addEventListener("click", (event) => {
-    if (event.target !== event.currentTarget && event.currentTarget.classList.contains("dev-profile-backdrop")) return;
-    state.devAccount = null;
-    render();
-  }));
-  $("[data-dev-enforce]")?.addEventListener("click", () => {
-    const targetId = $("[data-dev-enforce]").dataset.devEnforce;
-    state.devAccount = null;
-    state.devTab = "enforcement";
-    render();
-    const select = $("#devSanctionForm select[name='user_id']");
-    if (select) select.value = targetId;
-  });
-  $("[data-close-dev]")?.addEventListener("click", async () => { state.activeApp = null; await loadSession(); });
-  $("[data-refresh-dev]")?.addEventListener("click", refreshDevTools);
-}
-
-async function refreshDevTools() {
-  await loadAppData("dev-tools");
-  render();
-}
-
-function renderFineSettlement() {
-  const data = state.cache["fine-settlement"] || { unpaid: [], batches: [] };
-  const unpaid = data.unpaid || [];
-  const batches = data.batches || [];
-  const taxReady = data.tax_ready || [];
-  const taxBatches = data.tax_batches || [];
-  return `
-    <div class="stack">
-      <section class="profile-hero">
-        <div>
-          <p class="eyebrow">State of Faircroft DCJS</p>
-          <h3>Fine Settlement Control</h3>
-          <p>Owner/developer-only processing for court fines against live FCRPMUSSALO bank balances.</p>
-        </div>
-        <span class="pill">${unpaid.length} READY</span>
-      </section>
-      <div class="court-tabs">
-        <button class="${state.settlementTab === "fines" ? "active" : ""}" data-settlement-tab="fines">Fine Settlement</button>
-        <button class="${state.settlementTab === "taxes" ? "active" : ""}" data-settlement-tab="taxes">Tax Settlement</button>
-      </div>
-      <div style="${state.settlementTab === "fines" ? "" : "display:none"}" class="stack">
-      <section class="profile-link-card">
-        <h3>Required Codex procedure</h3>
-        <ol class="small">
-          <li>Select eligible fines and lock a settlement batch.</li>
-          <li>Generate the one-time developer code and approve that exact batch.</li>
-          <li>Copy the generated instructions into Codex. Codex must use the signed-in Shadowhaven panel.</li>
-          <li>Codex stops the Arma server, waits 120 seconds, confirms it is offline, and edits only the listed live bank JSON records through SFTP.</li>
-          <li>No backup is created. Codex starts the server and waits for the Railway bank sync.</li>
-          <li>Run balance verification below. Only exact verified deductions become paid.</li>
-        </ol>
-        <p class="muted small">Never edit the bank database while the game server is running. Manual Shadowhaven Stop/Start is required because no hosting-panel API is configured.</p>
-      </section>
-      <section class="profile-link-card">
-        <div class="row"><div><h3>Eligible unpaid fines</h3><p class="muted small">Only linked accounts with a synced game balance appear here.</p></div><strong>${unpaid.length}</strong></div>
-        <form id="fine-batch-form" class="stack">
-          ${unpaid.map((fine) => `
-            <label class="dev-account-row">
-              <input type="checkbox" name="citation_ids" value="${fine.id}" />
-              <span><strong>${escapeHtml(fine.name)} · ${escapeHtml(fine.civ_number || "")}</strong>
-              <small>${escapeHtml(fine.charge_code)} ${escapeHtml(fine.charge_title)} · Current ${money(fine.balance)} · Fine ${money(fine.fine_amount)}</small></span>
-            </label>`).join("") || `<div class="empty">No eligible unpaid fines are awaiting settlement.</div>`}
-          ${unpaid.length ? `<label>Batch notes<textarea name="notes" rows="3" placeholder="Court order, docket, or settlement instructions"></textarea></label><button type="submit">Create locked batch</button>` : ""}
-        </form>
-      </section>
-      <section class="stack">
-        <div class="row"><h3>Settlement batches</h3><span class="pill">${batches.length}</span></div>
-        ${batches.map((batch) => `
-          <article class="profile-link-card">
-            <div class="row"><div><p class="eyebrow">${escapeHtml(batch.batch_number)}</p><h3>${escapeHtml(String(batch.status || "").replaceAll("_", " "))}</h3></div><strong>${money(batch.total_amount)}</strong></div>
-            ${(batch.items || []).map((item) => `
-              <div class="row"><span>${escapeHtml(item.name)} · Case ${item.citation_id}<small>${escapeHtml(item.charge_code)} · ${money(item.balance_before)} → ${money(item.expected_balance)}</small></span>
-              <span class="pill">${escapeHtml(item.status)}</span></div>
-              ${item.failure_reason ? `<p class="muted small">${escapeHtml(item.failure_reason)}</p>` : ""}`).join("")}
-            ${batch.status === "draft" ? `
-              <div class="row"><button type="button" class="secondary" data-fine-code="${batch.id}">Generate 10-minute code</button>
-              ${state.fineSettlementCode?.batchId === batch.id ? `<strong>${escapeHtml(state.fineSettlementCode.code)}</strong>` : ""}</div>
-              <form data-fine-approve="${batch.id}" class="inline-form"><input name="code" required placeholder="DCJS authorization code" autocomplete="off" /><button>Approve for Codex</button></form>` : ""}
-            ${batch.status === "awaiting_codex" || batch.status === "needs_review" ? `
-              <button type="button" data-fine-verify="${batch.id}">Verify synced balances and resolve</button>` : ""}
-          </article>`).join("") || `<div class="empty">No settlement batches created.</div>`}
-      </section>
-      </div>
-      <div style="${state.settlementTab === "taxes" ? "" : "display:none"}" class="stack">
-      <section class="profile-link-card">
-        <div class="row"><div><p class="eyebrow">Registered licenses</p><h3>Issue accrued weekly tax</h3><p class="muted small">This license list and its tax controls are visible only to owners/developers.</p></div><span class="pill">${(data.tax_licenses || []).length}</span></div>
-        ${(data.tax_licenses || []).map((license) => `
-          <article class="dev-account-row">
-            <span><strong>${escapeHtml(license.business_name)} · ${escapeHtml(license.license_number)}</strong>
-            <small>${escapeHtml(license.owner_name)} · ${license.accrued_weeks || 0} complete week(s) · ${money(license.weekly_tax)}/week · ${money(license.unpaid_tax)} unpaid</small></span>
-            <form data-issue-license-tax="${license.id}" class="inline-form">
-              <input name="notes" placeholder="Optional developer note" />
-              <button ${(license.accrued_weeks || 0) < 1 ? "disabled" : ""}>Issue ${money(license.accrued_tax || 0)}</button>
-            </form>
-            ${(license.accrued_weeks || 0) < 1 ? `<small>Next accrual: ${new Date(license.tax_available_at).toLocaleString()}</small>` : ""}
-          </article>`).join("") || `<div class="empty">No linked registered business licenses.</div>`}
-      </section>
-      <section class="profile-link-card">
-        <div class="row"><div><p class="eyebrow">Business revenue</p><h3>Eligible accumulated taxes</h3><p class="muted small">Assessments tally by registered business. Only linked owners with sufficient synced game funds appear.</p></div><strong>${taxReady.length}</strong></div>
-        <form id="tax-batch-form" class="stack">
-          ${taxReady.map((tax) => `
-            <label class="dev-account-row"><input type="checkbox" name="business_ids" value="${tax.business_id}" />
-              <span><strong>${escapeHtml(tax.business_name)} · ${escapeHtml(tax.license_number)}</strong>
-              <small>${escapeHtml(tax.owner_name)} · ${tax.assessment_count} assessment(s) · Tax ${money(tax.tax_amount)} · Balance ${money(tax.balance)}</small></span>
-            </label>`).join("") || `<div class="empty">No eligible accumulated business taxes.</div>`}
-          ${taxReady.length ? `<label>Batch notes<textarea name="notes" rows="3" placeholder="Tax order or processing notes"></textarea></label><button type="submit">Create locked tax batch</button>` : ""}
-        </form>
-      </section>
-      <section class="stack">
-        <div class="row"><h3>Business tax batches</h3><span class="pill">${taxBatches.length}</span></div>
-        ${taxBatches.map((batch) => `
-          <article class="profile-link-card">
-            <div class="row"><div><p class="eyebrow">${escapeHtml(batch.batch_number)}</p><h3>${humanLabel(batch.status)}</h3></div><strong>${money(batch.total_amount)}</strong></div>
-            ${(batch.items || []).map((item) => `<div class="row"><span>${escapeHtml(item.business_name)} · ${escapeHtml(item.owner_name)}<small>${money(item.balance_before)} → ${money(item.expected_balance)}</small></span><span class="pill">${escapeHtml(item.status)}</span></div>${item.failure_reason ? `<p class="muted small">${escapeHtml(item.failure_reason)}</p>` : ""}`).join("")}
-            ${batch.status === "draft" ? `<div class="row"><button type="button" class="secondary" data-tax-code="${batch.id}">Generate 10-minute tax code</button>${state.taxSettlementCode?.batchId === batch.id ? `<strong>${escapeHtml(state.taxSettlementCode.code)}</strong>` : ""}</div>
-              <form data-tax-approve="${batch.id}" class="inline-form"><input name="code" required placeholder="TAX authorization code" autocomplete="off" /><button>Approve for Codex</button></form>` : ""}
-            ${["awaiting_codex", "needs_review"].includes(batch.status) ? `<button type="button" data-tax-verify="${batch.id}">Verify synced tax balances</button>` : ""}
-          </article>`).join("") || `<div class="empty">No business tax settlement batches.</div>`}
-      </section>
-      </div>
-      ${state.fineSettlementPrompt ? `<section class="profile-link-card"><h3>Codex processing request</h3><textarea id="fine-codex-prompt" rows="8" readonly>${escapeHtml(state.fineSettlementPrompt)}</textarea><button type="button" data-copy-fine-prompt>Copy for Codex</button></section>` : ""}
-    </div>`;
-}
-
-function bindFineSettlement() {
-  $$("[data-settlement-tab]").forEach((button) => button.addEventListener("click", () => {
-    state.settlementTab = button.dataset.settlementTab;
-    render();
-  }));
-  $$("[data-issue-license-tax]").forEach((form) => form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    await api(`/api/business/licenses/${form.dataset.issueLicenseTax}/taxes`, {
-      method: "POST",
-      body: { notes: form.notes?.value || "" },
-    });
-    toast("Accrued business tax issued");
-    state.cache["fine-settlement"] = await api("/api/fine-settlement");
-    render();
-  }));
-  $("#fine-batch-form")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const citation_ids = $$('input[name="citation_ids"]:checked', form).map((input) => Number(input.value));
-    if (!citation_ids.length) return toast("Select at least one fine");
-    await api("/api/fine-settlement/batches", { method: "POST", body: { citation_ids, notes: form.notes?.value || "" } });
-    state.cache["fine-settlement"] = await api("/api/fine-settlement");
-    render();
-  });
-  $$("[data-fine-code]").forEach((button) => button.addEventListener("click", async () => {
-    const batchId = Number(button.dataset.fineCode);
-    const result = await api(`/api/fine-settlement/batches/${batchId}/code`, { method: "POST", body: {} });
-    state.fineSettlementCode = { batchId, code: result.code, expiresAt: result.expires_at };
-    render();
-  }));
-  $$("[data-fine-approve]").forEach((form) => form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const batchId = Number(form.dataset.fineApprove);
-    const result = await api(`/api/fine-settlement/batches/${batchId}/approve`, { method: "POST", body: { code: form.code.value } });
-    state.fineSettlementPrompt = result.codex_prompt || "";
-    state.fineSettlementCode = null;
-    state.cache["fine-settlement"] = await api("/api/fine-settlement");
-    render();
-  }));
-  $$("[data-fine-verify]").forEach((button) => button.addEventListener("click", async () => {
-    const result = await api(`/api/fine-settlement/batches/${button.dataset.fineVerify}/complete`, { method: "POST", body: {} });
-    toast(result.status === "completed" ? "All deductions verified and fines marked paid" : "Balance mismatch found; batch requires review");
-    state.cache["fine-settlement"] = await api("/api/fine-settlement");
-    render();
-  }));
-  $("#tax-batch-form")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const business_ids = $$('input[name="business_ids"]:checked', form).map((input) => Number(input.value));
-    if (!business_ids.length) return toast("Select at least one business");
-    await api("/api/fine-settlement/tax-batches", { method: "POST", body: { business_ids, notes: form.notes?.value || "" } });
-    state.cache["fine-settlement"] = await api("/api/fine-settlement");
-    render();
-  });
-  $$("[data-tax-code]").forEach((button) => button.addEventListener("click", async () => {
-    const batchId = Number(button.dataset.taxCode);
-    const result = await api(`/api/fine-settlement/tax-batches/${batchId}/code`, { method: "POST", body: {} });
-    state.taxSettlementCode = { batchId, code: result.code };
-    render();
-  }));
-  $$("[data-tax-approve]").forEach((form) => form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const batchId = Number(form.dataset.taxApprove);
-    const result = await api(`/api/fine-settlement/tax-batches/${batchId}/approve`, { method: "POST", body: { code: form.code.value } });
-    state.fineSettlementPrompt = result.codex_prompt || "";
-    state.taxSettlementCode = null;
-    state.cache["fine-settlement"] = await api("/api/fine-settlement");
-    render();
-  }));
-  $$("[data-tax-verify]").forEach((button) => button.addEventListener("click", async () => {
-    const result = await api(`/api/fine-settlement/tax-batches/${button.dataset.taxVerify}/complete`, { method: "POST", body: {} });
-    toast(result.status === "completed" ? "Business taxes verified and marked paid" : "Tax balance mismatch; batch requires review");
-    state.cache["fine-settlement"] = await api("/api/fine-settlement");
-    render();
-  }));
-  $("[data-copy-fine-prompt]")?.addEventListener("click", async () => {
-    await navigator.clipboard.writeText(state.fineSettlementPrompt);
-    toast("Codex request copied");
-  });
-}
-
-function bindDevTools() {
-  $("#devAppVisibilityForm")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const visibility = {};
-    $$('input[type="checkbox"]', event.currentTarget).forEach((input) => {
-      visibility[input.name] = input.checked;
-    });
-    await api("/api/dev-tools/app-visibility", { method: "PATCH", body: { visibility } });
-    toast("Application visibility updated");
-    await refreshDevTools();
-  });
-  $("#devRuleSelect")?.addEventListener("change", (event) => {
-    const option = event.currentTarget.selectedOptions[0];
-    const reason = $("#devPublicReason");
-    if (reason && option?.value) {
-      reason.value = `Violation of Faircroft Rule ${option.value} — ${option.dataset.title}: ${option.dataset.description}`;
-    }
-  });
-  $("#devCodeForm")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try {
-      state.generatedDevCode = await api("/api/dev-tools/unlink-codes", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
-      toast("One-time developer code generated");
-      await refreshDevTools();
-    } catch (error) { toast(error.message); }
-  });
-  $("#devSanctionForm")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try {
-      const result = await api("/api/dev-tools/sanctions", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
-      toast(result.game_enforcement_status === "rcon_not_configured"
-        ? `Report ${result.report_number || ""} recorded in CAD; RCON is not configured`
-        : `Enforcement report ${result.report_number || ""} applied`);
-      await refreshDevTools();
-    } catch (error) { toast(error.message); }
-  });
-  $$("[data-revoke-sanction]").forEach((button) => button.addEventListener("click", async () => {
-    try {
-      const reason = window.prompt("Reason for revoking this sanction or unbanning the account:", "Reviewed by staff");
-      if (reason === null) return;
-      await api(`/api/dev-tools/sanctions/${button.dataset.revokeSanction}/revoke`, { method: "POST", body: { reason } });
-      toast("Sanction revoked");
-      await refreshDevTools();
-    } catch (error) { toast(error.message); }
-  }));
-  $("#devWarningForm")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try {
-      await api("/api/dev-tools/warnings", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
-      toast("Internal warning recorded");
-      await refreshDevTools();
-    } catch (error) { toast(error.message); }
-  });
-  $$("[data-resolve-warning]").forEach((button) => button.addEventListener("click", async () => {
-    try {
-      const notes = window.prompt("Resolution notes:", "Resolved by staff");
-      if (notes === null) return;
-      await api(`/api/dev-tools/warnings/${button.dataset.resolveWarning}/resolve`, { method: "POST", body: { notes } });
-      toast("Warning resolved");
-      await refreshDevTools();
-    } catch (error) { toast(error.message); }
-  }));
-}
-
 function renderAdmin() {
   const data = state.cache.admin;
   if (!data) return `<div class="empty">Admin loading</div>`;
@@ -7385,7 +6910,7 @@ function renderSystem() {
   `;
 }
 
-const roleOptions = ["civ", "owner", "admin", "dev", "indeed_admin", "leo", "judge", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "business_owner", "business_registrar", "city_hall", "economy_manager"];
+const roleOptions = ["civ", "owner", "admin", "indeed_admin", "leo", "judge", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "business_owner", "business_registrar", "city_hall", "economy_manager"];
 
 function adminUserSearchText(user) {
   return [
@@ -7521,7 +7046,7 @@ function renderAdminDepartmentApplicationCard(item, mode = "admin") {
           </div>
           <div class="admin-application-strip">
             <span>CIV ${escapeHtml(item.applicant_civ_number || "pending")}</span>
-            <span>${escapeHtml(item.applicant_arma_id || "Arma not linked")}</span>
+            <span>${escapeHtml(item.applicant_arma_id || "No Arma ID")}</span>
             <span>${escapeHtml(item.reviewer_name || "Unassigned")}</span>
           </div>
         </summary>
@@ -7529,7 +7054,7 @@ function renderAdminDepartmentApplicationCard(item, mode = "admin") {
           <div class="profile-grid compact">
             <div><span>CIV</span><strong>${escapeHtml(item.applicant_civ_number || "pending")}</strong></div>
             <div><span>Email</span><strong>${escapeHtml(item.applicant_email || "unknown")}</strong></div>
-            <div><span>Linked Arma ID</span><strong>${escapeHtml(item.applicant_arma_id || "not linked")}</strong></div>
+            <div><span>Arma ID</span><strong>${escapeHtml(item.applicant_arma_id || "not provided")}</strong></div>
             <div><span>Reviewer</span><strong>${escapeHtml(item.reviewer_name || "Unassigned")}</strong></div>
           </div>
           ${renderDepartmentApplicationPacket(item)}
@@ -7564,21 +7089,26 @@ function renderAdminReferrals(data) {
         <span class="pill ${item.status === "pending" ? "amber" : "green"}">${escapeHtml(item.status)}</span>
       </div>
       <div class="profile-grid compact">
-        <div><span>Legacy ticket value</span><strong>${money(item.bonus_amount)}</strong></div>
+        <div><span>Cash ticket</span><strong>${money(item.bonus_amount)}</strong></div>
         <div><span>Created</span><strong>${new Date(item.created_at).toLocaleString()}</strong></div>
         <div><span>Referrer CIV</span><strong>${escapeHtml(item.referrer_civ_number || "pending")}</strong></div>
         <div><span>Deposited by</span><strong>${escapeHtml(item.deposited_by_name || "Not deposited")}</strong></div>
       </div>
-      ${item.status === "pending" ? `<p class="muted small">Railway payouts are disabled. Apply any approved reward through the in-game economy.</p>` : item.admin_notes ? `<p class="muted small">Legacy notes: ${escapeHtml(item.admin_notes)}</p>` : ""}
+      ${item.status === "pending" ? `
+        <form class="referral-deposit-form form-grid" data-referral-id="${item.id}">
+          <label>Deposit notes<textarea name="admin_notes" maxlength="800" placeholder="Optional note for the referral payout ledger"></textarea></label>
+          <button class="primary" type="submit">Deposit ${money(item.bonus_amount)}</button>
+        </form>
+      ` : item.admin_notes ? `<p class="muted small">Notes: ${escapeHtml(item.admin_notes)}</p>` : ""}
     </article>
   `;
   return `
     <section class="admin-referrals">
       <div class="grid-2">
         <div class="metric"><span>Pending tickets</span><strong>${pending.length}</strong></div>
-        <div class="metric"><span>Pending rewards</span><strong>${pending.length}</strong></div>
+        <div class="metric"><span>Pending cash</span><strong>${money(data.stats?.pending_total || 0)}</strong></div>
         <div class="metric"><span>Deposited tickets</span><strong>${deposited.length}</strong></div>
-        <div class="metric"><span>Legacy completed</span><strong>${deposited.length}</strong></div>
+        <div class="metric"><span>Deposited cash</span><strong>${money(data.stats?.deposited_total || 0)}</strong></div>
       </div>
       <div class="referral-ticket-list">
         ${pending.map(renderCard).join("") || `<div class="empty">No pending referral tickets</div>`}
@@ -7599,7 +7129,7 @@ function renderAdminUsers(users) {
   const matches = users.filter((user) => !query || adminUserSearchText(user).includes(query));
   return `
     <section class="admin-account-search">
-      <label>Search accounts<input data-admin-account-search value="${escapeHtml(state.adminSearch)}" placeholder="Name, email, CIV, linked Arma ID, callsign, role" autocomplete="off" /></label>
+      <label>Search accounts<input data-admin-account-search value="${escapeHtml(state.adminSearch)}" placeholder="Name, email, CIV, Arma ID, callsign, role" autocomplete="off" /></label>
       <div class="admin-search-meta">
         <span data-admin-search-count>${matches.length} of ${users.length} accounts</span>
         <button class="secondary compact-action" type="button" data-clear-admin-search ${state.adminSearch ? "" : "disabled"}>Clear</button>
@@ -7644,7 +7174,7 @@ function renderAdminAccountModal(user) {
         </header>
         <div class="account-summary">
           <div><span>CIV</span><strong>${escapeHtml(user.civ_number || "pending")}</strong></div>
-          <div><span>Linked Arma ID</span><strong>${escapeHtml(user.arma_id || "Not linked")}</strong></div>
+          <div><span>Arma ID</span><strong>${escapeHtml(user.arma_id || "Not provided")}</strong></div>
           <div><span>Car Entry</span><strong>${escapeHtml(user.car_entry_code || "Required")}</strong></div>
           <div><span>Referral</span><strong>${escapeHtml(user.referral_code || "Generating")}</strong></div>
           <div><span>Email</span><strong>${escapeHtml(user.email)}</strong></div>
@@ -7962,7 +7492,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.70").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.71").catch(() => {}));
 }
 
 bootApp();
