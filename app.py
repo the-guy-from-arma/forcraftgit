@@ -605,15 +605,6 @@ DEPARTMENT_POSTINGS = (
         "schedule": "Medical calls, triage, transport RP, scene coordination, and hospital handoff.",
         "requirements": "Calm communication, medical RP standards, patient reports, and incident coordination.",
     },
-    {
-        "key": "dispatcher",
-        "label": "Dispatcher",
-        "division": "Communications",
-        "role_key": "dispatcher",
-        "badge": "Dispatcher Applicant",
-        "schedule": "911 call intake, unit dispatching, status tracking, and interagency coordination.",
-        "requirements": "Strong radio presence, multitasking, map awareness, and professional call handling.",
-    },
 )
 SYSTEM_SETTING_DEFAULTS = {
     "autopilot_verify_enabled": "0",
@@ -622,7 +613,27 @@ SYSTEM_SETTING_DEFAULTS = {
     "autopilot_license_minutes": "6",
     "update_lockdown_enabled": "0",
     "update_lockdown_message": "System update in progress. Driver License and LEO MDT remain available.",
+    "app_visibility": "{}",
 }
+APP_VISIBILITY_OPTIONS = (
+    ("getting-started", "Getting Started"),
+    ("dmv", "DMV"),
+    ("jobs", "Jobs"),
+    ("court", "Court"),
+    ("business", "Business"),
+    ("properties", "Properties"),
+    ("bank", "Bank"),
+    ("messages", "Messages"),
+    ("changelog", "Changelog"),
+    ("contracts", "Contracts"),
+    ("mdt", "MDT"),
+    ("fire", "Fire MDT"),
+    ("fire-settings", "Fire Settings"),
+    ("indeed-admin", "Indeed Admin"),
+    ("admin", "Admin"),
+    ("fine-settlement", "Fine Settlement"),
+)
+PROTECTED_APP_IDS = frozenset(("profile", "dev-tools", "system", "restriction"))
 
 
 def posting_command_roles(posting: dict[str, Any]) -> tuple[str, ...]:
@@ -1895,6 +1906,14 @@ def get_system_settings(db: Database) -> dict[str, Any]:
     except (TypeError, ValueError):
         license_minutes = int(SYSTEM_SETTING_DEFAULTS["autopilot_license_minutes"])
     license_minutes = max(1, min(license_minutes, 10080))
+    try:
+        app_visibility_raw = json.loads(str(raw.get("app_visibility") or "{}"))
+    except (TypeError, json.JSONDecodeError):
+        app_visibility_raw = {}
+    app_visibility = {
+        app_id: bool(app_visibility_raw.get(app_id, True))
+        for app_id, _label in APP_VISIBILITY_OPTIONS
+    }
     return {
         "autopilot_verify_enabled": str(raw.get("autopilot_verify_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "autopilot_verify_minutes": minutes,
@@ -1902,6 +1921,7 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "autopilot_license_minutes": license_minutes,
         "update_lockdown_enabled": str(raw.get("update_lockdown_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "update_lockdown_message": str(raw.get("update_lockdown_message") or SYSTEM_SETTING_DEFAULTS["update_lockdown_message"]).strip()[:240],
+        "app_visibility": app_visibility,
     }
 
 
@@ -2505,7 +2525,8 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
             apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "coming_soon": False, "hidden": False})
         if has_any(user, "owner"):
             apps.append({"id": "system", "label": "System", "icon": "settings", "enabled": True, "coming_soon": False, "hidden": False})
-        return apps
+        visibility = settings.get("app_visibility") or {}
+        return [item for item in apps if item["id"] in PROTECTED_APP_IDS or visibility.get(item["id"], True)]
     base = [
         ("profile", "Profile", "user", True, False),
         ("getting-started", "Getting Started", "map", True, False),
@@ -2524,8 +2545,6 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
     ]
     if contracts_enabled:
         apps.append({"id": "contracts", "label": "Contracts", "icon": "target", "enabled": True, "coming_soon": False, "hidden": False})
-    if has_any(user, "dispatcher", "owner"):
-        apps.append({"id": "dispatch", "label": "Dispatch", "icon": "radio", "enabled": True, "hidden": False})
     if has_any(user, *LAW_SERVICE_ROLES, "owner"):
         apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "hidden": False})
     if has_any(user, *FIRE_SERVICE_ROLES, "owner"):
@@ -2542,7 +2561,8 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps.append({"id": "dev-tools", "label": "Dev Tools", "icon": "code", "enabled": True, "hidden": False})
     if has_any(user, "owner", "dev"):
         apps.append({"id": "fine-settlement", "label": "Fine Settlement", "icon": "gavel", "enabled": True, "hidden": False})
-    return apps
+    visibility = settings.get("app_visibility") or {}
+    return [item for item in apps if item["id"] in PROTECTED_APP_IDS or visibility.get(item["id"], True)]
 
 
 def add_message(db: Database, recipient_id: int, subject: str, body: str, sender_id: int | None = None) -> None:
@@ -3027,18 +3047,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_alerts(db, user)
                 elif path.startswith("/api/mdt/alerts/") and method == "PATCH":
                     self.api_clear_alert(db, user, self.path_int(path, 3))
-                elif path == "/api/dispatch/overview" and method == "GET":
-                    self.api_dispatch_overview(db, user)
-                elif path == "/api/dispatch/calls" and method == "POST":
-                    self.api_dispatch_create_call(db, user)
-                elif path.startswith("/api/dispatch/calls/") and path.endswith("/units") and method == "POST":
-                    self.api_dispatch_attach_unit(db, user, self.path_int(path, 3))
-                elif path.startswith("/api/dispatch/calls/") and path.endswith("/notes") and method == "POST":
-                    self.api_dispatch_add_note(db, user, self.path_int(path, 3))
-                elif path.startswith("/api/dispatch/calls/") and method == "PATCH":
-                    self.api_dispatch_update_call(db, user, self.path_int(path, 3))
-                elif path.startswith("/api/dispatch/assignments/") and method == "PATCH":
-                    self.api_dispatch_update_assignment(db, user, self.path_int(path, 3))
                 elif path == "/api/fire/overview" and method == "GET":
                     self.api_fire_overview(db, user)
                 elif path == "/api/fire/rigs" and method == "PATCH":
@@ -3079,6 +3087,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_revoke_sanction(db, user, self.path_int(path, 3))
                 elif path == "/api/dev-tools/warnings" and method == "POST":
                     self.api_dev_create_warning(db, user)
+                elif path == "/api/dev-tools/app-visibility" and method == "PATCH":
+                    self.api_dev_update_app_visibility(db, user)
                 elif path.startswith("/api/dev-tools/warnings/") and path.endswith("/resolve") and method == "POST":
                     self.api_dev_resolve_warning(db, user, self.path_int(path, 3))
                 elif path == "/api/fine-settlement" and method == "GET":
@@ -7148,6 +7158,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             ORDER BY l.linked_at DESC LIMIT 40
             """,
         )
+        app_visibility = get_system_settings(db)["app_visibility"]
         self.send_json(
             200,
             {
@@ -7166,6 +7177,47 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "warnings": [dict(row) for row in warnings],
                 "audit_logs": [dict(row) for row in audit_logs],
                 "unlink_codes": [dict(row) for row in codes],
+                "app_visibility": {
+                    "apps": [
+                        {"id": app_id, "label": label, "enabled": app_visibility.get(app_id, True)}
+                        for app_id, label in APP_VISIBILITY_OPTIONS
+                    ],
+                    "protected": sorted(PROTECTED_APP_IDS),
+                },
+            },
+        )
+
+    def api_dev_update_app_visibility(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        visibility_payload = payload.get("visibility")
+        if not isinstance(visibility_payload, dict):
+            self.error(400, "App visibility must be an object")
+            return
+        allowed = {app_id for app_id, _label in APP_VISIBILITY_OPTIONS}
+        visibility = {
+            app_id: bool(visibility_payload.get(app_id, True))
+            for app_id in allowed
+        }
+        set_system_setting(db, "app_visibility", json.dumps(visibility, separators=(",", ":"), sort_keys=True))
+        add_admin_audit(
+            db,
+            int(user["id"]),
+            "system.app_visibility.updated",
+            details={"disabled": sorted(app_id for app_id, enabled in visibility.items() if not enabled)},
+        )
+        self.send_json(
+            200,
+            {
+                "ok": True,
+                "apps": [
+                    {"id": app_id, "label": label, "enabled": visibility.get(app_id, True)}
+                    for app_id, label in APP_VISIBILITY_OPTIONS
+                ],
             },
         )
 

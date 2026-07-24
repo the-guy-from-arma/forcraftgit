@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.66";
+const OS_VERSION = "0.0.70";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -63,6 +63,8 @@ const state = {
   contractProofId: null,
   businessTab: "apply",
   businessReviewFilter: "active",
+  businessLicensePage: 1,
+  businessRegistryPage: 1,
   treasuryProofs: [],
   adminTab: "users",
   adminApplicationFilter: "active",
@@ -434,21 +436,25 @@ function render() {
       state.dmvTab = "license";
     }
   }
-  if (state.activeApp === "mdt" || state.activeApp === "fire" || state.activeApp === "dispatch") {
+  if (state.activeApp === "mdt" || state.activeApp === "fire") {
     app.innerHTML = (
       state.activeApp === "fire"
         ? renderFireWorkspace()
-        : state.activeApp === "dispatch"
-          ? renderDispatchWorkspace()
-          : renderMdtWorkspace()
+        : renderMdtWorkspace()
     ) + renderRequiredProfileModals();
-    state.activeApp === "fire" ? bindFireWorkspace() : state.activeApp === "dispatch" ? bindDispatchWorkspace() : bindMdtWorkspace();
+    state.activeApp === "fire" ? bindFireWorkspace() : bindMdtWorkspace();
     bindRequiredProfileModals();
     return;
   }
   if (state.activeApp === "dev-tools") {
     app.innerHTML = renderDevWorkspace() + renderRequiredProfileModals();
     bindDevWorkspace();
+    bindRequiredProfileModals();
+    return;
+  }
+  if (state.activeApp === "business") {
+    app.innerHTML = renderBusinessWorkspace() + renderRequiredProfileModals();
+    bindBusinessWorkspace();
     bindRequiredProfileModals();
     return;
   }
@@ -572,8 +578,8 @@ function renderCallsignRequiredModal() {
           <h2>Set Your Callsign</h2>
         </header>
         <div class="notice-body">
-          <p>Your account has department access. Dispatch needs a callsign before you can be reliably assigned to CAD calls.</p>
-          <p>Use the callsign your command staff expects to see on the dispatch board.</p>
+          <p>Your account has department access. A callsign can identify you in department records.</p>
+          <p>Use the callsign your command staff expects to see in MDT records.</p>
         </div>
         <form id="forcedCallsignForm" class="form-grid">
           <label>Callsign<input name="callsign" value="${escapeHtml(user.callsign || "")}" maxlength="24" pattern="[A-Za-z0-9_-]{2,24}" placeholder="UNIT-1, ALPHA-2, 2B-12" autocomplete="off" required autofocus /></label>
@@ -586,7 +592,7 @@ function renderCallsignRequiredModal() {
 
 function renderRequiredProfileModals() {
   if (state.session?.sanction?.type === "timeout") return "";
-  return renderCarEntryRequiredModal() || renderCallsignRequiredModal() || renderArmaLinkRequiredModal();
+  return renderCarEntryRequiredModal() || renderArmaLinkRequiredModal();
 }
 
 function renderArmaLinkRequiredModal() {
@@ -816,7 +822,6 @@ async function loadAppData(id) {
     messages: () => api("/api/messages"),
     contracts: () => api("/api/contracts"),
     changelog: () => api("/api/changelog"),
-    dispatch: () => api("/api/dispatch/overview"),
     mdt: async () => {
       const data = {
         charges: await api("/api/mdt/charges"),
@@ -914,7 +919,6 @@ function bindPanel() {
     business: bindBusiness,
     messages: bindMessages,
     contracts: bindContracts,
-    dispatch: bindDispatch,
     mdt: bindMdt,
     fire: bindFireMdt,
     "fire-settings": bindFireSettings,
@@ -933,10 +937,6 @@ function can(role) {
 
 function canAny(...roles) {
   return roles.some((role) => can(role));
-}
-
-function canUseMdtDispatch() {
-  return canAny(...MDT_DISPATCH_ROLES);
 }
 
 function canUseMdtMessages() {
@@ -969,8 +969,8 @@ const TRAFFIC_STOP_STEPS = [
   {
     key: "radio",
     title: "Radio the stop",
-    callout: "Dispatch first",
-    body: "Advise dispatch of the stop before contact: unit callsign, location/postal, vehicle description, plate if visible, reason for stop, and occupant count.",
+    callout: "Document the stop",
+    body: "Record the location/postal, vehicle description, plate if visible, reason for stop, and occupant count before contact.",
   },
   {
     key: "position",
@@ -1000,13 +1000,13 @@ const TRAFFIC_STOP_STEPS = [
     key: "arrest",
     title: "Arrest protocol",
     callout: "Custody sequence",
-    body: "If the stop becomes an arrest or criminal offense, slow the scene down: notify dispatch, call backup or supervisor when needed, secure the driver, document probable cause, and route charges through the criminal writer.",
+    body: "If the stop becomes an arrest or criminal offense, slow the scene down: call backup or a supervisor when needed, secure the driver, document probable cause, and route charges through the criminal writer.",
   },
   {
     key: "close",
     title: "Close and document",
     callout: "Clear the stop",
-    body: "Explain the outcome to the driver, return documents when appropriate, and clear the stop with dispatch. File an after-call report if the stop became an incident, pursuit, arrest, or use-of-force event.",
+    body: "Explain the outcome to the driver, return documents when appropriate, and file an after-action report if the stop became an incident, pursuit, arrest, or use-of-force event.",
   },
 ];
 
@@ -1135,7 +1135,7 @@ function renderProfile() {
             <div>
               <p class="eyebrow">Radio identity</p>
               <h3>Department Callsign</h3>
-              <p class="muted small">Dispatch will use this handle for quick unit tracking and unit checks.</p>
+              <p class="muted small">This optional handle identifies you in department and MDT records.</p>
             </div>
             <span class="pill ${user.callsign ? "green" : "red"}">${user.callsign ? "set" : "missing"}</span>
           </div>
@@ -2570,6 +2570,54 @@ function renderBusiness() {
   `;
 }
 
+function renderBusinessWorkspace() {
+  const data = state.cache.business || {};
+  const staff = Boolean(data.staff_view);
+  const tabs = [
+    ["apply", "New Application"],
+    ["licenses", "My Licenses"],
+    ...(staff ? [["review", "Application Review"], ["market", "License Registry"]] : []),
+  ];
+  if (!tabs.some(([id]) => id === state.businessTab)) state.businessTab = "apply";
+  const active = tabs.find(([id]) => id === state.businessTab) || tabs[0];
+  return `
+    <section class="business-workspace">
+      <aside class="business-workspace-sidebar">
+        <div class="dev-brand"><img class="dev-emblem" src="/static/brand/faircroft-emblem.webp" alt="" /><div><strong>Faircroft RP</strong><small>Business Registry</small></div></div>
+        <p class="dev-nav-label">Registry workspace</p>
+        <nav>
+          ${tabs.map(([id, label]) => `<button type="button" class="${state.businessTab === id ? "active" : ""}" data-business-tab="${id}">${escapeHtml(label)}</button>`).join("")}
+        </nav>
+        <div class="business-workspace-sidebar-note">
+          <span class="dev-access-dot"></span>
+          <div><strong>${staff ? "Registry Staff" : "Business Owner"}</strong><small>${escapeHtml(state.session?.user?.name || "")}</small></div>
+        </div>
+      </aside>
+      <main class="business-workspace-main">
+        <header class="business-workspace-topbar">
+          <div><p class="eyebrow">${staff ? "City Hall Commerce Division" : "Faircroft Commerce Portal"}</p><h1>${escapeHtml(active[1])}</h1></div>
+          <div class="business-workspace-actions">
+            <button type="button" class="secondary" data-refresh-business-workspace>Refresh registry</button>
+            <button type="button" class="primary" data-close-business-workspace>Return to phone</button>
+          </div>
+        </header>
+        <div class="business-workspace-content">${renderBusiness()}</div>
+      </main>
+    </section>`;
+}
+
+function bindBusinessWorkspace() {
+  bindBusiness();
+  $("[data-close-business-workspace]")?.addEventListener("click", async () => {
+    state.activeApp = null;
+    await loadSession();
+  });
+  $("[data-refresh-business-workspace]")?.addEventListener("click", async () => {
+    await loadAppData("business");
+    render();
+  });
+}
+
 function renderBusinessApply(data) {
   const activeApplications = (data.applications || []).filter((item) => !["approved", "denied"].includes(item.status)).slice(0, 2);
   return `
@@ -2626,11 +2674,18 @@ function renderBusinessApply(data) {
 function renderBusinessLicenses(data) {
   const businesses = data.businesses || [];
   const applications = data.applications || [];
+  const page = businessPageSlice(businesses, state.businessLicensePage);
+  state.businessLicensePage = page.page;
   return `
     <div class="stack">
-      <div class="list">
-        ${businesses.map((item) => renderBusinessLicenseCard(item, false, data)).join("") || `<div class="empty">No approved business licenses yet</div>`}
+      <div class="business-license-heading">
+        <div><p class="eyebrow">License cabinet</p><h3>Your registered businesses</h3></div>
+        <span class="pill">${businesses.length} file${businesses.length === 1 ? "" : "s"}</span>
       </div>
+      <div class="business-license-folders">
+        ${page.rows.map((item) => renderBusinessLicenseFolder(item, false, data)).join("") || `<div class="empty">No approved business licenses yet</div>`}
+      </div>
+      ${renderBusinessPager(page, "licenses")}
       <div class="business-section">
         <div class="row"><h3>Application History</h3><span class="pill">${applications.length}</span></div>
         <div class="list">
@@ -2701,15 +2756,66 @@ function renderBusinessRecentReviews(rows) {
 
 function renderBusinessRegistry(data) {
   const businesses = data.all_businesses || [];
+  const page = businessPageSlice(businesses, state.businessRegistryPage);
+  state.businessRegistryPage = page.page;
   return `
     <div class="stack">
-      <div class="list">
-        ${businesses.map((item) => renderBusinessLicenseCard(item, true, data)).join("") || `<div class="empty">No business licenses issued yet</div>`}
+      <div class="business-license-heading">
+        <div><p class="eyebrow">City Hall records</p><h3>Business license cabinet</h3></div>
+        <span class="pill">${businesses.length} files</span>
       </div>
+      <div class="business-license-folders">
+        ${page.rows.map((item) => renderBusinessLicenseFolder(item, true, data)).join("") || `<div class="empty">No business licenses issued yet</div>`}
+      </div>
+      ${renderBusinessPager(page, "registry")}
       ${renderBusinessLedger("Recent Inspections", data.staff_inspections || [], "inspection")}
       ${renderBusinessLedger("Recent Violations", data.staff_violations || [], "violation")}
     </div>
   `;
+}
+
+const BUSINESS_LICENSES_PER_PAGE = 6;
+
+function businessPageSlice(rows, requestedPage) {
+  const pages = Math.max(1, Math.ceil(rows.length / BUSINESS_LICENSES_PER_PAGE));
+  const page = Math.max(1, Math.min(Number(requestedPage) || 1, pages));
+  const start = (page - 1) * BUSINESS_LICENSES_PER_PAGE;
+  return { rows: rows.slice(start, start + BUSINESS_LICENSES_PER_PAGE), page, pages, total: rows.length };
+}
+
+function renderBusinessPager(page, scope) {
+  if (page.pages <= 1) return "";
+  return `
+    <nav class="business-pager" aria-label="Business license pages">
+      <button type="button" class="secondary" data-business-page="${page.page - 1}" data-business-page-scope="${scope}" ${page.page <= 1 ? "disabled" : ""}>Previous</button>
+      <span>Page <strong>${page.page}</strong> of ${page.pages}</span>
+      <button type="button" class="secondary" data-business-page="${page.page + 1}" data-business-page-scope="${scope}" ${page.page >= page.pages ? "disabled" : ""}>Next</button>
+    </nav>`;
+}
+
+function renderBusinessLicenseFolder(item, manage, data) {
+  return `
+    <details class="business-license-folder">
+      <summary>
+        <div class="business-folder-tab">LICENSE FILE</div>
+        <div class="row tight">
+          <div>
+            <p class="eyebrow">${escapeHtml(item.license_number)}</p>
+            <h3>${escapeHtml(item.business_name)}</h3>
+            <p class="muted small">${escapeHtml(item.owner_name || "Owner")} · ${escapeHtml(item.location)}</p>
+          </div>
+          <span class="pill ${businessStatusClass(item.status)}">${humanLabel(item.status)}</span>
+        </div>
+        <div class="business-folder-strip">
+          <span>${humanLabel(item.license_category)}</span>
+          <span>${escapeHtml(item.business_type)}</span>
+          <span>${money(item.weekly_tax)}/week</span>
+          <span>${item.open_violations || 0} violation(s)</span>
+        </div>
+        <div class="business-folder-open">Open license file <span>+</span></div>
+      </summary>
+      <div class="business-license-folder-body">${renderBusinessLicenseCard(item, manage, data)}</div>
+    </details>`;
 }
 
 function renderBusinessApplicationReviewFolder(item, data) {
@@ -2906,6 +3012,12 @@ function bindBusiness() {
   }));
   $$("[data-business-review-filter]").forEach((button) => button.addEventListener("click", () => {
     state.businessReviewFilter = button.dataset.businessReviewFilter;
+    render();
+  }));
+  $$("[data-business-page]").forEach((button) => button.addEventListener("click", () => {
+    const page = Number(button.dataset.businessPage) || 1;
+    if (button.dataset.businessPageScope === "registry") state.businessRegistryPage = page;
+    else state.businessLicensePage = page;
     render();
   }));
   $("#businessApplicationForm")?.addEventListener("submit", async (event) => {
@@ -3511,7 +3623,6 @@ function renderMdtWorkspace() {
     ["panic", "Panic"],
   ];
   const activeNavLabel = navItems.find(([id]) => id === state.mdtTab)?.[1] || "NCIC / DMV";
-  const unitCallsign = state.session.user.callsign || "No callsign";
   const terminalTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   return `
     <section class="mdt-workspace mdt-redesign ${mdtCommandEnabledNow ? "cid-workspace" : ""}">
@@ -3519,15 +3630,13 @@ function renderMdtWorkspace() {
         <div>
           <p class="eyebrow">${mdtCommandEnabledNow ? commandLabel : "Law Enforcement"}</p>
           <h1>${mdtCommandEnabledNow ? `${commandLabel} Command MDT` : "Mobile Data Terminal"}</h1>
-          <p class="mdt-subtitle">${mdtCommandEnabledNow ? "Investigations / warrants / booking / internal affairs" : "NCIC / DMV / citations / booking / dispatch"}</p>
+          <p class="mdt-subtitle">${mdtCommandEnabledNow ? "Investigations / warrants / booking / internal affairs" : "NCIC / DMV / citations / reports / booking"}</p>
           <div class="mdt-status-line">
-            <span>${escapeHtml(unitCallsign)}</span>
             <span>${escapeHtml(activeNavLabel)}</span>
             <span>${escapeHtml(terminalTime)}</span>
           </div>
         </div>
         <div class="mdt-top-actions">
-          ${canUseMdtDispatch() ? `<button class="ghost mdt-mobile-action" data-open-mdt-dispatch>Dispatch</button>` : ""}
           <button class="ghost mdt-mobile-action" data-open-mdt-nav>Menu</button>
           <button class="ghost mdt-mobile-action" data-open-mdt-side>Watch</button>
           ${canUseMdtMessages() ? `<button class="ghost mdt-mobile-action" data-open-mdt-messages>Messages</button>` : ""}
@@ -3596,12 +3705,6 @@ function renderMdtQuickRail() {
   const unread = Number(state.session?.unread_messages || 0);
   return `
     <nav class="mdt-quick-rail" aria-label="MDT quick access">
-      ${canUseMdtDispatch() ? `
-        <button type="button" data-open-mdt-dispatch aria-label="Open dispatch">
-          ${iconSvg.radio}
-          <span>Dispatch</span>
-        </button>
-      ` : ""}
       ${canUseMdtMessages() ? `
         <button type="button" data-open-mdt-messages aria-label="Open messages">
           ${iconSvg.message}
@@ -3625,18 +3728,6 @@ function bindMdtWorkspace() {
     state.mdtSideOpen = false;
     await loadSession();
   });
-  $$("[data-open-mdt-dispatch]")?.forEach((button) => button.addEventListener("click", async () => {
-    if (!canUseMdtDispatch()) {
-      toast("You do not have permission to open Dispatch from MDT.");
-      return;
-    }
-    state.returnToMdtOnClose = true;
-    state.activeApp = "dispatch";
-    state.mdtNavOpen = false;
-    state.mdtSideOpen = false;
-    await loadAppData("dispatch");
-    render();
-  }));
   $$("[data-open-mdt-messages]")?.forEach((button) => button.addEventListener("click", async () => {
     if (!canUseMdtMessages()) {
       toast("You must be verified to open Messages.");
@@ -4394,9 +4485,7 @@ function renderFireWorkspace() {
                 <span class="pill ${panicStatusClass(alert.status)}">${escapeHtml(alert.status)}</span>
               </div>
               <p>${escapeHtml(alert.note || "No notes supplied")}</p>
-              ${alert.dispatch_last_note ? `<div class="dispatch-card-note"><strong>${escapeHtml(alert.dispatch_last_note_type || "dispatch update")}</strong><p>${escapeHtml(alert.dispatch_last_note)}</p></div>` : ""}
               <p class="muted small">Reported by ${escapeHtml(alert.officer_name || "Unknown")} - ${new Date(alert.created_at).toLocaleString()}</p>
-              <p class="muted small">${Number(alert.assigned_unit_count || 0)} units attached</p>
               <div class="row">
                 ${alert.status !== "responding" && alert.status !== "cleared" ? `<button class="secondary" data-fire-alert="${alert.id}" data-fire-status="responding">Responding</button>` : ""}
                 ${alert.status !== "cleared" ? `<button class="primary" data-fire-alert="${alert.id}" data-fire-status="cleared">Clear</button>` : ""}
@@ -4572,13 +4661,11 @@ function renderMdtSide() {
   const cid = state.cache.mdt?.cid;
   const priorityCases = (cid?.investigations || []).filter((item) => ["critical", "elevated"].includes(item.priority));
   const activeWarrants = (cid?.warrants || []).filter((item) => item.status === "active");
-  const canOpenDispatch = canUseMdtDispatch();
   const canOpenMessages = canUseMdtMessages();
   return `
     <div class="mdt-side-panel">
       <h3>Quick Access</h3>
       <div class="list compact-list">
-        ${canOpenDispatch ? `<button class="secondary" type="button" data-open-mdt-dispatch>Dispatch CAD</button>` : `<p class="muted small">Dispatch unavailable</p>`}
         ${canOpenMessages ? `<button class="secondary" type="button" data-open-mdt-messages>Messages</button>` : `<p class="muted small">Messages unavailable</p>`}
         ${state.mdtProtocolAssistantEnabled ? `<button class="secondary" type="button" data-start-traffic-stop>Initiate Traffic Stop</button>` : ""}
         <button class="secondary" type="button" data-mdt-tab="ticket">Write Ticket</button>
@@ -6067,8 +6154,6 @@ function renderPanic() {
           <div class="row"><h3>${escapeHtml(alert.officer_name)}</h3><span class="pill ${panicStatusClass(alert.status)}">${escapeHtml(alert.department || "police")} - ${escapeHtml(alert.status)}</span></div>
           <p>${escapeHtml(alert.location)}</p>
           <p class="muted small">${escapeHtml(alert.note)}</p>
-          ${alert.dispatch_last_note ? `<div class="dispatch-card-note"><strong>${escapeHtml(alert.dispatch_last_note_type || "dispatch update")}</strong><p>${escapeHtml(alert.dispatch_last_note)}</p></div>` : ""}
-          <p class="muted small">${Number(alert.assigned_unit_count || 0)} units attached</p>
           <p class="muted small">Activated ${new Date(alert.created_at).toLocaleString()}${alert.resolved_at ? ` - Cleared ${new Date(alert.resolved_at).toLocaleString()}` : ""}</p>
           <div class="row-actions">
             <button class="secondary" type="button" data-use-alert-report="${alert.id}">Write report</button>
@@ -6781,12 +6866,13 @@ function renderDevWorkspace() {
     warnings: ["Internal Notes", "Staff-only account history and observations"],
     linking: ["Account Linking", "Linked identities, recent claims, and unlink authorization"],
     audit: ["Activity Log", "Chronological record of staff actions"],
+    settings: ["App Visibility", "Control which application icons appear for users"],
   }[state.devTab] || ["Staff Operations", "Faircroft administrative console"];
   return `<section class="dev-workspace">
     <aside class="dev-sidebar">
       <div class="dev-brand"><img class="dev-emblem" src="/static/brand/faircroft-emblem.webp" alt="" /><div><strong>Faircroft RP</strong><small>Staff Operations</small></div></div>
       <p class="dev-nav-label">Workspace</p>
-      <nav>${[["dashboard","Overview"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["audit","Activity Log"]].map(([id,label]) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><span>${label}</span></button>`).join("")}</nav>
+      <nav>${[["dashboard","Overview"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["audit","Activity Log"],["settings","Settings"]].map(([id,label]) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><span>${label}</span></button>`).join("")}</nav>
       <div class="dev-sidebar-footer"><span class="dev-access-dot"></span><div><strong>Authorized Staff</strong><small>${escapeHtml(state.session?.user?.name || "Staff member")}</small></div></div>
     </aside>
     <main class="dev-main">
@@ -6842,6 +6928,29 @@ function renderDevTools() {
     </form></section><section class="dev-card"><h2>Enforcement Records</h2><div class="dev-record-list">${sanctions.map(devSanctionRow).join("") || `<div class="empty">No reports</div>`}</div></section></div>`;
   if (state.devTab === "warnings") return `<div class="dev-grid-2"><section class="dev-card"><div class="row"><div><p class="eyebrow">Staff-only intelligence</p><h2>Internal Note</h2></div><span class="pill amber">not player-visible</span></div><form id="devWarningForm" class="form-grid"><label>Account<select name="user_id" required><option value="">Select account</option>${devUserOptions(users)}</select></label><label>Severity<select name="severity"><option>low</option><option selected>standard</option><option>high</option><option>critical</option></select></label><label>Subject<input name="subject" maxlength="160" required /></label><label>Internal note<textarea name="body" maxlength="3000" required></textarea></label><button class="primary">Record Note</button></form></section><section class="dev-card"><h2>Note History</h2><div class="dev-record-list">${warnings.map((x) => `<article class="dev-case"><div><strong>${escapeHtml(x.target_name)} · ${escapeHtml(x.subject)}</strong><p>${escapeHtml(x.body)}</p><small>${escapeHtml(x.created_by_name)} · ${escapeHtml(x.created_at)}</small></div>${x.resolved_at ? `<span class="pill green">resolved</span>` : `<button class="secondary" data-resolve-warning="${x.id}">Resolve</button>`}</article>`).join("") || `<div class="empty">No internal notes</div>`}</div></section></div>`;
   if (state.devTab === "linking") return `<div class="stack">${metrics}<div class="dev-grid-2"><section class="dev-card"><p class="eyebrow">Secure unlink authorization</p><h2>One-time Developer Code</h2><form id="devCodeForm" class="form-grid"><label>Expires in minutes<input name="expiry_minutes" type="number" min="5" max="1440" value="30" required /></label><button class="primary">Generate Code</button></form>${state.generatedDevCode ? `<div class="dev-generated-code"><span>Shown once</span><strong>${escapeHtml(state.generatedDevCode.code)}</strong><small>Expires ${escapeHtml(state.generatedDevCode.expires_at)}</small></div>` : ""}<div class="dev-record-list">${codes.slice(0,12).map((x) => `<div class="dev-case"><span>••••-${escapeHtml(x.code_hint)} · ${escapeHtml(x.created_by_name)}</span><strong>${x.uses_remaining ? "available" : "used"}</strong></div>`).join("")}</div></section><section class="dev-card"><h2>Recent Links</h2>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card"><div class="row"><div><p class="eyebrow">Clickable investigation profiles</p><h2>All Linked Accounts</h2></div><span class="pill green">${users.filter((x) => x.arma_linked).length} loaded</span></div>${devLinkedAccounts(users)}</section></div>`;
+  if (state.devTab === "settings") {
+    const visibilityApps = data.app_visibility?.apps || [];
+    return `<div class="stack">
+      <section class="dev-card dev-visibility-intro">
+        <div><p class="eyebrow">Global user interface controls</p><h2>Application Icon Visibility</h2><p class="muted">Checked applications appear for users who have permission. Unchecked applications vanish from every user home screen.</p></div>
+        <span class="pill amber">global setting</span>
+      </section>
+      <form id="devAppVisibilityForm" class="dev-card">
+        <div class="dev-visibility-grid">
+          ${visibilityApps.map((item) => `
+            <label class="dev-visibility-toggle">
+              <span><strong>${escapeHtml(item.label)}</strong><small>${item.enabled ? "Visible to eligible users" : "Hidden from all users"}</small></span>
+              <input type="checkbox" name="${escapeHtml(item.id)}" ${item.enabled ? "checked" : ""} />
+              <i aria-hidden="true"></i>
+            </label>`).join("") || `<div class="empty">No configurable applications found.</div>`}
+        </div>
+        <div class="dev-visibility-footer">
+          <p><strong>Protected:</strong> Profile, Dev Tools, System Settings, and Restriction access cannot be hidden.</p>
+          <button class="primary" type="submit">Save icon visibility</button>
+        </div>
+      </form>
+    </div>`;
+  }
   return `<section class="dev-card"><div class="row"><div><p class="eyebrow">Administrative accountability</p><h2>Audit Log</h2></div><span class="pill green">${logs.length} events</span></div>${devAudit(logs)}</section>`;
 }
 
@@ -7113,6 +7222,16 @@ function bindFineSettlement() {
 }
 
 function bindDevTools() {
+  $("#devAppVisibilityForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const visibility = {};
+    $$('input[type="checkbox"]', event.currentTarget).forEach((input) => {
+      visibility[input.name] = input.checked;
+    });
+    await api("/api/dev-tools/app-visibility", { method: "PATCH", body: { visibility } });
+    toast("Application visibility updated");
+    await refreshDevTools();
+  });
   $("#devRuleSelect")?.addEventListener("change", (event) => {
     const option = event.currentTarget.selectedOptions[0];
     const reason = $("#devPublicReason");
@@ -7843,7 +7962,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.66").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.70").catch(() => {}));
 }
 
 bootApp();
