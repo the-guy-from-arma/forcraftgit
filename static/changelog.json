@@ -1,6 +1,27 @@
 {
-  "version": "0.0.50",
+  "version": "0.0.71",
   "entries": [
+    {
+      "date": "2026-07-23",
+      "version": "0.0.71",
+      "title": "Faircroft Community Build Route",
+      "added": [
+        "Added a Roadmap app icon for every signed-in Faircroft user.",
+        "Added a full-screen animated Build Route with connected milestones for the PWA core, TBS RP Linking expansion, live CAD/game sync, Android APK parity, mobile banking, properties, and the connected economy.",
+        "Added PostgreSQL-backed upvotes and downvotes with one active vote per account per milestone.",
+        "Added roadmap filters, live completion telemetry, Android target countdown, build briefs, community vote scores, and responsive phone layouts.",
+        "Added owner/admin route controls for creating milestones and changing status, progress, dates, order, visibility, accent, icon, summary, and build notes."
+      ],
+      "changed": [
+        "Roadmap opens outside the phone frame as a dedicated animated workspace and returns users to the phone when closed.",
+        "PWA cache versioning was bumped so installed devices receive the Roadmap icon and full-screen route."
+      ],
+      "fixed": [
+        "Restored Dev Tools, developer-role access, sanctions, warnings, app visibility controls, audit tools, and guided Arma unlink codes from the 0.0.70 system.",
+        "Restored the complete Arma bridge snapshot, event, game-bank sync, link/unlink routes, database tables, and Railway chunked-request handling while retaining the new Roadmap."
+      ],
+      "removed": []
+    },
     {
       "date": "2026-07-23",
       "version": "0.0.50",

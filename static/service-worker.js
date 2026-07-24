@@ -1,8 +1,8 @@
-const CACHE = "faircroft-rp-v70-dispatch-retired";
+const CACHE = "faircroft-rp-v71-community-roadmap";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.70",
-  "/static/app.js?v=0.0.70",
+  "/static/styles.css?v=0.0.71",
+  "/static/app.js?v=0.0.71",
   "/static/brand/faircroft-emblem.webp",
   "/static/brand/faircroft-light-sweep.mp4",
   "/static/brand/icon-192.png",

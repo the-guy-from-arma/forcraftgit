@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.70";
+const OS_VERSION = "0.0.71";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -61,6 +61,8 @@ const state = {
   contractsTab: "open",
   contractsInfoOpen: false,
   contractProofId: null,
+  roadmapFilter: "all",
+  roadmapEditorId: null,
   businessTab: "apply",
   businessReviewFilter: "active",
   businessLicensePage: 1,
@@ -135,6 +137,12 @@ const iconSvg = {
   scroll: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 21h9a3 3 0 0 0 3-3V5a2 2 0 0 0-2-2H7a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3h1Z"/><path d="M8 21a3 3 0 0 1-3-3V7h13"/><path d="M9 11h6M9 15h5"/></svg>',
   settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V22a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 18l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1A2 2 0 1 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>',
   code: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M14 5l-4 14"/><circle cx="19" cy="5" r="2"/></svg>',
+  route: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M8.5 19h3a3 3 0 0 0 3-3v-1a3 3 0 0 0-3-3h-1a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3h5"/></svg>',
+  link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.2 1.2"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.2-1.2"/></svg>',
+  rocket: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 5c3-3 6-3 7-2 1 1 1 4-2 7l-6 6-5-5 6-6Z"/><path d="m9 10-4 1-2 3 5 1M14 15l-1 4-3 2-1-5M15 6l3 3"/><path d="M5 18c-1 0-2 1-2 3 2 0 3-1 3-2"/></svg>',
+  "thumb-up": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M7 10v11H3V10h4ZM7 19h10a3 3 0 0 0 2.9-2.3l1-4A3 3 0 0 0 18 9h-4l1-4c.3-1.3-.7-2-1.5-2L7 10"/></svg>',
+  "thumb-down": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M7 14V3H3v11h4ZM7 5h10a3 3 0 0 1 2.9 2.3l1 4A3 3 0 0 1 18 15h-4l1 4c.3 1.3-.7 2-1.5 2L7 14"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14M5 12h14"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m15 18-6-6 6-6"/></svg>',
   logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M10 17l5-5-5-5M15 12H3M21 3v18"/></svg>',
@@ -155,6 +163,7 @@ const tileColors = {
   messages: "linear-gradient(145deg, #ffffff, #6d7779)",
   contracts: "linear-gradient(145deg, #ff5d7d, #4120a4)",
   changelog: "linear-gradient(145deg, #7ee7ff, #3158e8)",
+  roadmap: "linear-gradient(145deg, #56e3a2, #e8b84a 58%, #e45f55)",
   dispatch: "linear-gradient(145deg, #58f0e6, #1e3248)",
   mdt: "linear-gradient(145deg, #28343c, #050709)",
   fire: "linear-gradient(145deg, #ff6b4a, #2d1b1b)",
@@ -435,6 +444,12 @@ function render() {
     if (state.activeApp === "dmv") {
       state.dmvTab = "license";
     }
+  }
+  if (state.activeApp === "roadmap") {
+    app.innerHTML = renderRoadmapWorkspace() + renderRequiredProfileModals();
+    bindRoadmapWorkspace();
+    bindRequiredProfileModals();
+    return;
   }
   if (state.activeApp === "mdt" || state.activeApp === "fire") {
     app.innerHTML = (
@@ -822,6 +837,7 @@ async function loadAppData(id) {
     messages: () => api("/api/messages"),
     contracts: () => api("/api/contracts"),
     changelog: () => api("/api/changelog"),
+    roadmap: () => api("/api/roadmap"),
     mdt: async () => {
       const data = {
         charges: await api("/api/mdt/charges"),
@@ -2435,6 +2451,294 @@ function bindMessages() {
       render();
     } catch (error) {
       toast(error.message);
+    }
+  });
+}
+
+function roadmapDateLabel(value) {
+  if (!value) return "Open horizon";
+  const parsed = new Date(`${value}T12:00:00`);
+  return Number.isNaN(parsed.getTime())
+    ? String(value)
+    : parsed.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+}
+
+function roadmapFilterMatches(item, filter) {
+  if (filter === "all") return item.is_visible;
+  if (filter === "ideas") return item.is_visible && ["planned", "exploring"].includes(item.status);
+  return item.is_visible && item.status === filter;
+}
+
+function roadmapStatusLabel(status) {
+  return {
+    shipped: "Live",
+    building: "In build",
+    next: "Up next",
+    planned: "Planned",
+    exploring: "Exploring",
+    paused: "Paused",
+  }[status] || humanLabel(status);
+}
+
+function renderRoadmapWorkspace() {
+  const data = state.cache.roadmap || { items: [], stats: {}, options: {} };
+  const items = data.items || [];
+  const visible = items.filter((item) => item.is_visible);
+  const filtered = items.filter((item) => roadmapFilterMatches(item, state.roadmapFilter));
+  const stats = data.stats || {};
+  const filters = [
+    ["all", "All phases"],
+    ["building", "In build"],
+    ["next", "Up next"],
+    ["ideas", "Ideas"],
+    ["shipped", "Live"],
+  ];
+  const androidTarget = stats.android_days === null || stats.android_days === undefined
+    ? "Scheduling"
+    : `${stats.android_days} day${Number(stats.android_days) === 1 ? "" : "s"}`;
+  return `
+    <section class="roadmap-workspace">
+      <header class="roadmap-topbar">
+        <button class="roadmap-back" type="button" data-close-roadmap aria-label="Return to phone">
+          ${iconSvg.back}<span>Phone</span>
+        </button>
+        <div class="roadmap-brand">
+          <span class="roadmap-brand-mark">FC</span>
+          <div><p>FAIRCROFT DEVELOPMENT</p><strong>Build Route</strong></div>
+        </div>
+        <div class="roadmap-top-actions">
+          ${data.can_manage ? `<button class="roadmap-command" type="button" data-roadmap-edit="new" aria-label="Add milestone">${iconSvg.plus}<span>Add milestone</span></button>` : ""}
+          <button class="roadmap-refresh" type="button" data-refresh-roadmap aria-label="Refresh roadmap">↻</button>
+        </div>
+      </header>
+
+      <main class="roadmap-scroll">
+        <section class="roadmap-intro">
+          <div class="roadmap-intro-copy">
+            <p class="roadmap-kicker"><span></span> COMMUNITY ROADMAP / LIVE SIGNAL</p>
+            <h1>Building Faircroft,<br><em>one connected system at a time.</em></h1>
+            <p>The route from today’s PWA to live game integration, native mobile access, banking, properties, and a connected roleplay economy.</p>
+          </div>
+          <div class="roadmap-launch-countdown">
+            <span>ANDROID PARITY TARGET</span>
+            <strong>${escapeHtml(androidTarget)}</strong>
+            <p>${stats.android_target ? roadmapDateLabel(stats.android_target) : "Target window pending"}</p>
+          </div>
+        </section>
+
+        <section class="roadmap-telemetry" aria-label="Roadmap progress">
+          <div><span>Route completion</span><strong>${Number(stats.overall_progress || 0)}%</strong></div>
+          <div><span>Active phases</span><strong>${Number(stats.active_phases || 0)}</strong></div>
+          <div><span>Systems live</span><strong>${Number(stats.shipped_phases || 0)}</strong></div>
+          <div><span>Community signals</span><strong>${Number(stats.community_votes || 0)}</strong></div>
+          <div class="roadmap-master-progress"><span style="width:${Number(stats.overall_progress || 0)}%"></span></div>
+        </section>
+
+        <nav class="roadmap-filters" aria-label="Roadmap views">
+          ${filters.map(([id, label]) => `
+            <button class="${state.roadmapFilter === id ? "active" : ""}" type="button" data-roadmap-filter="${id}">
+              ${escapeHtml(label)}
+              <span>${id === "all" ? visible.length : items.filter((item) => roadmapFilterMatches(item, id)).length}</span>
+            </button>
+          `).join("")}
+        </nav>
+
+        <section class="roadmap-route" aria-label="Faircroft development milestones">
+          <div class="roadmap-route-line" aria-hidden="true"><span></span><i></i></div>
+          ${filtered.map((item) => {
+            const routeIndex = visible.findIndex((row) => String(row.id) === String(item.id));
+            const vote = Number(item.user_vote || 0);
+            return `
+              <article class="roadmap-stop accent-${escapeHtml(item.accent)} status-${escapeHtml(item.status)}" style="--stop-index:${Math.max(routeIndex, 0)}" data-roadmap-stop="${item.id}">
+                <div class="roadmap-node" aria-hidden="true">
+                  <span>${String(Math.max(routeIndex + 1, 1)).padStart(2, "0")}</span>
+                </div>
+                <div class="roadmap-stop-content">
+                  <div class="roadmap-stop-head">
+                    <div class="roadmap-stop-icon">${iconSvg[item.icon] || iconSvg.route}</div>
+                    <div>
+                      <p>${escapeHtml(item.category)} / ${escapeHtml(roadmapDateLabel(item.target_date))}</p>
+                      <h2>${escapeHtml(item.title)}</h2>
+                    </div>
+                    <span class="roadmap-status">${escapeHtml(roadmapStatusLabel(item.status))}</span>
+                  </div>
+                  <p class="roadmap-summary">${escapeHtml(item.summary)}</p>
+                  <div class="roadmap-progress-row">
+                    <div class="roadmap-progress-track"><span style="width:${Number(item.progress || 0)}%"></span></div>
+                    <strong>${Number(item.progress || 0)}%</strong>
+                  </div>
+                  ${item.details ? `
+                    <details class="roadmap-notes">
+                      <summary>Build brief</summary>
+                      <p>${escapeHtml(item.details)}</p>
+                    </details>
+                  ` : ""}
+                  <footer class="roadmap-stop-footer">
+                    <div class="roadmap-votes" aria-label="Community voting">
+                      <button class="${vote === 1 ? "active up" : ""}" type="button" data-roadmap-vote="${item.id}" data-vote="1" aria-label="Upvote ${escapeHtml(item.title)}">
+                        ${iconSvg["thumb-up"]}<span>${Number(item.upvotes || 0)}</span>
+                      </button>
+                      <strong class="${Number(item.score || 0) < 0 ? "negative" : ""}">${Number(item.score || 0) > 0 ? "+" : ""}${Number(item.score || 0)}</strong>
+                      <button class="${vote === -1 ? "active down" : ""}" type="button" data-roadmap-vote="${item.id}" data-vote="-1" aria-label="Downvote ${escapeHtml(item.title)}">
+                        ${iconSvg["thumb-down"]}<span>${Number(item.downvotes || 0)}</span>
+                      </button>
+                    </div>
+                    ${data.can_manage ? `<button class="roadmap-edit" type="button" data-roadmap-edit="${item.id}">${iconSvg.settings}<span>Edit phase</span></button>` : `<span class="roadmap-signal-label">COMMUNITY SIGNAL</span>`}
+                  </footer>
+                </div>
+              </article>
+            `;
+          }).join("") || `<div class="roadmap-empty">No phases match this route view.</div>`}
+        </section>
+
+        <footer class="roadmap-footer">
+          <div><span class="roadmap-footer-mark">FC</span><strong>FAIRCROFT BUILD ROUTE</strong></div>
+          <p>RP OS ${OS_VERSION} / PostgreSQL live roadmap</p>
+        </footer>
+      </main>
+      ${state.roadmapEditorId !== null ? renderRoadmapEditor(data) : ""}
+    </section>
+  `;
+}
+
+function renderRoadmapEditor(data) {
+  const isNew = state.roadmapEditorId === "new";
+  const item = isNew ? null : (data.items || []).find((row) => String(row.id) === String(state.roadmapEditorId));
+  if (!isNew && !item) return "";
+  const model = item || {
+    title: "",
+    category: "Platform",
+    summary: "",
+    details: "",
+    status: "planned",
+    progress: 0,
+    target_date: "",
+    sort_order: ((data.items || []).length + 1) * 10,
+    accent: "mint",
+    icon: "route",
+    is_visible: true,
+  };
+  const options = data.options || {};
+  return `
+    <div class="roadmap-editor-backdrop">
+      <section class="roadmap-editor" role="dialog" aria-modal="true" aria-label="${isNew ? "Add roadmap milestone" : "Edit roadmap milestone"}">
+        <header>
+          <div><p>ROUTE CONTROL</p><h2>${isNew ? "Add milestone" : "Edit milestone"}</h2></div>
+          <button type="button" data-close-roadmap-editor aria-label="Close editor">×</button>
+        </header>
+        <form id="roadmapEditorForm" data-roadmap-item-id="${isNew ? "" : item.id}">
+          <label>Title<input name="title" value="${escapeHtml(model.title)}" maxlength="120" required /></label>
+          <label>Category<input name="category" value="${escapeHtml(model.category)}" maxlength="60" required /></label>
+          <label class="roadmap-editor-wide">Public summary<textarea name="summary" maxlength="500" required>${escapeHtml(model.summary)}</textarea></label>
+          <label class="roadmap-editor-wide">Build brief<textarea name="details" maxlength="5000">${escapeHtml(model.details)}</textarea></label>
+          <label>Status<select name="status">${(options.statuses || ["shipped", "building", "next", "planned", "exploring", "paused"]).map((value) => `<option value="${value}"${selectedAttr(value, model.status)}>${roadmapStatusLabel(value)}</option>`).join("")}</select></label>
+          <label>Target date<input name="target_date" type="date" value="${escapeHtml(model.target_date || "")}" /></label>
+          <label>Accent<select name="accent">${(options.accents || ["mint", "gold", "coral", "cyan", "violet"]).map((value) => `<option value="${value}"${selectedAttr(value, model.accent)}>${humanLabel(value)}</option>`).join("")}</select></label>
+          <label>Icon<select name="icon">${(options.icons || ["route", "shield", "link", "bank", "home", "rocket", "settings"]).map((value) => `<option value="${value}"${selectedAttr(value, model.icon)}>${humanLabel(value)}</option>`).join("")}</select></label>
+          <label>Route order<input name="sort_order" type="number" min="0" max="9999" value="${Number(model.sort_order || 0)}" required /></label>
+          <label class="roadmap-progress-input">Progress <output>${Number(model.progress || 0)}%</output><input name="progress" type="range" min="0" max="100" value="${Number(model.progress || 0)}" /></label>
+          <label class="roadmap-visibility"><input name="is_visible" type="checkbox" ${model.is_visible ? "checked" : ""} /> Visible to community</label>
+          <div class="roadmap-editor-actions">
+            <button class="secondary" type="button" data-close-roadmap-editor>Cancel</button>
+            <button class="primary" type="submit">${isNew ? "Add to route" : "Save milestone"}</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+function animateRoadmapStops() {
+  const stops = $$(".roadmap-stop");
+  if (!("IntersectionObserver" in window)) {
+    stops.forEach((stop) => stop.classList.add("in-view"));
+    return;
+  }
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add("in-view");
+        observer.unobserve(entry.target);
+      }
+    });
+  }, { root: $(".roadmap-scroll"), threshold: 0.12 });
+  stops.forEach((stop) => observer.observe(stop));
+}
+
+function bindRoadmapWorkspace() {
+  animateRoadmapStops();
+  $("[data-close-roadmap]")?.addEventListener("click", async () => {
+    state.activeApp = null;
+    state.roadmapEditorId = null;
+    await loadSession();
+  });
+  $("[data-refresh-roadmap]")?.addEventListener("click", async () => {
+    await loadAppData("roadmap");
+    render();
+  });
+  $$("[data-roadmap-filter]").forEach((button) => button.addEventListener("click", () => {
+    state.roadmapFilter = button.dataset.roadmapFilter;
+    render();
+  }));
+  $$("[data-roadmap-vote]").forEach((button) => button.addEventListener("click", async () => {
+    const item = state.cache.roadmap?.items?.find((row) => String(row.id) === String(button.dataset.roadmapVote));
+    if (!item) return;
+    const requested = Number(button.dataset.vote);
+    const vote = Number(item.user_vote || 0) === requested ? 0 : requested;
+    const scrollTop = $(".roadmap-scroll")?.scrollTop || 0;
+    try {
+      const result = await api(`/api/roadmap/items/${item.id}/vote`, { method: "POST", body: { vote } });
+      Object.assign(item, result);
+      if (state.cache.roadmap?.stats) {
+        state.cache.roadmap.stats.community_votes = (state.cache.roadmap.items || []).reduce((total, row) => total + Number(row.upvotes || 0) + Number(row.downvotes || 0), 0);
+      }
+      render();
+      requestAnimationFrame(() => {
+        const scroll = $(".roadmap-scroll");
+        if (scroll) scroll.scrollTop = scrollTop;
+      });
+    } catch (error) {
+      if (error.message) toast(error.message);
+    }
+  }));
+  $$("[data-roadmap-edit]").forEach((button) => button.addEventListener("click", () => {
+    state.roadmapEditorId = button.dataset.roadmapEdit;
+    render();
+  }));
+  $$("[data-close-roadmap-editor]").forEach((button) => button.addEventListener("click", () => {
+    state.roadmapEditorId = null;
+    render();
+  }));
+  $(".roadmap-editor-backdrop")?.addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) {
+      state.roadmapEditorId = null;
+      render();
+    }
+  });
+  const progressInput = $("#roadmapEditorForm input[name='progress']");
+  progressInput?.addEventListener("input", () => {
+    const output = $("#roadmapEditorForm output");
+    if (output) output.textContent = `${progressInput.value}%`;
+  });
+  $("#roadmapEditorForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const payload = Object.fromEntries(new FormData(form).entries());
+    payload.is_visible = form.elements.is_visible.checked;
+    payload.progress = Number(payload.progress || 0);
+    payload.sort_order = Number(payload.sort_order || 0);
+    const itemId = form.dataset.roadmapItemId;
+    try {
+      await api(itemId ? `/api/roadmap/items/${itemId}` : "/api/roadmap/items", {
+        method: itemId ? "PATCH" : "POST",
+        body: payload,
+      });
+      toast(itemId ? "Roadmap milestone saved" : "Milestone added to route");
+      state.roadmapEditorId = null;
+      await loadAppData("roadmap");
+      render();
+    } catch (error) {
+      if (error.message) toast(error.message);
     }
   });
 }
@@ -7962,7 +8266,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("/service-worker.js?v=0.0.70").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.71").catch(() => {}));
 }
 
 bootApp();

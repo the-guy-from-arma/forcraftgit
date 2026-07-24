@@ -501,6 +501,9 @@ BUSINESS_APPLICATION_STATUSES = ("submitted", "under_review", "interview_request
 BUSINESS_LICENSE_STATUSES = ("active", "suspended", "revoked", "expired")
 BUSINESS_LICENSE_CATEGORIES = ("basic", "commercial", "restricted", "government_contract")
 BUSINESS_MAX_ACTIVE_PER_OWNER = 2
+ROADMAP_STATUSES = ("shipped", "building", "next", "planned", "exploring", "paused")
+ROADMAP_ACCENTS = ("mint", "gold", "coral", "cyan", "violet")
+ROADMAP_ICONS = ("route", "shield", "link", "bank", "home", "rocket", "settings")
 FIRE_COMMAND_ROLES = ("fire_chief", "deputy_chief", "fire_marshal")
 FIRE_SERVICE_ROLES = ("fireman", "ems", *FIRE_COMMAND_ROLES)
 FIRE_RIG_NAMES = ("Engine 1", "Ladder 1", "Truck 1", "Rescue 1", "Battalion 1", "Battalion 2", "Battalion 3", "Battalion 4", "Battalion 5")
@@ -514,6 +517,57 @@ LAW_ENFORCEMENT_COMMAND_ROLES = {
     "cid": ("cid_director",),
     "iu": ("iu_director",),
 }
+
+
+def roadmap_payload_values(payload: dict[str, Any], current: DbRow | None = None) -> dict[str, Any]:
+    current = current or {}
+
+    def value(key: str, default: Any) -> Any:
+        return payload[key] if key in payload else current.get(key, default)
+
+    title = " ".join(str(value("title", "") or "").strip().split())[:120]
+    category = " ".join(str(value("category", "Platform") or "Platform").strip().split())[:60]
+    summary = str(value("summary", "") or "").strip()[:500]
+    details = str(value("details", "") or "").strip()[:5000]
+    status = str(value("status", "planned") or "planned").strip().lower()
+    accent = str(value("accent", "mint") or "mint").strip().lower()
+    icon = str(value("icon", "route") or "route").strip().lower()
+    if not title:
+        raise ValueError("Roadmap title is required")
+    if not summary:
+        raise ValueError("Roadmap summary is required")
+    if status not in ROADMAP_STATUSES:
+        raise ValueError("Invalid roadmap status")
+    if accent not in ROADMAP_ACCENTS:
+        raise ValueError("Invalid roadmap accent")
+    if icon not in ROADMAP_ICONS:
+        raise ValueError("Invalid roadmap icon")
+    try:
+        progress = max(0, min(100, int(value("progress", 0))))
+        sort_order = max(0, min(9999, int(value("sort_order", 0))))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Progress and route order must be whole numbers") from exc
+    target_date = str(value("target_date", "") or "").strip()
+    if target_date:
+        try:
+            dt.date.fromisoformat(target_date)
+        except ValueError as exc:
+            raise ValueError("Target date must use YYYY-MM-DD") from exc
+    visible_raw = value("is_visible", 1)
+    is_visible = 1 if str(visible_raw).lower() in ("1", "true", "yes", "on") else 0
+    return {
+        "title": title,
+        "category": category,
+        "summary": summary,
+        "details": details,
+        "status": status,
+        "progress": progress,
+        "target_date": target_date or None,
+        "sort_order": sort_order,
+        "accent": accent,
+        "icon": icon,
+        "is_visible": is_visible,
+    }
 LAW_ENFORCEMENT_APPLICATION_FIELDS = (
     {"key": "in_game_name", "label": "What is your in-game name?", "kind": "text", "min": 2, "max": 120},
     {"key": "discord_name", "label": "Discord Name", "kind": "text", "min": 2, "max": 120},
@@ -1437,6 +1491,36 @@ def ensure_schema() -> None:
                 FOREIGN KEY (ia_id) REFERENCES cid_internal_affairs(id) ON DELETE CASCADE,
                 FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS roadmap_items (
+                id SERIAL PRIMARY KEY,
+                slug TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'Platform',
+                summary TEXT NOT NULL,
+                details TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'planned',
+                progress INTEGER NOT NULL DEFAULT 0,
+                target_date TEXT,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                accent TEXT NOT NULL DEFAULT 'mint',
+                icon TEXT NOT NULL DEFAULT 'route',
+                is_visible INTEGER NOT NULL DEFAULT 1,
+                created_by INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS roadmap_votes (
+                item_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                vote INTEGER NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (item_id, user_id),
+                FOREIGN KEY (item_id) REFERENCES roadmap_items(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
             """
         )
         ensure_migrations(db)
@@ -1444,6 +1528,7 @@ def ensure_schema() -> None:
         seed_jobs(db)
         seed_charges(db)
         seed_properties(db)
+        seed_roadmap(db)
 
 
 def ensure_migrations(db: Database) -> None:
@@ -1819,6 +1904,8 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS mdt_bookings_officer_idx ON mdt_bookings (officer_id, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS department_applications_user_idx ON department_applications (user_id, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS department_applications_department_idx ON department_applications (department_key, status)")
+    db.execute("CREATE INDEX IF NOT EXISTS roadmap_items_route_idx ON roadmap_items (is_visible, sort_order, id)")
+    db.execute("CREATE INDEX IF NOT EXISTS roadmap_votes_item_idx ON roadmap_votes (item_id, vote)")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS referrals (
@@ -2257,6 +2344,112 @@ def seed_properties(db: Database) -> None:
     )
 
 
+def seed_roadmap(db: Database) -> None:
+    ts = now_iso()
+    milestones = [
+        (
+            "pwa-command-core",
+            "Faircroft PWA Command Core",
+            "Foundation",
+            "The live phone OS, civilian services, role-based workspaces, CAD, courts, DMV, and staff tools.",
+            "The shared account and roleplay foundation is online. Future roadmap phases build on this profile, permissions, messaging, court, DMV, and PostgreSQL core.",
+            "shipped",
+            100,
+            "2026-07-23",
+            10,
+            "mint",
+            "shield",
+        ),
+        (
+            "tbs-account-link",
+            "TBS RP Linking Expansion",
+            "Game Link",
+            "Finish the account bridge that joins Arma identities to Faircroft online profiles.",
+            "The mod already generates identity-linked codes and the API foundation is partially complete. This phase hardens claiming, presence, event delivery, retry behavior, and link diagnostics.",
+            "building",
+            42,
+            "2026-07-30",
+            20,
+            "cyan",
+            "link",
+        ),
+        (
+            "live-cad-game-sync",
+            "Live CAD and Game Sync",
+            "Public Safety",
+            "Move active CAD events, callsigns, dispatch assignments, and roleplay outcomes between the game and the PWA.",
+            "The goal is a reliable two-way operational bridge: server events enter CAD, authorized CAD actions can be reflected in game systems, and every update retains an audit trail.",
+            "building",
+            31,
+            "2026-08-03",
+            30,
+            "coral",
+            "route",
+        ),
+        (
+            "android-app-parity",
+            "Faircroft Android App",
+            "Mobile",
+            "Package a native-feeling Android APK with the same working systems as the PWA.",
+            "The first Android release targets installable parity with the current PWA, secure session handling, push-ready notifications, native back behavior, and a polished small-screen shell.",
+            "building",
+            18,
+            "2026-08-07",
+            40,
+            "gold",
+            "rocket",
+        ),
+        (
+            "mobile-banking-sync",
+            "Connected Mobile Banking",
+            "Economy",
+            "Connect Faircroft bank balances and approved transactions to live roleplay activity.",
+            "Banking will move beyond a display page into a controlled ledger shared by the PWA and approved game events, with staff adjustments, transfer safeguards, and transaction audit history.",
+            "next",
+            12,
+            "2026-08-12",
+            50,
+            "mint",
+            "bank",
+        ),
+        (
+            "property-ownership",
+            "Properties and Ownership",
+            "World",
+            "Launch searchable properties, ownership records, access rights, sales, leases, and staff controls.",
+            "This phase turns the coming-soon Properties icon into a complete RP ownership system designed to connect with banking and later in-game entry and persistence events.",
+            "next",
+            7,
+            "2026-08-19",
+            60,
+            "violet",
+            "home",
+        ),
+        (
+            "connected-economy",
+            "Connected Faircroft Economy",
+            "Long Range",
+            "Unify jobs, businesses, banking, properties, contracts, and game events into one balanced economy.",
+            "The long-range system will give staff clear economic controls while players see consistent balances, ownership, reputation, applications, and activity across every Faircroft surface.",
+            "planned",
+            3,
+            None,
+            70,
+            "cyan",
+            "settings",
+        ),
+    ]
+    db.executemany(
+        """
+        INSERT INTO roadmap_items
+        (slug, title, category, summary, details, status, progress, target_date, sort_order, accent, icon, is_visible, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        ON CONFLICT (slug) DO NOTHING
+        """,
+        [(*item, ts, ts) for item in milestones],
+    )
+
+
 def create_default_dmv(db: Database, user_id: int) -> None:
     plate = f"RP{user_id:04d}{secrets.randbelow(90) + 10}"
     db.execute(
@@ -2530,6 +2723,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
     base = [
         ("profile", "Profile", "user", True, False),
         ("getting-started", "Getting Started", "map", True, False),
+        ("roadmap", "Roadmap", "route", True, False),
         ("dmv", "DMV", "id-card", verified, False),
         ("jobs", "JOB", "briefcase", True, False),
         ("court", "COURT", "gavel", verified, False),
@@ -2921,6 +3115,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_session(db, user)
                 elif path == "/api/changelog" and method == "GET":
                     self.api_changelog(user)
+                elif path == "/api/roadmap" and method == "GET":
+                    self.api_roadmap(db, user)
+                elif path == "/api/roadmap/items" and method == "POST":
+                    self.api_create_roadmap_item(db, user)
+                elif path.startswith("/api/roadmap/items/") and path.endswith("/vote") and method == "POST":
+                    self.api_vote_roadmap_item(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/roadmap/items/") and method == "PATCH":
+                    self.api_update_roadmap_item(db, user, self.path_int(path, 3))
                 elif path == "/api/presence" and method == "POST":
                     self.api_presence(db, user)
                 elif path == "/api/profile" and method == "GET":
@@ -3345,6 +3547,186 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         except (OSError, json.JSONDecodeError):
             payload = {"version": "unavailable", "entries": []}
         self.send_json(200, payload)
+
+    def api_roadmap(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        can_manage = has_any(user, "owner", "admin")
+        visibility_sql = "" if can_manage else "WHERE i.is_visible = 1"
+        rows = all_rows(
+            db,
+            f"""
+            SELECT i.*,
+                   (SELECT COUNT(*) FROM roadmap_votes rv WHERE rv.item_id = i.id AND rv.vote = 1) AS upvotes,
+                   (SELECT COUNT(*) FROM roadmap_votes rv WHERE rv.item_id = i.id AND rv.vote = -1) AS downvotes,
+                   COALESCE((SELECT rv.vote FROM roadmap_votes rv WHERE rv.item_id = i.id AND rv.user_id = ?), 0) AS user_vote
+            FROM roadmap_items i
+            {visibility_sql}
+            ORDER BY i.sort_order, i.id
+            """,
+            (user["id"],),
+        )
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["progress"] = int(item.get("progress") or 0)
+            item["sort_order"] = int(item.get("sort_order") or 0)
+            item["is_visible"] = bool(item.get("is_visible"))
+            item["upvotes"] = int(item.get("upvotes") or 0)
+            item["downvotes"] = int(item.get("downvotes") or 0)
+            item["score"] = item["upvotes"] - item["downvotes"]
+            item["user_vote"] = int(item.get("user_vote") or 0)
+            items.append(item)
+        public_items = [item for item in items if item["is_visible"]]
+        active = [item for item in public_items if item["status"] in ("building", "next")]
+        shipped = [item for item in public_items if item["status"] == "shipped"]
+        total_votes = sum(item["upvotes"] + item["downvotes"] for item in public_items)
+        overall_progress = round(sum(item["progress"] for item in public_items) / max(len(public_items), 1))
+        android = next((item for item in public_items if item["slug"] == "android-app-parity"), None)
+        android_days = None
+        if android and android.get("target_date"):
+            android_days = max(0, (dt.date.fromisoformat(str(android["target_date"])) - utcnow().date()).days)
+        self.send_json(
+            200,
+            {
+                "items": items,
+                "can_manage": can_manage,
+                "stats": {
+                    "overall_progress": overall_progress,
+                    "active_phases": len(active),
+                    "shipped_phases": len(shipped),
+                    "community_votes": total_votes,
+                    "android_days": android_days,
+                    "android_target": android.get("target_date") if android else None,
+                },
+                "options": {
+                    "statuses": list(ROADMAP_STATUSES),
+                    "accents": list(ROADMAP_ACCENTS),
+                    "icons": list(ROADMAP_ICONS),
+                },
+            },
+        )
+
+    def api_vote_roadmap_item(self, db: Database, user: DbRow | None, item_id: int) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        item = one(db, "SELECT id, is_visible FROM roadmap_items WHERE id = ?", (item_id,))
+        if not item or (not bool(item["is_visible"]) and not has_any(user, "owner", "admin")):
+            self.error(404, "Roadmap milestone not found")
+            return
+        payload = self.read_json()
+        try:
+            vote = int(payload.get("vote", 0))
+        except (TypeError, ValueError):
+            self.error(400, "Vote must be up, down, or cleared")
+            return
+        if vote not in (-1, 0, 1):
+            self.error(400, "Vote must be up, down, or cleared")
+            return
+        if vote == 0:
+            db.execute("DELETE FROM roadmap_votes WHERE item_id = ? AND user_id = ?", (item_id, user["id"]))
+        else:
+            db.execute(
+                """
+                INSERT INTO roadmap_votes (item_id, user_id, vote, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (item_id, user_id)
+                DO UPDATE SET vote = excluded.vote, updated_at = excluded.updated_at
+                """,
+                (item_id, user["id"], vote, now_iso()),
+            )
+        counts = one(
+            db,
+            """
+            SELECT
+                (SELECT COUNT(*) FROM roadmap_votes WHERE item_id = ? AND vote = 1) AS upvotes,
+                (SELECT COUNT(*) FROM roadmap_votes WHERE item_id = ? AND vote = -1) AS downvotes
+            """,
+            (item_id, item_id),
+        ) or {"upvotes": 0, "downvotes": 0}
+        upvotes = int(counts["upvotes"] or 0)
+        downvotes = int(counts["downvotes"] or 0)
+        self.send_json(200, {"ok": True, "item_id": item_id, "user_vote": vote, "upvotes": upvotes, "downvotes": downvotes, "score": upvotes - downvotes})
+
+    def api_create_roadmap_item(self, db: Database, user: DbRow | None) -> None:
+        err = admin_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        values = roadmap_payload_values(payload)
+        slug_base = "".join(character.lower() if character.isalnum() else "-" for character in values["title"])
+        slug_base = "-".join(part for part in slug_base.split("-") if part)[:70] or "milestone"
+        slug = slug_base
+        suffix = 2
+        while one(db, "SELECT id FROM roadmap_items WHERE slug = ?", (slug,)):
+            slug = f"{slug_base[:64]}-{suffix}"
+            suffix += 1
+        ts = now_iso()
+        created = db.execute(
+            """
+            INSERT INTO roadmap_items
+            (slug, title, category, summary, details, status, progress, target_date, sort_order, accent, icon, is_visible, created_by, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id
+            """,
+            (
+                slug,
+                values["title"],
+                values["category"],
+                values["summary"],
+                values["details"],
+                values["status"],
+                values["progress"],
+                values["target_date"],
+                values["sort_order"],
+                values["accent"],
+                values["icon"],
+                values["is_visible"],
+                user["id"],
+                ts,
+                ts,
+            ),
+        ).fetchone()
+        self.send_json(201, {"ok": True, "id": int(created["id"]), "slug": slug})
+
+    def api_update_roadmap_item(self, db: Database, user: DbRow | None, item_id: int) -> None:
+        err = admin_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        item = one(db, "SELECT * FROM roadmap_items WHERE id = ?", (item_id,))
+        if not item:
+            self.error(404, "Roadmap milestone not found")
+            return
+        values = roadmap_payload_values(self.read_json(), item)
+        db.execute(
+            """
+            UPDATE roadmap_items
+            SET title = ?, category = ?, summary = ?, details = ?, status = ?, progress = ?,
+                target_date = ?, sort_order = ?, accent = ?, icon = ?, is_visible = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                values["title"],
+                values["category"],
+                values["summary"],
+                values["details"],
+                values["status"],
+                values["progress"],
+                values["target_date"],
+                values["sort_order"],
+                values["accent"],
+                values["icon"],
+                values["is_visible"],
+                now_iso(),
+                item_id,
+            ),
+        )
+        self.send_json(200, {"ok": True, "id": item_id})
 
     def api_presence(self, db: Database, user: DbRow | None) -> None:
         if not user:
