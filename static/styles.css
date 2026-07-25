@@ -8620,11 +8620,21 @@ textarea:focus {
 @media (max-width: 980px) {
   .business-workspace {
     width: 100%;
+    max-width: 100vw;
     height: 100svh;
     min-height: 0;
     grid-template-columns: 1fr;
     grid-template-rows: auto minmax(0, 1fr);
+    overflow-x: hidden;
     border-radius: 0;
+  }
+
+  .business-workspace-main,
+  .business-workspace-content,
+  .business-workspace-content > .business-app,
+  .business-workspace-content > .business-app > * {
+    min-width: 0;
+    max-width: 100%;
   }
 
   .business-workspace-sidebar {
@@ -8642,8 +8652,16 @@ textarea:focus {
 
   .business-workspace-sidebar nav {
     display: flex;
+    width: 100%;
+    max-width: 100vw;
     gap: 7px;
     overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+  }
+
+  .business-workspace-sidebar nav::-webkit-scrollbar {
+    display: none;
   }
 
   .business-workspace-sidebar nav button {
@@ -8658,6 +8676,41 @@ textarea:focus {
 
   .business-workspace-content {
     padding: 16px;
+    overflow-x: hidden;
+  }
+
+  .business-workspace-content .grid-2,
+  .business-workspace-content .business-form .grid-2,
+  .business-workspace-content .business-card .grid-2,
+  .business-workspace-content .business-meta,
+  .business-license-folders {
+    grid-template-columns: 1fr;
+  }
+
+  .business-license-folder[open] {
+    grid-column: auto;
+  }
+
+  .business-workspace-content input,
+  .business-workspace-content select,
+  .business-workspace-content textarea {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    font-size: 16px;
+  }
+
+  .business-workspace-content .row {
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .business-workspace-content h1,
+  .business-workspace-content h2,
+  .business-workspace-content h3,
+  .business-workspace-content p,
+  .business-workspace-content strong {
+    overflow-wrap: anywhere;
   }
 
   .mdt-workspace {

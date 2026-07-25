@@ -1,6 +1,17 @@
 {
-  "version": "0.0.73",
+  "version": "0.0.74",
   "entries": [
+    {
+      "date": "2026-07-25",
+      "version": "0.0.74",
+      "title": "Business Registry Mobile Layout",
+      "added": [],
+      "changed": [],
+      "fixed": [
+        "Business Registry now switches all desktop grids, cards, form controls, and license folders to a single-column phone layout at the full workspace breakpoint.",
+        "Scaled mobile browser viewports can no longer force the Business Registry wider than the visible screen."
+      ]
+    },
     {
       "date": "2026-07-25",
       "version": "0.0.73",

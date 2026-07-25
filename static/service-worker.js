@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v73-mobile-workspaces";
+const CACHE = "faircroft-rp-v74-business-mobile";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.73",
-  "/static/roadmap.css?v=0.0.73",
-  "/static/app.js?v=0.0.73",
+  "/static/styles.css?v=0.0.74",
+  "/static/roadmap.css?v=0.0.74",
+  "/static/app.js?v=0.0.74",
   "/static/brand/faircroft-emblem.webp",
   "/static/brand/faircroft-light-sweep.mp4",
   "/static/brand/icon-192.png",
