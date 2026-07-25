@@ -8,8 +8,11 @@ import json
 import mimetypes
 import os
 import secrets
+import socket
+import struct
 import threading
 import time
+import zlib
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -44,6 +47,10 @@ SHADOWHAVEN_BANK_FILE = os.environ.get(
     "profile/profile/.db/FCRPMUSSALO/Banks/00bb0001-1e42-6138-7e90-c04752d4fab6.json",
 ).strip()
 SHADOWHAVEN_BANK_SYNC_SECONDS = max(5, int(os.environ.get("SHADOWHAVEN_BANK_SYNC_SECONDS", "15")))
+ARMA_RCON_HOST = os.environ.get("ARMA_RCON_HOST", os.environ.get("RCON_HOST", "")).strip()
+ARMA_RCON_PORT = int(os.environ.get("ARMA_RCON_PORT", os.environ.get("RCON_PORT", "19999")))
+ARMA_RCON_PASSWORD = os.environ.get("ARMA_RCON_PASSWORD", os.environ.get("RCON_PASSWORD", ""))
+ARMA_RCON_TIMEOUT_SECONDS = max(1.0, min(float(os.environ.get("ARMA_RCON_TIMEOUT_SECONDS", "5")), 15.0))
 NAME_CHANGE_LIMIT = 3
 NAME_CHANGE_WINDOW_DAYS = 3
 TREASURY_STIMULUS_AMOUNT = 75000.00
@@ -86,6 +93,54 @@ def parse_bridge_datetime(value: str | None) -> dt.datetime:
 
 def utcnow() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
+
+
+def arma_rcon_configured() -> bool:
+    return bool(ARMA_RCON_HOST and ARMA_RCON_PASSWORD and 1 <= ARMA_RCON_PORT <= 65535)
+
+
+def arma_rcon_packet(payload: bytes) -> bytes:
+    checksum = zlib.crc32(payload) & 0xFFFFFFFF
+    return b"BE" + struct.pack("<I", checksum) + b"\xff" + payload
+
+
+def arma_rcon_payload(packet: bytes) -> bytes:
+    if len(packet) < 8 or packet[:2] != b"BE" or packet[6:7] != b"\xff":
+        raise RuntimeError("RCON returned an invalid packet")
+    expected = struct.unpack("<I", packet[2:6])[0]
+    payload = packet[7:]
+    if (zlib.crc32(payload) & 0xFFFFFFFF) != expected:
+        raise RuntimeError("RCON returned a packet with an invalid checksum")
+    return payload
+
+
+def execute_arma_rcon(command: str) -> dict[str, str]:
+    """Execute one command using Arma Reforger's UDP RCON protocol."""
+    if not arma_rcon_configured():
+        return {"status": "rcon_not_configured", "response": ""}
+    clean_command = " ".join(str(command).replace("\x00", " ").split())
+    if not clean_command:
+        raise RuntimeError("RCON command cannot be empty")
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
+        client.settimeout(ARMA_RCON_TIMEOUT_SECONDS)
+        client.connect((ARMA_RCON_HOST, ARMA_RCON_PORT))
+        client.send(arma_rcon_packet(b"\x00" + ARMA_RCON_PASSWORD.encode("utf-8")))
+        login = arma_rcon_payload(client.recv(65535))
+        if len(login) < 2 or login[0] != 0 or login[1] != 1:
+            raise RuntimeError("RCON authentication failed")
+        client.send(arma_rcon_packet(b"\x01\x00" + clean_command.encode("utf-8")))
+        reply = arma_rcon_payload(client.recv(65535))
+        if len(reply) < 2 or reply[0] != 1 or reply[1] != 0:
+            raise RuntimeError("RCON returned an unexpected command response")
+        response = reply[2:].decode("utf-8", errors="replace").strip()
+        lowered = response.lower()
+        if any(marker in lowered for marker in ("error", "failed", "unknown command", "not found")):
+            raise RuntimeError(f"RCON rejected the command: {response[:300]}")
+        try:
+            client.send(arma_rcon_packet(b"\x01\x01@logout"))
+        except OSError:
+            pass
+    return {"status": "applied", "response": response[:1000]}
 
 
 def hash_password(password: str, salt: str | None = None) -> str:
@@ -510,7 +565,7 @@ FIRE_RIG_NAMES = ("Engine 1", "Ladder 1", "Truck 1", "Rescue 1", "Battalion 1", 
 LAW_SERVICE_ROLES = ("leo", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director")
 INDEED_ADMIN_ROLE = "indeed_admin"
 LAW_ENFORCEMENT_DEPARTMENT_KEYS = ("state_police", "metro_police", "sheriff", "cid", "iu")
-LAW_ENFORCEMENT_DEPARTMENT_CHOICES = ("Sheriffs Department", "Police Department", "State Police", "CID", "Interrogation Unit")
+LAW_ENFORCEMENT_DEPARTMENT_CHOICES = ("Faircroft Sheriff's Office",)
 LAW_ENFORCEMENT_COMMAND_ROLES = {
     "metro_police": ("metro_police_chief",),
     "state_police": ("state_police_commander",),
@@ -581,37 +636,15 @@ LAW_ENFORCEMENT_APPLICATION_FIELDS = (
     {"key": "drug_trafficking_process", "label": "While on duty, you detain a suspect for suspected drug trafficking, once you search them you discover the suspect does indeed have Cocaine. How would you process the suspect?", "kind": "long", "min": 20, "max": 5000},
     {"key": "corruption_acknowledgement", "label": "Do you understand that any proven corruption within the Faircroft Sheriff Offce may result in termination", "kind": "yesno"},
     {"key": "procedure_commitment", "label": "Do you commit to following the Global Operating Procedures, Division Standard Operating Procedures, and all announcements?", "kind": "yesno"},
-    {"key": "english_communication", "label": "Can you communicate clearly using the English language, which is crucial for clear and concise communication across the Police Department?", "kind": "yesno"},
+    {"key": "english_communication", "label": "Can you communicate clearly using the English language, which is crucial for clear and concise communication across the Sheriff's Office?", "kind": "yesno"},
     {"key": "chain_of_command", "label": "Do you agree to follow chain of command", "kind": "yesno"},
     {"key": "truth_acknowledgement", "label": "Do you acknowledge that falsifying any information on this application will result in an automatic denial and could result in blacklisting", "kind": "yesno"},
 )
 DEPARTMENT_POSTINGS = (
     {
-        "key": "state_police",
-        "label": "State Police",
-        "division": "State Police",
-        "role_key": "state_police",
-        "form_type": "law_enforcement",
-        "command_roles": LAW_ENFORCEMENT_COMMAND_ROLES["state_police"],
-        "badge": "Trooper Candidate",
-        "schedule": "Patrol, traffic enforcement, highway response, and statewide operations.",
-        "requirements": "Professional conduct, clean RP record, radio discipline, and command interview.",
-    },
-    {
-        "key": "metro_police",
-        "label": "Metro Police",
-        "division": "Metro Police",
-        "role_key": "police",
-        "form_type": "law_enforcement",
-        "command_roles": LAW_ENFORCEMENT_COMMAND_ROLES["metro_police"],
-        "badge": "Police Recruit",
-        "schedule": "City patrol, 911 response, arrests, citations, and community policing.",
-        "requirements": "Must understand MDT use, report writing, lawful stops, and use-of-force policy.",
-    },
-    {
         "key": "sheriff",
-        "label": "Sheriff Office",
-        "division": "Sheriff Office",
+        "label": "Sheriff's Office",
+        "division": "Faircroft Sheriff's Office",
         "role_key": "sheriff",
         "form_type": "law_enforcement",
         "command_roles": (),
@@ -620,44 +653,15 @@ DEPARTMENT_POSTINGS = (
         "requirements": "Interview required, mature RP, custody awareness, and county patrol availability.",
     },
     {
-        "key": "cid",
-        "label": "CID",
-        "division": "Criminal Investigations Division",
-        "role_key": "cid",
-        "form_type": "law_enforcement",
-        "command_roles": LAW_ENFORCEMENT_COMMAND_ROLES["cid"],
-        "badge": "Investigator Applicant",
-        "schedule": "Investigations, surveillance, warrants, internal affairs support, and case files.",
-        "requirements": "Prior LEO experience preferred, detailed writing, evidence handling, and command approval.",
-    },
-    {
-        "key": "iu",
-        "label": "Interrogation Unit",
-        "division": "Interrogation Unit",
-        "role_key": "iu",
-        "form_type": "law_enforcement",
-        "command_roles": LAW_ENFORCEMENT_COMMAND_ROLES["iu"],
-        "badge": "Interrogator Applicant",
-        "schedule": "Interrogations, intelligence debriefs, criminal interviews, and case support across CID-led operations.",
-        "requirements": "Command approval required. Detail retention, lawful interviewing standards, and chain-of-command compliance.",
-    },
-    {
-        "key": "fire",
-        "label": "Fire Dept",
-        "division": "Fire Department",
+        "key": "fire_ems",
+        "label": "Fire & EMS",
+        "division": "Fire & Emergency Medical Services",
         "role_key": "fireman",
-        "badge": "Firefighter Candidate",
-        "schedule": "Fire response, rescue support, incident staging, and apparatus operations.",
-        "requirements": "Scene safety, radio discipline, chain of command, and apparatus assignment training.",
-    },
-    {
-        "key": "ems",
-        "label": "EMS",
-        "division": "Emergency Medical Services",
-        "role_key": "ems",
-        "badge": "EMS Candidate",
-        "schedule": "Medical calls, triage, transport RP, scene coordination, and hospital handoff.",
-        "requirements": "Calm communication, medical RP standards, patient reports, and incident coordination.",
+        "role_label": "Fire & EMS",
+        "command_roles": FIRE_COMMAND_ROLES,
+        "badge": "Fire & EMS Candidate",
+        "schedule": "Fire response, rescue operations, medical calls, triage, transport RP, and hospital handoff.",
+        "requirements": "Scene safety, calm communication, medical and fire RP standards, radio discipline, and command training.",
     },
 )
 SYSTEM_SETTING_DEFAULTS = {
@@ -947,6 +951,9 @@ def ensure_schema() -> None:
                 revoked_by INTEGER,
                 revoked_at TEXT,
                 revoke_reason TEXT NOT NULL DEFAULT '',
+                game_enforcement_status TEXT NOT NULL DEFAULT '',
+                game_enforcement_response TEXT NOT NULL DEFAULT '',
+                game_enforcement_at TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (revoked_by) REFERENCES users(id) ON DELETE SET NULL
@@ -1787,6 +1794,9 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS player_statement TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS appeal_guidance TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS bail_amount NUMERIC(12,2) NOT NULL DEFAULT 0")
+    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS game_enforcement_status TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS game_enforcement_response TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE account_sanctions ADD COLUMN IF NOT EXISTS game_enforcement_at TEXT")
     # Legacy profile-entered IDs are not links. Preserve only IDs backed by the
     # authoritative link table; new links are created exclusively by code claim.
     db.execute(
@@ -8323,13 +8333,45 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             expires_at = (starts_at + dt.timedelta(minutes=duration_minutes)).isoformat()
         elif sanction_type == "sanction" and payload.get("duration_minutes"):
             expires_at = (starts_at + dt.timedelta(minutes=max(1, int(payload["duration_minutes"])))).isoformat()
+        game_enforcement = {"status": "not_required", "response": ""}
+        identity = one(
+            db,
+            "SELECT identity_id FROM arma_account_links WHERE user_id = ? ORDER BY linked_at DESC LIMIT 1",
+            (target_id,),
+        )
+        if sanction_type in ("ban", "timeout"):
+            if not identity or not str(identity.get("identity_id") or "").strip():
+                self.error(409, "This account has no linked Bohemia identity, so the game ban cannot be applied")
+                return
+            if not arma_rcon_configured():
+                self.error(503, "Arma RCON is not configured. Set ARMA_RCON_HOST, ARMA_RCON_PORT, and ARMA_RCON_PASSWORD.")
+                return
+            duration_seconds = 0
+            if sanction_type == "timeout":
+                duration_seconds = duration_minutes * 60
+            rcon_reason = " ".join(str(payload["reason"]).replace("#", "").split())[:240]
+            try:
+                game_enforcement = execute_arma_rcon(
+                    f"#ban create {identity['identity_id']} {duration_seconds} {rcon_reason}"
+                )
+            except (OSError, RuntimeError) as exc:
+                add_admin_audit(
+                    db,
+                    int(user["id"]),
+                    f"account.{sanction_type}.rcon_failed",
+                    target_id,
+                    {"report_number": report_number, "identity_id": identity["identity_id"], "error": str(exc)[:500]},
+                )
+                self.error(502, f"The enforcement report was not created because Arma RCON failed: {exc}")
+                return
         created = db.execute(
             """
             INSERT INTO account_sanctions
             (user_id, sanction_type, reason, report_number, rule_code, incident_at,
              incident_summary, evidence, witness_names, staff_findings, player_statement,
-             appeal_guidance, internal_notes, bail_amount, starts_at, expires_at, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
+             appeal_guidance, internal_notes, bail_amount, starts_at, expires_at, created_by, created_at,
+             game_enforcement_status, game_enforcement_response, game_enforcement_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
             """,
             (
                 target_id,
@@ -8350,9 +8392,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 expires_at,
                 user["id"],
                 starts_at.isoformat(),
+                game_enforcement["status"],
+                game_enforcement["response"],
+                starts_at.isoformat() if game_enforcement["status"] == "applied" else None,
             ),
         ).fetchone()
-        add_admin_audit(db, int(user["id"]), f"account.{sanction_type}.created", target_id, {"report_number": report_number, "rule_code": payload.get("rule_code"), "reason": payload["reason"], "expires_at": expires_at})
+        add_admin_audit(db, int(user["id"]), f"account.{sanction_type}.created", target_id, {"report_number": report_number, "rule_code": payload.get("rule_code"), "reason": payload["reason"], "expires_at": expires_at, "game_enforcement_status": game_enforcement["status"], "identity_id": identity.get("identity_id") if identity else None})
         self.send_json(
             201,
             {
@@ -8360,7 +8405,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "id": int(created["id"]),
                 "report_number": report_number,
                 "expires_at": expires_at,
-                "game_enforcement_status": "rcon_not_configured",
+                "game_enforcement_status": game_enforcement["status"],
+                "game_enforcement_response": game_enforcement["response"],
             },
         )
 
@@ -8378,12 +8424,41 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         payload = self.read_json()
         reason = str(payload.get("reason") or "Revoked by staff").strip()[:1000]
+        game_enforcement = {"status": "not_required", "response": ""}
+        if sanction.get("sanction_type") in ("ban", "timeout"):
+            identity = one(
+                db,
+                "SELECT identity_id FROM arma_account_links WHERE user_id = ? ORDER BY linked_at DESC LIMIT 1",
+                (sanction["user_id"],),
+            )
+            if not identity or not str(identity.get("identity_id") or "").strip():
+                self.error(409, "This account has no linked Bohemia identity, so it cannot be unbanned in Arma")
+                return
+            if not arma_rcon_configured():
+                self.error(503, "Arma RCON is not configured. Set ARMA_RCON_HOST, ARMA_RCON_PORT, and ARMA_RCON_PASSWORD.")
+                return
+            try:
+                game_enforcement = execute_arma_rcon(f"#ban remove {identity['identity_id']}")
+            except (OSError, RuntimeError) as exc:
+                add_admin_audit(
+                    db,
+                    int(user["id"]),
+                    "account.unban.rcon_failed",
+                    int(sanction["user_id"]),
+                    {"sanction_id": sanction_id, "identity_id": identity["identity_id"], "error": str(exc)[:500]},
+                )
+                self.error(502, f"The CAD sanction remains active because Arma RCON unban failed: {exc}")
+                return
         db.execute(
-            "UPDATE account_sanctions SET revoked_by = ?, revoked_at = ?, revoke_reason = ? WHERE id = ?",
-            (user["id"], now_iso(), reason, sanction_id),
+            """UPDATE account_sanctions
+               SET revoked_by = ?, revoked_at = ?, revoke_reason = ?,
+                   game_enforcement_status = ?, game_enforcement_response = ?, game_enforcement_at = ?
+               WHERE id = ?""",
+            (user["id"], now_iso(), reason, game_enforcement["status"], game_enforcement["response"], now_iso() if game_enforcement["status"] == "applied" else None, sanction_id),
         )
-        add_admin_audit(db, int(user["id"]), "account.sanction.revoked", int(sanction["user_id"]), {"sanction_id": sanction_id, "reason": reason})
-        self.send_json(200, {"ok": True})
+        audit_action = "account.unban.applied" if sanction.get("sanction_type") in ("ban", "timeout") else "account.sanction.revoked"
+        add_admin_audit(db, int(user["id"]), audit_action, int(sanction["user_id"]), {"sanction_id": sanction_id, "reason": reason, "game_enforcement_status": game_enforcement["status"]})
+        self.send_json(200, {"ok": True, "game_enforcement_status": game_enforcement["status"], "game_enforcement_response": game_enforcement["response"]})
 
     def api_dev_create_warning(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
@@ -9040,7 +9115,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             applicant = one(db, "SELECT * FROM users WHERE id = ?", (application["user_id"],))
             if applicant:
                 desired_role = normalize_role(application["desired_role"])
-                updated_roles = sorted(set([*roles_for(applicant), desired_role]))
+                granted_roles = [desired_role]
+                if application["department_key"] == "fire_ems":
+                    granted_roles = ["fireman", "ems"]
+                updated_roles = sorted(set([*roles_for(applicant), *granted_roles]))
                 agency = applicant.get("primary_agency") or application["department_name"]
                 db.execute(
                     "UPDATE users SET verified = 1, roles = ?, primary_agency = ? WHERE id = ?",

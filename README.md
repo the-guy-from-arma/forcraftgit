@@ -45,6 +45,10 @@ Useful environment variables:
 - `COOKIE_SECURE=1`: use once deployed behind HTTPS.
 - `ARMA_BRIDGE_API_KEY`: shared secret used by the external `TBS RP LINKING SYSTEM` bridge when posting link requests/events and pulling snapshots.
 - `ARMA_LINK_CODE_TTL_MINUTES`: optional expiration window for in-game link codes, default `30`.
+- `ARMA_RCON_HOST`: public hostname or IPv4 address of the Arma Reforger server.
+- `ARMA_RCON_PORT`: UDP RCON port, default `19999`.
+- `ARMA_RCON_PASSWORD`: RCON password; configure only in Railway variables.
+- `ARMA_RCON_TIMEOUT_SECONDS`: optional RCON response timeout, default `5`.
 - `SHADOWHAVEN_SFTP_HOST`: Shadowhaven SFTP hostname.
 - `SHADOWHAVEN_SFTP_PORT`: Shadowhaven SFTP port, default `2022`.
 - `SHADOWHAVEN_SFTP_USERNAME`: server-specific SFTP username.

@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.71";
+const OS_VERSION = "0.0.73";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -1771,7 +1771,7 @@ function bindDmv() {
   });
 }
 
-const lawEnforcementDepartmentChoices = ["Sheriffs Department", "Police Department", "State Police", "CID", "Interrogation Unit"];
+const lawEnforcementDepartmentChoices = ["Faircroft Sheriff's Office"];
 const lawEnforcementApplicationFields = [
   { key: "in_game_name", label: "What is your in-game name?", kind: "text", min: 2, max: 120, placeholder: "Your RP character name" },
   { key: "discord_name", label: "Discord Name", kind: "text", min: 2, max: 120, placeholder: "Discord username" },
@@ -1785,18 +1785,14 @@ const lawEnforcementApplicationFields = [
   { key: "drug_trafficking_process", label: "While on duty, you detain a suspect for suspected drug trafficking, once you search them you discover the suspect does indeed have Cocaine. How would you process the suspect?", kind: "long", min: 20, max: 5000 },
   { key: "corruption_acknowledgement", label: "Do you understand that any proven corruption within the Faircroft Sheriff Offce may result in termination", kind: "yesno" },
   { key: "procedure_commitment", label: "Do you commit to following the Global Operating Procedures, Division Standard Operating Procedures, and all announcements?", kind: "yesno" },
-  { key: "english_communication", label: "Can you communicate clearly using the English language, which is crucial for clear and concise communication across the Police Department?", kind: "yesno" },
+  { key: "english_communication", label: "Can you communicate clearly using the English language, which is crucial for clear and concise communication across the Sheriff's Office?", kind: "yesno" },
   { key: "chain_of_command", label: "Do you agree to follow chain of command", kind: "yesno" },
   { key: "truth_acknowledgement", label: "Do you acknowledge that falsifying any information on this application will result in an automatic denial and could result in blacklisting", kind: "yesno" },
 ];
 
 function departmentChoiceForPosting(posting) {
   const map = {
-    sheriff: "Sheriffs Department",
-    metro_police: "Police Department",
-    state_police: "State Police",
-    cid: "CID",
-    iu: "Interrogation Unit",
+    sheriff: "Faircroft Sheriff's Office",
   };
   return map[posting?.key] || "";
 }
@@ -1948,7 +1944,7 @@ function renderJobs() {
           </div>
           <div class="department-meta">
             <div><span>Department</span><strong>${escapeHtml(selectedPosting.label)}</strong></div>
-            <div><span>Role track</span><strong>${escapeHtml(humanLabel(selectedPosting.role_key))}</strong></div>
+            <div><span>Role track</span><strong>${escapeHtml(selectedPosting.role_label || humanLabel(selectedPosting.role_key))}</strong></div>
             <div><span>Review</span><strong>Command Staff</strong></div>
           </div>
           <div class="department-requirements">
@@ -7494,7 +7490,8 @@ function devMetrics(data, warnings) {
 }
 
 function devSanctionRow(item) {
-  return `<article class="dev-case"><div><div class="row"><strong>${escapeHtml(item.report_number || "Legacy record")} · ${escapeHtml(item.target_name)}</strong><span class="pill ${item.revoked_at ? "" : "red"}">${item.revoked_at ? "revoked" : escapeHtml(item.sanction_type)}</span></div><p>${escapeHtml(item.rule_code || "No rule")} — ${escapeHtml(item.reason)}</p><small>By ${escapeHtml(item.created_by_name)} · ${escapeHtml(item.created_at)}${item.expires_at ? ` · expires ${escapeHtml(item.expires_at)}` : ""}</small></div>${item.revoked_at ? "" : `<button class="secondary" type="button" data-revoke-sanction="${item.id}">Revoke</button>`}</article>`;
+  const isGameBan = item.sanction_type === "ban" || item.sanction_type === "timeout";
+  return `<article class="dev-case"><div><div class="row"><strong>${escapeHtml(item.report_number || "Legacy record")} · ${escapeHtml(item.target_name)}</strong><span class="pill ${item.revoked_at ? "" : "red"}">${item.revoked_at ? "revoked" : escapeHtml(item.sanction_type)}</span></div><p>${escapeHtml(item.rule_code || "No rule")} — ${escapeHtml(item.reason)}</p><small>By ${escapeHtml(item.created_by_name)} · ${escapeHtml(item.created_at)}${item.expires_at ? ` · expires ${escapeHtml(item.expires_at)}` : ""}${item.game_enforcement_status ? ` · game: ${escapeHtml(item.game_enforcement_status)}` : ""}</small></div>${item.revoked_at ? "" : `<button class="${isGameBan ? "danger" : "secondary"}" type="button" data-revoke-sanction="${item.id}" data-game-unban="${isGameBan ? "true" : "false"}">${isGameBan ? "Unban Player" : "Revoke Sanction"}</button>`}</article>`;
 }
 
 function devAudit(logs) {
@@ -7860,8 +7857,10 @@ function bindDevTools() {
     try {
       const reason = window.prompt("Reason for revoking this sanction or unbanning the account:", "Reviewed by staff");
       if (reason === null) return;
-      await api(`/api/dev-tools/sanctions/${button.dataset.revokeSanction}/revoke`, { method: "POST", body: { reason } });
-      toast("Sanction revoked");
+      const result = await api(`/api/dev-tools/sanctions/${button.dataset.revokeSanction}/revoke`, { method: "POST", body: { reason } });
+      toast(button.dataset.gameUnban === "true" && result.game_enforcement_status === "applied"
+        ? "Player unbanned in Arma and sanction revoked"
+        : "Sanction revoked");
       await refreshDevTools();
     } catch (error) { toast(error.message); }
   }));
@@ -8561,7 +8560,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.71").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.73").catch(() => {}));
 }
 
 bootApp();

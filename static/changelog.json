@@ -1,6 +1,35 @@
 {
-  "version": "0.0.71",
+  "version": "0.0.73",
   "entries": [
+    {
+      "date": "2026-07-25",
+      "version": "0.0.73",
+      "title": "Mobile Workspaces and Department Consolidation",
+      "added": [],
+      "changed": [
+        "Indeed recruitment now offers only the Faircroft Sheriff's Office and one combined Fire & EMS application.",
+        "Approval of a combined Fire & EMS application grants access to both emergency-service roles."
+      ],
+      "fixed": [
+        "Staff Operations and Business Registry now collapse desktop grids and form controls correctly on phone-sized screens.",
+        "Workspace navigation, headers, and content no longer force the mobile page wider than the viewport."
+      ]
+    },
+    {
+      "date": "2026-07-25",
+      "version": "0.0.72",
+      "title": "Live RCON Enforcement",
+      "added": [
+        "Added live Arma Reforger RCON commands for permanent bans, timed bans, and unbans using each linked Bohemia identity.",
+        "Added explicit Unban Player controls and game-enforcement status to Staff Operations."
+      ],
+      "changed": [
+        "CAD sanctions now remain active when an RCON unban fails, preventing false unban confirmations."
+      ],
+      "fixed": [
+        "Revoking a ban or timeout now sends the official #ban remove command to the game server and records the result in the audit trail."
+      ]
+    },
     {
       "date": "2026-07-23",
       "version": "0.0.71",

@@ -8970,6 +8970,61 @@ textarea:focus {
 }
 
 @media (max-width: 640px) {
+  .business-workspace,
+  .dev-workspace {
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
+  .business-workspace-main,
+  .business-workspace-content,
+  .business-workspace-content > .business-app,
+  .dev-main,
+  .dev-content,
+  .dev-content > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .business-workspace-sidebar nav,
+  .dev-sidebar nav {
+    width: 100%;
+    max-width: 100vw;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+  }
+
+  .business-workspace-sidebar nav::-webkit-scrollbar,
+  .dev-sidebar nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .business-workspace-content {
+    padding: 12px;
+  }
+
+  .business-workspace-content .grid-2,
+  .dev-grid-2,
+  .dev-grid-enforcement {
+    grid-template-columns: 1fr;
+  }
+
+  .business-workspace-content input,
+  .business-workspace-content select,
+  .business-workspace-content textarea,
+  .dev-workspace input,
+  .dev-workspace select,
+  .dev-workspace textarea {
+    width: 100%;
+    min-width: 0;
+    font-size: 16px;
+  }
+
+  .business-workspace-topbar h1,
+  .dev-topbar h1 {
+    overflow-wrap: anywhere;
+  }
+
   .business-workspace-topbar {
     align-items: flex-start;
   }
