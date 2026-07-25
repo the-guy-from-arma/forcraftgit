@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.74";
+const OS_VERSION = "0.0.76";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -176,6 +176,7 @@ const tileColors = {
   "indeed-admin": "linear-gradient(145deg, #2fd38f, #172f28)",
   admin: "linear-gradient(145deg, #ffcf5a, #6c5010)",
   "dev-tools": "linear-gradient(145deg, #8bffcf, #3156d8)",
+  "beta-tasks": "linear-gradient(145deg, #b78cff, #3156d8)",
 };
 
 function money(value) {
@@ -611,7 +612,26 @@ function renderCallsignRequiredModal() {
 
 function renderRequiredProfileModals() {
   if (state.session?.sanction?.type === "timeout") return "";
-  return renderCarEntryRequiredModal() || renderArmaLinkRequiredModal();
+  return renderCarEntryRequiredModal() || renderArmaLinkRequiredModal() || renderBetaInviteModal();
+}
+
+function renderBetaInviteModal() {
+  if (!state.session?.system?.beta_invite) return "";
+  return `
+    <div class="modal-backdrop beta-invite-backdrop">
+      <section class="mdt-modal force-code-modal beta-invite-modal" role="dialog" aria-modal="true" aria-label="Faircroft Beta Program invitation">
+        <header><p class="eyebrow">Early access invitation</p><h2>Join the Faircroft Beta Program?</h2></header>
+        <div class="beta-invite-mark">&beta;</div>
+        <div class="notice-body">
+          <p>${escapeHtml(state.session.system.beta_recruiting_message || "")}</p>
+          <p class="muted small">You will receive the Beta Tester role and a Beta Tasks app for test instructions and bug reports.</p>
+        </div>
+        <div class="row">
+          <button class="primary" type="button" data-beta-response="accepted">Join Beta Program</button>
+          <button class="secondary" type="button" data-beta-response="declined">Not right now</button>
+        </div>
+      </section>
+    </div>`;
 }
 
 function renderArmaLinkRequiredModal() {
@@ -658,6 +678,16 @@ function bindRequiredProfileModals() {
     state.armaLinkPromptDismissed = true;
     render();
   });
+  $$("[data-beta-response]").forEach((button) => button.addEventListener("click", async () => {
+    try {
+      const accepted = button.dataset.betaResponse === "accepted";
+      await api("/api/beta/respond", { method: "POST", body: { response: button.dataset.betaResponse } });
+      toast(accepted ? "Welcome to the Faircroft Beta Program" : "Beta invitation dismissed");
+      await loadSession();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
 }
 
 function renderHome() {
@@ -785,6 +815,7 @@ function renderPanel(id) {
     admin: "Admin",
     "dev-tools": "Dev Tools",
     "fine-settlement": "Fine Settlement",
+    "beta-tasks": "Beta Tasks",
   };
   const body = {
     profile: renderProfile,
@@ -810,6 +841,7 @@ function renderPanel(id) {
     admin: renderAdmin,
     "dev-tools": renderDevTools,
     "fine-settlement": renderFineSettlement,
+    "beta-tasks": renderBetaTasks,
   }[id]?.() || `<div class="empty">Module unavailable</div>`;
 
   return `
@@ -860,6 +892,7 @@ async function loadAppData(id) {
     "indeed-admin": () => api("/api/indeed-admin/applications"),
     "dev-tools": () => api("/api/dev-tools"),
     "fine-settlement": () => api("/api/fine-settlement"),
+    "beta-tasks": () => api("/api/beta/tasks"),
     admin: async () => ({
       overview: await api("/api/admin/overview"),
       users: await api("/api/admin/users"),
@@ -945,6 +978,7 @@ function bindPanel() {
     admin: bindAdmin,
     "dev-tools": bindDevTools,
     "fine-settlement": bindFineSettlement,
+    "beta-tasks": bindBetaTasks,
   };
   binders[state.activeApp]?.();
 }
@@ -1772,6 +1806,28 @@ function bindDmv() {
 }
 
 const lawEnforcementDepartmentChoices = ["Faircroft Sheriff's Office"];
+const barExamQuestions = [
+  ["Which offense is labeled Assault - Violent Crime with a $1,200 penalty?", ["Criminally negligent homicide", "Assault - Violent Crime", "Robbery in the 3rd degree", "Possession of burglar's tools"]],
+  ["Which offense involves physical injury with a deadly weapon or dangerous instrument and carries a $500 penalty?", ["Assault with a deadly weapon (lower degree)", "Murder in the 2nd degree", "Unlawful weapon possession", "Reckless endangerment"]],
+  ["Which serious assault carries a $2,500 penalty for serious physical injury by a deadly weapon or depraved-risk conduct?", ["Simple assault", "Aggravated assault on an officer", "Serious assault by deadly weapon", "Criminal facilitation"]],
+  ["Which offense is aggravated assault against a police or peace officer with a $5,000 penalty?", ["Assault - Violent Crime", "Aggravated assault upon a police or peace officer", "Robbery in the 1st degree", "Coercion in the 1st degree"]],
+  ["Which item is unlawful weapon possession with a $1,500 penalty?", ["WPN-style unlawful weapon possession", "Possession of burglar's tools", "Controlled substance possession", "Failure to identify"]],
+  ["Which offense causes death through criminal negligence and carries a $1,000 penalty?", ["Manslaughter in the 2nd degree", "Criminally negligent homicide", "Murder in the 1st degree", "Robbery in the 2nd degree"]],
+  ["Which offense carries a $10,000 penalty and involves intentionally causing death or depraved-risk conduct?", ["Manslaughter in the 1st degree", "Murder in the 2nd degree", "Criminal attempt", "Trespass in the 1st degree"]],
+  ["Which description best matches Robbery in the 2nd degree with a $2,500 penalty?", ["Forcibly stealing property with no aggravation", "Forcible stealing aided by another present, causing injury, or displaying what appears to be a firearm", "Simple theft below felony threshold", "Possession of burglar's tools"]],
+  ["Which offense is rape by forcible compulsion or when the victim is physically helpless and carries a $5,000 penalty?", ["Sexual misconduct", "Rape in the 1st degree", "Consensual sodomy (legacy)", "Criminal solicitation"]],
+  ["Which offense is listed as a legacy consensual sodomy offense with a $250 penalty?", ["Sexual misconduct", "Consensual sodomy (legacy)", "Sodomy in the 3rd degree", "Sodomy in the 1st degree"]],
+  ["Which item is the Class A misdemeanor carrying a $500 penalty for soliciting felony conduct?", ["Solicitation violation ($150)", "Solicitation for felony conduct ($500)", "Solicitation involving under 16 ($1,000)", "Solicitation for Class A felony ($2,500)"]],
+  ["Which facilitation offense applies when someone provides means to help commit a Class A felony and carries a $2,500 penalty?", ["Minor facilitation - $500", "Facilitation involving under 16 - $1,000", "Facilitation for Class A felony - $2,500", "Highest-level facilitation involving under 16 - $5,000"]],
+  ["Which conspiracy offense carries a $10,000 penalty for agreeing to commit a Class A felony with a participant under 16?", ["Low-level conspiracy - $250", "Mid-level conspiracy - $1,500", "Conspiracy to commit Class A felony - $5,000", "Conspiracy with under-16 participant - $10,000"]],
+  ["Which offense is Trespass in the 2nd degree for unlawfully entering a dwelling with a $500 penalty?", ["Trespass in the 3rd degree (building)", "Trespass in the 2nd degree (dwelling)", "Trespass in the 1st degree (weapon present)", "Burglary in the 3rd degree"]],
+  ["Which description best fits Burglary in the 1st degree with a $5,000 penalty?", ["Entering a building to commit any crime", "Burglary of a dwelling involving a deadly weapon, injury, or displayed firearm", "Possession of burglar's tools only", "Simple trespass on enclosed property"]],
+  ["Which basic idea describes Coercion in the 1st degree with a $1,500 penalty?", ["Minor annoyance or persuasion", "Using fear of physical injury or property damage to force serious acts", "Friendly suggestion to comply", "Only economic pressure"]],
+  ["Reckless Endangerment in the 1st degree shows depraved indifference and carries which penalty?", ["$500", "$1,000", "$1,500", "$5,000"]],
+  ["Which item is Controlled Substance Possession listed as a narcotics misdemeanor with a $900 penalty?", ["Controlled substance possession - $900", "Petty theft - $600", "Trespassing property - $450", "Failure to identify - $350"]],
+  ["Which traffic citation is Speeding 16-30 Over with a $300 fine and 4 points?", ["Speeding 1-15 Over - $150", "Speeding 16-30 Over - $300", "Speed Not Reasonable and Prudent - $200", "Speed in Zone - $250"]],
+  ["Which violation is portable electronic device use while driving with a $200 fine and 5 points?", ["Portable electronic device use - $200 and 5 points", "Seat belt violation - $100", "Vehicle equipment violation - $110", "Speeding 1-15 Over - $150"]],
+];
 const lawEnforcementApplicationFields = [
   { key: "in_game_name", label: "What is your in-game name?", kind: "text", min: 2, max: 120, placeholder: "Your RP character name" },
   { key: "discord_name", label: "Discord Name", kind: "text", min: 2, max: 120, placeholder: "Discord username" },
@@ -1801,7 +1857,7 @@ function parseDepartmentApplicationStatement(statement) {
   if (!statement || typeof statement !== "string" || !statement.trim().startsWith("{")) return null;
   try {
     const parsed = JSON.parse(statement);
-    return parsed?.type === "law_enforcement_application" ? parsed : null;
+    return ["law_enforcement_application", "bar_exam_application"].includes(parsed?.type) ? parsed : null;
   } catch {
     return null;
   }
@@ -1871,6 +1927,34 @@ function renderDepartmentApplicationField(field, posting) {
 }
 
 function renderDepartmentApplicationForm(posting) {
+  if (posting.form_type === "bar_exam") {
+    return `
+      <form class="department-application-form bar-exam-form" data-department-key="${escapeHtml(posting.key)}">
+        <div class="application-form-head">
+          <div><p class="eyebrow">Faircroft Bar Association</p><h3>Bar Exam</h3><p class="muted small">Answer all 20 questions. Your score is delivered privately to the review team.</p></div>
+          <span class="pill amber">20 Questions</span>
+        </div>
+        <div class="bar-applicant-grid">
+          <label>In-game name<input name="in_game_name" value="${escapeHtml(state.session?.user?.name || "")}" minlength="2" maxlength="120" required /></label>
+          <label>Discord name<input name="discord_name" minlength="2" maxlength="120" required /></label>
+        </div>
+        <div class="bar-question-list">
+          ${barExamQuestions.map(([question, options], index) => `
+            <fieldset class="bar-question">
+              <legend><span>${index + 1}</span>${escapeHtml(question)}</legend>
+              <div class="bar-options">
+                ${options.map((option, optionIndex) => {
+                  const letter = String.fromCharCode(65 + optionIndex);
+                  return `<label><input type="radio" name="bar_q${index + 1}" value="${letter}" required /><strong>${letter}</strong><span>${escapeHtml(option)}</span></label>`;
+                }).join("")}
+              </div>
+            </fieldset>
+          `).join("")}
+        </div>
+        <button class="primary" type="submit">Submit Bar Exam for review</button>
+      </form>
+    `;
+  }
   if (posting.form_type === "law_enforcement") {
     const commandRoles = (posting.command_roles || []).map(humanLabel).join(", ") || "Owner/Admin Command";
     return `
@@ -1903,12 +1987,6 @@ function renderJobs() {
   if (!data) return `<div class="empty">Jobs loading</div>`;
   const postings = data.department_postings || [];
   const applications = data.department_applications || [];
-  const selectedPosting = postings.find((item) => item.key === state.jobsTab) || postings[0] || null;
-  if (selectedPosting && state.jobsTab !== selectedPosting.key) state.jobsTab = selectedPosting.key;
-  const latestApplication = selectedPosting
-    ? applications.find((item) => item.department_key === selectedPosting.key)
-    : null;
-  const hasActiveApplication = latestApplication && !["denied", "withdrawn", "closed"].includes(latestApplication.status);
   const activeApplications = applications.filter((item) => !["approved", "denied", "withdrawn", "closed"].includes(item.status));
   return `
     <div class="stack jobs-portal">
@@ -1923,58 +2001,9 @@ function renderJobs() {
           <div><span>Active</span><strong>${activeApplications.length}</strong></div>
         </div>
       </section>
-      <div class="job-tabs" aria-label="Department job postings">
-        ${postings.map((posting) => `
-          <button class="${state.jobsTab === posting.key ? "active" : ""}" data-job-tab="${escapeHtml(posting.key)}">
-            <span>${escapeHtml(posting.label)}</span>
-          </button>
-        `).join("")}
+      <div class="job-ad-board">
+        ${postings.map((posting, index) => renderJobAdvertisement(posting, applications, index)).join("") || `<div class="empty">No job advertisements are open</div>`}
       </div>
-      ${selectedPosting ? `
-        <section class="department-posting">
-          <div class="department-posting-head">
-            <div>
-              <p class="eyebrow">${escapeHtml(selectedPosting.division)}</p>
-              <h3>${escapeHtml(selectedPosting.badge)}</h3>
-              <p>${escapeHtml(selectedPosting.schedule)}</p>
-            </div>
-            <span class="pill ${hasActiveApplication ? "amber" : latestApplication?.status === "approved" ? "green" : ""}">
-              ${latestApplication ? humanLabel(latestApplication.status) : "Open"}
-            </span>
-          </div>
-          <div class="department-meta">
-            <div><span>Department</span><strong>${escapeHtml(selectedPosting.label)}</strong></div>
-            <div><span>Role track</span><strong>${escapeHtml(selectedPosting.role_label || humanLabel(selectedPosting.role_key))}</strong></div>
-            <div><span>Review</span><strong>Command Staff</strong></div>
-          </div>
-          <div class="department-requirements">
-            <span>Requirements</span>
-            <p>${escapeHtml(selectedPosting.requirements)}</p>
-          </div>
-          ${latestApplication ? `
-            <div class="department-application-status">
-              <div>
-                <p class="eyebrow">${escapeHtml(latestApplication.application_number)}</p>
-                <h3>${escapeHtml(selectedPosting.label)} application</h3>
-                <p class="muted small">Submitted ${new Date(latestApplication.created_at).toLocaleString()}${latestApplication.reviewer_name ? ` / Reviewer ${escapeHtml(latestApplication.reviewer_name)}` : ""}</p>
-              </div>
-              <span class="pill ${businessStatusClass(latestApplication.status)}">${humanLabel(latestApplication.status)}</span>
-            </div>
-            <details class="job-application-drawer">
-              <summary><span>Submitted packet</span><strong>View answers</strong></summary>
-              ${renderDepartmentApplicationPreview(latestApplication) || `<p class="muted small">${escapeHtml(latestApplication.statement || "No application answers recorded")}</p>`}
-            </details>
-          ` : ""}
-          ${hasActiveApplication ? `
-            <div class="empty">Your ${escapeHtml(selectedPosting.label)} application is already active and waiting on command review.</div>
-          ` : `
-            <details class="job-application-drawer apply-drawer">
-              <summary><span>Application packet</span><strong>Open Form</strong></summary>
-              ${renderDepartmentApplicationForm(selectedPosting)}
-            </details>
-          `}
-        </section>
-      ` : `<div class="empty">No department postings configured</div>`}
       <details class="jobs-history" ${applications.length ? "" : ""}>
         <summary><span>My application files</span><strong>${applications.length}</strong></summary>
         <div class="job-application-list">
@@ -1982,6 +2011,34 @@ function renderJobs() {
         </div>
       </details>
     </div>
+  `;
+}
+
+function renderJobAdvertisement(posting, applications, index) {
+  const latestApplication = applications.find((item) => item.department_key === posting.key);
+  const hasActiveApplication = latestApplication && !["denied", "withdrawn", "closed"].includes(latestApplication.status);
+  const isLawyer = posting.key === "lawyer";
+  return `
+    <details class="job-advertisement ${isLawyer ? "lawyer-ad" : ""}" ${index === 0 ? "open" : ""}>
+      <summary>
+        <div class="job-ad-icon">${isLawyer ? "§" : posting.key === "fire_ems" ? "✚" : "★"}</div>
+        <div><p class="eyebrow">${escapeHtml(posting.division)}</p><h3>${escapeHtml(posting.label)}</h3><p>${escapeHtml(posting.schedule)}</p></div>
+        <div class="job-ad-action">
+          <span class="pill ${hasActiveApplication ? "amber" : latestApplication?.status === "approved" ? "green" : ""}">${latestApplication ? humanLabel(latestApplication.status) : "Now hiring"}</span>
+          <strong>${hasActiveApplication ? "View application" : "Open & apply"} <i>›</i></strong>
+        </div>
+      </summary>
+      <div class="job-ad-body">
+        <div class="department-meta">
+          <div><span>Position</span><strong>${escapeHtml(posting.badge)}</strong></div>
+          <div><span>Role track</span><strong>${escapeHtml(posting.role_label || humanLabel(posting.role_key))}</strong></div>
+          <div><span>Review</span><strong>${isLawyer ? "Judicial certification" : "Command staff"}</strong></div>
+        </div>
+        <div class="department-requirements"><span>What you need</span><p>${escapeHtml(posting.requirements)}</p></div>
+        ${latestApplication ? `<div class="department-application-status"><div><p class="eyebrow">${escapeHtml(latestApplication.application_number)}</p><h3>Your application</h3><p class="muted small">Submitted ${new Date(latestApplication.created_at).toLocaleString()}${latestApplication.reviewer_name ? ` / Reviewer ${escapeHtml(latestApplication.reviewer_name)}` : ""}</p></div><span class="pill ${businessStatusClass(latestApplication.status)}">${humanLabel(latestApplication.status)}</span></div>` : ""}
+        ${hasActiveApplication ? `<div class="empty">This application is active and waiting for review.</div>` : renderDepartmentApplicationForm(posting)}
+      </div>
+    </details>
   `;
 }
 
@@ -2003,12 +2060,6 @@ function renderJobApplicationFile(item, postings) {
 }
 
 function bindJobs() {
-  $$("[data-job-tab]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.jobsTab = button.dataset.jobTab;
-      render();
-    });
-  });
   $$(".department-application-form").forEach((form) => {
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -7346,6 +7397,53 @@ function devUserOptions(users) {
   )).join("");
 }
 
+function renderBetaTasks() {
+  const data = state.cache["beta-tasks"] || { tasks: [], reports: [] };
+  return `
+    <div class="stack beta-tasks-app">
+      <section class="beta-hero">
+        <div><p class="eyebrow">Faircroft early access</p><h3>Beta Testing Tasks</h3><p>Follow each test brief, reproduce issues carefully, and report what actually happened.</p></div>
+        <span class="beta-badge">&beta;</span>
+      </section>
+      <div class="beta-task-list">
+        ${(data.tasks || []).map((task) => `
+          <article class="beta-task-card">
+            <div class="row tight"><div><p class="eyebrow">${escapeHtml(task.test_area)}</p><h3>${escapeHtml(task.title)}</h3></div><span class="pill ${task.priority === "critical" ? "red" : task.priority === "high" ? "amber" : ""}">${escapeHtml(task.priority)}</span></div>
+            <p>${escapeHtml(task.instructions)}</p>
+            <details class="job-application-drawer">
+              <summary><span>Found a problem?</span><strong>Report bug</strong></summary>
+              <form class="form-grid beta-report-form" data-beta-task="${task.id}">
+                <label>Short summary<input name="summary" maxlength="180" required /></label>
+                <label>Severity<select name="severity"><option>low</option><option selected>standard</option><option>high</option><option>critical</option></select></label>
+                <label>Steps to reproduce<textarea name="steps" minlength="10" maxlength="4000" required></textarea></label>
+                <label>Expected result<textarea name="expected_result" maxlength="3000"></textarea></label>
+                <label>Actual result<textarea name="actual_result" minlength="5" maxlength="3000" required></textarea></label>
+                <button class="primary" type="submit">Send Bug Report</button>
+              </form>
+            </details>
+          </article>`).join("") || `<div class="empty">No beta tasks are active right now. Check back after the next test release.</div>`}
+      </div>
+      <details class="jobs-history">
+        <summary><span>My bug reports</span><strong>${(data.reports || []).length}</strong></summary>
+        <div class="list">${(data.reports || []).map((report) => `<article class="card"><div class="row"><strong>${escapeHtml(report.summary)}</strong><span class="pill">${escapeHtml(report.status)}</span></div><p class="muted small">${escapeHtml(report.task_title || "General beta report")} · ${escapeHtml(report.created_at)}</p></article>`).join("") || `<div class="empty">No reports submitted yet</div>`}</div>
+      </details>
+    </div>`;
+}
+
+function bindBetaTasks() {
+  $$(".beta-report-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api("/api/beta/reports", { method: "POST", body: { ...Object.fromEntries(new FormData(form).entries()), task_id: Number(form.dataset.betaTask) } });
+      toast("Bug report sent to the development team");
+      await loadAppData("beta-tasks");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+}
+
 function renderDevToolsLegacy() {
   const data = state.cache["dev-tools"] || {};
   const users = data.users || [];
@@ -7526,7 +7624,39 @@ function renderDevTools() {
   if (state.devTab === "linking") return `<div class="stack">${metrics}<div class="dev-grid-2"><section class="dev-card"><p class="eyebrow">Secure unlink authorization</p><h2>One-time Developer Code</h2><form id="devCodeForm" class="form-grid"><label>Expires in minutes<input name="expiry_minutes" type="number" min="5" max="1440" value="30" required /></label><button class="primary">Generate Code</button></form>${state.generatedDevCode ? `<div class="dev-generated-code"><span>Shown once</span><strong>${escapeHtml(state.generatedDevCode.code)}</strong><small>Expires ${escapeHtml(state.generatedDevCode.expires_at)}</small></div>` : ""}<div class="dev-record-list">${codes.slice(0,12).map((x) => `<div class="dev-case"><span>••••-${escapeHtml(x.code_hint)} · ${escapeHtml(x.created_by_name)}</span><strong>${x.uses_remaining ? "available" : "used"}</strong></div>`).join("")}</div></section><section class="dev-card"><h2>Recent Links</h2>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card"><div class="row"><div><p class="eyebrow">Clickable investigation profiles</p><h2>All Linked Accounts</h2></div><span class="pill green">${users.filter((x) => x.arma_linked).length} loaded</span></div>${devLinkedAccounts(users)}</section></div>`;
   if (state.devTab === "settings") {
     const visibilityApps = data.app_visibility?.apps || [];
+    const beta = data.beta_program || { recruiting_enabled: false, recruiting_message: "", members: 0, tasks: [], reports: [] };
     return `<div class="stack">
+      <section class="dev-card beta-dev-console">
+        <div class="dev-card-header"><div><p class="eyebrow">Release planning</p><h2>Beta Program</h2><p class="muted">Recruit testers, publish test assignments, and review incoming bug reports.</p></div><span class="pill ${beta.recruiting_enabled ? "green" : "amber"}">${beta.recruiting_enabled ? "seeking testers" : "recruitment off"}</span></div>
+        <div class="dev-metrics beta-dev-metrics">
+          <div class="dev-metric"><span>Beta members</span><strong>${Number(beta.members || 0)}</strong><small>Opted-in testers</small></div>
+          <div class="dev-metric"><span>Active tasks</span><strong>${(beta.tasks || []).filter((task) => task.active).length}</strong><small>Published briefs</small></div>
+          <div class="dev-metric"><span>Bug reports</span><strong>${(beta.reports || []).length}</strong><small>Submitted findings</small></div>
+        </div>
+        <form id="devBetaProgramForm" class="form-grid">
+          <label class="check-row"><input type="checkbox" name="enabled" ${beta.recruiting_enabled ? "checked" : ""} /> Seek new beta testers on login</label>
+          <label>Invitation message<textarea name="message" minlength="20" maxlength="600" required>${escapeHtml(beta.recruiting_message || "")}</textarea></label>
+          <button class="primary" type="submit">Save Beta Recruitment</button>
+        </form>
+      </section>
+      <div class="dev-grid-2">
+        <section class="dev-card">
+          <div><p class="eyebrow">New assignment</p><h2>Publish Beta Task</h2></div>
+          <form id="devBetaTaskForm" class="form-grid">
+            <label>Task title<input name="title" minlength="3" maxlength="140" required /></label>
+            <label>Test area<input name="test_area" maxlength="80" placeholder="Banking, MDT, mobile UI..." /></label>
+            <label>Priority<select name="priority"><option>low</option><option selected>standard</option><option>high</option><option>critical</option></select></label>
+            <label>Testing instructions<textarea name="instructions" minlength="10" maxlength="5000" required></textarea></label>
+            <button class="primary" type="submit">Publish Task</button>
+          </form>
+        </section>
+        <section class="dev-card"><div class="row"><h2>Published Tasks</h2><span class="pill">${(beta.tasks || []).length}</span></div>
+          <div class="dev-record-list">${(beta.tasks || []).map((task) => `<article class="dev-case"><div><strong>${escapeHtml(task.title)}</strong><p>${escapeHtml(task.test_area)} · ${escapeHtml(task.priority)}</p></div><button class="secondary" type="button" data-beta-task-toggle="${task.id}" data-active="${task.active ? "false" : "true"}">${task.active ? "Close" : "Reopen"}</button></article>`).join("") || `<div class="empty">No beta tasks published</div>`}</div>
+        </section>
+      </div>
+      <section class="dev-card"><div class="row"><div><p class="eyebrow">Tester findings</p><h2>Beta Bug Reports</h2></div><span class="pill red">${(beta.reports || []).length}</span></div>
+        <div class="dev-record-list">${(beta.reports || []).map((report) => `<article class="dev-case"><div><strong>${escapeHtml(report.summary)}</strong><p>${escapeHtml(report.reporter_name)} · ${escapeHtml(report.task_title || "General")} · ${escapeHtml(report.severity)}</p><small>${escapeHtml(report.actual_result)}</small></div><span class="pill">${escapeHtml(report.status)}</span></article>`).join("") || `<div class="empty">No beta bug reports</div>`}</div>
+      </section>
       <section class="dev-card dev-visibility-intro">
         <div><p class="eyebrow">Global user interface controls</p><h2>Application Icon Visibility</h2><p class="muted">Checked applications appear for users who have permission. Unchecked applications vanish from every user home screen.</p></div>
         <span class="pill amber">global setting</span>
@@ -7818,6 +7948,24 @@ function bindFineSettlement() {
 }
 
 function bindDevTools() {
+  $("#devBetaProgramForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    await api("/api/dev-tools/beta-program", { method: "PATCH", body: { enabled: form.enabled.checked, message: form.message.value } });
+    toast(form.enabled.checked ? "Beta recruitment is active" : "Beta recruitment is closed");
+    await refreshDevTools();
+  });
+  $("#devBetaTaskForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await api("/api/dev-tools/beta-tasks", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+    toast("Beta task published");
+    await refreshDevTools();
+  });
+  $$("[data-beta-task-toggle]").forEach((button) => button.addEventListener("click", async () => {
+    await api(`/api/dev-tools/beta-tasks/${button.dataset.betaTaskToggle}`, { method: "PATCH", body: { active: button.dataset.active === "true" } });
+    toast("Beta task updated");
+    await refreshDevTools();
+  }));
   $("#devAppVisibilityForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const visibility = {};
@@ -7983,7 +8131,7 @@ function renderSystem() {
   `;
 }
 
-const roleOptions = ["civ", "owner", "admin", "dev", "indeed_admin", "leo", "judge", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "business_owner", "business_registrar", "city_hall", "economy_manager"];
+const roleOptions = ["civ", "owner", "admin", "dev", "beta", "indeed_admin", "leo", "judge", "lawyer", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "business_owner", "business_registrar", "city_hall", "economy_manager"];
 
 function adminUserSearchText(user) {
   return [
@@ -8022,7 +8170,7 @@ function renderDepartmentApplicationPacket(item) {
   }
   return `
     <details class="admin-application-packet">
-      <summary>Application packet</summary>
+      <summary>${packet.type === "bar_exam_application" ? `Bar Exam · Internal score ${escapeHtml(packet.score)}/${escapeHtml(packet.total)}` : "Application packet"}</summary>
       <div class="admin-packet-answers">
         ${packet.answers.map((answer) => `
           <div>
@@ -8099,6 +8247,7 @@ function renderAdminDepartmentApplications(data, mode = "admin") {
 
 function renderAdminDepartmentApplicationCard(item, mode = "admin") {
   const isClosed = ["approved", "denied", "withdrawn", "closed"].includes(item.status);
+  const isBarExam = item.department_key === "lawyer";
   const isIndeed = mode === "indeed";
   const statusAttr = isIndeed ? "data-indeed-application-status" : "data-admin-application-status";
   const formClass = isIndeed ? "indeed-application-review-form admin-application-review-form" : "admin-application-review-form";
@@ -8136,7 +8285,7 @@ function renderAdminDepartmentApplicationCard(item, mode = "admin") {
             <label>Review notes<textarea name="reviewer_notes" maxlength="1500" placeholder="Optional notes sent to the applicant">${escapeHtml(item.reviewer_notes || "")}</textarea></label>
             <div class="admin-application-actions">
               <button class="secondary" type="button" ${statusAttr}="under_review" ${item.status === "under_review" ? "disabled" : ""}>Mark Review</button>
-              <button class="primary" type="button" ${statusAttr}="approved" ${item.status === "approved" ? "disabled" : ""}>Approve</button>
+              <button class="primary" type="button" ${statusAttr}="approved" ${item.status === "approved" ? "disabled" : ""}>${isBarExam ? "Judge: Sign Certificate" : "Approve"}</button>
               <button class="danger" type="button" ${statusAttr}="denied" ${item.status === "denied" ? "disabled" : ""}>Deny</button>
               <button class="secondary" type="button" ${statusAttr}="closed" ${isClosed ? "disabled" : ""}>Close</button>
             </div>
@@ -8560,7 +8709,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.74").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.76").catch(() => {}));
 }
 
 bootApp();

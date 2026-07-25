@@ -640,6 +640,28 @@ LAW_ENFORCEMENT_APPLICATION_FIELDS = (
     {"key": "chain_of_command", "label": "Do you agree to follow chain of command", "kind": "yesno"},
     {"key": "truth_acknowledgement", "label": "Do you acknowledge that falsifying any information on this application will result in an automatic denial and could result in blacklisting", "kind": "yesno"},
 )
+BAR_EXAM_QUESTIONS = (
+    ("Which offense is labeled Assault - Violent Crime with a $1,200 penalty?", ("Criminally negligent homicide", "Assault - Violent Crime", "Robbery in the 3rd degree", "Possession of burglar's tools"), "B"),
+    ("Which offense involves physical injury with a deadly weapon or dangerous instrument and carries a $500 penalty?", ("Assault with a deadly weapon (lower degree)", "Murder in the 2nd degree", "Unlawful weapon possession", "Reckless endangerment"), "A"),
+    ("Which serious assault carries a $2,500 penalty for serious physical injury by a deadly weapon or depraved-risk conduct?", ("Simple assault", "Aggravated assault on an officer", "Serious assault by deadly weapon", "Criminal facilitation"), "C"),
+    ("Which offense is aggravated assault against a police or peace officer with a $5,000 penalty?", ("Assault - Violent Crime", "Aggravated assault upon a police or peace officer", "Robbery in the 1st degree", "Coercion in the 1st degree"), "B"),
+    ("Which item is unlawful weapon possession with a $1,500 penalty?", ("WPN-style unlawful weapon possession", "Possession of burglar's tools", "Controlled substance possession", "Failure to identify"), "A"),
+    ("Which offense causes death through criminal negligence and carries a $1,000 penalty?", ("Manslaughter in the 2nd degree", "Criminally negligent homicide", "Murder in the 1st degree", "Robbery in the 2nd degree"), "B"),
+    ("Which offense carries a $10,000 penalty and involves intentionally causing death or depraved-risk conduct?", ("Manslaughter in the 1st degree", "Murder in the 2nd degree", "Criminal attempt", "Trespass in the 1st degree"), "B"),
+    ("Which description best matches Robbery in the 2nd degree with a $2,500 penalty?", ("Forcibly stealing property with no aggravation", "Forcible stealing aided by another present, causing injury, or displaying what appears to be a firearm", "Simple theft below felony threshold", "Possession of burglar's tools"), "B"),
+    ("Which offense is rape by forcible compulsion or when the victim is physically helpless and carries a $5,000 penalty?", ("Sexual misconduct", "Rape in the 1st degree", "Consensual sodomy (legacy)", "Criminal solicitation"), "B"),
+    ("Which offense is listed as a legacy consensual sodomy offense with a $250 penalty?", ("Sexual misconduct", "Consensual sodomy (legacy)", "Sodomy in the 3rd degree", "Sodomy in the 1st degree"), "B"),
+    ("Which item is the Class A misdemeanor carrying a $500 penalty for soliciting felony conduct?", ("Solicitation violation ($150)", "Solicitation for felony conduct ($500)", "Solicitation involving under 16 ($1,000)", "Solicitation for Class A felony ($2,500)"), "B"),
+    ("Which facilitation offense applies when someone provides means to help commit a Class A felony and carries a $2,500 penalty?", ("Minor facilitation - $500", "Facilitation involving under 16 - $1,000", "Facilitation for Class A felony - $2,500", "Highest-level facilitation involving under 16 - $5,000"), "C"),
+    ("Which conspiracy offense carries a $10,000 penalty for agreeing to commit a Class A felony with a participant under 16?", ("Low-level conspiracy - $250", "Mid-level conspiracy - $1,500", "Conspiracy to commit Class A felony - $5,000", "Conspiracy with under-16 participant - $10,000"), "D"),
+    ("Which offense is Trespass in the 2nd degree for unlawfully entering a dwelling with a $500 penalty?", ("Trespass in the 3rd degree (building)", "Trespass in the 2nd degree (dwelling)", "Trespass in the 1st degree (weapon present)", "Burglary in the 3rd degree"), "B"),
+    ("Which description best fits Burglary in the 1st degree with a $5,000 penalty?", ("Entering a building to commit any crime", "Burglary of a dwelling involving a deadly weapon, injury, or displayed firearm", "Possession of burglar's tools only", "Simple trespass on enclosed property"), "B"),
+    ("Which basic idea describes Coercion in the 1st degree with a $1,500 penalty?", ("Minor annoyance or persuasion", "Using fear of physical injury or property damage to force serious acts", "Friendly suggestion to comply", "Only economic pressure"), "B"),
+    ("Reckless Endangerment in the 1st degree shows depraved indifference and carries which penalty?", ("$500", "$1,000", "$1,500", "$5,000"), "C"),
+    ("Which item is Controlled Substance Possession listed as a narcotics misdemeanor with a $900 penalty?", ("Controlled substance possession - $900", "Petty theft - $600", "Trespassing property - $450", "Failure to identify - $350"), "A"),
+    ("Which traffic citation is Speeding 16-30 Over with a $300 fine and 4 points?", ("Speeding 1-15 Over - $150", "Speeding 16-30 Over - $300", "Speed Not Reasonable and Prudent - $200", "Speed in Zone - $250"), "B"),
+    ("Which violation is portable electronic device use while driving with a $200 fine and 5 points?", ("Portable electronic device use - $200 and 5 points", "Seat belt violation - $100", "Vehicle equipment violation - $110", "Speeding 1-15 Over - $150"), "A"),
+)
 DEPARTMENT_POSTINGS = (
     {
         "key": "sheriff",
@@ -663,6 +685,18 @@ DEPARTMENT_POSTINGS = (
         "schedule": "Fire response, rescue operations, medical calls, triage, transport RP, and hospital handoff.",
         "requirements": "Scene safety, calm communication, medical and fire RP standards, radio discipline, and command training.",
     },
+    {
+        "key": "lawyer",
+        "label": "Wanna Be a Lawyer?",
+        "division": "Faircroft Bar Association",
+        "role_key": "lawyer",
+        "role_label": "Licensed Attorney",
+        "form_type": "bar_exam",
+        "command_roles": ("judge",),
+        "badge": "Take the Faircroft Bar Exam",
+        "schedule": "Represent clients, review case law, prepare arguments, and work inside the Faircroft justice system.",
+        "requirements": "Complete all 20 Bar Exam questions. Results are reviewed by the judiciary and Indeed staff.",
+    },
 )
 SYSTEM_SETTING_DEFAULTS = {
     "autopilot_verify_enabled": "0",
@@ -671,6 +705,9 @@ SYSTEM_SETTING_DEFAULTS = {
     "autopilot_license_minutes": "6",
     "update_lockdown_enabled": "0",
     "update_lockdown_message": "System update in progress. Driver License and LEO MDT remain available.",
+    "beta_recruiting_enabled": "0",
+    "beta_recruiting_message": "Help test upcoming Faircroft features before public release. Beta testers receive guided tasks and can report issues directly to the development team.",
+    "beta_campaign_id": "1",
     "app_visibility": "{}",
 }
 APP_VISIBILITY_OPTIONS = (
@@ -691,6 +728,7 @@ APP_VISIBILITY_OPTIONS = (
     ("indeed-admin", "Indeed Admin"),
     ("admin", "Admin"),
     ("fine-settlement", "Fine Settlement"),
+    ("beta-tasks", "Beta Tasks"),
 )
 PROTECTED_APP_IDS = frozenset(("profile", "dev-tools", "system", "restriction"))
 
@@ -757,6 +795,48 @@ def clean_law_enforcement_application(payload: dict[str, Any], posting: dict[str
     ]
     message_lines.extend(f"{item['question']}\n{item['answer']}" for item in answers)
     return json.dumps(record, ensure_ascii=False), "\n\n".join(message_lines)
+
+
+def clean_bar_exam_application(payload: dict[str, Any], posting: dict[str, Any], user: DbRow) -> tuple[str, str]:
+    applicant_name = str(payload.get("in_game_name") or user.get("name") or "").strip()[:120]
+    discord_name = str(payload.get("discord_name") or "").strip()[:120]
+    if len(applicant_name) < 2 or len(discord_name) < 2:
+        raise ValueError("Your in-game name and Discord name are required")
+    answers: list[dict[str, str]] = []
+    correct = 0
+    letters = ("A", "B", "C", "D")
+    for index, (question, options, answer_key) in enumerate(BAR_EXAM_QUESTIONS, start=1):
+        selected = str(payload.get(f"bar_q{index}") or "").strip().upper()
+        if selected not in letters:
+            raise ValueError(f"Question {index} requires an answer")
+        option_index = letters.index(selected)
+        correct += int(selected == answer_key)
+        answers.append({
+            "key": f"bar_q{index}",
+            "question": f"{index}. {question}",
+            "answer": f"{selected}. {options[option_index]}",
+        })
+    score_percent = round(correct * 100 / len(BAR_EXAM_QUESTIONS))
+    record = {
+        "type": "bar_exam_application",
+        "version": 1,
+        "posting_key": posting["key"],
+        "posting_label": posting["label"],
+        "applicant_user_id": user["id"],
+        "applicant_civ_number": user.get("civ_number") or "",
+        "applicant_name": applicant_name,
+        "discord_name": discord_name,
+        "score": correct,
+        "total": len(BAR_EXAM_QUESTIONS),
+        "score_percent": score_percent,
+        "answers": answers,
+    }
+    message = (
+        f"Applicant: {applicant_name} / CIV {user.get('civ_number') or 'pending'}\n"
+        f"Discord: {discord_name}\n"
+        f"Bar Exam score: {correct}/{len(BAR_EXAM_QUESTIONS)} ({score_percent}%)"
+    )
+    return json.dumps(record, ensure_ascii=False), message
 
 
 def business_staff_required(user: DbRow | None) -> str | None:
@@ -2040,6 +2120,10 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         app_id: bool(app_visibility_raw.get(app_id, True))
         for app_id, _label in APP_VISIBILITY_OPTIONS
     }
+    try:
+        beta_campaign_id = max(1, int(raw.get("beta_campaign_id") or "1"))
+    except (TypeError, ValueError):
+        beta_campaign_id = 1
     return {
         "autopilot_verify_enabled": str(raw.get("autopilot_verify_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "autopilot_verify_minutes": minutes,
@@ -2047,6 +2131,9 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "autopilot_license_minutes": license_minutes,
         "update_lockdown_enabled": str(raw.get("update_lockdown_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "update_lockdown_message": str(raw.get("update_lockdown_message") or SYSTEM_SETTING_DEFAULTS["update_lockdown_message"]).strip()[:240],
+        "beta_recruiting_enabled": str(raw.get("beta_recruiting_enabled") or "0") in ("1", "true", "True", "yes", "on"),
+        "beta_recruiting_message": str(raw.get("beta_recruiting_message") or SYSTEM_SETTING_DEFAULTS["beta_recruiting_message"]).strip()[:600],
+        "beta_campaign_id": beta_campaign_id,
         "app_visibility": app_visibility,
     }
 
@@ -2402,6 +2489,52 @@ def seed_charges(db: Database) -> None:
     )
     db.execute(
         """
+        CREATE TABLE IF NOT EXISTS beta_program_responses (
+            user_id INTEGER NOT NULL,
+            campaign_id INTEGER NOT NULL,
+            response TEXT NOT NULL,
+            responded_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, campaign_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS beta_tasks (
+            id SERIAL PRIMARY KEY,
+            title TEXT NOT NULL,
+            instructions TEXT NOT NULL,
+            test_area TEXT NOT NULL DEFAULT 'General',
+            priority TEXT NOT NULL DEFAULT 'standard',
+            active INTEGER NOT NULL DEFAULT 1,
+            created_by INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS beta_bug_reports (
+            id SERIAL PRIMARY KEY,
+            task_id INTEGER,
+            reporter_id INTEGER NOT NULL,
+            summary TEXT NOT NULL,
+            steps TEXT NOT NULL,
+            expected_result TEXT NOT NULL DEFAULT '',
+            actual_result TEXT NOT NULL,
+            severity TEXT NOT NULL DEFAULT 'standard',
+            status TEXT NOT NULL DEFAULT 'submitted',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (task_id) REFERENCES beta_tasks(id) ON DELETE SET NULL,
+            FOREIGN KEY (reporter_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute(
+        """
         UPDATE citations c
         SET minimum_sentence_minutes = catalog.minimum_sentence_minutes,
             maximum_sentence_minutes = catalog.maximum_sentence_minutes
@@ -2676,7 +2809,7 @@ def add_admin_audit(
 def application_review_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
-    if not has_any(user, "owner", "admin", INDEED_ADMIN_ROLE):
+    if not has_any(user, "owner", "admin", INDEED_ADMIN_ROLE, "judge"):
         return "Indeed Admin access required"
     return None
 
@@ -2835,12 +2968,14 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps.append({"id": "fire-settings", "label": "Fire Settings", "icon": "settings", "enabled": True, "hidden": False})
     if has_any(user, "owner"):
         apps.append({"id": "system", "label": "System", "icon": "settings", "enabled": True, "hidden": False})
-    if has_any(user, "owner", "admin", INDEED_ADMIN_ROLE):
+    if has_any(user, "owner", "admin", INDEED_ADMIN_ROLE, "judge"):
         apps.append({"id": "indeed-admin", "label": "Indeed Admin", "icon": "briefcase", "enabled": True, "hidden": False})
     if has_any(user, "owner", "admin"):
         apps.append({"id": "admin", "label": "Admin", "icon": "settings", "enabled": True, "hidden": False})
     if has_any(user, "owner", "dev"):
         apps.append({"id": "dev-tools", "label": "Dev Tools", "icon": "code", "enabled": True, "hidden": False})
+    if has_any(user, "beta"):
+        apps.append({"id": "beta-tasks", "label": "Beta Tasks", "icon": "target", "enabled": True, "hidden": False})
     if has_any(user, "owner", "dev"):
         apps.append({"id": "fine-settlement", "label": "Fine Settlement", "icon": "gavel", "enabled": True, "hidden": False})
     visibility = settings.get("app_visibility") or {}
@@ -3404,8 +3539,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_system_settings(db, user)
                 elif path == "/api/system/settings" and method == "PATCH":
                     self.api_update_system_settings(db, user)
+                elif path == "/api/beta/respond" and method == "POST":
+                    self.api_beta_respond(db, user)
+                elif path == "/api/beta/tasks" and method == "GET":
+                    self.api_beta_tasks(db, user)
+                elif path == "/api/beta/reports" and method == "POST":
+                    self.api_beta_report(db, user)
                 elif path == "/api/dev-tools" and method == "GET":
                     self.api_dev_tools(db, user)
+                elif path == "/api/dev-tools/beta-program" and method == "PATCH":
+                    self.api_dev_beta_program(db, user)
+                elif path == "/api/dev-tools/beta-tasks" and method == "POST":
+                    self.api_dev_create_beta_task(db, user)
+                elif path.startswith("/api/dev-tools/beta-tasks/") and method == "PATCH":
+                    self.api_dev_update_beta_task(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/dev-tools/accounts/") and method == "GET":
                     self.api_dev_account(db, user, self.path_int(path, 3))
                 elif path == "/api/dev-tools/unlink-codes" and method == "POST":
@@ -3624,6 +3771,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         unread = one(db, "SELECT COUNT(*) AS count FROM messages WHERE recipient_id = ? AND read_at IS NULL", (user["id"],))
         arma_linked = bool(one(db, "SELECT id FROM arma_account_links WHERE user_id = ?", (user["id"],)))
+        beta_response = one(
+            db,
+            "SELECT response FROM beta_program_responses WHERE user_id = ? AND campaign_id = ?",
+            (user["id"], settings["beta_campaign_id"]),
+        )
+        beta_invite = bool(
+            settings["beta_recruiting_enabled"]
+            and not has_any(user, "beta")
+            and not beta_response
+        )
         apps = app_catalog(user, settings)
         if block and block["sanction_type"] == "timeout":
             apps = [
@@ -3660,6 +3817,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "system": {
                     "update_lockdown_enabled": settings["update_lockdown_enabled"],
                     "update_lockdown_message": settings["update_lockdown_message"],
+                    "beta_invite": beta_invite,
+                    "beta_recruiting_message": settings["beta_recruiting_message"],
                 },
             },
         )
@@ -4552,6 +4711,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if posting.get("form_type") == "law_enforcement":
             try:
                 statement, message_body = clean_law_enforcement_application(payload, posting, user)
+            except ValueError as exc:
+                self.error(400, str(exc))
+                return
+        elif posting.get("form_type") == "bar_exam":
+            try:
+                statement, message_body = clean_bar_exam_application(payload, posting, user)
             except ValueError as exc:
                 self.error(400, str(exc))
                 return
@@ -7954,6 +8119,122 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         stats = {**auto_verify_stats(db, settings), **auto_license_stats(db, settings)}
         self.send_json(200, {"ok": True, "settings": settings, "stats": stats, "auto_verified_now": auto_verified, "auto_licensed_now": auto_licensed})
 
+    def api_beta_respond(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        settings = get_system_settings(db)
+        payload = self.read_json()
+        response = str(payload.get("response") or "").strip().lower()
+        if response not in ("accepted", "declined"):
+            self.error(400, "Response must be accepted or declined")
+            return
+        if response == "accepted" and not settings["beta_recruiting_enabled"]:
+            self.error(409, "Beta recruitment is currently closed")
+            return
+        db.execute(
+            """
+            INSERT INTO beta_program_responses (user_id, campaign_id, response, responded_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, campaign_id) DO UPDATE SET response = excluded.response, responded_at = excluded.responded_at
+            """,
+            (user["id"], settings["beta_campaign_id"], response, now_iso()),
+        )
+        if response == "accepted":
+            updated_roles = sorted(set([*roles_for(user), "beta"]))
+            db.execute("UPDATE users SET roles = ? WHERE id = ?", (json.dumps(updated_roles), user["id"]))
+            add_message(db, user["id"], "Welcome to the Faircroft Beta Program", "Beta access is active. Open Beta Tasks to begin testing upcoming releases.")
+        self.send_json(200, {"ok": True, "response": response})
+
+    def api_beta_tasks(self, db: Database, user: DbRow | None) -> None:
+        if not user or not has_any(user, "beta", "dev", "owner"):
+            self.error(403 if user else 401, "Beta Program access required")
+            return
+        tasks = all_rows(db, "SELECT * FROM beta_tasks WHERE active <> 0 ORDER BY CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 ELSE 2 END, updated_at DESC")
+        reports = all_rows(
+            db,
+            "SELECT r.*, t.title AS task_title FROM beta_bug_reports r LEFT JOIN beta_tasks t ON t.id = r.task_id WHERE r.reporter_id = ? ORDER BY r.created_at DESC LIMIT 100",
+            (user["id"],),
+        )
+        self.send_json(200, {"tasks": [dict(row) for row in tasks], "reports": [dict(row) for row in reports]})
+
+    def api_beta_report(self, db: Database, user: DbRow | None) -> None:
+        if not user or not has_any(user, "beta", "dev", "owner"):
+            self.error(403 if user else 401, "Beta Program access required")
+            return
+        payload = self.read_json()
+        summary = str(payload.get("summary") or "").strip()[:180]
+        steps = str(payload.get("steps") or "").strip()[:4000]
+        actual = str(payload.get("actual_result") or "").strip()[:3000]
+        expected = str(payload.get("expected_result") or "").strip()[:3000]
+        severity = str(payload.get("severity") or "standard").strip().lower()
+        if not summary or len(steps) < 10 or len(actual) < 5:
+            self.error(400, "Summary, reproduction steps, and actual result are required")
+            return
+        if severity not in ("low", "standard", "high", "critical"):
+            severity = "standard"
+        task_id = payload.get("task_id")
+        task_id = int(task_id) if str(task_id or "").isdigit() else None
+        db.execute(
+            "INSERT INTO beta_bug_reports (task_id, reporter_id, summary, steps, expected_result, actual_result, severity, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (task_id, user["id"], summary, steps, expected, actual, severity, now_iso()),
+        )
+        self.send_json(201, {"ok": True})
+
+    def api_dev_beta_program(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        current = get_system_settings(db)
+        enabled = bool(payload.get("enabled"))
+        message = str(payload.get("message") or current["beta_recruiting_message"]).strip()[:600]
+        if len(message) < 20:
+            self.error(400, "Recruitment message must be at least 20 characters")
+            return
+        campaign_id = current["beta_campaign_id"]
+        if enabled and not current["beta_recruiting_enabled"]:
+            campaign_id += 1
+        set_system_setting(db, "beta_recruiting_enabled", "1" if enabled else "0")
+        set_system_setting(db, "beta_recruiting_message", message)
+        set_system_setting(db, "beta_campaign_id", str(campaign_id))
+        add_admin_audit(db, int(user["id"]), "beta.recruitment.updated", details={"enabled": enabled, "campaign_id": campaign_id})
+        self.send_json(200, {"ok": True, "settings": get_system_settings(db)})
+
+    def api_dev_create_beta_task(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        title = str(payload.get("title") or "").strip()[:140]
+        instructions = str(payload.get("instructions") or "").strip()[:5000]
+        test_area = str(payload.get("test_area") or "General").strip()[:80]
+        priority = str(payload.get("priority") or "standard").strip().lower()
+        if len(title) < 3 or len(instructions) < 10:
+            self.error(400, "Task title and detailed instructions are required")
+            return
+        if priority not in ("low", "standard", "high", "critical"):
+            priority = "standard"
+        ts = now_iso()
+        db.execute(
+            "INSERT INTO beta_tasks (title, instructions, test_area, priority, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (title, instructions, test_area, priority, user["id"], ts, ts),
+        )
+        self.send_json(201, {"ok": True})
+
+    def api_dev_update_beta_task(self, db: Database, user: DbRow | None, task_id: int) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        active = 1 if bool(payload.get("active")) else 0
+        db.execute("UPDATE beta_tasks SET active = ?, updated_at = ? WHERE id = ?", (active, now_iso(), task_id))
+        self.send_json(200, {"ok": True})
+
     def api_dev_tools(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
         if err:
@@ -8046,7 +8327,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             ORDER BY l.linked_at DESC LIMIT 40
             """,
         )
-        app_visibility = get_system_settings(db)["app_visibility"]
+        system_settings = get_system_settings(db)
+        app_visibility = system_settings["app_visibility"]
+        beta_tasks = all_rows(db, "SELECT * FROM beta_tasks ORDER BY active DESC, updated_at DESC LIMIT 100")
+        beta_reports = all_rows(
+            db,
+            """
+            SELECT r.*, reporter.name AS reporter_name, t.title AS task_title
+            FROM beta_bug_reports r
+            JOIN users reporter ON reporter.id = r.reporter_id
+            LEFT JOIN beta_tasks t ON t.id = r.task_id
+            ORDER BY r.created_at DESC LIMIT 200
+            """,
+        )
+        beta_members = sum(1 for row in users if "beta" in roles_for(row))
         self.send_json(
             200,
             {
@@ -8065,6 +8359,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "warnings": [dict(row) for row in warnings],
                 "audit_logs": [dict(row) for row in audit_logs],
                 "unlink_codes": [dict(row) for row in codes],
+                "beta_program": {
+                    "recruiting_enabled": system_settings["beta_recruiting_enabled"],
+                    "recruiting_message": system_settings["beta_recruiting_message"],
+                    "campaign_id": system_settings["beta_campaign_id"],
+                    "members": beta_members,
+                    "tasks": [dict(row) for row in beta_tasks],
+                    "reports": [dict(row) for row in beta_reports],
+                },
                 "app_visibility": {
                     "apps": [
                         {"id": app_id, "label": label, "enabled": app_visibility.get(app_id, True)}
@@ -9101,6 +9403,23 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if status not in ("submitted", "under_review", "approved", "denied", "withdrawn", "closed"):
             self.error(400, "Invalid application status")
             return
+        is_bar_exam = application["department_key"] == "lawyer"
+        if has_any(user, "judge") and not has_any(user, "owner", "admin", INDEED_ADMIN_ROLE) and not is_bar_exam:
+            self.error(403, "Judges may only review Bar Exam applications")
+            return
+        if is_bar_exam and status == "approved":
+            if not has_any(user, "judge", "owner"):
+                self.error(403, "A Judge must sign the Bar certificate")
+                return
+            try:
+                exam_record = json.loads(application["statement"])
+                exam_score = int(exam_record.get("score", 0))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                self.error(409, "This application does not contain a valid Bar Exam result")
+                return
+            if exam_score < 14:
+                self.error(409, "This Bar Exam is not eligible for judicial certification")
+                return
         reviewer_notes = str(payload.get("reviewer_notes") or application.get("reviewer_notes") or "").strip()[:1500]
         ts = now_iso()
         db.execute(
@@ -9126,7 +9445,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 )
         subject = f"{application['department_name']} application {status.replace('_', ' ')}"
         note = reviewer_notes or f"Your {application['department_name']} application is now {status.replace('_', ' ')}."
-        if status == "approved":
+        if is_bar_exam and status == "approved":
+            subject = "Faircroft Bar certificate signed"
+            note = f"{reviewer_notes}\n\n" if reviewer_notes else ""
+            note += f"Judge {user['name']} signed your Faircroft Bar certificate. Licensed Attorney access has been added to your account."
+        elif status == "approved":
             note = f"{note}\n\nDepartment access has been added to your account."
         add_message(db, application["user_id"], subject, note, user["id"])
         self.send_json(200, {"ok": True, "status": status})

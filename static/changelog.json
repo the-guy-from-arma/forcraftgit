@@ -1,6 +1,34 @@
 {
-  "version": "0.0.74",
+  "version": "0.0.76",
   "entries": [
+    {
+      "date": "2026-07-25",
+      "version": "0.0.76",
+      "title": "Faircroft Beta Program",
+      "added": [
+        "Added developer-controlled Beta Program recruitment campaigns with a customizable login invitation.",
+        "Added automatic Beta Tester role enrollment and a dedicated Beta Tasks app.",
+        "Added developer-published testing assignments and structured tester bug reports.",
+        "Added Beta Program membership, active-task, and report metrics inside Dev Tools."
+      ],
+      "changed": [
+        "Dev Tools Settings now includes release-testing recruitment, task publishing, task closure, and tester feedback."
+      ],
+      "fixed": []
+    },
+    {
+      "date": "2026-07-25",
+      "version": "0.0.75",
+      "title": "Indeed Job Advertisements and Bar Exam",
+      "added": [
+        "Added the Wanna Be a Lawyer advertisement with a private 20-question Faircroft Bar Exam.",
+        "Added internal exam scoring and judicial certificate signing before Licensed Attorney access is granted."
+      ],
+      "changed": [
+        "Replaced the plain Indeed navigation tabs with expandable, visual job advertisements that open directly into each application."
+      ],
+      "fixed": []
+    },
     {
       "date": "2026-07-25",
       "version": "0.0.74",
