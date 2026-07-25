@@ -6234,19 +6234,24 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"results": []})
             return
         like = f"%{term}%"
+        can_view_account_email = bool(user and has_any(user, "owner", "admin"))
+        email_column = ", u.email" if can_view_account_email else ""
+        email_filter = " OR u.email ILIKE ?" if can_view_account_email else ""
+        search_params = (like, like, like, like, like, like) if can_view_account_email else (like, like, like, like, like)
         rows = all_rows(
             db,
-            """
-            SELECT u.id, u.civ_number, u.name, u.email, u.verified, u.roles, u.car_entry_code, u.callsign, d.license_status, d.license_class, d.vehicle_make,
+            f"""
+            SELECT u.id, u.civ_number, u.name{email_column}, u.verified, u.roles, u.car_entry_code, u.callsign, d.license_status, d.license_class, d.vehicle_make,
                    d.vehicle_model, d.vehicle_color, d.plate, d.registration_status, d.insurance_status
             FROM users u
             LEFT JOIN dmv_records d ON d.user_id = u.id
-            WHERE u.name ILIKE ? OR u.email ILIKE ? OR u.civ_number ILIKE ? OR u.car_entry_code ILIKE ? OR d.plate ILIKE ?
+            WHERE u.name ILIKE ? OR u.civ_number ILIKE ? OR u.car_entry_code ILIKE ? OR d.plate ILIKE ?
                OR EXISTS (SELECT 1 FROM dmv_vehicles v WHERE v.user_id = u.id AND v.plate ILIKE ?)
+               {email_filter}
             ORDER BY u.name
             LIMIT 25
             """,
-            (like, like, like, like, like, like),
+            search_params,
         )
         results = []
         for row in rows:
@@ -6293,6 +6298,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 (row["id"],),
             )
             item = dict(row)
+            if not can_view_account_email:
+                item.pop("email", None)
             item["roles"] = roles_for(row)
             item["open_cases"] = [dict(w) for w in warrants]
             item["vehicles"] = vehicles

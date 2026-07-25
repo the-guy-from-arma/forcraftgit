@@ -26,6 +26,7 @@
         "Roadmap opening, closing, route travel, progress, filter, refresh, build-brief, vote, and scroll-reveal motion now use a coordinated animation system across desktop and mobile."
       ],
       "fixed": [
+        "Restricted account email addresses in CAD and NCIC to owner/admin sessions; law-enforcement, CID, dispatch, fire, and EMS searches no longer receive, display, or search private login email data.",
         "Fixed a judge's own tickets and citations appearing inside the same workspace as the official court docket.",
         "Fixed criminal sentencing displaying real-world-style terms by replacing them with bounded Faircroft RP minute standards.",
         "Restored Dev Tools, developer-role access, sanctions, warnings, app visibility controls, audit tools, and guided Arma unlink codes from the 0.0.70 system.",

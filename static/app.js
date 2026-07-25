@@ -4080,16 +4080,17 @@ function renderMdtLegacy() {
 
 function renderMdtSearchLegacy() {
   const results = state.cache.mdt?.search || [];
+  const canViewAccountEmail = canAny("owner", "admin");
   return `
     <form id="mdtSearch" class="card form-grid">
-      <label>Name, email, or plate<input name="q" minlength="2" required /></label>
+      <label>${canViewAccountEmail ? "Name, email, CIV, or plate" : "Name, CIV, or plate"}<input name="q" minlength="2" required /></label>
       <button class="primary" type="submit">Search NCIC</button>
     </form>
     <div class="list">
       ${results.map((item) => `
         <article class="record-card">
           <div class="row"><h3>${escapeHtml(item.name)}</h3><span class="pill ${item.verified ? "green" : "amber"}">${item.verified ? "verified" : "unverified"}</span></div>
-          <p class="muted small">${escapeHtml(item.email)} · ${escapeHtml(item.plate || "No plate")}</p>
+          <p class="muted small">${canViewAccountEmail && item.email ? `${escapeHtml(item.email)} / ` : ""}${escapeHtml(item.plate || "No plate")}</p>
           <div class="grid-2">
             <div class="metric"><span>License</span><strong>${escapeHtml(item.license_status || "None")}</strong></div>
             <div class="metric"><span>Vehicle</span><strong>${escapeHtml([item.vehicle_color, item.vehicle_make, item.vehicle_model].filter(Boolean).join(" "))}</strong></div>
@@ -4401,6 +4402,7 @@ function renderDispatchWorkspace() {
   const data = state.cache.dispatch || {};
   const calls = data.calls || [];
   const canManageDispatch = Boolean(data.can_manage_dispatch);
+  const canViewAccountEmail = canAny("owner", "admin");
   const ncicResults = state.dispatchNcicResults || [];
   const stats = data.stats || { active: 0, critical: 0, assigned_units: 0, police: 0, fire: 0, ems: 0 };
   const activeStatuses = ["active", "staged", "responding", "on_scene", "held"];
@@ -4677,7 +4679,7 @@ function renderDispatchWorkspace() {
               <p class="eyebrow">NCIC / DMV check</p>
               <h2>Run Lookup</h2>
             </div>
-            <label>Find person by name, civ, email, or plate<input name="q" value="${escapeHtml(state.dispatchNcicQuery)}" placeholder="Search civilian name, civ, email, plate" /></label>
+            <label>${canViewAccountEmail ? "Find person by name, CIV, email, or plate" : "Find person by name, CIV, or plate"}<input name="q" value="${escapeHtml(state.dispatchNcicQuery)}" placeholder="${canViewAccountEmail ? "Search civilian name, CIV, email, or plate" : "Search civilian name, CIV, or plate"}" /></label>
             <button class="secondary" type="submit">Search</button>
           </form>
           <section class="dispatch-log">
@@ -4694,7 +4696,7 @@ function renderDispatchWorkspace() {
                   <div class="row tight"><strong>${escapeHtml(item.name || "Unknown")}</strong><span>${escapeHtml(item.civ_number || "CIV pending")}</span></div>
                   <p>${escapeHtml(item.callsign ? `Callsign ${item.callsign}` : "No callsign set")} / ${escapeHtml(item.primary_agency || "Civilian")}</p>
                   <p>${escapeHtml(item.license_status || "No DMV record")} | Plate ${escapeHtml((item.vehicles?.[0] && item.vehicles[0].plate) || item.plate || "N/A")}</p>
-                  <p class="muted small">${escapeHtml(item.email || "No email")} / Car code ${escapeHtml(item.car_entry_code || "N/A")}</p>
+                  <p class="muted small">${canViewAccountEmail && item.email ? `${escapeHtml(item.email)} / ` : ""}Car code ${escapeHtml(item.car_entry_code || "N/A")}</p>
                 </article>
               `).join("") || `<div class="empty">No NCIC hits yet</div>`}
             </div>
@@ -5606,9 +5608,10 @@ function renderCadReports() {
 
 function renderMdtSearch() {
   const results = state.cache.mdt?.search || [];
+  const canViewAccountEmail = canAny("owner", "admin");
   return `
     <form id="mdtSearch" class="mdt-searchbar">
-      <label>Search name, email, plate, CIV, or car code<input name="q" minlength="2" placeholder="Search name, email, plate, CIV number, or car code" required /></label>
+      <label>${canViewAccountEmail ? "Search name, email, plate, CIV, or car code" : "Search name, plate, CIV, or car code"}<input name="q" minlength="2" placeholder="${canViewAccountEmail ? "Search name, email, plate, CIV number, or car code" : "Search name, plate, CIV number, or car code"}" required /></label>
       <button class="primary" type="submit">Run NCIC</button>
     </form>
     <div class="mdt-results">
@@ -5617,7 +5620,7 @@ function renderMdtSearch() {
           <div class="row">
             <div>
               <h3>${escapeHtml(item.name)}</h3>
-              <p class="muted small">CIV ${escapeHtml(item.civ_number || "pending")} / Record #${item.id} / ${escapeHtml(item.email)}</p>
+              <p class="muted small">CIV ${escapeHtml(item.civ_number || "pending")} / Record #${item.id}${canViewAccountEmail && item.email ? ` / ${escapeHtml(item.email)}` : ""}</p>
             </div>
             <span class="pill ${item.verified ? "green" : "amber"}">${item.verified ? "verified" : "unverified"}</span>
           </div>
@@ -5660,6 +5663,7 @@ function renderMdtProfileModal() {
   const previousWarrants = warrants.filter((item) => !["active", "pending"].includes(item.status));
   const licenseStatus = person.license_status || "None";
   const canSuspendLicense = licenseStatus === "Valid";
+  const canViewAccountEmail = canAny("owner", "admin");
   return `
     <div class="modal-backdrop mdt-profile-backdrop" data-close-mdt-profile>
       <section class="mdt-modal mdt-profile-modal" role="dialog" aria-modal="true" aria-label="Civilian MDT profile">
@@ -5757,7 +5761,7 @@ function renderMdtProfileModal() {
                 <span class="pill ${person.verified ? "green" : "amber"}">${person.verified ? "verified" : "unverified"}</span>
               </div>
               <div class="profile-grid compact">
-                <div class="metric"><span>Email</span><strong>${escapeHtml(person.email)}</strong></div>
+                ${canViewAccountEmail && person.email ? `<div class="metric"><span>Email</span><strong>${escapeHtml(person.email)}</strong></div>` : ""}
                 <div class="metric"><span>Roles</span><strong>${escapeHtml((person.roles || []).join(", ") || "civ")}</strong></div>
                 <div class="metric"><span>Car Entry</span><strong>${escapeHtml(person.car_entry_code || "Not filed")}</strong></div>
                 <div class="metric"><span>Bookings</span><strong>${bookings.length}</strong></div>
@@ -6137,6 +6141,7 @@ function renderTrafficStopAttachedDriver() {
 function renderTrafficStopNcicTools() {
   const results = state.mdtTrafficStopResults || [];
   const searched = Boolean(String(state.mdtTrafficStopQuery || "").trim());
+  const canViewAccountEmail = canAny("owner", "admin");
   return `
     <section class="traffic-stop-tools">
       <form id="trafficStopNcicForm" class="traffic-ncic-form">
@@ -6156,7 +6161,7 @@ function renderTrafficStopNcicTools() {
               <div class="row">
                 <div>
                   <h4>${escapeHtml(item.name)}</h4>
-                  <p class="muted small">CIV ${escapeHtml(item.civ_number || "pending")} / DB #${item.id} / ${escapeHtml(item.email || "no email")}</p>
+                  <p class="muted small">CIV ${escapeHtml(item.civ_number || "pending")} / DB #${item.id}${canViewAccountEmail && item.email ? ` / ${escapeHtml(item.email)}` : ""}</p>
                 </div>
                 <span class="pill ${item.verified ? "green" : "amber"}">${item.verified ? "verified" : "unverified"}</span>
               </div>
