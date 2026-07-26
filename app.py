@@ -9042,7 +9042,32 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         anticheat_sync_status = all_rows(
             db, "SELECT * FROM anticheat_sync_status ORDER BY source_key"
         )
-        anticheat_online = sum(1 for row in anticheat_players if row.get("online"))
+        anticheat_active_players = all_rows(
+            db,
+            """
+            SELECT s.server_id, s.player_uid AS uid, s.player_name, s.joined_at,
+                   s.last_heartbeat_at,
+                   COALESCE(s.linked_user_id, link.user_id) AS linked_user_id,
+                   account.name AS account_name, account.civ_number,
+                   COALESCE(p.teleport_flags, 0) AS teleport_flags,
+                   COALESCE(p.aim_flags, 0) AS aim_flags,
+                   CASE WHEN p.uid IS NULL THEN 0 ELSE 1 END AS has_intelligence_file
+            FROM anticheat_live_sessions s
+            LEFT JOIN LATERAL (
+                SELECT l.user_id
+                FROM arma_account_links l
+                WHERE l.identity_id = s.player_uid OR l.uid = s.player_uid
+                ORDER BY l.linked_at DESC LIMIT 1
+            ) link ON TRUE
+            LEFT JOIN users account ON account.id = COALESCE(s.linked_user_id, link.user_id)
+            LEFT JOIN anticheat_players p ON p.uid = s.player_uid
+            WHERE s.status = 'online' AND s.last_heartbeat_at >= ?
+            ORDER BY s.server_id, s.player_name, s.player_uid
+            LIMIT 500
+            """,
+            (live_cutoff,),
+        )
+        anticheat_online = len(anticheat_active_players)
         anticheat_flagged = sum(
             1 for row in anticheat_players
             if int(row.get("teleport_flags") or 0) + int(row.get("aim_flags") or 0) > 0
@@ -9076,6 +9101,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 },
                 "anti_cheat": {
                     "players": [dict(row) for row in anticheat_players],
+                    "active_players": [dict(row) for row in anticheat_active_players],
                     "events": [dict(row) for row in anticheat_events],
                     "alt_groups": [dict(row) for row in anticheat_alt_groups],
                     "alt_members": [dict(row) for row in anticheat_alt_members],

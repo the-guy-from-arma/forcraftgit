@@ -1,6 +1,20 @@
 {
-  "version": "0.0.99",
+  "version": "0.0.100",
   "entries": [
+    {
+      "date": "2026-07-26",
+      "version": "0.0.100",
+      "title": "Live Anti-Cheat Server Roster",
+      "added": [
+        "Added a dedicated Active Players roster to the Developer Anti-Cheat board.",
+        "Added live server, join time, CAD account match, CIV number, and detection-status details."
+      ],
+      "changed": [
+        "Current in-game presence is now separated from the historical anti-cheat player directory and website login activity.",
+        "Live players with intelligence files can be opened directly from the active roster."
+      ],
+      "fixed": []
+    },
     {
       "date": "2026-07-26",
       "version": "0.0.99",

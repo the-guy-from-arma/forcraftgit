@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.99";
+const OS_VERSION = "0.0.100";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -8230,6 +8230,7 @@ function devRecentLinks(links) {
 
 function renderDevAntiCheat(data) {
   const metrics = data.metrics || {};
+  const activePlayers = data.active_players || [];
   const query = state.devAntiCheatSearch.trim().toLowerCase();
   const players = (data.players || []).filter((player) =>
     !query || [player.player_name, player.uid, player.account_name, player.civ_number]
@@ -8248,6 +8249,21 @@ function renderDevAntiCheat(data) {
       <div class="dev-metric amber-tone"><span>Alt groups</span><strong>${Number(metrics.alt_groups || 0)}</strong><small>Known associations</small></div>
       <div class="dev-metric blue-tone"><span>Events</span><strong>${Number(metrics.events || 0)}</strong><small>Recent evidence</small></div>
     </div>
+    <section class="anticheat-live-roster">
+      <header>
+        <div><p class="eyebrow">Live game server</p><h2>Active Players</h2><p>Players currently reporting an in-server heartbeat. This is separate from website login activity.</p></div>
+        <span class="anticheat-live-count"><i></i>${activePlayers.length} connected</span>
+      </header>
+      <div class="anticheat-live-grid">
+        ${activePlayers.map((player) => {
+          const flags = Number(player.teleport_flags || 0) + Number(player.aim_flags || 0);
+          const content = `<span class="anticheat-live-pulse"></span><div><strong>${escapeHtml(player.player_name || "Unknown player")}</strong><small>${escapeHtml(player.account_name || "No linked CAD account")}${player.civ_number ? ` · CIV ${escapeHtml(player.civ_number)}` : ""}</small></div><div><span>${escapeHtml(player.server_id || "default server")}</span><small>${flags ? `${flags} active detection flag${flags === 1 ? "" : "s"}` : "No detection flags"}</small></div><time>${player.joined_at ? `Joined ${new Date(player.joined_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "Session active"}</time>`;
+          return player.has_intelligence_file
+            ? `<button type="button" class="anticheat-live-player" data-anticheat-player="${escapeHtml(player.uid)}">${content}</button>`
+            : `<article class="anticheat-live-player">${content}</article>`;
+        }).join("") || `<div class="anticheat-live-empty"><i></i><div><strong>No active server heartbeats</strong><span>Players appear here as soon as the game bridge reports a join or heartbeat.</span></div></div>`}
+      </div>
+    </section>
     <section class="dev-card">
       <div class="anticheat-directory-head"><div><h2>Player directory</h2><p class="muted">${players.length} matching records</p></div><input id="antiCheatSearch" type="search" value="${escapeHtml(state.devAntiCheatSearch)}" placeholder="Search name, UID, account, or CIV…" /></div>
       <div class="anticheat-player-list">${players.map((player) => {
@@ -9340,7 +9356,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.99").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.100").catch(() => {}));
 }
 
 bootApp();
