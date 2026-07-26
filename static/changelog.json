@@ -1,6 +1,47 @@
 {
-  "version": "0.0.102",
+  "version": "0.1.1",
   "entries": [
+    {
+      "date": "2026-07-26",
+      "version": "0.1.1",
+      "title": "Faircroft Operations Release",
+      "added": [
+        "Released the integrated Court, MDT/CAD, Developer Operations, and Anti-Cheat platform workflow as PWA 0.1.1."
+      ],
+      "changed": [
+        "Updated the visible RP OS version and installation cache to the 0.1.1 release line."
+      ],
+      "fixed": []
+    },
+    {
+      "date": "2026-07-26",
+      "version": "0.0.104",
+      "title": "Anti-Cheat System Telemetry",
+      "added": [
+        "Added reported player-system storage from anti-cheat platform, playerPlatform, platformName, system, and deviceType telemetry fields.",
+        "Added system badges to the Anti-Cheat directory and intelligence profile.",
+        "Added an Anti-Cheat Reported System section to linked-user backend profiles."
+      ],
+      "changed": [
+        "Verified Arma platform data is used as a fallback when the anti-cheat record does not report a system.",
+        "Unknown systems are labeled honestly instead of being inferred."
+      ],
+      "fixed": []
+    },
+    {
+      "date": "2026-07-26",
+      "version": "0.0.103",
+      "title": "Anti-Cheat Directory Restoration",
+      "added": [],
+      "changed": [
+        "Restored the Anti-Cheat board to its established intelligence-directory layout.",
+        "Recent bridge presence can still mark an individual player as live inside their anti-cheat record."
+      ],
+      "fixed": [],
+      "removed": [
+        "Removed the separate Active Players roster, A2S query, connection warnings, and A2S environment settings."
+      ]
+    },
     {
       "date": "2026-07-26",
       "version": "0.0.102",

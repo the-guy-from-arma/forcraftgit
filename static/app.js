@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.102";
+const OS_VERSION = "0.1.1";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -8230,8 +8230,6 @@ function devRecentLinks(links) {
 
 function renderDevAntiCheat(data) {
   const metrics = data.metrics || {};
-  const activePlayers = data.active_players || [];
-  const liveSource = data.live_source || {};
   const query = state.devAntiCheatSearch.trim().toLowerCase();
   const players = (data.players || []).filter((player) =>
     !query || [player.player_name, player.uid, player.account_name, player.civ_number]
@@ -8250,22 +8248,6 @@ function renderDevAntiCheat(data) {
       <div class="dev-metric amber-tone"><span>Alt groups</span><strong>${Number(metrics.alt_groups || 0)}</strong><small>Known associations</small></div>
       <div class="dev-metric blue-tone"><span>Events</span><strong>${Number(metrics.events || 0)}</strong><small>Recent evidence</small></div>
     </div>
-    <section class="anticheat-live-roster">
-      <header>
-        <div><p class="eyebrow">Live game server</p><h2>Active Players</h2><p>Players currently reporting an in-server heartbeat. This is separate from website login activity.</p></div>
-        <div class="anticheat-live-status"><span class="pill ${liveSource.status === "live" ? "green" : "red"}">${escapeHtml((liveSource.source || "bridge").toUpperCase())} · ${escapeHtml(liveSource.status || "unknown")}</span><span class="anticheat-live-count"><i></i>${activePlayers.length} connected</span></div>
-      </header>
-      ${liveSource.error ? `<div class="anticheat-source-error"><strong>Live query unavailable</strong><span>${escapeHtml(liveSource.error)}</span></div>` : ""}
-      <div class="anticheat-live-grid">
-        ${activePlayers.map((player) => {
-          const flags = Number(player.teleport_flags || 0) + Number(player.aim_flags || 0);
-          const content = `<span class="anticheat-live-pulse"></span><div><strong>${escapeHtml(player.player_name || "Unknown player")}</strong><small>${escapeHtml(player.account_name || "No linked CAD account")}${player.civ_number ? ` · CIV ${escapeHtml(player.civ_number)}` : ""}</small></div><div><span>${escapeHtml(player.server_id || "default server")}</span><small>${flags ? `${flags} active detection flag${flags === 1 ? "" : "s"}` : "No detection flags"}</small></div><time>${player.joined_at ? `Joined ${new Date(player.joined_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "Session active"}</time>`;
-          return player.has_intelligence_file
-            ? `<button type="button" class="anticheat-live-player" data-anticheat-player="${escapeHtml(player.uid)}">${content}</button>`
-            : `<article class="anticheat-live-player">${content}</article>`;
-        }).join("") || `<div class="anticheat-live-empty"><i></i><div><strong>No active server heartbeats</strong><span>Players appear here as soon as the game bridge reports a join or heartbeat.</span></div></div>`}
-      </div>
-    </section>
     <section class="dev-card">
       <div class="anticheat-directory-head"><div><h2>Player directory</h2><p class="muted">${players.length} matching records</p></div><input id="antiCheatSearch" type="search" value="${escapeHtml(state.devAntiCheatSearch)}" placeholder="Search name, UID, account, or CIV…" /></div>
       <div class="anticheat-player-list">${players.map((player) => {
@@ -8275,7 +8257,7 @@ function renderDevAntiCheat(data) {
           <div class="anticheat-player-id"><strong>${escapeHtml(player.player_name || "Unknown player")}</strong><small>${escapeHtml(player.uid)}</small></div>
           <div><span>${player.linked_user_id ? escapeHtml(player.account_name || "Linked account") : "No CAD link"}</span><small>${player.civ_number ? `CIV ${escapeHtml(player.civ_number)}` : "Bohemia UID unmatched"}</small></div>
           <div><span>${Number(player.ticket_count || 0)} tickets</span><small>${flags} detection flags</small></div>
-          <div><span class="pill ${player.online ? "green" : ""}">${player.online ? "live" : "offline"}</span>${Number(player.alt_group_count || 0) ? `<span class="pill amber">${Number(player.alt_group_count)} alt group</span>` : ""}</div>
+          <div><span class="pill ${player.online ? "green" : ""}">${player.online ? "live" : "offline"}</span><span class="pill blue">${escapeHtml(player.detected_system || "Unknown")}</span>${Number(player.alt_group_count || 0) ? `<span class="pill amber">${Number(player.alt_group_count)} alt group</span>` : ""}</div>
         </button>`;
       }).join("") || `<div class="empty">No anti-cheat players match this search.</div>`}</div>
     </section>
@@ -8298,6 +8280,7 @@ function renderAntiCheatModal(data, uid) {
       <div class="dev-profile-scroll">
         <div class="dev-profile-summary">
           <div><span>Presence</span><strong>${player.online ? "Online now" : "Offline"}</strong></div>
+          <div><span>Reported system</span><strong>${escapeHtml(player.detected_system || "Unknown")}</strong></div>
           <div><span>CAD account</span><strong>${escapeHtml(player.account_name || "Not linked")}</strong></div>
           <div><span>CIV number</span><strong>${escapeHtml(player.civ_number || "Not matched")}</strong></div>
           <div><span>Tickets</span><strong>${Number(player.ticket_count || 0)}</strong></div>
@@ -8324,6 +8307,7 @@ function renderDevAccountModal(data) {
   const sanctions = data.sanctions || [], warnings = data.warnings || [], tx = data.transactions || [];
   const activity = data.arma_activity || [], characters = data.characters || [], jobs = data.jobs || [], citations = data.citations || [], properties = data.properties || [];
   const gameBank = data.game_database?.bank;
+  const antiCheat = data.anti_cheat || {};
   return `<div class="dev-profile-backdrop" data-close-dev-account>
     <section class="dev-profile-modal" role="dialog" aria-modal="true" aria-label="Linked account investigation profile">
       <header class="dev-profile-header"><div><p class="eyebrow">Linked account intelligence file</p><h2>${escapeHtml(a.name || "Account")}</h2><p>CIV ${escapeHtml(a.civ_number || "pending")} · ${escapeHtml(a.player_name || "Unknown in-game name")}</p></div><div class="row"><button class="danger" data-dev-enforce="${a.id}">Ban / Timeout</button><button class="secondary" data-close-dev-account>Close</button></div></header>
@@ -8332,6 +8316,7 @@ function renderDevAccountModal(data) {
           <div><span>Website status</span><strong>${a.verified ? "Verified" : "Unverified"}</strong></div>
           <div><span>Account email</span><strong>${escapeHtml(a.email || "")}</strong></div>
           <div><span>Platform</span><strong>${escapeHtml(a.platform || "Unknown")}</strong></div>
+          <div><span>Anti-Cheat system</span><strong>${escapeHtml(antiCheat.detected_system || "Unknown")}</strong></div>
           <div><span>Server</span><strong>${escapeHtml(a.server_id || "Unknown")}</strong></div>
           <div><span>Bohemia Identity ID</span><strong>${escapeHtml(a.identity_id || "")}</strong></div>
           <div><span>UID</span><strong>${escapeHtml(a.uid || "")}</strong></div>
@@ -8342,6 +8327,10 @@ function renderDevAccountModal(data) {
           <div><span>Last game sync</span><strong>${escapeHtml(a.last_sync_at || "Not reported")}</strong></div>
         </div>
         ${data.active_block ? `<div class="dev-alert red-tone"><strong>Active ${escapeHtml(data.active_block.sanction_type)}</strong><span>${escapeHtml(data.active_block.reason || "")}</span></div>` : ""}
+        <section class="dev-card dev-system-evidence">
+          <div><p class="eyebrow">Anti-Cheat device telemetry</p><h3>Reported System</h3><p>${escapeHtml(antiCheat.detected_system || "Unknown")}</p><small>${antiCheat.reported_system ? "Reported directly by the anti-cheat player record." : a.platform ? "Derived from the verified Arma account-link platform because the anti-cheat record did not report a system." : "No platform information has been reported by the game or anti-cheat telemetry."}</small></div>
+          <span class="pill blue">${escapeHtml(antiCheat.detected_system || "Unknown")}</span>
+        </section>
         <div class="dev-profile-grid">
           <section class="dev-card"><div class="row"><h3>Characters</h3><span class="pill">${characters.length}</span></div>${devDetailList(characters, (x) => [x.character_name || x.name || "Character", `${x.is_active ? "Active" : "Inactive"} · updated ${x.updated_at || ""}`])}</section>
           <section class="dev-card"><div class="row"><h3>Jobs</h3><span class="pill">${jobs.length}</span></div>${devDetailList(jobs, (x) => [x.title || "Job", `${x.market || ""} · ${x.status || ""} · started ${x.started_at || ""}`])}</section>
@@ -9358,7 +9347,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.102").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.1").catch(() => {}));
 }
 
 bootApp();

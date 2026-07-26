@@ -63,9 +63,6 @@ ARMA_RCON_HOST = os.environ.get("ARMA_RCON_HOST", os.environ.get("RCON_HOST", ""
 ARMA_RCON_PORT = int(os.environ.get("ARMA_RCON_PORT", os.environ.get("RCON_PORT", "19999")))
 ARMA_RCON_PASSWORD = os.environ.get("ARMA_RCON_PASSWORD", os.environ.get("RCON_PASSWORD", ""))
 ARMA_RCON_TIMEOUT_SECONDS = max(1.0, min(float(os.environ.get("ARMA_RCON_TIMEOUT_SECONDS", "5")), 15.0))
-ARMA_A2S_HOST = os.environ.get("ARMA_A2S_HOST", ARMA_RCON_HOST).strip()
-ARMA_A2S_PORT = int(os.environ.get("ARMA_A2S_PORT", "17777"))
-ARMA_A2S_TIMEOUT_SECONDS = max(0.5, min(float(os.environ.get("ARMA_A2S_TIMEOUT_SECONDS", "2.5")), 8.0))
 NAME_CHANGE_LIMIT = 3
 NAME_CHANGE_WINDOW_DAYS = 3
 TREASURY_STIMULUS_AMOUNT = 75000.00
@@ -177,40 +174,6 @@ def execute_arma_rcon(command: str, *, accept_timeout_after_send: bool = False) 
         except OSError:
             pass
     return {"status": "applied", "response": response[:1000]}
-
-
-def query_arma_a2s_players() -> dict[str, Any]:
-    """Query Reforger's Steam A2S endpoint for authoritative live players."""
-    if not ARMA_A2S_HOST or not 1 <= ARMA_A2S_PORT <= 65535:
-        return {"status": "not_configured", "players": [], "count": 0}
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
-        client.settimeout(ARMA_A2S_TIMEOUT_SECONDS)
-        client.connect((ARMA_A2S_HOST, ARMA_A2S_PORT))
-        client.send(b"\xff\xff\xff\xff\x55\xff\xff\xff\xff")
-        response = client.recv(65535)
-        if response[:5] == b"\xff\xff\xff\xff\x41" and len(response) >= 9:
-            client.send(b"\xff\xff\xff\xff\x55" + response[5:9])
-            response = client.recv(65535)
-        if response[:5] != b"\xff\xff\xff\xff\x44" or len(response) < 6:
-            raise RuntimeError("A2S player query returned an unsupported response")
-        expected = int(response[5])
-        offset = 6
-        players: list[dict[str, Any]] = []
-        for _ in range(expected):
-            if offset >= len(response):
-                break
-            index = int(response[offset])
-            offset += 1
-            name_end = response.find(b"\x00", offset)
-            if name_end < 0 or name_end + 9 > len(response):
-                break
-            name = response[offset:name_end].decode("utf-8", errors="replace").strip()
-            offset = name_end + 1
-            score = struct.unpack("<i", response[offset:offset + 4])[0]
-            duration = max(0.0, float(struct.unpack("<f", response[offset + 4:offset + 8])[0]))
-            offset += 8
-            players.append({"index": index, "player_name": name or f"Player {index + 1}", "score": score, "duration_seconds": round(duration)})
-        return {"status": "live", "players": players, "count": expected}
 
 
 def hash_password(password: str, salt: str | None = None) -> str:
@@ -503,11 +466,15 @@ def sync_shadowhaven_anticheat_once() -> tuple[int, int]:
             db.execute(
                 """
                 INSERT INTO anticheat_players
-                (uid, player_name, teleport_flags, aim_flags, ticket_count, raw_payload,
+                (uid, player_name, reported_system, teleport_flags, aim_flags, ticket_count, raw_payload,
                  source_file, first_synced_at, last_synced_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (uid) DO UPDATE SET
                     player_name = EXCLUDED.player_name,
+                    reported_system = CASE
+                        WHEN EXCLUDED.reported_system <> '' THEN EXCLUDED.reported_system
+                        ELSE anticheat_players.reported_system
+                    END,
                     teleport_flags = EXCLUDED.teleport_flags,
                     aim_flags = EXCLUDED.aim_flags,
                     ticket_count = EXCLUDED.ticket_count,
@@ -518,6 +485,14 @@ def sync_shadowhaven_anticheat_once() -> tuple[int, int]:
                 (
                     uid,
                     str(player.get("playerName") or "Unknown")[:120],
+                    str(
+                        player.get("platform")
+                        or player.get("playerPlatform")
+                        or player.get("platformName")
+                        or player.get("system")
+                        or player.get("deviceType")
+                        or ""
+                    ).strip()[:80],
                     int(player.get("teleportFlags") or 0),
                     int(player.get("aimFlags") or 0),
                     int(player.get("ticketCount") or 0),
@@ -1220,6 +1195,7 @@ def ensure_schema() -> None:
             CREATE TABLE IF NOT EXISTS anticheat_players (
                 uid TEXT PRIMARY KEY,
                 player_name TEXT NOT NULL DEFAULT '',
+                reported_system TEXT NOT NULL DEFAULT '',
                 teleport_flags INTEGER NOT NULL DEFAULT 0,
                 aim_flags INTEGER NOT NULL DEFAULT 0,
                 ticket_count INTEGER NOT NULL DEFAULT 0,
@@ -1988,6 +1964,7 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS minimum_sentence_minutes INTEGER NOT NULL DEFAULT 0")
     db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS maximum_sentence_minutes INTEGER NOT NULL DEFAULT 0")
     db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS decided_at TEXT")
+    db.execute("ALTER TABLE anticheat_players ADD COLUMN IF NOT EXISTS reported_system TEXT NOT NULL DEFAULT ''")
     db.execute("UPDATE citations SET judge_id = NULL WHERE judge_id = civ_id")
     db.execute("UPDATE citations SET final_result = status WHERE final_result = '' AND status NOT IN ('issued','contested','reviewed','reduced')")
     db.execute(
@@ -9074,14 +9051,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         anticheat_players = all_rows(
             db,
             """
-            SELECT p.*, link.user_id AS linked_user_id, account.name AS account_name,
+            SELECT p.*, link.user_id AS linked_user_id, link.linked_platform,
+                   COALESCE(NULLIF(p.reported_system, ''), NULLIF(link.linked_platform, ''), 'Unknown') AS detected_system,
+                   account.name AS account_name,
                    account.civ_number, live.server_id, live.joined_at,
                    live.last_heartbeat_at,
                    CASE WHEN live.last_heartbeat_at >= ? THEN 1 ELSE 0 END AS online,
                    COALESCE(alts.alt_group_count, 0) AS alt_group_count
             FROM anticheat_players p
             LEFT JOIN LATERAL (
-                SELECT l.user_id FROM arma_account_links l
+                SELECT l.user_id, l.platform AS linked_platform FROM arma_account_links l
                 WHERE l.identity_id = p.uid OR l.uid = p.uid
                 ORDER BY l.linked_at DESC LIMIT 1
             ) link ON TRUE
@@ -9119,93 +9098,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         anticheat_sync_status = all_rows(
             db, "SELECT * FROM anticheat_sync_status ORDER BY source_key"
         )
-        anticheat_active_players = all_rows(
-            db,
-            """
-            SELECT s.server_id, s.player_uid AS uid, s.player_name, s.joined_at,
-                   s.last_heartbeat_at,
-                   COALESCE(s.linked_user_id, link.user_id) AS linked_user_id,
-                   account.name AS account_name, account.civ_number,
-                   COALESCE(p.teleport_flags, 0) AS teleport_flags,
-                   COALESCE(p.aim_flags, 0) AS aim_flags,
-                   CASE WHEN p.uid IS NULL THEN 0 ELSE 1 END AS has_intelligence_file
-            FROM anticheat_live_sessions s
-            LEFT JOIN LATERAL (
-                SELECT l.user_id
-                FROM arma_account_links l
-                WHERE l.identity_id = s.player_uid OR l.uid = s.player_uid
-                ORDER BY l.linked_at DESC LIMIT 1
-            ) link ON TRUE
-            LEFT JOIN users account ON account.id = COALESCE(s.linked_user_id, link.user_id)
-            LEFT JOIN anticheat_players p ON p.uid = s.player_uid
-            WHERE s.status = 'online' AND s.last_heartbeat_at >= ?
-            ORDER BY s.server_id, s.player_name, s.player_uid
-            LIMIT 500
-            """,
-            (live_cutoff,),
-        )
-        active_player_payload = [dict(row) for row in anticheat_active_players]
-        live_source = "bridge"
-        live_source_status = "live" if active_player_payload else "awaiting_presence"
-        live_source_error = ""
-        try:
-            a2s = query_arma_a2s_players()
-            if a2s["status"] == "live":
-                live_source = "a2s"
-                live_source_status = "live"
-                intelligence_by_name = {
-                    str(row.get("player_name") or "").strip().casefold(): dict(row)
-                    for row in anticheat_players
-                    if str(row.get("player_name") or "").strip()
-                }
-                a2s_payload = []
-                for player in a2s["players"]:
-                    intelligence = intelligence_by_name.get(str(player["player_name"]).strip().casefold(), {})
-                    duration_seconds = int(player.get("duration_seconds") or 0)
-                    a2s_payload.append(
-                        {
-                            "server_id": "Shadow Haven",
-                            "uid": intelligence.get("uid", ""),
-                            "player_name": player["player_name"],
-                            "joined_at": (utcnow() - dt.timedelta(seconds=duration_seconds)).isoformat(),
-                            "last_heartbeat_at": now_iso(),
-                            "linked_user_id": intelligence.get("linked_user_id"),
-                            "account_name": intelligence.get("account_name"),
-                            "civ_number": intelligence.get("civ_number"),
-                            "teleport_flags": intelligence.get("teleport_flags", 0),
-                            "aim_flags": intelligence.get("aim_flags", 0),
-                            "has_intelligence_file": bool(intelligence),
-                            "score": player.get("score", 0),
-                            "duration_seconds": duration_seconds,
-                        }
-                    )
-                active_player_payload = a2s_payload
-                # Some servers expose the authoritative count but suppress names.
-                while len(active_player_payload) < int(a2s.get("count") or 0):
-                    active_player_payload.append(
-                        {
-                            "server_id": "Shadow Haven",
-                            "uid": "",
-                            "player_name": f"Connected player {len(active_player_payload) + 1}",
-                            "joined_at": "",
-                            "last_heartbeat_at": now_iso(),
-                            "linked_user_id": None,
-                            "account_name": None,
-                            "civ_number": None,
-                            "teleport_flags": 0,
-                            "aim_flags": 0,
-                            "has_intelligence_file": False,
-                        }
-                    )
-            elif not active_player_payload:
-                live_source = "a2s"
-                live_source_status = "not_configured"
-        except (OSError, RuntimeError) as exc:
-            if not active_player_payload:
-                live_source = "a2s"
-                live_source_status = "unreachable"
-                live_source_error = str(exc)[:300]
-        anticheat_online = len(active_player_payload)
+        anticheat_online = sum(1 for row in anticheat_players if row.get("online"))
         anticheat_flagged = sum(
             1 for row in anticheat_players
             if int(row.get("teleport_flags") or 0) + int(row.get("aim_flags") or 0) > 0
@@ -9239,12 +9132,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 },
                 "anti_cheat": {
                     "players": [dict(row) for row in anticheat_players],
-                    "active_players": active_player_payload,
-                    "live_source": {
-                        "source": live_source,
-                        "status": live_source_status,
-                        "error": live_source_error,
-                    },
                     "events": [dict(row) for row in anticheat_events],
                     "alt_groups": [dict(row) for row in anticheat_alt_groups],
                     "alt_members": [dict(row) for row in anticheat_alt_members],
@@ -9429,6 +9316,22 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "SELECT * FROM arma_game_bank_balances WHERE identity_id = ?",
             (account.get("identity_id") or "",),
         )
+        anticheat_record = one(
+            db,
+            """
+            SELECT p.*,
+                   COALESCE(NULLIF(p.reported_system, ''), NULLIF(?, ''), 'Unknown') AS detected_system
+            FROM anticheat_players p
+            WHERE p.uid = ? OR p.uid = ?
+            ORDER BY p.last_synced_at DESC
+            LIMIT 1
+            """,
+            (
+                account.get("platform") or "",
+                account.get("uid") or "",
+                account.get("identity_id") or "",
+            ),
+        )
         response_account = public_user(account)
         response_account.update(
             {
@@ -9456,6 +9359,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "jobs": [dict(row) for row in jobs],
                 "citations": [dict(row) for row in citations],
                 "properties": [dict(row) for row in properties],
+                "anti_cheat": dict(anticheat_record) if anticheat_record else {
+                    "detected_system": account.get("platform") or "Unknown",
+                    "reported_system": "",
+                    "status": "awaiting_anti_cheat_match",
+                },
                 "game_database": {
                     "status": "synced" if game_bank else "awaiting_bank_sync",
                     "source": "FCRPMUSSALO",
