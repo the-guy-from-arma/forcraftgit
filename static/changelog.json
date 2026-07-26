@@ -1,6 +1,19 @@
 {
-  "version": "0.0.82",
+  "version": "0.0.83",
   "entries": [
+    {
+      "date": "2026-07-26",
+      "version": "0.0.83",
+      "title": "Citation Code Finder",
+      "added": [
+        "Added instant citation searching across codes, offense names, keywords, descriptions, fines, and point values.",
+        "Added a table-of-contents category bar with live code counts and a keyboard search shortcut."
+      ],
+      "changed": [
+        "Citation codes are now organized into searchable category views instead of one continuous list."
+      ],
+      "fixed": []
+    },
     {
       "date": "2026-07-26",
       "version": "0.0.82",

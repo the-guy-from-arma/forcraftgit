@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.82";
+const OS_VERSION = "0.0.83";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -6124,14 +6124,43 @@ function renderBookingSystem() {
 
 function renderCodeSection(kind) {
   const rows = getMdtCatalog(kind);
+  const categories = [...new Set(rows.map((charge) => String(charge.category || "Other").trim()).filter(Boolean))].sort();
+  const activeCategory = kind === "citation" && categories.includes(state.mdtCitationCategory)
+    ? state.mdtCitationCategory
+    : "All";
+  const visibleRows = activeCategory === "All"
+    ? rows
+    : rows.filter((charge) => String(charge.category || "Other").trim() === activeCategory);
   return `
     <div class="mdt-section-head">
-      <div><p class="eyebrow">${kind === "citation" ? "Traffic and parking" : "Criminal charges"} catalog</p><h2>${kind === "citation" ? "Citation Codes" : "Criminal Charges"}</h2></div>
+      <div><p class="eyebrow">${kind === "citation" ? "Traffic and parking" : "Criminal charges"} catalog</p><h2>${kind === "citation" ? "Citation Code Finder" : "Criminal Charges"}</h2></div>
       <button class="secondary" data-open-catalog data-catalog-kind="${kind}">Open catalog</button>
     </div>
-    <div class="mdt-code-grid">
-      ${rows.map((charge) => `
-        <article class="charge-card mdt-code-card">
+    ${kind === "citation" ? `
+      <section class="citation-code-finder">
+        <label class="citation-code-search">
+          <span>Search citation codes</span>
+          <input type="search" data-citation-code-search placeholder="Search code, offense, keyword, fine, or description..." autocomplete="off" />
+          <kbd>/</kbd>
+        </label>
+        <nav class="citation-category-tabs" aria-label="Citation code categories">
+          <button type="button" class="${activeCategory === "All" ? "active" : ""}" data-citation-category="All">
+            <strong>All codes</strong><span>${rows.length}</span>
+          </button>
+          ${categories.map((category) => {
+            const count = rows.filter((charge) => String(charge.category || "Other").trim() === category).length;
+            return `<button type="button" class="${activeCategory === category ? "active" : ""}" data-citation-category="${escapeHtml(category)}"><strong>${escapeHtml(category)}</strong><span>${count}</span></button>`;
+          }).join("")}
+        </nav>
+        <div class="citation-finder-status">
+          <span>Showing <strong data-citation-visible-count>${visibleRows.length}</strong> of ${rows.length} codes</span>
+          <span>${escapeHtml(activeCategory === "All" ? "All categories" : activeCategory)}</span>
+        </div>
+      </section>
+    ` : ""}
+    <div class="mdt-code-grid ${kind === "citation" ? "citation-code-results" : ""}">
+      ${visibleRows.map((charge) => `
+        <article class="charge-card mdt-code-card" ${kind === "citation" ? `data-citation-code-card data-citation-search="${escapeHtml(`${charge.code} ${charge.title} ${charge.category} ${charge.severity} ${charge.description} ${charge.fine_amount} ${charge.points}`.toLowerCase())}"` : ""}>
           <div class="row"><strong>${escapeHtml(charge.code)}</strong><span class="pill">${escapeHtml(charge.severity)}</span></div>
           <h3>${escapeHtml(charge.title)}</h3>
           <p class="muted small">${escapeHtml(charge.category)} - ${money(charge.fine_amount)} - ${charge.points} pts</p>
@@ -6141,6 +6170,7 @@ function renderCodeSection(kind) {
             : `<button class="secondary" type="button" data-select-citation-charge="${charge.id}">Write ticket</button>`}
         </article>
       `).join("") || `<div class="empty">No ${kind} codes loaded</div>`}
+      ${kind === "citation" ? `<div class="empty citation-search-empty" data-citation-search-empty hidden>No citation codes match that search.</div>` : ""}
     </div>
   `;
 }
@@ -7519,6 +7549,37 @@ function bindBetaTasks() {
       toast(error.message);
     }
   }));
+  $$("[data-citation-category]").forEach((button) => button.addEventListener("click", () => {
+    state.mdtCitationCategory = button.dataset.citationCategory;
+    render();
+  }));
+  const citationSearch = $("[data-citation-code-search]");
+  if (citationSearch) {
+    citationSearch.addEventListener("input", () => {
+      const query = citationSearch.value.trim().toLowerCase();
+      const cards = $$("[data-citation-code-card]");
+      let visible = 0;
+      cards.forEach((card) => {
+        const match = !query || String(card.dataset.citationSearch || "").includes(query);
+        card.hidden = !match;
+        if (match) visible += 1;
+      });
+      const count = $("[data-citation-visible-count]");
+      const empty = $("[data-citation-search-empty]");
+      if (count) count.textContent = String(visible);
+      if (empty) empty.hidden = visible !== 0;
+    });
+    if (!document.documentElement.dataset.citationShortcutBound) {
+      document.documentElement.dataset.citationShortcutBound = "true";
+      document.addEventListener("keydown", (event) => {
+        if (event.key !== "/" || /input|textarea|select/i.test(document.activeElement?.tagName || "")) return;
+        const currentSearch = $("[data-citation-code-search]");
+        if (!currentSearch) return;
+        event.preventDefault();
+        currentSearch.focus();
+      });
+    }
+  }
 }
 
 function renderDevToolsLegacy() {
@@ -8897,7 +8958,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.82").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.83").catch(() => {}));
 }
 
 bootApp();
