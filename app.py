@@ -58,7 +58,7 @@ SHADOWHAVEN_ANTICHEAT_ALT_FILE = os.environ.get(
 SHADOWHAVEN_ANTICHEAT_SYNC_SECONDS = max(
     15, int(os.environ.get("SHADOWHAVEN_ANTICHEAT_SYNC_SECONDS", "30"))
 )
-ANTICHEAT_LIVE_TTL_SECONDS = max(90, int(os.environ.get("ANTICHEAT_LIVE_TTL_SECONDS", "150")))
+ANTICHEAT_LIVE_TTL_SECONDS = max(90, int(os.environ.get("ANTICHEAT_LIVE_TTL_SECONDS", "900")))
 ARMA_RCON_HOST = os.environ.get("ARMA_RCON_HOST", os.environ.get("RCON_HOST", "")).strip()
 ARMA_RCON_PORT = int(os.environ.get("ARMA_RCON_PORT", os.environ.get("RCON_PORT", "19999")))
 ARMA_RCON_PASSWORD = os.environ.get("ARMA_RCON_PASSWORD", os.environ.get("RCON_PASSWORD", ""))
@@ -4914,12 +4914,52 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 add_transaction(db, user_id, f"arma_{action or 'money'}", amount, reason or source_system)
             if link:
                 db.execute("UPDATE arma_account_links SET last_seen_at = ?, last_sync_at = ? WHERE id = ?", (created_at, received_at, link["id"]))
-            if action in ("anticheat.player_joined", "anticheat.player_heartbeat"):
+            presence_values = {action.strip().lower(), event_type.strip().lower()}
+            joined_presence = bool(
+                presence_values
+                & {
+                    "anticheat.player_joined",
+                    "player.joined",
+                    "player.connected",
+                    "player_joined",
+                }
+            )
+            heartbeat_presence = bool(
+                presence_values
+                & {
+                    "anticheat.player_heartbeat",
+                    "player.heartbeat",
+                    "player.presence",
+                    "player_heartbeat",
+                }
+            )
+            departed_presence = bool(
+                presence_values
+                & {
+                    "anticheat.player_left",
+                    "anticheat.player_disconnected",
+                    "player.left",
+                    "player.disconnected",
+                    "player_left",
+                }
+            )
+            if joined_presence or heartbeat_presence or departed_presence:
                 player_uid = str(event.get("Uid") or event.get("IdentityId") or "").strip()[:160]
                 if player_uid:
                     server_id = str(event.get("ServerId") or data.get("ServerId") or "default")[:80]
                     player_name = str(event.get("PlayerName") or "")[:120]
-                    if action == "anticheat.player_joined":
+                    if departed_presence:
+                        db.execute(
+                            """
+                            UPDATE anticheat_live_sessions
+                            SET player_name = CASE WHEN ? <> '' THEN ? ELSE player_name END,
+                                linked_user_id = COALESCE(?, linked_user_id),
+                                last_heartbeat_at = ?, status = 'offline'
+                            WHERE server_id = ? AND player_uid = ?
+                            """,
+                            (player_name, player_name, user_id, received_at, server_id, player_uid),
+                        )
+                    elif joined_presence:
                         db.execute(
                             """
                             INSERT INTO anticheat_live_sessions

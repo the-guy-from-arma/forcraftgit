@@ -1,6 +1,21 @@
 {
-  "version": "0.0.100",
+  "version": "0.0.101",
   "entries": [
+    {
+      "date": "2026-07-26",
+      "version": "0.0.101",
+      "title": "Live Player Presence Compatibility",
+      "added": [
+        "Added support for join, heartbeat, presence, disconnect, and leave events across both bridge Action and EventType fields."
+      ],
+      "changed": [
+        "Expanded the default live-presence window to 15 minutes for servers with less-frequent heartbeat reporting.",
+        "Disconnect and leave events now immediately remove players from the active roster."
+      ],
+      "fixed": [
+        "Fixed live server players being logged as activity without appearing in the Anti-Cheat Active Players count."
+      ]
+    },
     {
       "date": "2026-07-26",
       "version": "0.0.100",
