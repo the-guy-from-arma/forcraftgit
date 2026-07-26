@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.96";
+const OS_VERSION = "0.0.99";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -29,7 +29,6 @@ const state = {
   devAccount: null,
   devAntiCheatUid: null,
   devAntiCheatSearch: "",
-  devRestartConfirmOpen: false,
   dmvTab: "overview",
   jobsTab: "state_police",
   mdtTab: "search",
@@ -4022,7 +4021,7 @@ function renderCourt() {
   const decided = data.decided || [];
   const stats = data.stats || {};
   const petitions = data.petitions || [];
-  const tabs = [["docket", "Active docket"], ["petitions", `Petitions (${Number(stats.petitions || 0)})`], ["decisions", "Decisions"], ["standards", "Sentencing"]];
+  const tabs = [["docket", "Active docket"], ["petitions", `Petitions (${Number(stats.petitions || 0)})`], ["decisions", `Completed docket (${Number(stats.decided || 0)})`], ["standards", "Sentencing"]];
   if (!tabs.some(([id]) => id === state.courtTab)) state.courtTab = "docket";
   if (!active.some((item) => Number(item.id) === Number(state.courtSelectedCaseId))) {
     state.courtSelectedCaseId = active[0]?.id || null;
@@ -4043,8 +4042,10 @@ function renderCourt() {
           <div><dt>Open</dt><dd>${Number(stats.active || 0)}</dd></div>
           <div><dt>Contested</dt><dd>${Number(stats.contested || 0)}</dd></div>
           <div><dt>Criminal</dt><dd>${Number(stats.criminal || 0)}</dd></div>
+          ${Number(stats.conflicts || 0) ? `<div class="court-conflict-stat"><dt>Conflicts</dt><dd>${Number(stats.conflicts)}</dd></div>` : ""}
         </dl>
       </header>
+      ${Number(stats.conflicts || 0) ? `<div class="court-conflict-alert"><strong>CONFLICT-OF-INTEREST RECORDS DETECTED</strong><span>${Number(stats.conflicts)} active case${Number(stats.conflicts) === 1 ? "" : "s"} involve you as defendant or issuing officer. Judicial controls are locked on those records.</span></div>` : ""}
       <nav class="court-bench-tabs">${tabs.map(([id, label]) => `<button class="${state.courtTab === id ? "active" : ""}" data-court-tab="${id}">${label}</button>`).join("")}</nav>
       ${content}
     </div>
@@ -4063,7 +4064,7 @@ function renderCourtPetitions(petitions) {
               <span class="pill ${item.status === "pending" ? "amber" : item.status === "approved" ? "green" : "red"}">${escapeHtml(item.status)}</span>
             </header>
             <div class="court-petition-body"><strong>Basis for request</strong><p>${escapeHtml(item.reason)}</p>${item.supporting_statement ? `<strong>Supporting statement</strong><p>${escapeHtml(item.supporting_statement)}</p>` : ""}<small>Original result: ${escapeHtml(item.final_result || "Filed court decision")}</small></div>
-            ${item.status === "pending" ? `
+            ${item.conflict_of_interest ? `<div class="court-conflict-lock"><span>JUDICIAL CONFLICT — ACTION LOCKED</span><strong>${escapeHtml((item.conflict_reasons || []).join(" · "))}</strong><p>This petition must be reviewed by another authorized court official.</p></div>` : item.status === "pending" ? `
               <form class="court-petition-form" data-petition-id="${item.id}">
                 <label>Judicial decision notes<textarea name="decision_notes" rows="3" minlength="3" required placeholder="State the reason for approving or denying this petition."></textarea></label>
                 <div><button class="secondary" type="submit" name="decision" value="denied">Deny petition</button><button class="primary" type="submit" name="decision" value="approved">Approve ${item.request_type}</button></div>
@@ -4116,9 +4117,9 @@ function renderCourtDocket(cases) {
       <aside class="court-docket-list">
         <header><span>Assigned docket</span><strong>${cases.length}</strong></header>
         ${cases.map((item) => `
-          <button class="${selected?.id === item.id ? "active" : ""}" data-court-select="${item.id}">
+          <button class="${selected?.id === item.id ? "active" : ""} ${item.conflict_of_interest ? "conflict" : ""}" data-court-select="${item.id}">
             <span><strong>#${item.id} ${escapeHtml(item.charge_code)}</strong><small>${escapeHtml(item.civ_name)} / ${escapeHtml(item.kind)}</small></span>
-            <i class="${item.status === "contested" ? "amber" : ""}">${escapeHtml(item.status)}</i>
+            <i class="${item.conflict_of_interest ? "red" : item.status === "contested" ? "amber" : ""}">${item.conflict_of_interest ? "CONFLICT" : escapeHtml(item.status)}</i>
           </button>
         `).join("") || `<div class="empty">No cases awaiting court action</div>`}
       </aside>
@@ -4145,6 +4146,7 @@ function renderCourtCaseFile(item) {
         <div><dt>Matter</dt><dd>${criminal ? "Criminal" : "Citation"} / ${escapeHtml(item.severity)}</dd></div>
       </dl>
       <section class="court-allegation"><span>Filed narrative</span><p>${escapeHtml(item.narrative)}</p><small>${escapeHtml(item.location)}</small></section>
+      ${item.conflict_of_interest ? `<section class="court-conflict-lock"><span>JUDICIAL CONFLICT — CASE LOCKED</span><strong>${escapeHtml((item.conflict_reasons || []).join(" · "))}</strong><p>You may review this record for disclosure purposes, but you cannot open judicial action controls, enter findings, sentence, dismiss, or otherwise affect this case. Another court official must preside.</p></section>` : ""}
       ${criminal ? `
         <section class="court-sentence-band">
           <div><span>Mandatory RP minimum</span><strong>${Number(item.minimum_sentence_minutes || 0)} min</strong></div>
@@ -4152,8 +4154,9 @@ function renderCourtCaseFile(item) {
           <p>These are gameplay minutes for Faircroft RP. They are not real-world years or real legal sentencing.</p>
         </section>
       ` : ""}
-      <form class="court-decision-form" data-case-id="${item.id}">
+      ${item.conflict_of_interest ? "" : `<form class="court-decision-form" data-case-id="${item.id}">
         <header><div><p class="eyebrow">Judicial action</p><h4>Findings & disposition</h4></div><span>Digitally filed to both parties</span></header>
+        <p class="court-disposition-guidance">Final dispositions move this matter to the Completed docket. Only “Place under review” and “Continue hearing” keep it active.</p>
         <div class="grid-2">
           <label>Disposition<select name="disposition">${dispositions.map(([value, label]) => `<option value="${value}"${selectedAttr(value, item.disposition || "under_review")}>${label}</option>`).join("")}</select></label>
           <label>Fine amount<input name="fine_amount" type="number" min="0" step="0.01" value="${escapeHtml(item.fine_amount)}" required /></label>
@@ -4162,7 +4165,7 @@ function renderCourtCaseFile(item) {
         <label>Written findings<textarea name="judgment_notes" rows="5" maxlength="2000" placeholder="State the finding, evidence considered, and reason for the disposition.">${escapeHtml(item.judgment_notes || "")}</textarea></label>
         ${criminal ? `<label>Sentence conditions<textarea name="sentence_notes" rows="3" maxlength="1200" placeholder="Time served, release conditions, probation RP, or other court direction.">${escapeHtml(item.sentence_notes || "")}</textarea></label>` : ""}
         <button class="primary" type="submit">Sign & file court action</button>
-      </form>
+      </form>`}
     </article>
   `;
 }
@@ -4172,10 +4175,10 @@ function renderCourtDecisions(cases) {
     <section class="court-decisions">
       <header><div><p class="eyebrow">Filed orders</p><h3>Previous decisions</h3></div><span>${cases.length} records</span></header>
       ${cases.map((item) => `
-        <article>
+        <article class="${item.conflict_of_interest ? "conflict" : ""}">
           <div><strong>FC-${item.id}</strong><small>${escapeHtml(item.decided_at ? new Date(item.decided_at).toLocaleDateString() : item.updated_at ? new Date(item.updated_at).toLocaleDateString() : "")}</small></div>
           <div><h4>${escapeHtml(item.charge_code)} / ${escapeHtml(item.civ_name)}</h4><p>${escapeHtml(item.final_result || item.disposition || item.status)}</p></div>
-          <span>${item.sentence_minutes ? `${item.sentence_minutes} min` : money(item.fine_amount)}</span>
+          <span>${item.conflict_of_interest ? "CONFLICT" : item.sentence_minutes ? `${item.sentence_minutes} min` : money(item.fine_amount)}</span>
         </article>
       `).join("") || `<div class="empty">No filed decisions</div>`}
     </section>
@@ -4205,16 +4208,24 @@ function bindCourt() {
   }));
   $$(".court-decision-form").forEach((form) => form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const submit = form.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    submit.textContent = "Filing court action...";
     try {
       const result = await api(`/api/court/cases/${form.dataset.caseId}`, {
         method: "PATCH",
         body: Object.fromEntries(new FormData(form).entries()),
       });
-      toast(result.final_result || "Court action filed");
+      toast(result.final_decision
+        ? `Case completed: ${result.final_result || result.disposition}`
+        : `Case remains active: ${String(result.disposition || "").replaceAll("_", " ")}`);
       state.courtSelectedCaseId = null;
+      if (result.final_decision) state.courtTab = "decisions";
       await loadAppData("court");
       render();
     } catch (error) {
+      submit.disabled = false;
+      submit.textContent = "Sign & file court action";
       if (error.message) toast(error.message);
     }
   }));
@@ -8070,36 +8081,7 @@ function renderDevWorkspace() {
     </main>
     ${state.devAccount ? renderDevAccountModal(state.devAccount) : ""}
     ${state.devAntiCheatUid ? renderAntiCheatModal(state.cache["dev-tools"]?.anti_cheat || {}, state.devAntiCheatUid) : ""}
-    ${state.devRestartConfirmOpen ? renderDevRestartModal() : ""}
   </section>`;
-}
-
-function renderDevServerControl(control) {
-  const ready = Boolean(control.rcon_configured && control.restart_available);
-  return `<section class="dev-server-control">
-    <div class="dev-server-control-status">
-      <span class="dev-server-control-mark ${ready ? "ready" : ""}"></span>
-      <div><span>GAME SERVER</span><strong>${ready ? "RCON control ready" : "RCON unavailable"}</strong><small>${ready ? "Restart commands are sent directly to the configured Arma server." : "Configure the server-side RCON connection to enable remote restart."}</small></div>
-    </div>
-    <button class="danger" type="button" data-open-server-restart ${ready ? "" : "disabled"}>Restart server</button>
-  </section>`;
-}
-
-function renderDevRestartModal() {
-  return `<div class="dev-profile-backdrop dev-restart-backdrop" data-close-server-restart>
-    <section class="dev-restart-modal" role="dialog" aria-modal="true" aria-labelledby="devRestartTitle">
-      <header>
-        <div><p class="eyebrow">RCON SERVER CONTROL</p><h2 id="devRestartTitle">Restart the live game server?</h2></div>
-        <button class="secondary" type="button" data-close-server-restart aria-label="Close restart confirmation">Close</button>
-      </header>
-      <div class="dev-restart-warning"><strong>Connected players will be disconnected.</strong><p>This sends the configured restart command immediately. The action and reason are permanently recorded in the developer audit log.</p></div>
-      <form id="devServerRestartForm" class="dev-restart-form">
-        <label>Operational reason<textarea name="reason" minlength="10" maxlength="500" required placeholder="Describe the maintenance, deployment, or incident requiring a restart."></textarea></label>
-        <label>Type RESTART to authorize<input name="confirmation" autocomplete="off" required pattern="RESTART" placeholder="RESTART" /></label>
-        <div class="dev-restart-actions"><button class="secondary" type="button" data-close-server-restart>Cancel</button><button class="danger" type="submit">Send restart through RCON</button></div>
-      </form>
-    </section>
-  </div>`;
 }
 
 function devMetrics(data, warnings) {
@@ -8127,7 +8109,7 @@ function renderDevTools() {
   const users = data.users || [], sanctions = data.sanctions || [], warnings = data.warnings || [], logs = data.audit_logs || [], codes = data.unlink_codes || [];
   const metrics = devMetrics(data, warnings);
   if (state.devTab === "anticheat") return renderDevAntiCheat(data.anti_cheat || {});
-  if (state.devTab === "dashboard") return `<div class="stack dev-overview">${can("dev") ? renderDevServerControl(data.server_control || {}) : ""}${metrics}<div class="dev-section-heading"><div><h2>Work queue</h2><p>Items requiring staff attention and recent review.</p></div></div><div class="dev-overview-queue"><section class="dev-card dev-queue-card enforcement"><div class="dev-card-header"><div><span>ENFORCEMENT</span><h2>Active cases</h2></div><button class="secondary" data-dev-go="enforcement">View cases</button></div>${sanctions.filter((x) => !x.revoked_at).slice(0,8).map(devSanctionRow).join("") || `<div class="dev-queue-clear"><i></i><div><strong>Queue clear</strong><span>No active enforcement cases require review.</span></div></div>`}</section><section class="dev-card dev-queue-card identity"><div class="dev-card-header"><div><span>IDENTITY</span><h2>Recent Arma links</h2></div><button class="secondary" data-dev-go="linking">View accounts</button></div>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card dev-activity-panel"><div class="dev-card-header"><div><span>STAFF RECORD</span><h2>Latest activity</h2></div><button class="secondary" data-dev-go="audit">View complete log</button></div>${devAudit(logs.slice(0,10))}</section></div>`;
+  if (state.devTab === "dashboard") return `<div class="stack dev-overview">${metrics}<div class="dev-section-heading"><div><h2>Work queue</h2><p>Items requiring staff attention and recent review.</p></div></div><div class="dev-overview-queue"><section class="dev-card dev-queue-card enforcement"><div class="dev-card-header"><div><span>ENFORCEMENT</span><h2>Active cases</h2></div><button class="secondary" data-dev-go="enforcement">View cases</button></div>${sanctions.filter((x) => !x.revoked_at).slice(0,8).map(devSanctionRow).join("") || `<div class="dev-queue-clear"><i></i><div><strong>Queue clear</strong><span>No active enforcement cases require review.</span></div></div>`}</section><section class="dev-card dev-queue-card identity"><div class="dev-card-header"><div><span>IDENTITY</span><h2>Recent Arma links</h2></div><button class="secondary" data-dev-go="linking">View accounts</button></div>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card dev-activity-panel"><div class="dev-card-header"><div><span>STAFF RECORD</span><h2>Latest activity</h2></div><button class="secondary" data-dev-go="audit">View complete log</button></div>${devAudit(logs.slice(0,10))}</section></div>`;
   if (state.devTab === "enforcement") return `<div class="dev-grid-enforcement"><section class="dev-card"><div class="row"><div><p class="eyebrow">Required incident documentation</p><h2>Enforcement Report</h2><p class="muted">A ban or timeout cannot be issued until this report is complete.</p></div><span class="pill red">required</span></div>
     <form id="devSanctionForm" class="dev-report-form">
       <label>Account<select name="user_id" required><option value="">Select account</option>${devUserOptions(users)}</select></label>
@@ -8364,15 +8346,6 @@ function devDetailList(items, mapper) {
 
 function bindDevWorkspace() {
   bindDevTools();
-  $("[data-open-server-restart]")?.addEventListener("click", () => {
-    state.devRestartConfirmOpen = true;
-    render();
-  });
-  $$("[data-close-server-restart]").forEach((button) => button.addEventListener("click", (event) => {
-    if (event.target !== event.currentTarget && event.currentTarget.classList.contains("dev-restart-backdrop")) return;
-    state.devRestartConfirmOpen = false;
-    render();
-  }));
   $$("[data-dev-tab], [data-dev-go]").forEach((button) => button.addEventListener("click", () => { state.devTab = button.dataset.devTab || button.dataset.devGo; render(); }));
   $$("[data-anticheat-player]").forEach((button) => button.addEventListener("click", () => {
     state.devAntiCheatUid = button.dataset.anticheatPlayer;
@@ -8606,25 +8579,6 @@ function bindFineSettlement() {
 }
 
 function bindDevTools() {
-  $("#devServerRestartForm")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const submit = form.querySelector('button[type="submit"]');
-    submit.disabled = true;
-    submit.textContent = "Sending restart command...";
-    try {
-      const result = await api("/api/dev-tools/server/restart", { method: "POST", body: Object.fromEntries(new FormData(form).entries()) });
-      state.devRestartConfirmOpen = false;
-      toast(result.status === "dispatched"
-        ? "Restart dispatched; the game server stopped replying as the restart began"
-        : "RCON restart command accepted by the game server");
-      await refreshDevTools();
-    } catch (error) {
-      submit.disabled = false;
-      submit.textContent = "Send restart through RCON";
-      toast(error.message);
-    }
-  });
   $("#devBetaProgramForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -9386,7 +9340,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.96").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.99").catch(() => {}));
 }
 
 bootApp();

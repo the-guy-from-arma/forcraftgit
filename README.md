@@ -49,12 +49,10 @@ Useful environment variables:
 - `ARMA_RCON_PORT`: UDP RCON port, default `19999`.
 - `ARMA_RCON_PASSWORD`: RCON password; configure only in Railway variables.
 - `ARMA_RCON_TIMEOUT_SECONDS`: optional RCON response timeout, default `5`.
-- `ARMA_RCON_RESTART_COMMAND`: optional restart command, default `#restart`.
-
-The Reforger server's `rcon.permission` must be `admin` for restart, ban, and
-unban controls. If a command whitelist is configured, include `#players`,
-`#restart`, and the ban commands used by the staff tools. The RCON UDP port must
-also be reachable from the deployed website service.
+The Reforger server's `rcon.permission` must be `admin` for ban and unban
+controls. If a command whitelist is configured, include the ban commands used
+by the staff tools. The RCON UDP port must also be reachable from the deployed
+website service.
 - `SHADOWHAVEN_SFTP_HOST`: Shadowhaven SFTP hostname.
 - `SHADOWHAVEN_SFTP_PORT`: Shadowhaven SFTP port, default `2022`.
 - `SHADOWHAVEN_SFTP_USERNAME`: server-specific SFTP username.

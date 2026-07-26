@@ -1,6 +1,49 @@
 {
-  "version": "0.0.96",
+  "version": "0.0.99",
   "entries": [
+    {
+      "date": "2026-07-26",
+      "version": "0.0.99",
+      "title": "Completed Court Docket",
+      "added": [
+        "Added a clearly labeled Completed docket with a live record count.",
+        "Added filing progress and explicit final-versus-active decision feedback."
+      ],
+      "changed": [
+        "Final dispositions now automatically open the Completed docket after filing.",
+        "Under-review and continued matters explicitly remain on the Active docket."
+      ],
+      "fixed": [
+        "Court updates now verify the saved database row before reporting success.",
+        "Finalized citations and criminal matters are guaranteed to leave the active-case status set."
+      ]
+    },
+    {
+      "date": "2026-07-26",
+      "version": "0.0.98",
+      "title": "Judicial Conflict-of-Interest Locks",
+      "added": [
+        "Added prominent red conflict warnings when a court official is the defendant or filing officer on a case.",
+        "Added conflict indicators to active dockets, prior decisions, appeals, and expungement petitions."
+      ],
+      "changed": [
+        "Conflict records remain visible for disclosure while all judicial action controls are removed."
+      ],
+      "fixed": [
+        "The backend now prevents conflicted officials from deciding, sentencing, dismissing, or ruling on related petitions."
+      ]
+    },
+    {
+      "date": "2026-07-26",
+      "version": "0.0.97",
+      "title": "Developer Tools Control Update",
+      "added": [],
+      "changed": [],
+      "fixed": [],
+      "removed": [
+        "Temporarily removed the RCON server restart control and its API from Developer Tools."
+      ]
+    },
     {
       "date": "2026-07-26",
       "version": "0.0.96",

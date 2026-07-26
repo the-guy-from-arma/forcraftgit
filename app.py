@@ -63,7 +63,6 @@ ARMA_RCON_HOST = os.environ.get("ARMA_RCON_HOST", os.environ.get("RCON_HOST", ""
 ARMA_RCON_PORT = int(os.environ.get("ARMA_RCON_PORT", os.environ.get("RCON_PORT", "19999")))
 ARMA_RCON_PASSWORD = os.environ.get("ARMA_RCON_PASSWORD", os.environ.get("RCON_PASSWORD", ""))
 ARMA_RCON_TIMEOUT_SECONDS = max(1.0, min(float(os.environ.get("ARMA_RCON_TIMEOUT_SECONDS", "5")), 15.0))
-ARMA_RCON_RESTART_COMMAND = os.environ.get("ARMA_RCON_RESTART_COMMAND", "#restart").strip()
 NAME_CHANGE_LIMIT = 3
 NAME_CHANGE_WINDOW_DAYS = 3
 TREASURY_STIMULUS_AMOUNT = 75000.00
@@ -3869,8 +3868,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_create_warning(db, user)
                 elif path == "/api/dev-tools/app-visibility" and method == "PATCH":
                     self.api_dev_update_app_visibility(db, user)
-                elif path == "/api/dev-tools/server/restart" and method == "POST":
-                    self.api_dev_restart_server(db, user)
                 elif path.startswith("/api/dev-tools/warnings/") and path.endswith("/resolve") and method == "POST":
                     self.api_dev_resolve_warning(db, user, self.path_int(path, 3))
                 elif path == "/api/fine-settlement" and method == "GET":
@@ -6606,7 +6603,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         request = one(
             db,
             """
-            SELECT r.*, c.charge_code, c.charge_title
+            SELECT r.*, c.charge_code, c.charge_title, c.officer_id
             FROM court_record_requests r
             JOIN citations c ON c.id = r.citation_id
             WHERE r.id = ?
@@ -6615,6 +6612,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         if not request:
             self.error(404, "Court petition not found")
+            return
+        conflict_roles = []
+        if int(request["civ_id"]) == int(user["id"]):
+            conflict_roles.append("petitioner/defendant")
+        if int(request["officer_id"]) == int(user["id"]):
+            conflict_roles.append("filing officer")
+        if conflict_roles:
+            self.error(403, f"Conflict of interest: you are the {' and '.join(conflict_roles)} in the underlying case and cannot decide this petition")
             return
         if request["status"] != "pending":
             self.error(409, "This petition has already been decided")
@@ -6666,11 +6671,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             LEFT JOIN users judge ON judge.id = c.judge_id
         """
         if has_any(user, "owner"):
-            scope = "c.civ_id <> ?"
-            params: tuple[Any, ...] = (user["id"],)
+            scope = "TRUE"
+            params: tuple[Any, ...] = ()
         else:
-            scope = "c.civ_id <> ? AND (c.judge_id = ? OR c.judge_id IS NULL)"
-            params = (user["id"], user["id"])
+            scope = "(c.judge_id = ? OR c.judge_id IS NULL)"
+            params = (user["id"],)
         active = all_rows(
             db,
             f"""
@@ -6705,31 +6710,46 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         petitions = all_rows(
             db,
             """
-            SELECT r.*, c.charge_code, c.charge_title, c.final_result, civ.name AS civ_name,
-                   civ.civ_number, judge.name AS judge_name
+            SELECT r.*, c.charge_code, c.charge_title, c.final_result, c.officer_id,
+                   civ.name AS civ_name, civ.civ_number, officer.name AS officer_name,
+                   judge.name AS judge_name
             FROM court_record_requests r
             JOIN citations c ON c.id = r.citation_id
             JOIN users civ ON civ.id = r.civ_id
+            JOIN users officer ON officer.id = c.officer_id
             LEFT JOIN users judge ON judge.id = r.judge_id
-            WHERE r.civ_id <> ?
             ORDER BY CASE r.status WHEN 'pending' THEN 0 ELSE 1 END, r.created_at DESC
             LIMIT 160
-            """,
-            (user["id"],),
+            """
         )
+        def court_conflict(row: DbRow) -> dict[str, Any]:
+            item = dict(row)
+            reasons = []
+            if int(item["civ_id"]) == int(user["id"]):
+                reasons.append("You are the defendant in this case")
+            if int(item["officer_id"]) == int(user["id"]):
+                reasons.append("You filed or issued this case")
+            item["conflict_of_interest"] = bool(reasons)
+            item["conflict_reasons"] = reasons
+            return item
+
+        active_payload = [court_conflict(row) for row in active]
+        decided_payload = [court_conflict(row) for row in decided]
+        petition_payload = [court_conflict(row) for row in petitions]
         self.send_json(
             200,
             {
-                "active": [dict(row) for row in active],
-                "decided": [dict(row) for row in decided],
+                "active": active_payload,
+                "decided": decided_payload,
                 "standards": [dict(row) for row in standards],
-                "petitions": [dict(row) for row in petitions],
+                "petitions": petition_payload,
                 "stats": {
                     "active": len(active),
                     "contested": sum(1 for row in active if row["status"] == "contested"),
                     "criminal": sum(1 for row in active if row["kind"] == "criminal"),
                     "decided": len(decided),
                     "petitions": sum(1 for row in petitions if row["status"] == "pending"),
+                    "conflicts": sum(1 for row in active_payload if row["conflict_of_interest"]),
                 },
             },
         )
@@ -6753,8 +6773,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not case:
             self.error(404, "Court case not found")
             return
+        conflict_roles = []
         if int(case["civ_id"]) == int(user["id"]):
-            self.error(403, "You cannot preside over a case filed against your own account. Use MyFaircroft for personal matters.")
+            conflict_roles.append("defendant")
+        if int(case["officer_id"]) == int(user["id"]):
+            conflict_roles.append("filing/issuing officer")
+        if conflict_roles:
+            self.error(403, f"Conflict of interest: you are the {' and '.join(conflict_roles)} in this case and cannot perform judicial action")
             return
         payload = self.read_json()
         disposition = str(payload.get("disposition") or "").strip().lower()
@@ -6833,12 +6858,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         }.get(disposition, "closed")
         decided_at = now_iso() if final_decision else None
         final_result = court_decision_result(disposition, amount, sentence_minutes, notes) if final_decision else ""
-        db.execute(
+        saved_case = db.execute(
             """
             UPDATE citations
             SET status = ?, disposition = ?, fine_amount = ?, sentence_minutes = ?, sentence_notes = ?,
                 judgment_notes = ?, judge_id = ?, final_result = ?, decided_at = ?, updated_at = ?
             WHERE id = ?
+            RETURNING id, status, disposition, final_result, decided_at
             """,
             (
                 status,
@@ -6853,7 +6879,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 now_iso(),
                 case_id,
             ),
-        )
+        ).fetchone()
+        if not saved_case:
+            self.error(409, "The court action could not be saved; refresh the docket and try again")
+            return
+        if final_decision and saved_case["status"] in ACTIVE_CASE_STATUSES:
+            raise RuntimeError(f"Final court decision for case {case_id} remained active")
         if final_decision and case["kind"] == "criminal":
             booking_status = "sentenced" if disposition in CONVICTION_DISPOSITIONS else "released"
             db.execute(
@@ -6863,7 +6894,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         add_message(db, case["civ_id"], "Court decision updated", f"Case #{case_id} / {case['charge_code']}: {final_result or disposition.replace('_', ' ')}. Open MyFaircroft for your record.", user["id"])
         add_message(db, case["officer_id"], "Officer case updated", f"Case #{case_id} / {case['charge_code']}: {final_result or disposition.replace('_', ' ')}.", user["id"])
         add_admin_audit(db, int(user["id"]), "court.case.decided" if final_decision else "court.case.updated", int(case["civ_id"]), {"case_id": case_id, "disposition": disposition, "sentence_minutes": sentence_minutes, "fine_amount": amount})
-        self.send_json(200, {"ok": True, "status": status, "disposition": disposition, "final_result": final_result})
+        self.send_json(
+            200,
+            {
+                "ok": True,
+                "status": saved_case["status"],
+                "disposition": saved_case["disposition"],
+                "final_result": saved_case["final_result"],
+                "decided_at": saved_case["decided_at"],
+                "final_decision": final_decision,
+                "docket": "completed" if final_decision else "active",
+            },
+        )
 
     def api_mdt_search(self, db: Database, user: DbRow | None, query: dict[str, list[str]]) -> None:
         err = emergency_required(user)
@@ -9054,51 +9096,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     ],
                     "protected": sorted(PROTECTED_APP_IDS),
                 },
-                "server_control": {
-                    "rcon_configured": arma_rcon_configured(),
-                    "restart_available": bool(arma_rcon_configured() and ARMA_RCON_RESTART_COMMAND),
-                },
             },
         )
-
-    def api_dev_restart_server(self, db: Database, user: DbRow | None) -> None:
-        if not user:
-            self.error(401, "Authentication required")
-            return
-        if not has_any(user, "dev"):
-            self.error(403, "Developer role required for server restart")
-            return
-        if not arma_rcon_configured() or not ARMA_RCON_RESTART_COMMAND:
-            self.error(503, "Arma RCON restart is not configured")
-            return
-        payload = self.read_json()
-        if str(payload.get("confirmation") or "").strip().upper() != "RESTART":
-            self.error(400, "Type RESTART to confirm this action")
-            return
-        reason = str(payload.get("reason") or "").strip()
-        if len(reason) < 10:
-            self.error(400, "Enter a restart reason of at least 10 characters")
-            return
-        try:
-            # Confirm that this deployment can authenticate and exchange command
-            # traffic before issuing a disruptive command. Reforger can stop
-            # replying as soon as #restart begins, which is a valid dispatch.
-            execute_arma_rcon("#players")
-            result = execute_arma_rcon(
-                ARMA_RCON_RESTART_COMMAND,
-                accept_timeout_after_send=True,
-            )
-        except Exception as exc:
-            add_admin_audit(db, int(user["id"]), "server.restart.rcon_failed", details={"reason": reason[:500], "error": str(exc)[:500]})
-            self.error(502, f"RCON restart failed: {exc}")
-            return
-        add_admin_audit(
-            db,
-            int(user["id"]),
-            "server.restart.rcon_sent",
-            details={"reason": reason[:500], "rcon_status": result.get("status"), "response": result.get("response", "")[:500]},
-        )
-        self.send_json(200, {"ok": True, "status": result.get("status"), "response": result.get("response", "")})
 
     def api_dev_update_app_visibility(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
