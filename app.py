@@ -6880,6 +6880,19 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         notes = str(payload.get("judgment_notes") or "").strip()[:2000]
         sentence_notes = str(payload.get("sentence_notes") or "").strip()[:1200]
         final_decision = disposition not in ("under_review", "continued")
+        court_date = str(payload.get("court_date") or case.get("court_date") or "").strip()
+        if disposition == "continued":
+            if not court_date:
+                self.error(400, "Select the next court date before continuing this hearing")
+                return
+            try:
+                scheduled_date = dt.date.fromisoformat(court_date)
+            except ValueError:
+                self.error(400, "Select a valid next court date")
+                return
+            if scheduled_date < utcnow().date():
+                self.error(400, "The continued hearing date cannot be in the past")
+                return
         if final_decision and len(notes) < 3:
             self.error(400, "A short written finding is required for a final decision")
             return
@@ -6916,9 +6929,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             """
             UPDATE citations
             SET status = ?, disposition = ?, fine_amount = ?, sentence_minutes = ?, sentence_notes = ?,
-                judgment_notes = ?, judge_id = ?, final_result = ?, decided_at = ?, updated_at = ?
+                judgment_notes = ?, judge_id = ?, final_result = ?, decided_at = ?, court_date = ?, updated_at = ?
             WHERE id = ?
-            RETURNING id, status, disposition, final_result, decided_at
+            RETURNING id, status, disposition, final_result, decided_at, court_date
             """,
             (
                 status,
@@ -6930,6 +6943,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 user["id"],
                 final_result,
                 decided_at,
+                court_date,
                 now_iso(),
                 case_id,
             ),
@@ -6945,9 +6959,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "UPDATE mdt_bookings SET status = ?, release_notes = ?, updated_at = ?, completed_at = ? WHERE court_case_id = ?",
                 (booking_status, final_result, now_iso(), now_iso(), case_id),
             )
-        add_message(db, case["civ_id"], "Court decision updated", f"Case #{case_id} / {case['charge_code']}: {final_result or disposition.replace('_', ' ')}. Open MyFaircroft for your record.", user["id"])
-        add_message(db, case["officer_id"], "Officer case updated", f"Case #{case_id} / {case['charge_code']}: {final_result or disposition.replace('_', ' ')}.", user["id"])
-        add_admin_audit(db, int(user["id"]), "court.case.decided" if final_decision else "court.case.updated", int(case["civ_id"]), {"case_id": case_id, "disposition": disposition, "sentence_minutes": sentence_minutes, "fine_amount": amount})
+        action_result = final_result or (f"Hearing continued to {court_date}" if disposition == "continued" else disposition.replace("_", " "))
+        add_message(db, case["civ_id"], "Court date issued" if disposition == "continued" else "Court decision updated", f"Case #{case_id} / {case['charge_code']}: {action_result}. Open MyFaircroft for your record.", user["id"])
+        add_message(db, case["officer_id"], "Court date issued" if disposition == "continued" else "Officer case updated", f"Case #{case_id} / {case['charge_code']}: {action_result}.", user["id"])
+        add_admin_audit(db, int(user["id"]), "court.case.decided" if final_decision else "court.case.updated", int(case["civ_id"]), {"case_id": case_id, "disposition": disposition, "court_date": court_date, "sentence_minutes": sentence_minutes, "fine_amount": amount})
         self.send_json(
             200,
             {
@@ -6956,6 +6971,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "disposition": saved_case["disposition"],
                 "final_result": saved_case["final_result"],
                 "decided_at": saved_case["decided_at"],
+                "court_date": saved_case["court_date"],
                 "final_decision": final_decision,
                 "docket": "completed" if final_decision else "active",
             },

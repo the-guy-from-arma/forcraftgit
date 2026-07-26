@@ -3821,9 +3821,10 @@ function renderMyFaircroft() {
   const recordRequests = data.record_requests || [];
   const taxAccounts = myFaircroftTaxAccounts(taxes);
   const dueFines = cases.filter(myFaircroftFineIsDue);
+  const scheduledCases = cases.filter((item) => ["issued", "contested", "reviewed", "reduced", "continued"].includes(item.status));
   const historyCases = cases.filter((item) => !myFaircroftFineIsDue(item) || item.disposition);
   const paidTaxes = taxes.filter((item) => item.status === "paid");
-  const tabs = [["overview", "Overview"], ["fines", "Fines"], ["taxes", "Taxes"], ["history", "Records"]];
+  const tabs = [["overview", "Overview"], ["court-dates", `Court dates (${scheduledCases.length})`], ["fines", "Fines"], ["taxes", "Taxes"], ["history", "Records"]];
   const body = {
     overview: `
       <section class="myfc-action-ledger">
@@ -3836,6 +3837,7 @@ function renderMyFaircroft() {
         <div><strong>Verified payment process</strong><p>Payment requests lock the expected in-game balance. A clerk completes the transaction, and your record changes to paid only after the Arma bank sync confirms the exact balance.</p></div>
       </section>
     `,
+    "court-dates": renderMyFaircroftCourtDates(scheduledCases),
     fines: renderMyFaircroftFines(dueFines),
     taxes: renderMyFaircroftTaxes(taxAccounts),
     history: renderMyFaircroftHistory(historyCases, paidTaxes, recordRequests),
@@ -3860,6 +3862,25 @@ function renderMyFaircroft() {
       </nav>
       <div class="myfc-content">${body}</div>
     </div>
+  `;
+}
+
+function renderMyFaircroftCourtDates(cases) {
+  return `
+    <section class="myfc-ledger">
+      <header><div><p class="eyebrow">Official court calendar</p><h3>Your scheduled matters</h3></div><span>${cases.length} active</span></header>
+      ${cases.map((item) => `
+        <article class="myfc-ledger-row court-date">
+          <div class="myfc-ledger-code"><strong>${escapeHtml(item.court_date ? new Date(`${item.court_date}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "TBD")}</strong><small>${item.court_date ? new Date(`${item.court_date}T12:00:00`).getFullYear() : "Date pending"}</small></div>
+          <div class="myfc-ledger-main">
+            <h4>${escapeHtml(item.charge_code)} / ${escapeHtml(item.charge_title)}</h4>
+            <p>Case #${item.id} · ${escapeHtml(item.kind === "criminal" ? "Criminal matter" : "Citation hearing")}</p>
+            <small>${item.status === "continued" ? "Hearing continued by the Court" : "Scheduled appearance"}${item.judge_name ? ` · Judge ${escapeHtml(item.judge_name)}` : ""}</small>
+          </div>
+          <div class="myfc-ledger-money"><strong>${escapeHtml(item.court_date || "Pending")}</strong><span>${escapeHtml(item.status)}</span></div>
+        </article>
+      `).join("") || `<div class="empty">You have no scheduled court matters</div>`}
+    </section>
   `;
 }
 
@@ -4161,6 +4182,7 @@ function renderCourtCaseFile(item) {
           <label>Disposition<select name="disposition">${dispositions.map(([value, label]) => `<option value="${value}"${selectedAttr(value, item.disposition || "under_review")}>${label}</option>`).join("")}</select></label>
           <label>Fine amount<input name="fine_amount" type="number" min="0" step="0.01" value="${escapeHtml(item.fine_amount)}" required /></label>
         </div>
+        <label class="court-continuance-date">Next court date<input name="court_date" type="date" min="${new Date().toISOString().slice(0, 10)}" value="${escapeHtml(item.court_date || "")}" /><small>Required when continuing the hearing. The new date is published immediately to the civilian's Court dates tab.</small></label>
         ${criminal ? `<label>RP sentence in minutes<input name="sentence_minutes" type="number" min="0" max="${Number(item.maximum_sentence_minutes || 999)}" value="${Number(item.sentence_minutes || item.minimum_sentence_minutes || 0)}" required /><small>Convictions cannot be filed below ${Number(item.minimum_sentence_minutes || 0)} minutes or above ${Number(item.maximum_sentence_minutes || 0)} minutes.</small></label>` : `<input name="sentence_minutes" type="hidden" value="0" />`}
         <label>Written findings<textarea name="judgment_notes" rows="5" maxlength="2000" placeholder="State the finding, evidence considered, and reason for the disposition.">${escapeHtml(item.judgment_notes || "")}</textarea></label>
         ${criminal ? `<label>Sentence conditions<textarea name="sentence_notes" rows="3" maxlength="1200" placeholder="Time served, release conditions, probation RP, or other court direction.">${escapeHtml(item.sentence_notes || "")}</textarea></label>` : ""}
@@ -4218,7 +4240,9 @@ function bindCourt() {
       });
       toast(result.final_decision
         ? `Case completed: ${result.final_result || result.disposition}`
-        : `Case remains active: ${String(result.disposition || "").replaceAll("_", " ")}`);
+        : result.disposition === "continued"
+          ? `Hearing continued to ${result.court_date}`
+          : `Case remains active: ${String(result.disposition || "").replaceAll("_", " ")}`);
       state.courtSelectedCaseId = null;
       if (result.final_decision) state.courtTab = "decisions";
       await loadAppData("court");
@@ -8071,12 +8095,12 @@ function renderDevWorkspace() {
   return `<section class="dev-workspace">
     <aside class="dev-sidebar">
       <div class="dev-brand"><img class="dev-emblem" src="/static/brand/faircroft-emblem.webp" alt="" /><div><strong>Faircroft RP</strong><small>Staff Operations</small></div></div>
-      <p class="dev-nav-label">Workspace</p>
-      <nav>${[["dashboard","Overview"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["audit","Activity Log"],["settings","Settings"]].map(([id,label]) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><span>${label}</span></button>`).join("")}</nav>
+      <p class="dev-nav-label">Operations index</p>
+      <nav>${[["dashboard","Overview"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["audit","Activity Log"],["settings","Settings"]].map(([id,label], index) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><small>${String(index + 1).padStart(2, "0")}</small><span>${label}</span><i></i></button>`).join("")}</nav>
       <div class="dev-sidebar-footer"><span class="dev-access-dot"></span><div><strong>Authorized Staff</strong><small>${escapeHtml(state.session?.user?.name || "Staff member")}</small></div></div>
     </aside>
     <main class="dev-main">
-      <header class="dev-topbar"><div><h1>${activeTab[0]}</h1><p>${activeTab[1]}</p></div><div class="dev-toolbar"><span class="dev-system-status"><i></i>System online</span><button class="secondary" data-refresh-dev>Refresh data</button><button class="primary" data-close-dev>Exit staff view</button></div></header>
+      <header class="dev-topbar"><div><span class="dev-topbar-kicker">FC / STAFF OPERATIONS</span><h1>${activeTab[0]}</h1><p>${activeTab[1]}</p></div><div class="dev-toolbar"><span class="dev-system-status"><i></i>Systems nominal</span><button class="secondary" data-refresh-dev>Sync records</button><button class="primary" data-close-dev>Exit workspace</button></div></header>
       <div class="dev-content">${renderDevTools()}</div>
     </main>
     ${state.devAccount ? renderDevAccountModal(state.devAccount) : ""}
@@ -8097,11 +8121,24 @@ function devMetrics(data, warnings) {
 
 function devSanctionRow(item) {
   const isGameBan = item.sanction_type === "ban" || item.sanction_type === "timeout";
-  return `<article class="dev-case"><div><div class="row"><strong>${escapeHtml(item.report_number || "Legacy record")} · ${escapeHtml(item.target_name)}</strong><span class="pill ${item.revoked_at ? "" : "red"}">${item.revoked_at ? "revoked" : escapeHtml(item.sanction_type)}</span></div><p>${escapeHtml(item.rule_code || "No rule")} — ${escapeHtml(item.reason)}</p><small>By ${escapeHtml(item.created_by_name)} · ${escapeHtml(item.created_at)}${item.expires_at ? ` · expires ${escapeHtml(item.expires_at)}` : ""}${item.game_enforcement_status ? ` · game: ${escapeHtml(item.game_enforcement_status)}` : ""}</small></div>${item.revoked_at ? "" : `<button class="${isGameBan ? "danger" : "secondary"}" type="button" data-revoke-sanction="${item.id}" data-game-unban="${isGameBan ? "true" : "false"}">${isGameBan ? "Unban Player" : "Revoke Sanction"}</button>`}</article>`;
+  return `<article class="dev-case dev-case-record">
+    <span class="dev-record-rail ${item.revoked_at ? "closed" : "active"}"></span>
+    <div class="dev-case-reference"><small>${escapeHtml(item.report_number || "LEGACY")}</small><strong>${escapeHtml(item.target_name)}</strong></div>
+    <div class="dev-case-summary"><strong>${escapeHtml(item.rule_code || "Unclassified")}</strong><p>${escapeHtml(item.reason)}</p></div>
+    <div class="dev-case-provenance"><span>${escapeHtml(item.created_by_name)}</span><small>${escapeHtml(item.created_at)}${item.expires_at ? ` · expires ${escapeHtml(item.expires_at)}` : ""}</small></div>
+    <span class="dev-record-status ${item.revoked_at ? "closed" : "alert"}">${item.revoked_at ? "Revoked" : escapeHtml(item.sanction_type)}</span>
+    ${item.revoked_at ? "" : `<button class="${isGameBan ? "danger" : "secondary"}" type="button" data-revoke-sanction="${item.id}" data-game-unban="${isGameBan ? "true" : "false"}">${isGameBan ? "Unban" : "Revoke"}</button>`}
+  </article>`;
 }
 
 function devAudit(logs) {
-  return `<div class="dev-audit-list">${logs.map((item) => `<div class="dev-audit-event"><div><strong>${escapeHtml(item.action)}</strong><small>${escapeHtml(item.target_name || "System")} · ${escapeHtml(item.created_at)}</small></div><span>${escapeHtml(item.actor_name || "Deleted account")}</span><code>${escapeHtml(item.details || "{}")}</code></div>`).join("") || `<div class="empty">No audited actions yet</div>`}</div>`;
+  return `<div class="dev-audit-list dev-activity-ledger">${logs.map((item, index) => `<article class="dev-audit-event">
+    <div class="dev-audit-sequence"><span>${String(index + 1).padStart(2, "0")}</span><i></i></div>
+    <div class="dev-audit-primary"><strong>${escapeHtml(item.action)}</strong><small>${escapeHtml(item.target_name || "System record")}</small></div>
+    <div class="dev-audit-actor"><span>Performed by</span><strong>${escapeHtml(item.actor_name || "Deleted account")}</strong></div>
+    <time>${escapeHtml(item.created_at)}</time>
+    <details><summary>Inspect event</summary><code>${escapeHtml(item.details || "{}")}</code></details>
+  </article>`).join("") || `<div class="empty">No audited actions yet</div>`}</div>`;
 }
 
 function renderDevTools() {
@@ -8110,7 +8147,7 @@ function renderDevTools() {
   const metrics = devMetrics(data, warnings);
   if (state.devTab === "anticheat") return renderDevAntiCheat(data.anti_cheat || {});
   if (state.devTab === "dashboard") return `<div class="stack dev-overview">${metrics}<div class="dev-section-heading"><div><h2>Work queue</h2><p>Items requiring staff attention and recent review.</p></div></div><div class="dev-overview-queue"><section class="dev-card dev-queue-card enforcement"><div class="dev-card-header"><div><span>ENFORCEMENT</span><h2>Active cases</h2></div><button class="secondary" data-dev-go="enforcement">View cases</button></div>${sanctions.filter((x) => !x.revoked_at).slice(0,8).map(devSanctionRow).join("") || `<div class="dev-queue-clear"><i></i><div><strong>Queue clear</strong><span>No active enforcement cases require review.</span></div></div>`}</section><section class="dev-card dev-queue-card identity"><div class="dev-card-header"><div><span>IDENTITY</span><h2>Recent Arma links</h2></div><button class="secondary" data-dev-go="linking">View accounts</button></div>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card dev-activity-panel"><div class="dev-card-header"><div><span>STAFF RECORD</span><h2>Latest activity</h2></div><button class="secondary" data-dev-go="audit">View complete log</button></div>${devAudit(logs.slice(0,10))}</section></div>`;
-  if (state.devTab === "enforcement") return `<div class="dev-grid-enforcement"><section class="dev-card"><div class="row"><div><p class="eyebrow">Required incident documentation</p><h2>Enforcement Report</h2><p class="muted">A ban or timeout cannot be issued until this report is complete.</p></div><span class="pill red">required</span></div>
+  if (state.devTab === "enforcement") return `<div class="dev-ops-view dev-cases-view"><div class="dev-view-intro"><div><span>ENFORCEMENT CONTROL</span><h2>Case administration</h2><p>Document an incident, apply a proportionate action, and preserve the complete decision record.</p></div><strong>${sanctions.filter((x) => !x.revoked_at).length} ACTIVE</strong></div><div class="dev-grid-enforcement"><section class="dev-card dev-editor-panel"><div class="row"><div><p class="eyebrow">Required incident documentation</p><h2>Open enforcement report</h2><p class="muted">A ban or timeout cannot be issued until this report is complete.</p></div><span class="pill red">required</span></div>
     <form id="devSanctionForm" class="dev-report-form">
       <label>Account<select name="user_id" required><option value="">Select account</option>${devUserOptions(users)}</select></label>
       <label>Action<select name="sanction_type" required><option value="timeout">Timeout</option><option value="ban">Ban</option><option value="sanction">Recorded sanction</option></select></label>
@@ -8128,9 +8165,9 @@ function renderDevTools() {
       <label class="wide">Confidential staff notes<textarea name="internal_notes" maxlength="2000"></textarea></label>
       <label class="dev-certify wide"><input type="checkbox" required /> I certify this report is accurate, evidence-based, and complete.</label>
       <button class="danger wide" type="submit">Submit Report and Apply Action</button>
-    </form></section><section class="dev-card"><h2>Enforcement Records</h2><div class="dev-record-list">${sanctions.map(devSanctionRow).join("") || `<div class="empty">No reports</div>`}</div></section></div>`;
-  if (state.devTab === "warnings") return `<div class="dev-grid-2"><section class="dev-card"><div class="row"><div><p class="eyebrow">Staff-only intelligence</p><h2>Internal Note</h2></div><span class="pill amber">not player-visible</span></div><form id="devWarningForm" class="form-grid"><label>Account<select name="user_id" required><option value="">Select account</option>${devUserOptions(users)}</select></label><label>Severity<select name="severity"><option>low</option><option selected>standard</option><option>high</option><option>critical</option></select></label><label>Subject<input name="subject" maxlength="160" required /></label><label>Internal note<textarea name="body" maxlength="3000" required></textarea></label><button class="primary">Record Note</button></form></section><section class="dev-card"><h2>Note History</h2><div class="dev-record-list">${warnings.map((x) => `<article class="dev-case"><div><strong>${escapeHtml(x.target_name)} · ${escapeHtml(x.subject)}</strong><p>${escapeHtml(x.body)}</p><small>${escapeHtml(x.created_by_name)} · ${escapeHtml(x.created_at)}</small></div>${x.resolved_at ? `<span class="pill green">resolved</span>` : `<button class="secondary" data-resolve-warning="${x.id}">Resolve</button>`}</article>`).join("") || `<div class="empty">No internal notes</div>`}</div></section></div>`;
-  if (state.devTab === "linking") return `<div class="stack">${metrics}<div class="dev-grid-2"><section class="dev-card"><p class="eyebrow">Secure unlink authorization</p><h2>One-time Developer Code</h2><form id="devCodeForm" class="form-grid"><label>Expires in minutes<input name="expiry_minutes" type="number" min="5" max="1440" value="30" required /></label><button class="primary">Generate Code</button></form>${state.generatedDevCode ? `<div class="dev-generated-code"><span>Shown once</span><strong>${escapeHtml(state.generatedDevCode.code)}</strong><small>Expires ${escapeHtml(state.generatedDevCode.expires_at)}</small></div>` : ""}<div class="dev-record-list">${codes.slice(0,12).map((x) => `<div class="dev-case"><span>••••-${escapeHtml(x.code_hint)} · ${escapeHtml(x.created_by_name)}</span><strong>${x.uses_remaining ? "available" : "used"}</strong></div>`).join("")}</div></section><section class="dev-card"><h2>Recent Links</h2>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card"><div class="row"><div><p class="eyebrow">Clickable investigation profiles</p><h2>All Linked Accounts</h2></div><span class="pill green">${users.filter((x) => x.arma_linked).length} loaded</span></div>${devLinkedAccounts(users)}</section></div>`;
+    </form></section><section class="dev-card dev-record-panel"><div class="dev-card-header"><div><span>CASE LEDGER</span><h2>Enforcement records</h2></div><strong>${sanctions.length}</strong></div><div class="dev-record-list">${sanctions.map(devSanctionRow).join("") || `<div class="empty">No reports</div>`}</div></section></div></div>`;
+  if (state.devTab === "warnings") return `<div class="dev-ops-view dev-notes-view"><div class="dev-view-intro"><div><span>INTERNAL INTELLIGENCE</span><h2>Staff observation ledger</h2><p>Restricted operational context. Notes are never shown on the player-facing account.</p></div><strong>${warnings.filter((x) => !x.resolved_at).length} OPEN</strong></div><div class="dev-grid-2"><section class="dev-card dev-editor-panel"><div class="row"><div><p class="eyebrow">New observation</p><h2>Record internal note</h2></div><span class="pill amber">staff only</span></div><form id="devWarningForm" class="form-grid"><label>Account<select name="user_id" required><option value="">Select account</option>${devUserOptions(users)}</select></label><label>Severity<select name="severity"><option>low</option><option selected>standard</option><option>high</option><option>critical</option></select></label><label>Subject<input name="subject" maxlength="160" required /></label><label>Internal note<textarea name="body" maxlength="3000" required></textarea></label><button class="primary">Commit note</button></form></section><section class="dev-card dev-record-panel"><div class="dev-card-header"><div><span>HISTORICAL RECORD</span><h2>Note history</h2></div><strong>${warnings.length}</strong></div><div class="dev-record-list">${warnings.map((x) => `<article class="dev-note-record"><span class="dev-note-severity ${escapeHtml(x.severity || "standard")}"></span><div><small>${escapeHtml(x.target_name)} · ${escapeHtml(x.severity || "standard")}</small><strong>${escapeHtml(x.subject)}</strong><p>${escapeHtml(x.body)}</p><time>${escapeHtml(x.created_by_name)} · ${escapeHtml(x.created_at)}</time></div>${x.resolved_at ? `<span class="dev-record-status closed">Resolved</span>` : `<button class="secondary" data-resolve-warning="${x.id}">Resolve</button>`}</article>`).join("") || `<div class="empty">No internal notes</div>`}</div></section></div></div>`;
+  if (state.devTab === "linking") return `<div class="stack dev-ops-view dev-linking-view"><div class="dev-view-intro"><div><span>IDENTITY CONTROL</span><h2>Account-link registry</h2><p>Review verified identity claims and issue tightly scoped unlink authorization.</p></div><strong>${users.filter((x) => x.arma_linked).length} LINKED</strong></div>${metrics}<div class="dev-grid-2"><section class="dev-card dev-access-panel"><p class="eyebrow">Secure unlink authorization</p><h2>One-time developer code</h2><p class="muted">Single-purpose credentials for supervised identity maintenance.</p><form id="devCodeForm" class="form-grid"><label>Validity window<input name="expiry_minutes" type="number" min="5" max="1440" value="30" required /><small>Minutes until automatic expiration</small></label><button class="primary">Generate authorization</button></form>${state.generatedDevCode ? `<div class="dev-generated-code"><span>Shown once</span><strong>${escapeHtml(state.generatedDevCode.code)}</strong><small>Expires ${escapeHtml(state.generatedDevCode.expires_at)}</small></div>` : ""}<div class="dev-code-ledger">${codes.slice(0,12).map((x) => `<div><code>••••-${escapeHtml(x.code_hint)}</code><span>${escapeHtml(x.created_by_name)}</span><strong class="${x.uses_remaining ? "available" : ""}">${x.uses_remaining ? "Available" : "Consumed"}</strong></div>`).join("") || `<div class="empty">No authorization codes issued</div>`}</div></section><section class="dev-card dev-record-panel"><div class="dev-card-header"><div><span>RECENT CLAIMS</span><h2>Identity activity</h2></div></div>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card dev-linked-registry"><div class="dev-card-header"><div><span>VERIFIED DIRECTORY</span><h2>Linked accounts</h2></div><strong>${users.filter((x) => x.arma_linked).length}</strong></div>${devLinkedAccounts(users)}</section></div>`;
   if (state.devTab === "settings") {
     const visibilityApps = data.app_visibility?.apps || [];
     const beta = data.beta_program || { recruiting_enabled: false, recruiting_message: "", members: 0, member_roster: [], tasks: [], reports: [] };
@@ -8207,7 +8244,7 @@ function renderDevTools() {
       </form>
     </div>`;
   }
-  return `<section class="dev-card"><div class="row"><div><p class="eyebrow">Administrative accountability</p><h2>Audit Log</h2></div><span class="pill green">${logs.length} events</span></div>${devAudit(logs)}</section>`;
+  return `<div class="dev-ops-view dev-audit-view"><div class="dev-view-intro"><div><span>IMMUTABLE STAFF RECORD</span><h2>Administrative activity</h2><p>Chronological accountability across enforcement, identity, moderation, and system controls.</p></div><strong>${logs.length} EVENTS</strong></div><section class="dev-card dev-audit-panel"><div class="dev-card-header"><div><span>EVENT STREAM</span><h2>Activity ledger</h2></div><span class="dev-live-indicator"><i></i>Current</span></div>${devAudit(logs)}</section></div>`;
 }
 
 function devRecentLinks(links) {
@@ -8236,9 +8273,9 @@ function renderDevAntiCheat(data) {
       .some((value) => String(value || "").toLowerCase().includes(query))
   );
   const sync = data.sync_status || [];
-  return `<div class="stack anticheat-console">
+  return `<div class="stack anticheat-console dev-ops-view">
     <section class="anticheat-command">
-      <div><p class="eyebrow">Thunder Buddies Security Network</p><h2>Player Intelligence</h2><p>Read-only telemetry from the live anti-cheat database, matched to verified CAD identities by Bohemia UID.</p></div>
+      <div><span class="anticheat-command-mark">TB</span><div><p class="eyebrow">Thunder Buddies Security Network</p><h2>Live player intelligence</h2><p>Anti-cheat telemetry correlated against verified Faircroft identities.</p></div></div>
       <div class="anticheat-sync">${sync.map((item) => `<span class="pill ${item.status === "synced" ? "green" : "amber"}">${escapeHtml(item.source_key)} · ${Number(item.records || 0)} · ${escapeHtml(item.status)}</span>`).join("") || `<span class="pill amber">awaiting first SFTP sync</span>`}</div>
     </section>
     <div class="dev-metrics">
@@ -8248,16 +8285,18 @@ function renderDevAntiCheat(data) {
       <div class="dev-metric amber-tone"><span>Alt groups</span><strong>${Number(metrics.alt_groups || 0)}</strong><small>Known associations</small></div>
       <div class="dev-metric blue-tone"><span>Events</span><strong>${Number(metrics.events || 0)}</strong><small>Recent evidence</small></div>
     </div>
-    <section class="dev-card">
-      <div class="anticheat-directory-head"><div><h2>Player directory</h2><p class="muted">${players.length} matching records</p></div><input id="antiCheatSearch" type="search" value="${escapeHtml(state.devAntiCheatSearch)}" placeholder="Search name, UID, account, or CIV…" /></div>
+    <section class="dev-card anticheat-directory">
+      <div class="anticheat-directory-head"><div><p class="eyebrow">IDENTITY DIRECTORY</p><h2>Players & telemetry</h2><p class="muted">${players.length} matching records</p></div><label class="dev-command-search"><span>Search records</span><input id="antiCheatSearch" type="search" value="${escapeHtml(state.devAntiCheatSearch)}" placeholder="Name, UID, account, or CIV…" /></label></div>
+      <div class="anticheat-player-head"><span></span><span>Player identity</span><span>Faircroft account</span><span>Telemetry</span><span>Operational status</span></div>
       <div class="anticheat-player-list">${players.map((player) => {
         const flags = Number(player.teleport_flags || 0) + Number(player.aim_flags || 0);
+        const platform = devPlatformIdentity(player.reported_system, player.detected_system);
         return `<button class="anticheat-player-row" data-anticheat-player="${escapeHtml(player.uid)}">
           <span class="anticheat-presence ${player.online ? "online" : ""}"></span>
           <div class="anticheat-player-id"><strong>${escapeHtml(player.player_name || "Unknown player")}</strong><small>${escapeHtml(player.uid)}</small></div>
           <div><span>${player.linked_user_id ? escapeHtml(player.account_name || "Linked account") : "No CAD link"}</span><small>${player.civ_number ? `CIV ${escapeHtml(player.civ_number)}` : "Bohemia UID unmatched"}</small></div>
           <div><span>${Number(player.ticket_count || 0)} tickets</span><small>${flags} detection flags</small></div>
-          <div><span class="pill ${player.online ? "green" : ""}">${player.online ? "live" : "offline"}</span><span class="pill blue">${escapeHtml(player.detected_system || "Unknown")}</span>${Number(player.alt_group_count || 0) ? `<span class="pill amber">${Number(player.alt_group_count)} alt group</span>` : ""}</div>
+          <div><span class="dev-record-status ${player.online ? "verified" : "closed"}">${player.online ? "Live" : "Offline"}</span><span class="dev-platform-mini">${escapeHtml(platform.mark)} · ${escapeHtml(platform.label)}</span>${Number(player.alt_group_count || 0) ? `<span class="dev-record-status alert">${Number(player.alt_group_count)} alt group</span>` : ""}<i>›</i></div>
         </button>`;
       }).join("") || `<div class="empty">No anti-cheat players match this search.</div>`}</div>
     </section>
@@ -8299,7 +8338,8 @@ function renderAntiCheatModal(data, uid) {
 }
 
 function devLinkedAccounts(users) {
-  return `<div class="dev-account-directory">${users.filter((x) => x.arma_linked).map((x) => `<button class="dev-account-tile" data-dev-account="${x.id}"><div><strong>${escapeHtml(x.name)}</strong><small>CIV ${escapeHtml(x.civ_number || "pending")} · ${escapeHtml(x.linked_arma_id || "")}</small></div><span class="pill green">linked</span></button>`).join("") || `<div class="empty">No linked accounts</div>`}</div>`;
+  const linked = users.filter((x) => x.arma_linked);
+  return `<div class="dev-account-directory"><div class="dev-account-directory-head"><span>Account</span><span>Civilian record</span><span>Bohemia identity</span><span>Status</span></div>${linked.map((x) => `<button class="dev-account-tile" data-dev-account="${x.id}"><span class="dev-link-avatar">${escapeHtml((x.name || "??").slice(0, 2).toUpperCase())}</span><div><strong>${escapeHtml(x.name)}</strong><small>${escapeHtml(x.email || "Verified web account")}</small></div><span><strong>CIV ${escapeHtml(x.civ_number || "pending")}</strong><small>${escapeHtml(x.player_name || "Player name pending")}</small></span><code>${escapeHtml(x.linked_arma_id || "Identity unavailable")}</code><span class="dev-record-status verified">Linked</span><i>›</i></button>`).join("") || `<div class="empty">No linked accounts</div>`}</div>`;
 }
 
 function devPlatformIdentity(...values) {
@@ -9393,7 +9433,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.1").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.1-ops2").catch(() => {}));
 }
 
 bootApp();
