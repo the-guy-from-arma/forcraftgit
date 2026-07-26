@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.81";
+const OS_VERSION = "0.0.82";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -4279,7 +4279,7 @@ function renderMdtWorkspace() {
     <section class="mdt-workspace mdt-redesign ${mdtCommandEnabledNow ? "cid-workspace" : ""}">
       <header class="mdt-topbar">
         <div>
-          <p class="eyebrow">${mdtCommandEnabledNow ? commandLabel : "Law Enforcement"}</p>
+          <p class="eyebrow mdt-live-kicker"><span class="mdt-live-dot"></span>${mdtCommandEnabledNow ? commandLabel : "Law Enforcement"} <b>Secure session</b></p>
           <h1>${mdtCommandEnabledNow ? `${commandLabel} Command MDT` : "Mobile Data Terminal"}</h1>
           <p class="mdt-subtitle">${mdtCommandEnabledNow ? "Investigations / warrants / booking / internal affairs" : "NCIC / DMV / citations / reports / booking"}</p>
           <div class="mdt-status-line">
@@ -5699,7 +5699,50 @@ function renderMdtSearch() {
             ${(item.bookings || []).slice(0, 4).map((booking) => `<div class="row"><span>${escapeHtml(booking.booking_number)} - ${escapeHtml(booking.charge_code)} ${escapeHtml(booking.charge_title)}</span><span class="pill ${bookingStatusClass(booking.status)}">${escapeHtml(booking.status)}</span></div>`).join("") || `<p class="muted small">No booking history</p>`}
           </div>
         </article>
-      `).join("") || `<div class="empty">Run a search to pull DMV and case records</div>`}
+      `).join("") || `
+        <section class="mdt-launchpad" aria-label="MDT operations launchpad">
+          <div class="mdt-launch-hero">
+            <div>
+              <p class="eyebrow">NCIC / DMV secure gateway</p>
+              <h2>Ready for query</h2>
+              <p>Search a civilian, plate, CIV number, or vehicle entry code above. Records open inside this secured workspace.</p>
+            </div>
+            <div class="mdt-radar" aria-hidden="true"><span></span><i></i></div>
+          </div>
+          <div class="mdt-launch-grid">
+            <button type="button" data-mdt-tab="ticket">
+              <span class="mdt-launch-index">01 / TRAFFIC</span>
+              <strong>Issue Citation</strong>
+              <small>Verify a subject, select a civil code, and complete the UTT workflow.</small>
+              <i>Open writer</i>
+            </button>
+            <button type="button" data-mdt-tab="booking">
+              <span class="mdt-launch-index">02 / CUSTODY</span>
+              <strong>Booking Intake</strong>
+              <small>Transport confirmation, criminal charge, property, and court packet.</small>
+              <i>Open desk</i>
+            </button>
+            <button type="button" data-mdt-tab="bolos">
+              <span class="mdt-launch-index">03 / INTELLIGENCE</span>
+              <strong>BOLO Network</strong>
+              <small>Review active alerts, caution levels, vehicles, and target information.</small>
+              <i>Open board</i>
+            </button>
+            <button type="button" data-mdt-tab="cad-reports">
+              <span class="mdt-launch-index">04 / REPORTING</span>
+              <strong>After-Call Reports</strong>
+              <small>File incident narratives, dispositions, involved parties, and evidence.</small>
+              <i>Open reports</i>
+            </button>
+          </div>
+          <div class="mdt-system-band">
+            <span><b></b> NCIC link operational</span>
+            <span><b></b> DMV index synchronized</span>
+            <span><b></b> Court interface available</span>
+            <span>Encrypted / role controlled</span>
+          </div>
+        </section>
+      `}
     </div>
   `;
 }
@@ -8854,7 +8897,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.81").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.82").catch(() => {}));
 }
 
 bootApp();

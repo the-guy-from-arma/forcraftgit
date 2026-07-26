@@ -1,6 +1,22 @@
 {
-  "version": "0.0.81",
+  "version": "0.0.82",
   "entries": [
+    {
+      "date": "2026-07-26",
+      "version": "0.0.82",
+      "title": "Elite CAD Command Interface",
+      "added": [
+        "Added a secured NCIC operations launchpad with direct access to citations, booking, BOLOs, and after-call reports.",
+        "Added animated system-health, secure-session, and live-terminal status treatments."
+      ],
+      "changed": [
+        "Rebuilt the MDT visual hierarchy into a denser command-center interface with premium motion, panels, controls, and record transitions.",
+        "Enhanced MDT drawers and modal windows with polished spring animations while retaining the existing workflows."
+      ],
+      "fixed": [
+        "Removed the oversized empty NCIC landing area that made the desktop CAD appear unfinished."
+      ]
+    },
     {
       "date": "2026-07-26",
       "version": "0.0.81",
