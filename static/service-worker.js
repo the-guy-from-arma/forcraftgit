@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v83-citation-finder";
+const CACHE = "faircroft-rp-v90-admin-overview";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.83",
-  "/static/roadmap.css?v=0.0.83",
-  "/static/app.js?v=0.0.83",
+  "/static/styles.css?v=0.0.90",
+  "/static/roadmap.css?v=0.0.90",
+  "/static/app.js?v=0.0.90",
   "/static/brand/faircroft-emblem.webp",
   "/static/brand/faircroft-light-sweep.mp4",
   "/static/brand/icon-192.png",

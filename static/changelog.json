@@ -1,6 +1,101 @@
 {
-  "version": "0.0.83",
+  "version": "0.0.90",
   "entries": [
+    {
+      "date": "2026-07-26",
+      "version": "0.0.90",
+      "title": "Staff Operations Ledger",
+      "added": [
+        "Added a structured identity ledger for recent Arma account links."
+      ],
+      "changed": [
+        "Reworked the Dev Tools Overview queue with aligned identity, Bohemia link, and readable date columns.",
+        "Replaced oversized empty cards with compact operational status rows."
+      ],
+      "fixed": [
+        "Removed raw browser-style boxes and unformatted timestamps from Recent Arma Links."
+      ]
+    },
+    {
+      "date": "2026-07-26",
+      "version": "0.0.89",
+      "title": "Full-Screen Court Workspace",
+      "added": [
+        "Added a dedicated full-screen judicial shell with docket refresh, session status, and Court exit controls."
+      ],
+      "changed": [
+        "Court now opens outside the phone frame like the MDT and uses the available desktop workspace.",
+        "Expanded the docket and case-file columns for clearer judicial review."
+      ],
+      "fixed": [
+        "Removed the congested phone-width Court layout."
+      ]
+    },
+    {
+      "date": "2026-07-26",
+      "version": "0.0.88",
+      "title": "Dev Tools Scroll Correction",
+      "added": [],
+      "changed": [
+        "Desktop Dev Tools now uses one dedicated content scroll surface while keeping its navigation and toolbar fixed."
+      ],
+      "fixed": [
+        "Removed the competing page and staff-container scrollbars from the desktop Dev Tools workspace."
+      ]
+    },
+    {
+      "date": "2026-07-26",
+      "version": "0.0.87",
+      "title": "Criminal Charge Finder",
+      "added": [
+        "Added instant criminal-code searching and offense-category navigation with live result counts."
+      ],
+      "changed": [
+        "Criminal charges now use the same compact finder structure as citation codes instead of one continuous list.",
+        "Criminal category selections retain the existing transport and Booking handoff."
+      ],
+      "fixed": []
+    },
+    {
+      "date": "2026-07-26",
+      "version": "0.0.86",
+      "title": "Working Citation Categories",
+      "added": [],
+      "changed": [
+        "Citation categories now wrap into a clean table-of-contents index without a native horizontal scrollbar."
+      ],
+      "fixed": [
+        "Connected citation category buttons, code search, citation review updates, and Booking charge search to the active MDT binder."
+      ]
+    },
+    {
+      "date": "2026-07-26",
+      "version": "0.0.85",
+      "title": "Professional Citation Writer",
+      "added": [
+        "Added a structured four-stage electronic UTT filing workspace and persistent filing review."
+      ],
+      "changed": [
+        "Redesigned citation issuance with restrained typography, compact official-record fields, and a dedicated violation summary.",
+        "Separated code lookup, officer statement, and final court filing into a clearer professional workflow."
+      ],
+      "fixed": []
+    },
+    {
+      "date": "2026-07-26",
+      "version": "0.0.84",
+      "title": "Multi-Charge Booking",
+      "added": [
+        "Added searchable multi-select criminal charges to Booking intake.",
+        "Added linked charge records and a separate court case for every criminal count in one booking."
+      ],
+      "changed": [
+        "Booking cards now display the complete filed charge stack and linked court case numbers."
+      ],
+      "fixed": [
+        "Booking intake is no longer limited to one criminal charge."
+      ]
+    },
     {
       "date": "2026-07-26",
       "version": "0.0.83",

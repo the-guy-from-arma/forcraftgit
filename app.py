@@ -2086,6 +2086,26 @@ def ensure_migrations(db: Database) -> None:
         """
     )
     db.execute("ALTER TABLE mdt_bookings ADD COLUMN IF NOT EXISTS transport_confirmed_at TEXT")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mdt_booking_charges (
+            booking_id INTEGER NOT NULL,
+            charge_id INTEGER NOT NULL,
+            court_case_id INTEGER,
+            charge_code TEXT NOT NULL,
+            charge_title TEXT NOT NULL,
+            category TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            fine_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+            points INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (booking_id, charge_id),
+            FOREIGN KEY (booking_id) REFERENCES mdt_bookings(id) ON DELETE CASCADE,
+            FOREIGN KEY (charge_id) REFERENCES charge_catalog(id) ON DELETE RESTRICT,
+            FOREIGN KEY (court_case_id) REFERENCES citations(id) ON DELETE SET NULL
+        )
+        """
+    )
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS target_context TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS last_known TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS requirements TEXT NOT NULL DEFAULT ''")
@@ -7046,12 +7066,40 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             LIMIT 120
             """,
         )
+        active_items = [dict(row) for row in active]
+        recent_items = [dict(row) for row in recent]
+        booking_ids = list({int(item["id"]) for item in active_items + recent_items})
+        charges_by_booking: dict[int, list[dict[str, Any]]] = {}
+        if booking_ids:
+            booking_placeholders = ", ".join("?" for _ in booking_ids)
+            linked_charges = all_rows(
+                db,
+                f"""
+                SELECT booking_id, charge_id, court_case_id, charge_code, charge_title, category,
+                       severity, fine_amount, points
+                FROM mdt_booking_charges
+                WHERE booking_id IN ({booking_placeholders})
+                ORDER BY booking_id, charge_code
+                """,
+                tuple(booking_ids),
+            )
+            for linked_charge in linked_charges:
+                charges_by_booking.setdefault(int(linked_charge["booking_id"]), []).append(dict(linked_charge))
+        for item in active_items + recent_items:
+            item["charges"] = charges_by_booking.get(int(item["id"])) or [{
+                "charge_id": item["charge_id"],
+                "court_case_id": item["court_case_id"],
+                "charge_code": item["charge_code"],
+                "charge_title": item["charge_title"],
+                "category": item["category"],
+                "severity": item["severity"],
+            }]
         stats = {
             "active": one(db, "SELECT COUNT(*) AS count FROM mdt_bookings WHERE status IN (?, ?, ?, ?)", active_statuses)["count"],
             "today": one(db, "SELECT COUNT(*) AS count FROM mdt_bookings WHERE created_at >= ?", (utcnow().date().isoformat(),))["count"],
             "released": one(db, "SELECT COUNT(*) AS count FROM mdt_bookings WHERE status = 'released'")["count"],
         }
-        self.send_json(200, {"active": [dict(row) for row in active], "recent": [dict(row) for row in recent], "stats": stats})
+        self.send_json(200, {"active": active_items, "recent": recent_items, "stats": stats})
 
     def api_create_mdt_booking(self, db: Database, user: DbRow | None) -> None:
         err = leo_required(user)
@@ -7060,22 +7108,44 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         assert user is not None
         payload = self.read_json()
-        missing = require_fields(payload, "civ_id", "charge_id", "arrest_location", "probable_cause", "holding_cell")
+        missing = require_fields(payload, "civ_id", "arrest_location", "probable_cause", "holding_cell")
         if missing:
             self.error(400, missing)
+            return
+        raw_charge_ids = payload.get("charge_ids")
+        if not isinstance(raw_charge_ids, list):
+            raw_charge_ids = [raw_charge_ids or payload.get("charge_id")]
+        charge_ids: list[int] = []
+        try:
+            for raw_charge_id in raw_charge_ids:
+                charge_id = int(raw_charge_id)
+                if charge_id not in charge_ids:
+                    charge_ids.append(charge_id)
+        except (TypeError, ValueError):
+            self.error(400, "Select valid criminal charge codes")
+            return
+        if not charge_ids:
+            self.error(400, "Select at least one criminal charge")
+            return
+        if len(charge_ids) > 12:
+            self.error(400, "A booking packet can contain no more than 12 criminal charges")
             return
         transport_confirmed = str(payload.get("transport_confirmed") or "").strip().lower() in ("1", "true", "yes", "on")
         if not transport_confirmed:
             self.error(400, "Confirm that the suspect was transported to Booking before filing the criminal charge")
             return
         civ = one(db, "SELECT * FROM users WHERE id = ?", (int(payload["civ_id"]),))
-        charge = one(db, "SELECT * FROM charge_catalog WHERE id = ?", (int(payload["charge_id"]),))
-        if not civ or not charge:
+        charge_placeholders = ", ".join("?" for _ in charge_ids)
+        charge_rows = all_rows(db, f"SELECT * FROM charge_catalog WHERE id IN ({charge_placeholders})", tuple(charge_ids))
+        charges_by_id = {int(row["id"]): row for row in charge_rows}
+        charges = [charges_by_id[charge_id] for charge_id in charge_ids if charge_id in charges_by_id]
+        if not civ or len(charges) != len(charge_ids):
             self.error(404, "Civilian or criminal code not found")
             return
-        if charge.get("kind") != "criminal":
+        if any(charge.get("kind") != "criminal" for charge in charges):
             self.error(400, "Booking requires a criminal charge code")
             return
+        charge = charges[0]
         try:
             bond_amount = round(float(payload.get("bond_amount") or 0), 2)
         except (TypeError, ValueError):
@@ -7093,35 +7163,38 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(400, "Arrest location and probable cause are required")
             return
         presiding_judge = pick_presiding_judge(db, int(civ["id"]))
-        court_case = db.execute(
-            """
-            INSERT INTO citations
-            (civ_id, officer_id, judge_id, charge_id, charge_code, charge_title, category, fine_amount, points, severity,
-             minimum_sentence_minutes, maximum_sentence_minutes, location, narrative, court_date, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            RETURNING id
-            """,
-            (
-                civ["id"],
-                user["id"],
-                presiding_judge["id"] if presiding_judge else None,
-                charge["id"],
-                charge["code"],
-                charge["title"],
-                charge["category"],
-                float(charge["fine_amount"]),
-                int(charge["points"]),
-                charge["severity"],
-                int(charge["minimum_sentence_minutes"]),
-                int(charge["maximum_sentence_minutes"]),
-                arrest_location,
-                probable_cause,
-                court_date,
-                ts,
-                ts,
-            ),
-        ).fetchone()
-        court_case_id = int(court_case["id"])
+        court_case_ids: list[int] = []
+        for selected_charge in charges:
+            court_case = db.execute(
+                """
+                INSERT INTO citations
+                (civ_id, officer_id, judge_id, charge_id, charge_code, charge_title, category, fine_amount, points, severity,
+                 minimum_sentence_minutes, maximum_sentence_minutes, location, narrative, court_date, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                RETURNING id
+                """,
+                (
+                    civ["id"],
+                    user["id"],
+                    presiding_judge["id"] if presiding_judge else None,
+                    selected_charge["id"],
+                    selected_charge["code"],
+                    selected_charge["title"],
+                    selected_charge["category"],
+                    float(selected_charge["fine_amount"]),
+                    int(selected_charge["points"]),
+                    selected_charge["severity"],
+                    int(selected_charge["minimum_sentence_minutes"]),
+                    int(selected_charge["maximum_sentence_minutes"]),
+                    arrest_location,
+                    probable_cause,
+                    court_date,
+                    ts,
+                    ts,
+                ),
+            ).fetchone()
+            court_case_ids.append(int(court_case["id"]))
+        court_case_id = court_case_ids[0]
         booking_number = generate_record_number(db, "mdt_bookings", "booking_number", "BKG")
         arresting_agency = str(payload.get("arresting_agency") or user["primary_agency"] or "Law Enforcement").strip()[:120]
         created = db.execute(
@@ -7159,18 +7232,40 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 ts,
             ),
         ).fetchone()
+        for selected_charge, selected_court_case_id in zip(charges, court_case_ids):
+            db.execute(
+                """
+                INSERT INTO mdt_booking_charges
+                (booking_id, charge_id, court_case_id, charge_code, charge_title, category, severity,
+                 fine_amount, points, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(created["id"]),
+                    int(selected_charge["id"]),
+                    selected_court_case_id,
+                    selected_charge["code"],
+                    selected_charge["title"],
+                    selected_charge["category"],
+                    selected_charge["severity"],
+                    float(selected_charge["fine_amount"]),
+                    int(selected_charge["points"]),
+                    ts,
+                ),
+            )
+        charge_summary = ", ".join(f"{item['code']} - {item['title']}" for item in charges)
         add_message(
             db,
             civ["id"],
             "Arrest booking processed",
-            f"Booking {created['booking_number']} was filed for {charge['code']} - {charge['title']}. Court date: {court_date}.",
+            f"Booking {created['booking_number']} was filed with {len(charges)} charge(s): {charge_summary}. Court date: {court_date}.",
             user["id"],
         )
         add_message(
             db,
             user["id"],
             "Booking packet filed",
-            f"Booking {created['booking_number']} and court case #{court_case_id} were filed for {civ['name']}.",
+            f"Booking {created['booking_number']} and {len(court_case_ids)} court case(s) were filed for {civ['name']}.",
             user["id"],
         )
         if presiding_judge:
@@ -7178,7 +7273,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 db,
                 presiding_judge["id"],
                 "Booking case assigned",
-                f"Booking {created['booking_number']} / case #{court_case_id} was assigned to you. Defendant: {civ['name']}.",
+                f"Booking {created['booking_number']} / cases {', '.join(f'#{case_id}' for case_id in court_case_ids)} were assigned to you. Defendant: {civ['name']}.",
                 user["id"],
             )
         self.send_json(
@@ -7188,6 +7283,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "id": int(created["id"]),
                 "booking_number": created["booking_number"],
                 "court_case_id": court_case_id,
+                "court_case_ids": court_case_ids,
+                "charge_count": len(charges),
                 "court_date": court_date,
                 "judge_id": presiding_judge["id"] if presiding_judge else None,
             },

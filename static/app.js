@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.83";
+const OS_VERSION = "0.0.90";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -484,6 +484,12 @@ function render() {
   if (state.activeApp === "business") {
     app.innerHTML = renderBusinessWorkspace() + renderRequiredProfileModals();
     bindBusinessWorkspace();
+    bindRequiredProfileModals();
+    return;
+  }
+  if (state.activeApp === "court") {
+    app.innerHTML = renderCourtWorkspace() + renderRequiredProfileModals();
+    bindCourtWorkspace();
     bindRequiredProfileModals();
     return;
   }
@@ -4006,6 +4012,39 @@ function renderCourt() {
   `;
 }
 
+function renderCourtWorkspace() {
+  return `
+    <section class="court-workspace">
+      <header class="court-workspace-topbar">
+        <div>
+          <p class="eyebrow">State of Faircroft Judiciary</p>
+          <h1>Court Management System</h1>
+          <p>Official docket, judicial findings, sentencing standards, and filed decisions.</p>
+        </div>
+        <div class="court-workspace-actions">
+          <span class="court-session-status"><i></i> Judicial session active</span>
+          <button class="secondary" type="button" data-refresh-court>Refresh docket</button>
+          <button class="primary" type="button" data-close-court>Exit Court</button>
+        </div>
+      </header>
+      <main class="court-workspace-content">${renderCourt()}</main>
+    </section>
+  `;
+}
+
+function bindCourtWorkspace() {
+  bindCourt();
+  $("[data-close-court]")?.addEventListener("click", async () => {
+    state.activeApp = null;
+    state.courtSelectedCaseId = null;
+    await loadSession();
+  });
+  $("[data-refresh-court]")?.addEventListener("click", async () => {
+    await loadAppData("court");
+    render();
+  });
+}
+
 function renderCourtDocket(cases) {
   const selected = cases.find((item) => Number(item.id) === Number(state.courtSelectedCaseId));
   return `
@@ -5906,8 +5945,78 @@ function renderTicketWriter() {
   const civilians = getMdtCivilians();
   const criminalMode = state.mdtCatalogMode === "criminal";
   const defaultCourt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const selectedCharge = charges.find((charge) => String(charge.id) === String(state.mdtSelectedChargeId));
+  if (!criminalMode) {
+    return `
+      <form id="ticketForm" class="citation-writer">
+        <header class="citation-writer-head">
+          <div>
+            <p class="eyebrow">New York State / Uniform Traffic Ticket</p>
+            <h2>Issue Citation</h2>
+            <p>Create a civil traffic or parking filing. Criminal counts must continue through Booking.</p>
+          </div>
+          <div class="citation-writer-ref">
+            <span>Electronic filing</span>
+            <strong>UTT / ${new Date().getFullYear()}</strong>
+            <small>Officer authenticated</small>
+          </div>
+        </header>
+        <nav class="citation-workflow-nav" aria-label="Citation workflow">
+          <span class="active"><b>01</b> Subject</span>
+          <span><b>02</b> Violation</span>
+          <span><b>03</b> Statement</span>
+          <span><b>04</b> File</span>
+        </nav>
+        <div class="citation-writer-layout">
+          <div class="citation-form-body">
+            <section class="citation-form-section">
+              <header><span>01</span><div><strong>Subject and appearance</strong><small>Attach the civilian record and schedule the court appearance.</small></div></header>
+              <div class="grid-2">
+                <label>Civilian record<select name="civ_id" required data-issue-subject>
+                  <option value="">Select civilian record</option>
+                  ${civilians.map((person) => `<option value="${person.id}" data-name="${escapeHtml(person.name)}"${selectedAttr(person.id, state.mdtSelectedCiv)}>${escapeHtml(person.name)} — CIV ${escapeHtml(person.civ_number || "pending")} — ${escapeHtml(person.license_status || "No license")}</option>`).join("")}
+                </select></label>
+                <label>Court appearance<input name="court_date" type="date" value="${defaultCourt}" /></label>
+              </div>
+            </section>
+            <section class="citation-form-section">
+              <header><span>02</span><div><strong>Violation</strong><small>Select the applicable civil code and record where it occurred.</small></div></header>
+              <label>Citation code<select name="charge_id" required data-citation-writer-code>
+                <option value="">Select citation code</option>
+                ${renderChargeOptions(charges, state.mdtSelectedChargeId)}
+              </select></label>
+              <label>Location of occurrence<input name="location" placeholder="Street, nearest cross street, postal, or landmark" required /></label>
+              <div class="citation-code-actions">
+                <button class="secondary" type="button" data-mdt-tab="citations">Search code table</button>
+                <button class="ghost" type="button" data-open-catalog data-catalog-kind="citation">Open compact catalog</button>
+              </div>
+            </section>
+            <section class="citation-form-section">
+              <header><span>03</span><div><strong>Officer statement</strong><small>State the observed facts clearly and specifically.</small></div></header>
+              <label>Narrative<textarea name="narrative" rows="6" required placeholder="Observed conduct, vehicle and driver details, direction of travel, conditions, and enforcement action..."></textarea></label>
+              <div class="citation-narrative-note"><strong>Record standard</strong><span>Document facts—not conclusions. This statement is routed with the citation to the court docket.</span></div>
+            </section>
+          </div>
+          <aside class="citation-review-panel">
+            <div class="citation-review-title"><span>Filing review</span><b>Draft</b></div>
+            <dl>
+              <div><dt>Code</dt><dd data-citation-review-code>${escapeHtml(selectedCharge?.code || "Not selected")}</dd></div>
+              <div><dt>Offense</dt><dd data-citation-review-title>${escapeHtml(selectedCharge?.title || "Select a violation")}</dd></div>
+              <div><dt>Classification</dt><dd data-citation-review-severity>${escapeHtml(selectedCharge?.severity || "—")}</dd></div>
+              <div><dt>Fine</dt><dd data-citation-review-fine>${selectedCharge ? money(selectedCharge.fine_amount) : "—"}</dd></div>
+              <div><dt>Points</dt><dd data-citation-review-points>${selectedCharge ? Number(selectedCharge.points || 0) : "—"}</dd></div>
+            </dl>
+            <div class="citation-review-rule"></div>
+            <p>Submission creates the civil citation and routes it to the court queue. It does not create a warrant or booking.</p>
+            <button class="citation-file-button" type="submit"><span>File Citation</span><small>Submit to court docket</small></button>
+            <button class="citation-mode-link" type="button" data-catalog-mode="criminal">Criminal charge? Continue to Booking</button>
+          </aside>
+        </div>
+      </form>
+    `;
+  }
   return `
-    <form id="ticketForm" class="mdt-form ${criminalMode ? "criminal-booking-handoff-form" : ""}">
+    <form id="ticketForm" class="mdt-form criminal-booking-handoff-form">
       <section class="ticket-command-strip">
         <button type="button" data-open-catalog data-catalog-kind="citation"><strong>Citation Book</strong><span>Traffic, vehicle, and parking codes</span></button>
         <button type="button" data-catalog-mode="criminal"><strong>Criminal Charges</strong><span>Transport and continue to Booking</span></button>
@@ -6007,7 +6116,7 @@ function renderBookingCard(booking, active = true) {
         <div>
           <p class="eyebrow">${escapeHtml(booking.booking_number || "Booking")}</p>
           <h3>${escapeHtml(booking.civ_name || "Unknown subject")}</h3>
-          <p class="muted small">CIV ${escapeHtml(booking.civ_number || "pending")} / ${escapeHtml(booking.charge_code)} ${escapeHtml(booking.charge_title)}</p>
+          <p class="muted small">CIV ${escapeHtml(booking.civ_number || "pending")} / ${(booking.charges || [{ charge_code: booking.charge_code }]).length} criminal charge(s)</p>
         </div>
         <span class="pill ${bookingStatusClass(booking.status)}">${escapeHtml(booking.status || "intake")}</span>
       </div>
@@ -6021,6 +6130,12 @@ function renderBookingCard(booking, active = true) {
         <div><span>Bond</span><strong>${money(booking.bond_amount)}</strong></div>
       </div>
       <div class="booking-summary">
+        <div class="booking-charge-stack">
+          <strong>Filed charges</strong>
+          ${(booking.charges || [{ charge_code: booking.charge_code, charge_title: booking.charge_title, severity: booking.severity, court_case_id: booking.court_case_id }]).map((charge) => `
+            <div><span><b>${escapeHtml(charge.charge_code)}</b> ${escapeHtml(charge.charge_title)}</span><span class="pill">${escapeHtml(charge.severity || "criminal")}</span><small>${charge.court_case_id ? `Court #${charge.court_case_id}` : "Court pending"}</small></div>
+          `).join("")}
+        </div>
         <p><strong>Probable cause:</strong> ${escapeHtml(booking.probable_cause || "No probable cause narrative filed")}</p>
         ${booking.property_inventory ? `<p><strong>Property:</strong> ${escapeHtml(booking.property_inventory)}</p>` : ""}
         ${booking.medical_notes ? `<p><strong>Medical:</strong> ${escapeHtml(booking.medical_notes)}</p>` : ""}
@@ -6050,6 +6165,7 @@ function renderBookingSystem() {
   const civilians = getMdtCivilians();
   const defaultCourt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const draft = state.mdtBookingDraft || {};
+  const selectedChargeIds = (draft.charge_ids || [draft.charge_id || state.mdtSelectedChargeId]).filter(Boolean).map(String);
   return `
     <div class="booking-workspace">
       <form id="bookingForm" class="mdt-form booking-intake-form">
@@ -6071,10 +6187,19 @@ function renderBookingSystem() {
             <option value="">Select civilian record</option>
             ${civilians.map((person) => `<option value="${person.id}"${selectedAttr(person.id, draft.civ_id || state.mdtSelectedCiv)}>${escapeHtml(person.name)} - CIV ${escapeHtml(person.civ_number || "pending")} - ${escapeHtml(person.license_status || "No license")}</option>`).join("")}
           </select></label>
-          <label>Criminal code<select name="charge_id" required>
-            <option value="">Select criminal charge</option>
-            ${renderChargeOptions(charges, draft.charge_id || state.mdtSelectedChargeId)}
-          </select></label>
+          <fieldset class="booking-charge-picker">
+            <legend>Criminal charges <span data-booking-charge-count>${selectedChargeIds.length}</span> selected</legend>
+            <label class="booking-charge-search"><input type="search" data-booking-charge-search placeholder="Search criminal code or offense..." /></label>
+            <div class="booking-charge-options">
+              ${charges.map((charge) => `
+                <label data-booking-charge-option data-booking-charge-text="${escapeHtml(`${charge.code} ${charge.title} ${charge.category} ${charge.description}`.toLowerCase())}">
+                  <input type="checkbox" name="charge_ids" value="${charge.id}" ${selectedChargeIds.includes(String(charge.id)) ? "checked" : ""} />
+                  <span><strong>${escapeHtml(charge.code)} — ${escapeHtml(charge.title)}</strong><small>${escapeHtml(charge.category)} / ${escapeHtml(charge.severity)}</small></span>
+                </label>
+              `).join("")}
+            </div>
+            <p class="muted small">Select every criminal count in this arrest. Each charge receives its own linked court case.</p>
+          </fieldset>
           <label>Arrest location<input name="arrest_location" value="${escapeHtml(draft.arrest_location || "")}" required placeholder="Street, postal, landmark, or station" /></label>
           <label>Arrest date/time<input name="arrest_datetime" type="datetime-local" /></label>
           <label>Arresting agency<input name="arresting_agency" value="${escapeHtml(state.session?.user?.primary_agency || "")}" placeholder="Department / agency" /></label>
@@ -6125,42 +6250,39 @@ function renderBookingSystem() {
 function renderCodeSection(kind) {
   const rows = getMdtCatalog(kind);
   const categories = [...new Set(rows.map((charge) => String(charge.category || "Other").trim()).filter(Boolean))].sort();
-  const activeCategory = kind === "citation" && categories.includes(state.mdtCitationCategory)
-    ? state.mdtCitationCategory
-    : "All";
+  const savedCategory = kind === "citation" ? state.mdtCitationCategory : state.mdtCriminalCategory;
+  const activeCategory = categories.includes(savedCategory) ? savedCategory : "All";
   const visibleRows = activeCategory === "All"
     ? rows
     : rows.filter((charge) => String(charge.category || "Other").trim() === activeCategory);
   return `
     <div class="mdt-section-head">
-      <div><p class="eyebrow">${kind === "citation" ? "Traffic and parking" : "Criminal charges"} catalog</p><h2>${kind === "citation" ? "Citation Code Finder" : "Criminal Charges"}</h2></div>
+      <div><p class="eyebrow">${kind === "citation" ? "Traffic and parking" : "New York Penal Law"} catalog</p><h2>${kind === "citation" ? "Citation Code Finder" : "Criminal Charge Finder"}</h2></div>
       <button class="secondary" data-open-catalog data-catalog-kind="${kind}">Open catalog</button>
     </div>
-    ${kind === "citation" ? `
-      <section class="citation-code-finder">
+      <section class="citation-code-finder ${kind === "criminal" ? "criminal-code-finder" : ""}">
         <label class="citation-code-search">
-          <span>Search citation codes</span>
-          <input type="search" data-citation-code-search placeholder="Search code, offense, keyword, fine, or description..." autocomplete="off" />
+          <span>Search ${kind === "citation" ? "citation" : "criminal"} codes</span>
+          <input type="search" data-code-search="${kind}" placeholder="Search code, offense, keyword, classification, or description..." autocomplete="off" />
           <kbd>/</kbd>
         </label>
         <nav class="citation-category-tabs" aria-label="Citation code categories">
-          <button type="button" class="${activeCategory === "All" ? "active" : ""}" data-citation-category="All">
+          <button type="button" class="${activeCategory === "All" ? "active" : ""}" data-code-category="All" data-code-kind="${kind}">
             <strong>All codes</strong><span>${rows.length}</span>
           </button>
           ${categories.map((category) => {
             const count = rows.filter((charge) => String(charge.category || "Other").trim() === category).length;
-            return `<button type="button" class="${activeCategory === category ? "active" : ""}" data-citation-category="${escapeHtml(category)}"><strong>${escapeHtml(category)}</strong><span>${count}</span></button>`;
+            return `<button type="button" class="${activeCategory === category ? "active" : ""}" data-code-category="${escapeHtml(category)}" data-code-kind="${kind}"><strong>${escapeHtml(category)}</strong><span>${count}</span></button>`;
           }).join("")}
         </nav>
         <div class="citation-finder-status">
-          <span>Showing <strong data-citation-visible-count>${visibleRows.length}</strong> of ${rows.length} codes</span>
+          <span>Showing <strong data-code-visible-count="${kind}">${visibleRows.length}</strong> of ${rows.length} codes</span>
           <span>${escapeHtml(activeCategory === "All" ? "All categories" : activeCategory)}</span>
         </div>
       </section>
-    ` : ""}
-    <div class="mdt-code-grid ${kind === "citation" ? "citation-code-results" : ""}">
+    <div class="mdt-code-grid citation-code-results ${kind === "criminal" ? "criminal-code-results" : ""}">
       ${visibleRows.map((charge) => `
-        <article class="charge-card mdt-code-card" ${kind === "citation" ? `data-citation-code-card data-citation-search="${escapeHtml(`${charge.code} ${charge.title} ${charge.category} ${charge.severity} ${charge.description} ${charge.fine_amount} ${charge.points}`.toLowerCase())}"` : ""}>
+        <article class="charge-card mdt-code-card" data-code-card="${kind}" data-code-search-text="${escapeHtml(`${charge.code} ${charge.title} ${charge.category} ${charge.severity} ${charge.description} ${charge.fine_amount} ${charge.points}`.toLowerCase())}">
           <div class="row"><strong>${escapeHtml(charge.code)}</strong><span class="pill">${escapeHtml(charge.severity)}</span></div>
           <h3>${escapeHtml(charge.title)}</h3>
           <p class="muted small">${escapeHtml(charge.category)} - ${money(charge.fine_amount)} - ${charge.points} pts</p>
@@ -6170,7 +6292,7 @@ function renderCodeSection(kind) {
             : `<button class="secondary" type="button" data-select-citation-charge="${charge.id}">Write ticket</button>`}
         </article>
       `).join("") || `<div class="empty">No ${kind} codes loaded</div>`}
-      ${kind === "citation" ? `<div class="empty citation-search-empty" data-citation-search-empty hidden>No citation codes match that search.</div>` : ""}
+      <div class="empty citation-search-empty" data-code-search-empty="${kind}" hidden>No ${kind === "citation" ? "citation" : "criminal"} codes match that search.</div>
     </div>
   `;
 }
@@ -6899,7 +7021,73 @@ function renderPanic() {
   `;
 }
 
+function bindMdtFinders() {
+  $("[data-citation-writer-code]")?.addEventListener("change", (event) => {
+    const charge = getMdtCatalog("citation").find((item) => String(item.id) === String(event.currentTarget.value));
+    const values = {
+      "[data-citation-review-code]": charge?.code || "Not selected",
+      "[data-citation-review-title]": charge?.title || "Select a violation",
+      "[data-citation-review-severity]": charge?.severity || "—",
+      "[data-citation-review-fine]": charge ? money(charge.fine_amount) : "—",
+      "[data-citation-review-points]": charge ? String(Number(charge.points || 0)) : "—",
+    };
+    Object.entries(values).forEach(([selector, value]) => {
+      const target = $(selector);
+      if (target) target.textContent = value;
+    });
+  });
+  const bookingChargeSearch = $("[data-booking-charge-search]");
+  if (bookingChargeSearch) {
+    const updateBookingCharges = () => {
+      const query = bookingChargeSearch.value.trim().toLowerCase();
+      $$("[data-booking-charge-option]").forEach((option) => {
+        option.hidden = Boolean(query) && !String(option.dataset.bookingChargeText || "").includes(query);
+      });
+      const count = $("[data-booking-charge-count]");
+      if (count) count.textContent = String($$('input[name="charge_ids"]:checked').length);
+    };
+    bookingChargeSearch.addEventListener("input", updateBookingCharges);
+    $$('input[name="charge_ids"]').forEach((input) => input.addEventListener("change", updateBookingCharges));
+  }
+  $$("[data-code-category]").forEach((button) => button.addEventListener("click", () => {
+    if (button.dataset.codeKind === "criminal") {
+      state.mdtCriminalCategory = button.dataset.codeCategory || "All";
+    } else {
+      state.mdtCitationCategory = button.dataset.codeCategory || "All";
+    }
+    render();
+  }));
+  $$("[data-code-search]").forEach((codeSearch) => {
+    codeSearch.addEventListener("input", () => {
+      const kind = codeSearch.dataset.codeSearch;
+      const query = codeSearch.value.trim().toLowerCase();
+      const cards = $$(`[data-code-card="${kind}"]`);
+      let visible = 0;
+      cards.forEach((card) => {
+        const match = !query || String(card.dataset.codeSearchText || "").includes(query);
+        card.hidden = !match;
+        if (match) visible += 1;
+      });
+      const count = $(`[data-code-visible-count="${kind}"]`);
+      const empty = $(`[data-code-search-empty="${kind}"]`);
+      if (count) count.textContent = String(visible);
+      if (empty) empty.hidden = visible !== 0;
+    });
+  });
+  if (!document.documentElement.dataset.citationShortcutBound) {
+    document.documentElement.dataset.citationShortcutBound = "true";
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "/" || /input|textarea|select/i.test(document.activeElement?.tagName || "")) return;
+      const currentSearch = $("[data-code-search]");
+      if (!currentSearch) return;
+      event.preventDefault();
+      currentSearch.focus();
+    });
+  }
+}
+
 function bindMdt() {
+  bindMdtFinders();
   $$("[data-mdt-tab]").forEach((button) => button.addEventListener("click", () => {
     state.mdtTab = button.dataset.mdtTab;
     if (button.dataset.cidOpenCase) {
@@ -7200,8 +7388,15 @@ function bindMdt() {
   $("#bookingForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
-      const result = await api("/api/mdt/bookings", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
-      toast(`Booking ${result.booking_number} filed - court ${result.court_date}`);
+      const formData = new FormData(event.currentTarget);
+      const payload = Object.fromEntries(formData.entries());
+      payload.charge_ids = formData.getAll("charge_ids");
+      if (!payload.charge_ids.length) {
+        toast("Select at least one criminal charge");
+        return;
+      }
+      const result = await api("/api/mdt/bookings", { method: "POST", body: payload });
+      toast(`Booking ${result.booking_number} filed with ${result.charge_count} charge(s)`);
       state.mdtSelectedChargeId = "";
       state.mdtSelectedCiv = "";
       state.mdtBookingDraft = null;
@@ -7346,6 +7541,7 @@ function bindMdt() {
         state.mdtBookingDraft = {
           civ_id: payload.civ_id,
           charge_id: payload.charge_id,
+          charge_ids: [payload.charge_id],
           arrest_location: payload.location,
           probable_cause: payload.probable_cause,
           holding_cell: payload.holding_cell,
@@ -7549,6 +7745,33 @@ function bindBetaTasks() {
       toast(error.message);
     }
   }));
+  $("[data-citation-writer-code]")?.addEventListener("change", (event) => {
+    const charge = getMdtCatalog("citation").find((item) => String(item.id) === String(event.currentTarget.value));
+    const values = {
+      "[data-citation-review-code]": charge?.code || "Not selected",
+      "[data-citation-review-title]": charge?.title || "Select a violation",
+      "[data-citation-review-severity]": charge?.severity || "—",
+      "[data-citation-review-fine]": charge ? money(charge.fine_amount) : "—",
+      "[data-citation-review-points]": charge ? String(Number(charge.points || 0)) : "—",
+    };
+    Object.entries(values).forEach(([selector, value]) => {
+      const target = $(selector);
+      if (target) target.textContent = value;
+    });
+  });
+  const bookingChargeSearch = $("[data-booking-charge-search]");
+  if (bookingChargeSearch) {
+    const updateBookingChargePicker = () => {
+      const query = bookingChargeSearch.value.trim().toLowerCase();
+      $$("[data-booking-charge-option]").forEach((option) => {
+        option.hidden = Boolean(query) && !String(option.dataset.bookingChargeText || "").includes(query);
+      });
+      const count = $("[data-booking-charge-count]");
+      if (count) count.textContent = String($$('input[name="charge_ids"]:checked').length);
+    };
+    bookingChargeSearch.addEventListener("input", updateBookingChargePicker);
+    $$('input[name="charge_ids"]').forEach((input) => input.addEventListener("change", updateBookingChargePicker));
+  }
   $$("[data-citation-category]").forEach((button) => button.addEventListener("click", () => {
     state.mdtCitationCategory = button.dataset.citationCategory;
     render();
@@ -7741,7 +7964,7 @@ function renderDevTools() {
   const users = data.users || [], sanctions = data.sanctions || [], warnings = data.warnings || [], logs = data.audit_logs || [], codes = data.unlink_codes || [];
   const metrics = devMetrics(data, warnings);
   if (state.devTab === "anticheat") return renderDevAntiCheat(data.anti_cheat || {});
-  if (state.devTab === "dashboard") return `<div class="stack">${metrics}<div class="dev-section-heading"><div><h2>Work queue</h2><p>Items requiring staff attention and recent review.</p></div></div><div class="dev-grid-2"><section class="dev-card"><div class="dev-card-header"><div><span>ENFORCEMENT</span><h2>Active cases</h2></div><button class="secondary" data-dev-go="enforcement">View cases</button></div>${sanctions.filter((x) => !x.revoked_at).slice(0,8).map(devSanctionRow).join("") || `<div class="empty">No active enforcement cases</div>`}</section><section class="dev-card"><div class="dev-card-header"><div><span>IDENTITY</span><h2>Recent Arma links</h2></div><button class="secondary" data-dev-go="linking">View accounts</button></div>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card"><div class="dev-card-header"><div><span>STAFF RECORD</span><h2>Latest activity</h2></div><button class="secondary" data-dev-go="audit">View complete log</button></div>${devAudit(logs.slice(0,10))}</section></div>`;
+  if (state.devTab === "dashboard") return `<div class="stack dev-overview">${metrics}<div class="dev-section-heading"><div><h2>Work queue</h2><p>Items requiring staff attention and recent review.</p></div></div><div class="dev-overview-queue"><section class="dev-card dev-queue-card enforcement"><div class="dev-card-header"><div><span>ENFORCEMENT</span><h2>Active cases</h2></div><button class="secondary" data-dev-go="enforcement">View cases</button></div>${sanctions.filter((x) => !x.revoked_at).slice(0,8).map(devSanctionRow).join("") || `<div class="dev-queue-clear"><i></i><div><strong>Queue clear</strong><span>No active enforcement cases require review.</span></div></div>`}</section><section class="dev-card dev-queue-card identity"><div class="dev-card-header"><div><span>IDENTITY</span><h2>Recent Arma links</h2></div><button class="secondary" data-dev-go="linking">View accounts</button></div>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card dev-activity-panel"><div class="dev-card-header"><div><span>STAFF RECORD</span><h2>Latest activity</h2></div><button class="secondary" data-dev-go="audit">View complete log</button></div>${devAudit(logs.slice(0,10))}</section></div>`;
   if (state.devTab === "enforcement") return `<div class="dev-grid-enforcement"><section class="dev-card"><div class="row"><div><p class="eyebrow">Required incident documentation</p><h2>Enforcement Report</h2><p class="muted">A ban or timeout cannot be issued until this report is complete.</p></div><span class="pill red">required</span></div>
     <form id="devSanctionForm" class="dev-report-form">
       <label>Account<select name="user_id" required><option value="">Select account</option>${devUserOptions(users)}</select></label>
@@ -7843,7 +8066,21 @@ function renderDevTools() {
 }
 
 function devRecentLinks(links) {
-  return `<div class="dev-table">${links.slice(0,40).map((x) => `<button class="dev-table-row dev-account-row" data-dev-account="${x.account_id}"><div><strong>${escapeHtml(x.account_name || x.player_name || "Unknown")}</strong><small>${escapeHtml(x.civ_number || "No CIV")} · ${escapeHtml(x.arma_id || "")}</small></div><span>${escapeHtml(x.linked_at || "")}</span></button>`).join("") || `<div class="empty">No completed links</div>`}</div>`;
+  return `<div class="dev-link-ledger">
+    <div class="dev-link-ledger-head"><span>Identity</span><span>Bohemia link</span><span>Linked</span></div>
+    ${links.slice(0, 12).map((x) => {
+      const name = x.account_name || x.player_name || "Unknown";
+      const linkedDate = x.linked_at ? new Date(x.linked_at) : null;
+      const validDate = linkedDate && !Number.isNaN(linkedDate.getTime());
+      return `<button class="dev-link-entry" type="button" data-dev-account="${x.account_id}">
+        <span class="dev-link-avatar">${escapeHtml(name.slice(0, 2).toUpperCase())}</span>
+        <span class="dev-link-person"><strong>${escapeHtml(name)}</strong><small>CIV ${escapeHtml(x.civ_number || "pending")}</small></span>
+        <span class="dev-link-identity"><strong>${escapeHtml(x.arma_id || "No identity ID")}</strong><small>Verified account match</small></span>
+        <time datetime="${escapeHtml(x.linked_at || "")}"><strong>${validDate ? linkedDate.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) : "Date unavailable"}</strong><small>${validDate ? linkedDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}</small></time>
+        <i aria-hidden="true">›</i>
+      </button>`;
+    }).join("") || `<div class="dev-queue-clear"><i></i><div><strong>No completed links</strong><span>New identity claims will appear here.</span></div></div>`}
+  </div>`;
 }
 
 function renderDevAntiCheat(data) {
@@ -8958,7 +9195,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.83").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.90").catch(() => {}));
 }
 
 bootApp();
