@@ -1,6 +1,85 @@
 {
-  "version": "0.0.90",
+  "version": "0.0.95",
   "entries": [
+    {
+      "date": "2026-07-26",
+      "version": "0.0.95",
+      "title": "Developer RCON Server Control",
+      "added": [
+        "Added a developer-only live server restart control to the Dev Tools overview.",
+        "Added a protected confirmation flow requiring an operational reason and the word RESTART."
+      ],
+      "changed": [
+        "Server restart commands now use the configured server-side Arma RCON connection without exposing credentials to the browser.",
+        "Successful and failed restart attempts are recorded in the staff audit log."
+      ],
+      "fixed": []
+    },
+    {
+      "date": "2026-07-26",
+      "version": "0.0.94",
+      "title": "Permanent Court Records & Petitions",
+      "added": [
+        "Added permanent non-expunged criminal records to NCIC returns and civilian MDT profiles.",
+        "Added civilian appeal and expungement request forms in MyFaircroft.",
+        "Added a judicial Petitions docket for approving or denying post-judgment requests."
+      ],
+      "changed": [
+        "Court decisions remain attached to the original CAD/NCIC case record and notify the civilian and filing officer.",
+        "Approved appeals reopen the original case for judicial review while preserving the previous decision history.",
+        "Approved expungements remove the record from operational NCIC criminal history without deleting the court audit record."
+      ],
+      "fixed": [
+        "Reconnected judicial decisions to refreshed Court data and permanent operational record displays."
+      ]
+    },
+    {
+      "date": "2026-07-26",
+      "version": "0.0.93",
+      "title": "Compact MDT Command Rail",
+      "added": [
+        "Added direct section links from each operational rail preview."
+      ],
+      "changed": [
+        "Rebuilt Quick Access as a compact command index instead of oversized stacked buttons.",
+        "The side rail now shows short BOLO, report, return, and active-only officer-alert previews.",
+        "All existing rail features remain available through their full MDT sections."
+      ],
+      "fixed": [
+        "Reduced excessive side-panel length and unnecessary scrolling caused by cleared historical alerts."
+      ]
+    },
+    {
+      "date": "2026-07-26",
+      "version": "0.0.92",
+      "title": "Compact Criminal Charge Catalog",
+      "added": [],
+      "changed": [
+        "Criminal charge cards now use the same compact treatment as citation cards.",
+        "Desktop criminal-code results use a denser three-column grid with responsive two- and one-column breakpoints.",
+        "Long offense titles, classifications, and descriptions are constrained without removing code details."
+      ],
+      "fixed": [
+        "Criminal charge cards no longer consume excessive vertical space."
+      ]
+    },
+    {
+      "date": "2026-07-26",
+      "version": "0.0.91",
+      "title": "Multi-Citation Traffic Stops",
+      "added": [
+        "Added searchable multi-select citation codes to the electronic UTT writer.",
+        "Added combined fine, point, code, and violation totals before filing."
+      ],
+      "changed": [
+        "One traffic stop can now submit up to 12 civil violations using shared stop details.",
+        "Each selected violation creates its own linked Court filing for payment or contest.",
+        "Citation catalog cards are shorter and use compact clamped descriptions."
+      ],
+      "fixed": [
+        "Officers are no longer limited to one citation per traffic stop."
+      ]
+    },
     {
       "date": "2026-07-26",
       "version": "0.0.90",

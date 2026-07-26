@@ -63,6 +63,7 @@ ARMA_RCON_HOST = os.environ.get("ARMA_RCON_HOST", os.environ.get("RCON_HOST", ""
 ARMA_RCON_PORT = int(os.environ.get("ARMA_RCON_PORT", os.environ.get("RCON_PORT", "19999")))
 ARMA_RCON_PASSWORD = os.environ.get("ARMA_RCON_PASSWORD", os.environ.get("RCON_PASSWORD", ""))
 ARMA_RCON_TIMEOUT_SECONDS = max(1.0, min(float(os.environ.get("ARMA_RCON_TIMEOUT_SECONDS", "5")), 15.0))
+ARMA_RCON_RESTART_COMMAND = os.environ.get("ARMA_RCON_RESTART_COMMAND", "#restart").strip()
 NAME_CHANGE_LIMIT = 3
 NAME_CHANGE_WINDOW_DAYS = 3
 TREASURY_STIMULUS_AMOUNT = 75000.00
@@ -2086,6 +2087,29 @@ def ensure_migrations(db: Database) -> None:
         """
     )
     db.execute("ALTER TABLE mdt_bookings ADD COLUMN IF NOT EXISTS transport_confirmed_at TEXT")
+    db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS record_expunged_at TEXT")
+    db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS record_expunged_by INTEGER")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS court_record_requests (
+            id SERIAL PRIMARY KEY,
+            citation_id INTEGER NOT NULL,
+            civ_id INTEGER NOT NULL,
+            request_type TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            supporting_statement TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            judge_id INTEGER,
+            decision_notes TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            decided_at TEXT,
+            FOREIGN KEY (citation_id) REFERENCES citations(id) ON DELETE CASCADE,
+            FOREIGN KEY (civ_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (judge_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS mdt_booking_charges (
@@ -3720,6 +3744,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_pay_case(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/my-faircroft/fines/") and path.endswith("/contest") and method == "POST":
                     self.api_contest_case(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/my-faircroft/records/") and path.endswith("/appeal") and method == "POST":
+                    self.api_create_record_request(db, user, self.path_int(path, 3), "appeal")
+                elif path.startswith("/api/my-faircroft/records/") and path.endswith("/expunge") and method == "POST":
+                    self.api_create_record_request(db, user, self.path_int(path, 3), "expungement")
                 elif path.startswith("/api/my-faircroft/taxes/") and path.endswith("/pay") and method == "POST":
                     self.api_pay_business_tax(db, user, self.path_int(path, 3))
                 elif path == "/api/court/my-cases" and method == "GET":
@@ -3732,6 +3760,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_judge_cases(db, user)
                 elif path.startswith("/api/court/cases/") and method == "PATCH":
                     self.api_update_case(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/court/petitions/") and method == "PATCH":
+                    self.api_update_record_request(db, user, self.path_int(path, 3))
                 elif path == "/api/mdt/search" and method == "GET":
                     self.api_mdt_search(db, user, query)
                 elif path == "/api/mdt/charges" and method == "GET":
@@ -3818,6 +3848,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_create_warning(db, user)
                 elif path == "/api/dev-tools/app-visibility" and method == "PATCH":
                     self.api_dev_update_app_visibility(db, user)
+                elif path == "/api/dev-tools/server/restart" and method == "POST":
+                    self.api_dev_restart_server(db, user)
                 elif path.startswith("/api/dev-tools/warnings/") and path.endswith("/resolve") and method == "POST":
                     self.api_dev_resolve_warning(db, user, self.path_int(path, 3))
                 elif path == "/api/fine-settlement" and method == "GET":
@@ -6223,6 +6255,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             """,
             (user["id"],),
         )
+        record_requests = all_rows(
+            db,
+            """
+            SELECT r.*, c.charge_code, c.charge_title
+            FROM court_record_requests r
+            JOIN citations c ON c.id = r.citation_id
+            WHERE r.civ_id = ?
+            ORDER BY r.created_at DESC
+            """,
+            (user["id"],),
+        )
         case_payload = [dict(row) for row in cases]
         tax_payload = [dict(row) for row in taxes]
         outstanding_fines = [
@@ -6245,6 +6288,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         }
         return {
             "cases": case_payload,
+            "record_requests": [dict(item) for item in record_requests],
             "taxes": tax_payload,
             "bank": public_user_with_game_bank(db, user),
             "summary": {
@@ -6490,6 +6534,101 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 add_message(db, judge["id"], "Citation contested", f"{user['name']} contested {case['charge_code']} - {case['charge_title']}.", user["id"])
         self.send_json(200, {"ok": True})
 
+    def api_create_record_request(self, db: Database, user: DbRow | None, case_id: int, request_type: str) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        case = one(db, "SELECT * FROM citations WHERE id = ? AND civ_id = ?", (case_id, user["id"]))
+        if not case:
+            self.error(404, "Court record not found")
+            return
+        if not case.get("decided_at") or case["status"] in ACTIVE_CASE_STATUSES:
+            self.error(409, "A final court decision is required before filing this request")
+            return
+        if case.get("record_expunged_at"):
+            self.error(409, "This record has already been expunged")
+            return
+        existing = one(
+            db,
+            "SELECT id FROM court_record_requests WHERE citation_id = ? AND request_type = ? AND status = 'pending'",
+            (case_id, request_type),
+        )
+        if existing:
+            self.error(409, f"A pending {request_type} request already exists")
+            return
+        payload = self.read_json()
+        reason = str(payload.get("reason") or "").strip()
+        supporting_statement = str(payload.get("supporting_statement") or "").strip()
+        if len(reason) < 20:
+            self.error(400, "Explain the basis for this request in at least 20 characters")
+            return
+        ts = now_iso()
+        created = db.execute(
+            """
+            INSERT INTO court_record_requests
+            (citation_id, civ_id, request_type, reason, supporting_statement, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id
+            """,
+            (case_id, user["id"], request_type, reason[:2000], supporting_statement[:3000], ts, ts),
+        ).fetchone()
+        for judge in all_rows(db, "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ?", ("%judge%", "%owner%")):
+            if int(judge["id"]) != int(user["id"]):
+                add_message(db, judge["id"], f"New {request_type} petition", f"{user['name']} filed a {request_type} request for case #{case_id}.", user["id"])
+        self.send_json(201, {"ok": True, "request_id": int(created["id"]), "status": "pending"})
+
+    def api_update_record_request(self, db: Database, user: DbRow | None, request_id: int) -> None:
+        err = judge_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        request = one(
+            db,
+            """
+            SELECT r.*, c.charge_code, c.charge_title
+            FROM court_record_requests r
+            JOIN citations c ON c.id = r.citation_id
+            WHERE r.id = ?
+            """,
+            (request_id,),
+        )
+        if not request:
+            self.error(404, "Court petition not found")
+            return
+        if request["status"] != "pending":
+            self.error(409, "This petition has already been decided")
+            return
+        payload = self.read_json()
+        decision = str(payload.get("decision") or "").strip().lower()
+        if decision not in ("approved", "denied"):
+            self.error(400, "Select approve or deny")
+            return
+        notes = str(payload.get("decision_notes") or "").strip()
+        if len(notes) < 3:
+            self.error(400, "Judicial decision notes are required")
+            return
+        ts = now_iso()
+        db.execute(
+            """
+            UPDATE court_record_requests
+            SET status = ?, judge_id = ?, decision_notes = ?, decided_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (decision, user["id"], notes[:2000], ts, ts, request_id),
+        )
+        if decision == "approved" and request["request_type"] == "expungement":
+            db.execute(
+                "UPDATE citations SET record_expunged_at = ?, record_expunged_by = ?, updated_at = ? WHERE id = ?",
+                (ts, user["id"], ts, request["citation_id"]),
+            )
+        elif decision == "approved" and request["request_type"] == "appeal":
+            db.execute(
+                "UPDATE citations SET status = 'contested', disposition = 'under_review', updated_at = ? WHERE id = ?",
+                (ts, request["citation_id"]),
+            )
+        add_message(db, request["civ_id"], f"{request['request_type'].title()} petition {decision}", f"Case #{request['citation_id']}: {notes}", user["id"])
+        self.send_json(200, {"ok": True, "status": decision})
+
     def api_judge_cases(self, db: Database, user: DbRow | None) -> None:
         err = judge_required(user)
         if err:
@@ -6542,17 +6681,34 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             ORDER BY maximum_sentence_minutes, minimum_sentence_minutes, severity
             """,
         )
+        petitions = all_rows(
+            db,
+            """
+            SELECT r.*, c.charge_code, c.charge_title, c.final_result, civ.name AS civ_name,
+                   civ.civ_number, judge.name AS judge_name
+            FROM court_record_requests r
+            JOIN citations c ON c.id = r.citation_id
+            JOIN users civ ON civ.id = r.civ_id
+            LEFT JOIN users judge ON judge.id = r.judge_id
+            WHERE r.civ_id <> ?
+            ORDER BY CASE r.status WHEN 'pending' THEN 0 ELSE 1 END, r.created_at DESC
+            LIMIT 160
+            """,
+            (user["id"],),
+        )
         self.send_json(
             200,
             {
                 "active": [dict(row) for row in active],
                 "decided": [dict(row) for row in decided],
                 "standards": [dict(row) for row in standards],
+                "petitions": [dict(row) for row in petitions],
                 "stats": {
                     "active": len(active),
                     "contested": sum(1 for row in active if row["status"] == "contested"),
                     "criminal": sum(1 for row in active if row["kind"] == "criminal"),
                     "decided": len(decided),
+                    "petitions": sum(1 for row in petitions if row["status"] == "pending"),
                 },
             },
         )
@@ -6721,7 +6877,22 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         for row in rows:
             warrants = all_rows(
                 db,
-                "SELECT id, charge_code, charge_title, status, fine_amount FROM citations WHERE civ_id = ? AND status IN ('issued', 'contested', 'reviewed', 'reduced') ORDER BY created_at DESC LIMIT 10",
+                "SELECT id, charge_code, charge_title, status, fine_amount FROM citations WHERE civ_id = ? AND record_expunged_at IS NULL AND status IN ('issued', 'contested', 'reviewed', 'reduced') ORDER BY created_at DESC LIMIT 10",
+                (row["id"],),
+            )
+            criminal_record = all_rows(
+                db,
+                """
+                SELECT c.id, c.charge_code, c.charge_title, c.severity, c.disposition, c.final_result,
+                       c.sentence_minutes, c.decided_at, judge.name AS judge_name
+                FROM citations c
+                JOIN charge_catalog catalog ON catalog.id = c.charge_id
+                LEFT JOIN users judge ON judge.id = c.judge_id
+                WHERE c.civ_id = ? AND catalog.kind = 'criminal' AND c.decided_at IS NOT NULL
+                  AND c.record_expunged_at IS NULL
+                ORDER BY c.decided_at DESC
+                LIMIT 30
+                """,
                 (row["id"],),
             )
             vehicles = all_rows(
@@ -6766,6 +6937,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 item.pop("email", None)
             item["roles"] = roles_for(row)
             item["open_cases"] = [dict(w) for w in warrants]
+            item["criminal_record"] = [dict(record) for record in criminal_record]
             item["vehicles"] = vehicles
             item["license_applications"] = applications
             item["warrants"] = [dict(warrant) for warrant in user_warrants]
@@ -6965,69 +7137,94 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403 if user else 401, err)
             return
         payload = self.read_json()
-        missing = require_fields(payload, "civ_id", "charge_id", "location", "narrative")
+        missing = require_fields(payload, "civ_id", "location", "narrative")
         if missing:
             self.error(400, missing)
             return
+        raw_charge_ids = payload.get("charge_ids")
+        if not isinstance(raw_charge_ids, list):
+            raw_charge_ids = [raw_charge_ids or payload.get("charge_id")]
+        charge_ids: list[int] = []
+        try:
+            for raw_charge_id in raw_charge_ids:
+                charge_id = int(raw_charge_id)
+                if charge_id not in charge_ids:
+                    charge_ids.append(charge_id)
+        except (TypeError, ValueError):
+            self.error(400, "Select valid citation codes")
+            return
+        if not charge_ids:
+            self.error(400, "Select at least one citation code")
+            return
+        if len(charge_ids) > 12:
+            self.error(400, "A traffic stop can contain no more than 12 citations")
+            return
         civ = one(db, "SELECT * FROM users WHERE id = ?", (int(payload["civ_id"]),))
-        charge = one(db, "SELECT * FROM charge_catalog WHERE id = ?", (int(payload["charge_id"]),))
-        if not civ or not charge:
+        charge_placeholders = ", ".join("?" for _ in charge_ids)
+        charge_rows = all_rows(db, f"SELECT * FROM charge_catalog WHERE id IN ({charge_placeholders})", tuple(charge_ids))
+        charges_by_id = {int(row["id"]): row for row in charge_rows}
+        charges = [charges_by_id[charge_id] for charge_id in charge_ids if charge_id in charges_by_id]
+        if not civ or len(charges) != len(charge_ids):
             self.error(404, "Civilian or charge not found")
             return
-        if charge.get("kind") != "citation":
+        if any(charge.get("kind") != "citation" for charge in charges):
             self.error(400, "Criminal charges must be processed through Booking after transport confirmation")
             return
         default_court_date = (utcnow() + dt.timedelta(days=3)).date().isoformat()
         court_date = str(payload.get("court_date") or "").strip() or default_court_date
         presiding_judge = pick_presiding_judge(db, int(civ["id"]))
         ts = now_iso()
-        cur = db.execute(
-            """
-            INSERT INTO citations
-            (civ_id, officer_id, judge_id, charge_id, charge_code, charge_title, category, fine_amount, points, severity,
-             minimum_sentence_minutes, maximum_sentence_minutes, location, narrative, court_date, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            RETURNING id
-            """,
-            (
-                civ["id"],
-                user["id"],
-                presiding_judge["id"] if presiding_judge else None,
-                charge["id"],
-                charge["code"],
-                charge["title"],
-                charge["category"],
-                charge["fine_amount"],
-                charge["points"],
-                charge["severity"],
-                int(charge["minimum_sentence_minutes"]),
-                int(charge["maximum_sentence_minutes"]),
-                str(payload["location"])[:120],
-                str(payload["narrative"])[:1000],
-                court_date,
-                ts,
-                ts,
-            ),
-        )
-        created = cur.fetchone()
-        citation_id = int(created["id"])
+        citation_ids: list[int] = []
+        for charge in charges:
+            created = db.execute(
+                """
+                INSERT INTO citations
+                (civ_id, officer_id, judge_id, charge_id, charge_code, charge_title, category, fine_amount, points, severity,
+                 minimum_sentence_minutes, maximum_sentence_minutes, location, narrative, court_date, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                RETURNING id
+                """,
+                (
+                    civ["id"],
+                    user["id"],
+                    presiding_judge["id"] if presiding_judge else None,
+                    charge["id"],
+                    charge["code"],
+                    charge["title"],
+                    charge["category"],
+                    charge["fine_amount"],
+                    charge["points"],
+                    charge["severity"],
+                    int(charge["minimum_sentence_minutes"]),
+                    int(charge["maximum_sentence_minutes"]),
+                    str(payload["location"])[:120],
+                    str(payload["narrative"])[:1000],
+                    court_date,
+                    ts,
+                    ts,
+                ),
+            ).fetchone()
+            citation_ids.append(int(created["id"]))
+        citation_id = citation_ids[0]
+        total_fines = sum(float(charge["fine_amount"]) for charge in charges)
+        charge_summary = ", ".join(f"{charge['code']} - {charge['title']}" for charge in charges)
         add_message(
             db,
             civ["id"],
-            f"New citation {charge['code']}",
-            f"{user['name']} issued {charge['title']} for ${float(charge['fine_amount']):,.2f}. Open MyFaircroft to pay or contest.",
+            f"New traffic stop citations ({len(charges)})",
+            f"{user['name']} issued {charge_summary}. Total fines: ${total_fines:,.2f}. Open MyFaircroft to pay or contest each filing.",
             user["id"],
         )
-        add_message(db, user["id"], "Officer case filed", f"Case #{citation_id} was filed against {civ['name']} and routed to the Court docket.", user["id"])
+        add_message(db, user["id"], "Officer traffic stop filed", f"{len(citation_ids)} citation case(s) were filed against {civ['name']} and routed to the Court docket.", user["id"])
         if presiding_judge:
             add_message(
                 db,
                 presiding_judge["id"],
-                "Presiding case assigned",
-                f"Case #{citation_id} was assigned to you. Defendant: {civ['name']}. Officer: {user['name']}.",
+                "Traffic stop cases assigned",
+                f"Cases {', '.join(f'#{case_id}' for case_id in citation_ids)} were assigned to you. Defendant: {civ['name']}. Officer: {user['name']}.",
                 user["id"],
             )
-        self.send_json(201, {"ok": True, "citation_id": citation_id, "court_date": court_date, "judge_id": presiding_judge["id"] if presiding_judge else None})
+        self.send_json(201, {"ok": True, "citation_id": citation_id, "citation_ids": citation_ids, "citation_count": len(citation_ids), "court_date": court_date, "judge_id": presiding_judge["id"] if presiding_judge else None})
 
     def api_mdt_bookings(self, db: Database, user: DbRow | None) -> None:
         err = leo_required(user)
@@ -8836,8 +9033,44 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     ],
                     "protected": sorted(PROTECTED_APP_IDS),
                 },
+                "server_control": {
+                    "rcon_configured": arma_rcon_configured(),
+                    "restart_available": bool(arma_rcon_configured() and ARMA_RCON_RESTART_COMMAND),
+                },
             },
         )
+
+    def api_dev_restart_server(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        if not has_any(user, "dev"):
+            self.error(403, "Developer role required for server restart")
+            return
+        if not arma_rcon_configured() or not ARMA_RCON_RESTART_COMMAND:
+            self.error(503, "Arma RCON restart is not configured")
+            return
+        payload = self.read_json()
+        if str(payload.get("confirmation") or "").strip().upper() != "RESTART":
+            self.error(400, "Type RESTART to confirm this action")
+            return
+        reason = str(payload.get("reason") or "").strip()
+        if len(reason) < 10:
+            self.error(400, "Enter a restart reason of at least 10 characters")
+            return
+        try:
+            result = execute_arma_rcon(ARMA_RCON_RESTART_COMMAND)
+        except Exception as exc:
+            add_admin_audit(db, int(user["id"]), "server.restart.rcon_failed", details={"reason": reason[:500], "error": str(exc)[:500]})
+            self.error(502, f"RCON restart failed: {exc}")
+            return
+        add_admin_audit(
+            db,
+            int(user["id"]),
+            "server.restart.rcon_sent",
+            details={"reason": reason[:500], "rcon_status": result.get("status"), "response": result.get("response", "")[:500]},
+        )
+        self.send_json(200, {"ok": True, "status": result.get("status"), "response": result.get("response", "")})
 
     def api_dev_update_app_visibility(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)

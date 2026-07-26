@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.90";
+const OS_VERSION = "0.0.95";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -29,6 +29,7 @@ const state = {
   devAccount: null,
   devAntiCheatUid: null,
   devAntiCheatSearch: "",
+  devRestartConfirmOpen: false,
   dmvTab: "overview",
   jobsTab: "state_police",
   mdtTab: "search",
@@ -3818,6 +3819,7 @@ function renderMyFaircroft() {
   const cases = data.cases || [];
   const taxes = data.taxes || [];
   const summary = data.summary || {};
+  const recordRequests = data.record_requests || [];
   const taxAccounts = myFaircroftTaxAccounts(taxes);
   const dueFines = cases.filter(myFaircroftFineIsDue);
   const historyCases = cases.filter((item) => !myFaircroftFineIsDue(item) || item.disposition);
@@ -3837,7 +3839,7 @@ function renderMyFaircroft() {
     `,
     fines: renderMyFaircroftFines(dueFines),
     taxes: renderMyFaircroftTaxes(taxAccounts),
-    history: renderMyFaircroftHistory(historyCases, paidTaxes),
+    history: renderMyFaircroftHistory(historyCases, paidTaxes, recordRequests),
   }[state.myFaircroftTab] || "";
   return `
     <div class="myfc-app">
@@ -3912,16 +3914,26 @@ function renderMyFaircroftTaxes(accounts) {
   `;
 }
 
-function renderMyFaircroftHistory(cases, taxes) {
+function renderMyFaircroftHistory(cases, taxes, recordRequests = []) {
+  const latestRequests = new Map();
+  recordRequests.forEach((request) => {
+    const key = `${request.citation_id}:${request.request_type}`;
+    if (!latestRequests.has(key)) latestRequests.set(key, request);
+  });
   const entries = [
     ...cases.map((item) => ({
+      id: item.id,
+      kind: "case",
       date: item.updated_at,
       reference: `CASE-${item.id}`,
       title: `${item.charge_code} / ${item.charge_title}`,
       result: item.final_result || item.disposition || item.status,
       amount: item.fine_amount,
+      decided_at: item.decided_at,
+      expunged_at: item.record_expunged_at,
     })),
     ...taxes.map((item) => ({
+      kind: "tax",
       date: item.settled_at || item.assessed_at,
       reference: item.payment_batch_number || item.license_number,
       title: `${item.business_name} / ${item.period_label}`,
@@ -3937,6 +3949,16 @@ function renderMyFaircroftHistory(cases, taxes) {
           <div><strong>${escapeHtml(item.reference)}</strong><small>${item.date ? new Date(item.date).toLocaleDateString() : "Date pending"}</small></div>
           <div><h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.result)}</p></div>
           <strong>${money(item.amount)}</strong>
+          ${item.kind === "case" && item.decided_at && !item.expunged_at ? `
+            <div class="myfc-record-actions">
+              ${["appeal", "expungement"].map((requestType) => {
+                const request = latestRequests.get(`${item.id}:${requestType}`);
+                return request
+                  ? `<span class="pill ${request.status === "approved" ? "green" : request.status === "denied" ? "red" : "amber"}">${requestType} ${escapeHtml(request.status)}</span>`
+                  : `<details><summary>Request ${requestType === "appeal" ? "appeal" : "expungement"}</summary><form class="myfc-record-request-form" data-case-id="${item.id}" data-request-type="${requestType}"><label>Basis for request<textarea name="reason" minlength="20" maxlength="2000" required></textarea></label><label>Supporting statement<textarea name="supporting_statement" maxlength="3000" placeholder="Optional supporting facts, rehabilitation, errors, or changed circumstances."></textarea></label><button class="primary" type="submit">Submit to Court</button></form></details>`;
+              }).join("")}
+            </div>
+          ` : item.expunged_at ? `<span class="pill green">Record expunged</span>` : ""}
         </article>
       `).join("") || `<div class="empty">No previous court or tax records</div>`}
     </section>
@@ -3978,6 +4000,20 @@ function bindMyFaircroft() {
       if (error.message) toast(error.message);
     }
   }));
+  $$(".myfc-record-request-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api(`/api/my-faircroft/records/${form.dataset.caseId}/${form.dataset.requestType === "expungement" ? "expunge" : "appeal"}`, {
+        method: "POST",
+        body: Object.fromEntries(new FormData(form).entries()),
+      });
+      toast(`${form.dataset.requestType === "expungement" ? "Expungement" : "Appeal"} request sent to Court`);
+      await loadAppData("my-faircroft");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
 }
 
 function renderCourt() {
@@ -3985,16 +4021,19 @@ function renderCourt() {
   const active = data.active || [];
   const decided = data.decided || [];
   const stats = data.stats || {};
-  const tabs = [["docket", "Active docket"], ["decisions", "Decisions"], ["standards", "Sentencing"]];
+  const petitions = data.petitions || [];
+  const tabs = [["docket", "Active docket"], ["petitions", `Petitions (${Number(stats.petitions || 0)})`], ["decisions", "Decisions"], ["standards", "Sentencing"]];
   if (!tabs.some(([id]) => id === state.courtTab)) state.courtTab = "docket";
   if (!active.some((item) => Number(item.id) === Number(state.courtSelectedCaseId))) {
     state.courtSelectedCaseId = active[0]?.id || null;
   }
   const content = state.courtTab === "docket"
     ? renderCourtDocket(active)
-    : state.courtTab === "decisions"
-      ? renderCourtDecisions(decided)
-      : renderCourtStandards(data.standards || []);
+    : state.courtTab === "petitions"
+      ? renderCourtPetitions(petitions)
+      : state.courtTab === "decisions"
+        ? renderCourtDecisions(decided)
+        : renderCourtStandards(data.standards || []);
   return `
     <div class="court-app court-bench">
       <header class="court-identity">
@@ -4009,6 +4048,31 @@ function renderCourt() {
       <nav class="court-bench-tabs">${tabs.map(([id, label]) => `<button class="${state.courtTab === id ? "active" : ""}" data-court-tab="${id}">${label}</button>`).join("")}</nav>
       ${content}
     </div>
+  `;
+}
+
+function renderCourtPetitions(petitions) {
+  return `
+    <section class="court-petitions">
+      <header><div><p class="eyebrow">Post-judgment review</p><h3>Appeals & Expungement Petitions</h3></div><span>${petitions.filter((item) => item.status === "pending").length} pending</span></header>
+      <div class="court-petition-list">
+        ${petitions.map((item) => `
+          <article class="court-petition ${item.status}">
+            <header>
+              <div><span>${escapeHtml(item.request_type)}</span><h4>Case #${item.citation_id} / ${escapeHtml(item.charge_code)} ${escapeHtml(item.charge_title)}</h4><small>${escapeHtml(item.civ_name)} / CIV ${escapeHtml(item.civ_number || "pending")} / filed ${new Date(item.created_at).toLocaleString()}</small></div>
+              <span class="pill ${item.status === "pending" ? "amber" : item.status === "approved" ? "green" : "red"}">${escapeHtml(item.status)}</span>
+            </header>
+            <div class="court-petition-body"><strong>Basis for request</strong><p>${escapeHtml(item.reason)}</p>${item.supporting_statement ? `<strong>Supporting statement</strong><p>${escapeHtml(item.supporting_statement)}</p>` : ""}<small>Original result: ${escapeHtml(item.final_result || "Filed court decision")}</small></div>
+            ${item.status === "pending" ? `
+              <form class="court-petition-form" data-petition-id="${item.id}">
+                <label>Judicial decision notes<textarea name="decision_notes" rows="3" minlength="3" required placeholder="State the reason for approving or denying this petition."></textarea></label>
+                <div><button class="secondary" type="submit" name="decision" value="denied">Deny petition</button><button class="primary" type="submit" name="decision" value="approved">Approve ${item.request_type}</button></div>
+              </form>
+            ` : `<div class="court-petition-decision"><strong>${escapeHtml(item.judge_name || "Court")}</strong><p>${escapeHtml(item.decision_notes || "Decision filed")}</p></div>`}
+          </article>
+        `).join("") || `<div class="empty">No appeal or expungement petitions have been filed.</div>`}
+      </div>
+    </section>
   `;
 }
 
@@ -4152,6 +4216,24 @@ function bindCourt() {
       render();
     } catch (error) {
       if (error.message) toast(error.message);
+    }
+  }));
+  $$(".court-petition-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submitter = event.submitter;
+    try {
+      await api(`/api/court/petitions/${form.dataset.petitionId}`, {
+        method: "PATCH",
+        body: {
+          decision: submitter?.value,
+          decision_notes: new FormData(form).get("decision_notes"),
+        },
+      });
+      toast(`Petition ${submitter?.value || "updated"}`);
+      await loadAppData("court");
+      render();
+    } catch (error) {
+      toast(error.message);
     }
   }));
 }
@@ -5353,16 +5435,17 @@ function renderMdtSide() {
   const priorityCases = (cid?.investigations || []).filter((item) => ["critical", "elevated"].includes(item.priority));
   const activeWarrants = (cid?.warrants || []).filter((item) => item.status === "active");
   const canOpenMessages = canUseMdtMessages();
+  const liveAlerts = alerts.filter((alert) => ["active", "responding", "on_scene"].includes(String(alert.status || "").toLowerCase()));
   return `
-    <div class="mdt-side-panel">
-      <h3>Quick Access</h3>
-      <div class="list compact-list">
-        ${canOpenMessages ? `<button class="secondary" type="button" data-open-mdt-messages>Messages</button>` : `<p class="muted small">Messages unavailable</p>`}
-        ${state.mdtProtocolAssistantEnabled ? `<button class="secondary" type="button" data-start-traffic-stop>Initiate Traffic Stop</button>` : ""}
-        <button class="secondary" type="button" data-mdt-tab="ticket">Write Ticket</button>
-        <button class="secondary" type="button" data-mdt-tab="booking">Booking Desk</button>
-        <button class="secondary" type="button" data-mdt-tab="citations">NYS Codes</button>
-        <button class="secondary" type="button" data-mdt-tab="mdt-settings">MDT Settings</button>
+    <div class="mdt-side-panel mdt-command-index">
+      <div class="mdt-side-heading"><span>Command index</span><small>Direct access</small></div>
+      <div class="mdt-command-links">
+        ${canOpenMessages ? `<button type="button" data-open-mdt-messages><span>01</span><strong>Messages</strong></button>` : ""}
+        ${state.mdtProtocolAssistantEnabled ? `<button type="button" data-start-traffic-stop><span>02</span><strong>Traffic Stop</strong></button>` : ""}
+        <button type="button" data-mdt-tab="ticket"><span>03</span><strong>Write Ticket</strong></button>
+        <button type="button" data-mdt-tab="booking"><span>04</span><strong>Booking</strong></button>
+        <button type="button" data-mdt-tab="citations"><span>05</span><strong>NYS Codes</strong></button>
+        <button type="button" data-mdt-tab="mdt-settings"><span>06</span><strong>Settings</strong></button>
       </div>
     </div>
     ${cid ? `
@@ -5387,28 +5470,28 @@ function renderMdtSide() {
         </div>
       </div>
     ` : ""}
-    <div class="mdt-side-panel">
-      <h3>Active BOLOs</h3>
+    <div class="mdt-side-panel mdt-rail-section">
+      <div class="mdt-side-heading"><span>Active BOLOs</span><button type="button" data-mdt-tab="bolos">Open</button></div>
       <div class="list compact-list">
-        ${activeBolos.slice(0, 5).map((bolo) => `<button class="cid-side-link danger-link" data-mdt-tab="bolos"><strong>${escapeHtml(bolo.bolo_number)}</strong><span>${escapeHtml(bolo.target_name)} / ${escapeHtml(bolo.caution_level)}</span></button>`).join("") || `<p class="muted small">No active BOLOs</p>`}
+        ${activeBolos.slice(0, 3).map((bolo) => `<button class="cid-side-link danger-link" data-mdt-tab="bolos"><strong>${escapeHtml(bolo.bolo_number)}</strong><span>${escapeHtml(bolo.target_name)} / ${escapeHtml(bolo.caution_level)}</span></button>`).join("") || `<p class="mdt-rail-clear">No active BOLOs</p>`}
       </div>
     </div>
-    <div class="mdt-side-panel">
-      <h3>Watch</h3>
+    <div class="mdt-side-panel mdt-rail-section">
+      <div class="mdt-side-heading"><span>Live Watch</span><button type="button" data-mdt-tab="panic">Open</button></div>
       <div class="list compact-list">
-        ${alerts.slice(0, 5).map((alert) => `<div class="row"><span>${escapeHtml(alert.officer_name)}</span><span class="pill ${panicStatusClass(alert.status)}">${escapeHtml(alert.status)}</span></div>`).join("") || `<p class="muted small">No active panic traffic</p>`}
+        ${liveAlerts.slice(0, 4).map((alert) => `<div class="mdt-watch-line"><span>${escapeHtml(alert.officer_name)}</span><i></i><strong>${escapeHtml(alert.status)}</strong></div>`).join("") || `<p class="mdt-rail-clear">No active officer alerts</p>`}
       </div>
     </div>
-    <div class="mdt-side-panel">
-      <h3>Recent Reports</h3>
+    <div class="mdt-side-panel mdt-rail-section">
+      <div class="mdt-side-heading"><span>Recent Reports</span><button type="button" data-mdt-tab="cad-reports">Open</button></div>
       <div class="list compact-list">
-        ${reports.slice(0, 5).map((report) => `<button class="cid-side-link" data-mdt-tab="cad-reports"><strong>${escapeHtml(report.report_number)}</strong><span>${escapeHtml(report.call_type)} / ${escapeHtml(report.disposition)}</span></button>`).join("") || `<p class="muted small">No after-call reports filed</p>`}
+        ${reports.slice(0, 3).map((report) => `<button class="cid-side-link" data-mdt-tab="cad-reports"><strong>${escapeHtml(report.report_number)}</strong><span>${escapeHtml(report.call_type)} / ${escapeHtml(report.disposition)}</span></button>`).join("") || `<p class="mdt-rail-clear">No after-call reports</p>`}
       </div>
     </div>
-    <div class="mdt-side-panel">
-      <h3>Open Returns</h3>
+    <div class="mdt-side-panel mdt-rail-section">
+      <div class="mdt-side-heading"><span>Open Returns</span><button type="button" data-mdt-tab="search">NCIC</button></div>
       <div class="list compact-list">
-        ${issued.slice(0, 5).map((item) => `<div class="row"><span>${escapeHtml(item.charge_code)}</span><strong>${money(item.fine_amount)}</strong></div>`).join("") || `<p class="muted small">No NCIC open case returns</p>`}
+        ${issued.slice(0, 3).map((item) => `<div class="mdt-return-line"><span>${escapeHtml(item.charge_code)}</span><strong>${money(item.fine_amount)}</strong></div>`).join("") || `<p class="mdt-rail-clear">No open NCIC returns</p>`}
       </div>
     </div>
   `;
@@ -5737,6 +5820,10 @@ function renderMdtSearch() {
             <h4>Booking returns</h4>
             ${(item.bookings || []).slice(0, 4).map((booking) => `<div class="row"><span>${escapeHtml(booking.booking_number)} - ${escapeHtml(booking.charge_code)} ${escapeHtml(booking.charge_title)}</span><span class="pill ${bookingStatusClass(booking.status)}">${escapeHtml(booking.status)}</span></div>`).join("") || `<p class="muted small">No booking history</p>`}
           </div>
+          <div class="mdt-subsection ncic-criminal-record">
+            <h4>Permanent criminal record</h4>
+            ${(item.criminal_record || []).map((record) => `<div class="row"><span>${escapeHtml(record.charge_code)} ${escapeHtml(record.charge_title)} / ${escapeHtml(record.disposition || "decided")}</span><strong>${escapeHtml(record.final_result || `${record.sentence_minutes || 0} min`)}</strong></div>`).join("") || `<p class="muted small">No non-expunged criminal convictions on record</p>`}
+          </div>
         </article>
       `).join("") || `
         <section class="mdt-launchpad" aria-label="MDT operations launchpad">
@@ -5818,9 +5905,15 @@ function renderMdtProfileModal() {
           <button class="${state.mdtProfileTab === "license" ? "active" : ""}" type="button" data-mdt-profile-tab="license">Driver License</button>
           <button class="${state.mdtProfileTab === "warrants" ? "active" : ""}" type="button" data-mdt-profile-tab="warrants">Warrants ${activeWarrants.length ? `(${activeWarrants.length})` : ""}</button>
           <button class="${state.mdtProfileTab === "bookings" ? "active" : ""}" type="button" data-mdt-profile-tab="bookings">Bookings ${activeBookings.length ? `(${activeBookings.length})` : ""}</button>
+          <button class="${state.mdtProfileTab === "record" ? "active" : ""}" type="button" data-mdt-profile-tab="record">Criminal Record ${(person.criminal_record || []).length ? `(${person.criminal_record.length})` : ""}</button>
         </div>
         <div class="admin-account-scroll">
-          ${state.mdtProfileTab === "warrants" ? `
+          ${state.mdtProfileTab === "record" ? `
+            <section class="account-section ncic-master-record">
+              <div class="row tight"><h3>Permanent Criminal Record</h3><span class="pill red">${(person.criminal_record || []).length} entries</span></div>
+              ${(person.criminal_record || []).map((record) => `<article class="ncic-record-entry"><div class="row"><div><strong>${escapeHtml(record.charge_code)} — ${escapeHtml(record.charge_title)}</strong><p class="muted small">Case #${record.id} / decided ${record.decided_at ? new Date(record.decided_at).toLocaleDateString() : "date unavailable"} / Judge ${escapeHtml(record.judge_name || "Court")}</p></div><span class="pill">${escapeHtml(record.disposition || "decided")}</span></div><p>${escapeHtml(record.final_result || "Court decision filed")}</p></article>`).join("") || `<div class="empty">No non-expunged criminal convictions on this profile.</div>`}
+            </section>
+          ` : state.mdtProfileTab === "warrants" ? `
             <section class="account-section">
               <div class="row tight">
                 <h3>Warrant Record</h3>
@@ -5946,6 +6039,7 @@ function renderTicketWriter() {
   const criminalMode = state.mdtCatalogMode === "criminal";
   const defaultCourt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const selectedCharge = charges.find((charge) => String(charge.id) === String(state.mdtSelectedChargeId));
+  const selectedCitationIds = (state.mdtCitationChargeIds || [state.mdtSelectedChargeId]).filter(Boolean).map(String);
   if (!criminalMode) {
     return `
       <form id="ticketForm" class="citation-writer">
@@ -5981,10 +6075,18 @@ function renderTicketWriter() {
             </section>
             <section class="citation-form-section">
               <header><span>02</span><div><strong>Violation</strong><small>Select the applicable civil code and record where it occurred.</small></div></header>
-              <label>Citation code<select name="charge_id" required data-citation-writer-code>
-                <option value="">Select citation code</option>
-                ${renderChargeOptions(charges, state.mdtSelectedChargeId)}
-              </select></label>
+              <fieldset class="citation-multi-picker">
+                <legend>Citation codes <span data-citation-charge-count>${selectedCitationIds.length}</span> selected</legend>
+                <label class="citation-picker-search">Find a violation<input type="search" data-citation-picker-search placeholder="Search code, offense, category, or description..." /></label>
+                <div class="citation-picker-options">
+                  ${charges.map((charge) => `
+                    <label data-citation-picker-option data-citation-picker-text="${escapeHtml(`${charge.code} ${charge.title} ${charge.category} ${charge.description}`.toLowerCase())}">
+                      <input type="checkbox" name="charge_ids" value="${charge.id}" ${selectedCitationIds.includes(String(charge.id)) ? "checked" : ""} />
+                      <span><strong>${escapeHtml(charge.code)} — ${escapeHtml(charge.title)}</strong><small>${escapeHtml(charge.category)} / ${money(charge.fine_amount)} / ${Number(charge.points || 0)} pts</small></span>
+                    </label>
+                  `).join("")}
+                </div>
+              </fieldset>
               <label>Location of occurrence<input name="location" placeholder="Street, nearest cross street, postal, or landmark" required /></label>
               <div class="citation-code-actions">
                 <button class="secondary" type="button" data-mdt-tab="citations">Search code table</button>
@@ -6000,11 +6102,10 @@ function renderTicketWriter() {
           <aside class="citation-review-panel">
             <div class="citation-review-title"><span>Filing review</span><b>Draft</b></div>
             <dl>
-              <div><dt>Code</dt><dd data-citation-review-code>${escapeHtml(selectedCharge?.code || "Not selected")}</dd></div>
-              <div><dt>Offense</dt><dd data-citation-review-title>${escapeHtml(selectedCharge?.title || "Select a violation")}</dd></div>
-              <div><dt>Classification</dt><dd data-citation-review-severity>${escapeHtml(selectedCharge?.severity || "—")}</dd></div>
-              <div><dt>Fine</dt><dd data-citation-review-fine>${selectedCharge ? money(selectedCharge.fine_amount) : "—"}</dd></div>
-              <div><dt>Points</dt><dd data-citation-review-points>${selectedCharge ? Number(selectedCharge.points || 0) : "—"}</dd></div>
+              <div><dt>Violations</dt><dd data-citation-review-count>${selectedCitationIds.length || "None"}</dd></div>
+              <div><dt>Codes</dt><dd data-citation-review-code>${selectedCitationIds.map((id) => charges.find((charge) => String(charge.id) === id)?.code).filter(Boolean).join(", ") || "Not selected"}</dd></div>
+              <div><dt>Total fines</dt><dd data-citation-review-fine>${money(charges.filter((charge) => selectedCitationIds.includes(String(charge.id))).reduce((sum, charge) => sum + Number(charge.fine_amount || 0), 0))}</dd></div>
+              <div><dt>Total points</dt><dd data-citation-review-points>${charges.filter((charge) => selectedCitationIds.includes(String(charge.id))).reduce((sum, charge) => sum + Number(charge.points || 0), 0)}</dd></div>
             </dl>
             <div class="citation-review-rule"></div>
             <p>Submission creates the civil citation and routes it to the court queue. It does not create a warrant or booking.</p>
@@ -7049,6 +7150,31 @@ function bindMdtFinders() {
     bookingChargeSearch.addEventListener("input", updateBookingCharges);
     $$('input[name="charge_ids"]').forEach((input) => input.addEventListener("change", updateBookingCharges));
   }
+  const citationPickerSearch = $("[data-citation-picker-search]");
+  if (citationPickerSearch) {
+    const updateCitationPicker = () => {
+      const query = citationPickerSearch.value.trim().toLowerCase();
+      $$("[data-citation-picker-option]").forEach((option) => {
+        option.hidden = Boolean(query) && !String(option.dataset.citationPickerText || "").includes(query);
+      });
+      const selectedIds = $$('input[name="charge_ids"]:checked').map((input) => String(input.value));
+      state.mdtCitationChargeIds = selectedIds;
+      const selectedCharges = getMdtCatalog("citation").filter((charge) => selectedIds.includes(String(charge.id)));
+      const values = {
+        "[data-citation-charge-count]": String(selectedIds.length),
+        "[data-citation-review-count]": selectedIds.length ? String(selectedIds.length) : "None",
+        "[data-citation-review-code]": selectedCharges.map((charge) => charge.code).join(", ") || "Not selected",
+        "[data-citation-review-fine]": money(selectedCharges.reduce((sum, charge) => sum + Number(charge.fine_amount || 0), 0)),
+        "[data-citation-review-points]": String(selectedCharges.reduce((sum, charge) => sum + Number(charge.points || 0), 0)),
+      };
+      Object.entries(values).forEach(([selector, value]) => {
+        const target = $(selector);
+        if (target) target.textContent = value;
+      });
+    };
+    citationPickerSearch.addEventListener("input", updateCitationPicker);
+    $$('input[name="charge_ids"]').forEach((input) => input.addEventListener("change", updateCitationPicker));
+  }
   $$("[data-code-category]").forEach((button) => button.addEventListener("click", () => {
     if (button.dataset.codeKind === "criminal") {
       state.mdtCriminalCategory = button.dataset.codeCategory || "All";
@@ -7369,6 +7495,7 @@ function bindMdt() {
   $$("[data-select-citation-charge]").forEach((button) => button.addEventListener("click", () => {
     state.mdtCatalogMode = "citation";
     state.mdtSelectedChargeId = button.dataset.selectCitationCharge;
+    state.mdtCitationChargeIds = [button.dataset.selectCitationCharge];
     state.mdtTab = "ticket";
     state.mdtCatalogOpen = false;
     render();
@@ -7553,12 +7680,19 @@ function bindMdt() {
         render();
         return;
       } else {
+        const formData = new FormData(event.currentTarget);
+        payload.charge_ids = formData.getAll("charge_ids");
+        if (!payload.charge_ids.length) {
+          toast("Select at least one citation code");
+          return;
+        }
         const result = await api("/api/mdt/citations", { method: "POST", body: payload });
-        toast(`Citation issued - court ${result.court_date}`);
+        toast(`${result.citation_count} citation(s) issued - court ${result.court_date}`);
       }
       event.currentTarget.reset();
       state.mdtSelectedCiv = "";
       state.mdtSelectedChargeId = "";
+      state.mdtCitationChargeIds = [];
       await loadAppData("mdt");
       render();
     } catch (error) {
@@ -7936,7 +8070,36 @@ function renderDevWorkspace() {
     </main>
     ${state.devAccount ? renderDevAccountModal(state.devAccount) : ""}
     ${state.devAntiCheatUid ? renderAntiCheatModal(state.cache["dev-tools"]?.anti_cheat || {}, state.devAntiCheatUid) : ""}
+    ${state.devRestartConfirmOpen ? renderDevRestartModal() : ""}
   </section>`;
+}
+
+function renderDevServerControl(control) {
+  const ready = Boolean(control.rcon_configured && control.restart_available);
+  return `<section class="dev-server-control">
+    <div class="dev-server-control-status">
+      <span class="dev-server-control-mark ${ready ? "ready" : ""}"></span>
+      <div><span>GAME SERVER</span><strong>${ready ? "RCON control ready" : "RCON unavailable"}</strong><small>${ready ? "Restart commands are sent directly to the configured Arma server." : "Configure the server-side RCON connection to enable remote restart."}</small></div>
+    </div>
+    <button class="danger" type="button" data-open-server-restart ${ready ? "" : "disabled"}>Restart server</button>
+  </section>`;
+}
+
+function renderDevRestartModal() {
+  return `<div class="dev-profile-backdrop dev-restart-backdrop" data-close-server-restart>
+    <section class="dev-restart-modal" role="dialog" aria-modal="true" aria-labelledby="devRestartTitle">
+      <header>
+        <div><p class="eyebrow">RCON SERVER CONTROL</p><h2 id="devRestartTitle">Restart the live game server?</h2></div>
+        <button class="secondary" type="button" data-close-server-restart aria-label="Close restart confirmation">Close</button>
+      </header>
+      <div class="dev-restart-warning"><strong>Connected players will be disconnected.</strong><p>This sends the configured restart command immediately. The action and reason are permanently recorded in the developer audit log.</p></div>
+      <form id="devServerRestartForm" class="dev-restart-form">
+        <label>Operational reason<textarea name="reason" minlength="10" maxlength="500" required placeholder="Describe the maintenance, deployment, or incident requiring a restart."></textarea></label>
+        <label>Type RESTART to authorize<input name="confirmation" autocomplete="off" required pattern="RESTART" placeholder="RESTART" /></label>
+        <div class="dev-restart-actions"><button class="secondary" type="button" data-close-server-restart>Cancel</button><button class="danger" type="submit">Send restart through RCON</button></div>
+      </form>
+    </section>
+  </div>`;
 }
 
 function devMetrics(data, warnings) {
@@ -7964,7 +8127,7 @@ function renderDevTools() {
   const users = data.users || [], sanctions = data.sanctions || [], warnings = data.warnings || [], logs = data.audit_logs || [], codes = data.unlink_codes || [];
   const metrics = devMetrics(data, warnings);
   if (state.devTab === "anticheat") return renderDevAntiCheat(data.anti_cheat || {});
-  if (state.devTab === "dashboard") return `<div class="stack dev-overview">${metrics}<div class="dev-section-heading"><div><h2>Work queue</h2><p>Items requiring staff attention and recent review.</p></div></div><div class="dev-overview-queue"><section class="dev-card dev-queue-card enforcement"><div class="dev-card-header"><div><span>ENFORCEMENT</span><h2>Active cases</h2></div><button class="secondary" data-dev-go="enforcement">View cases</button></div>${sanctions.filter((x) => !x.revoked_at).slice(0,8).map(devSanctionRow).join("") || `<div class="dev-queue-clear"><i></i><div><strong>Queue clear</strong><span>No active enforcement cases require review.</span></div></div>`}</section><section class="dev-card dev-queue-card identity"><div class="dev-card-header"><div><span>IDENTITY</span><h2>Recent Arma links</h2></div><button class="secondary" data-dev-go="linking">View accounts</button></div>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card dev-activity-panel"><div class="dev-card-header"><div><span>STAFF RECORD</span><h2>Latest activity</h2></div><button class="secondary" data-dev-go="audit">View complete log</button></div>${devAudit(logs.slice(0,10))}</section></div>`;
+  if (state.devTab === "dashboard") return `<div class="stack dev-overview">${can("dev") ? renderDevServerControl(data.server_control || {}) : ""}${metrics}<div class="dev-section-heading"><div><h2>Work queue</h2><p>Items requiring staff attention and recent review.</p></div></div><div class="dev-overview-queue"><section class="dev-card dev-queue-card enforcement"><div class="dev-card-header"><div><span>ENFORCEMENT</span><h2>Active cases</h2></div><button class="secondary" data-dev-go="enforcement">View cases</button></div>${sanctions.filter((x) => !x.revoked_at).slice(0,8).map(devSanctionRow).join("") || `<div class="dev-queue-clear"><i></i><div><strong>Queue clear</strong><span>No active enforcement cases require review.</span></div></div>`}</section><section class="dev-card dev-queue-card identity"><div class="dev-card-header"><div><span>IDENTITY</span><h2>Recent Arma links</h2></div><button class="secondary" data-dev-go="linking">View accounts</button></div>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card dev-activity-panel"><div class="dev-card-header"><div><span>STAFF RECORD</span><h2>Latest activity</h2></div><button class="secondary" data-dev-go="audit">View complete log</button></div>${devAudit(logs.slice(0,10))}</section></div>`;
   if (state.devTab === "enforcement") return `<div class="dev-grid-enforcement"><section class="dev-card"><div class="row"><div><p class="eyebrow">Required incident documentation</p><h2>Enforcement Report</h2><p class="muted">A ban or timeout cannot be issued until this report is complete.</p></div><span class="pill red">required</span></div>
     <form id="devSanctionForm" class="dev-report-form">
       <label>Account<select name="user_id" required><option value="">Select account</option>${devUserOptions(users)}</select></label>
@@ -8201,6 +8364,15 @@ function devDetailList(items, mapper) {
 
 function bindDevWorkspace() {
   bindDevTools();
+  $("[data-open-server-restart]")?.addEventListener("click", () => {
+    state.devRestartConfirmOpen = true;
+    render();
+  });
+  $$("[data-close-server-restart]").forEach((button) => button.addEventListener("click", (event) => {
+    if (event.target !== event.currentTarget && event.currentTarget.classList.contains("dev-restart-backdrop")) return;
+    state.devRestartConfirmOpen = false;
+    render();
+  }));
   $$("[data-dev-tab], [data-dev-go]").forEach((button) => button.addEventListener("click", () => { state.devTab = button.dataset.devTab || button.dataset.devGo; render(); }));
   $$("[data-anticheat-player]").forEach((button) => button.addEventListener("click", () => {
     state.devAntiCheatUid = button.dataset.anticheatPlayer;
@@ -8434,6 +8606,23 @@ function bindFineSettlement() {
 }
 
 function bindDevTools() {
+  $("#devServerRestartForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const submit = form.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    submit.textContent = "Sending restart command...";
+    try {
+      await api("/api/dev-tools/server/restart", { method: "POST", body: Object.fromEntries(new FormData(form).entries()) });
+      state.devRestartConfirmOpen = false;
+      toast("RCON restart command accepted");
+      await refreshDevTools();
+    } catch (error) {
+      submit.disabled = false;
+      submit.textContent = "Send restart through RCON";
+      toast(error.message);
+    }
+  });
   $("#devBetaProgramForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -9195,7 +9384,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.90").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.95").catch(() => {}));
 }
 
 bootApp();

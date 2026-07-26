@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v90-admin-overview";
+const CACHE = "faircroft-rp-v95-rcon-restart";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.90",
-  "/static/roadmap.css?v=0.0.90",
-  "/static/app.js?v=0.0.90",
+  "/static/styles.css?v=0.0.95",
+  "/static/roadmap.css?v=0.0.95",
+  "/static/app.js?v=0.0.95",
   "/static/brand/faircroft-emblem.webp",
   "/static/brand/faircroft-light-sweep.mp4",
   "/static/brand/icon-192.png",
