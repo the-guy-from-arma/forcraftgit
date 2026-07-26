@@ -1,6 +1,23 @@
 {
-  "version": "0.0.79",
+  "version": "0.0.80",
   "entries": [
+    {
+      "date": "2026-07-26",
+      "version": "0.0.80",
+      "title": "Citation and Booking Separation",
+      "added": [
+        "Added mandatory suspect-transport confirmation before a criminal charge can be filed through Booking.",
+        "Added recorded transport-confirmation timestamps to booking packets."
+      ],
+      "changed": [
+        "Criminal charges selected from the ticket writer now continue into Booking instead of issuing a warrant.",
+        "The criminal handoff preserves the selected suspect, criminal code, arrest location, probable cause, and transport destination."
+      ],
+      "fixed": [
+        "Citation issuance can no longer accept criminal charge codes.",
+        "Traffic and civil tickets no longer trigger the criminal warrant workflow."
+      ]
+    },
     {
       "date": "2026-07-26",
       "version": "0.0.79",

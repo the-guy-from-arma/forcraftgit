@@ -1463,6 +1463,7 @@ def ensure_schema() -> None:
                 holding_cell TEXT NOT NULL DEFAULT '',
                 bond_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'intake',
+                transport_confirmed_at TEXT,
                 court_date TEXT,
                 release_notes TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
@@ -2071,6 +2072,7 @@ def ensure_migrations(db: Database) -> None:
             holding_cell TEXT NOT NULL DEFAULT '',
             bond_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
             status TEXT NOT NULL DEFAULT 'intake',
+            transport_confirmed_at TEXT,
             court_date TEXT,
             release_notes TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
@@ -2083,6 +2085,7 @@ def ensure_migrations(db: Database) -> None:
         )
         """
     )
+    db.execute("ALTER TABLE mdt_bookings ADD COLUMN IF NOT EXISTS transport_confirmed_at TEXT")
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS target_context TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS last_known TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE rp_contracts ADD COLUMN IF NOT EXISTS requirements TEXT NOT NULL DEFAULT ''")
@@ -6951,6 +6954,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not civ or not charge:
             self.error(404, "Civilian or charge not found")
             return
+        if charge.get("kind") != "citation":
+            self.error(400, "Criminal charges must be processed through Booking after transport confirmation")
+            return
         default_court_date = (utcnow() + dt.timedelta(days=3)).date().isoformat()
         court_date = str(payload.get("court_date") or "").strip() or default_court_date
         presiding_judge = pick_presiding_judge(db, int(civ["id"]))
@@ -7054,9 +7060,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         assert user is not None
         payload = self.read_json()
-        missing = require_fields(payload, "civ_id", "charge_id", "arrest_location", "probable_cause")
+        missing = require_fields(payload, "civ_id", "charge_id", "arrest_location", "probable_cause", "holding_cell")
         if missing:
             self.error(400, missing)
+            return
+        transport_confirmed = str(payload.get("transport_confirmed") or "").strip().lower() in ("1", "true", "yes", "on")
+        if not transport_confirmed:
+            self.error(400, "Confirm that the suspect was transported to Booking before filing the criminal charge")
             return
         civ = one(db, "SELECT * FROM users WHERE id = ?", (int(payload["civ_id"]),))
         charge = one(db, "SELECT * FROM charge_catalog WHERE id = ?", (int(payload["charge_id"]),))
@@ -7119,8 +7129,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             INSERT INTO mdt_bookings
             (booking_number, civ_id, officer_id, charge_id, court_case_id, charge_code, charge_title, category, severity,
              arrest_location, arrest_datetime, arresting_agency, incident_number, probable_cause, property_inventory,
-             medical_notes, booking_notes, holding_cell, bond_amount, status, court_date, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'intake', ?, ?, ?)
+             medical_notes, booking_notes, holding_cell, bond_amount, status, transport_confirmed_at, court_date, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'intake', ?, ?, ?, ?)
             RETURNING id, booking_number
             """,
             (
@@ -7143,6 +7153,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 str(payload.get("booking_notes") or "").strip()[:1600],
                 str(payload.get("holding_cell") or "").strip()[:80],
                 bond_amount,
+                ts,
                 court_date,
                 ts,
                 ts,

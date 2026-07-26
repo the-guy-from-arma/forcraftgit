@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.79";
+const OS_VERSION = "0.0.80";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -38,6 +38,7 @@ const state = {
   mdtCatalogMode: "citation",
   mdtSelectedCiv: "",
   mdtSelectedChargeId: "",
+  mdtBookingDraft: null,
   mdtReportAlertId: "",
   mdtNotice: null,
   mdtProtocolAssistantEnabled: localStorage.getItem("rp.mdt.protocolAssistant") !== "0",
@@ -5857,14 +5858,14 @@ function renderTicketWriter() {
   const criminalMode = state.mdtCatalogMode === "criminal";
   const defaultCourt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   return `
-    <form id="ticketForm" class="mdt-form ${criminalMode ? "charge-warrant-form" : ""}">
+    <form id="ticketForm" class="mdt-form ${criminalMode ? "criminal-booking-handoff-form" : ""}">
       <section class="ticket-command-strip">
         <button type="button" data-open-catalog data-catalog-kind="citation"><strong>Citation Book</strong><span>Traffic, vehicle, and parking codes</span></button>
-        <button type="button" data-catalog-mode="criminal"><strong>Criminal Charges</strong><span>Switch to charge/warrant filing</span></button>
+        <button type="button" data-catalog-mode="criminal"><strong>Criminal Charges</strong><span>Transport and continue to Booking</span></button>
         <button type="button" data-mdt-tab="citations"><strong>NYS Codes</strong><span>Browse citation cards</span></button>
       </section>
       <div class="mdt-section-head">
-        <div><p class="eyebrow">${criminalMode ? "Criminal process" : "Citation writer"}</p><h2>${criminalMode ? "Issue Criminal Charge / Warrant" : "Issue Citation"}</h2></div>
+        <div><p class="eyebrow">${criminalMode ? "Custodial criminal process" : "Citation writer"}</p><h2>${criminalMode ? "Transport to Booking" : "Issue Citation"}</h2></div>
         <button class="secondary" type="button" data-open-catalog>Browse codes</button>
       </div>
       <div class="segmented mdt-code-switch">
@@ -5885,14 +5886,14 @@ function renderTicketWriter() {
       </select></label>
       <label>Location<input name="location" placeholder="Street, postal, landmark" required /></label>
       ${criminalMode ? `
-        <label>Probable cause<textarea name="probable_cause" required placeholder="Facts supporting the criminal charge and warrant"></textarea></label>
-        <section class="mdt-subsection bypass-court-section">
-          <div class="row"><h4>Bypass court</h4><span class="pill amber">Optional</span></div>
-          <label class="check-row"><input type="checkbox" name="bypass_court" /> Bypass court docket and issue warrant only</label>
-          <p class="muted small">Unchecked creates a court case and an active warrant. Checked creates the active warrant only and links it directly to the selected account.</p>
+        <label>Probable cause<textarea name="probable_cause" required placeholder="Facts supporting custody, arrest, and the selected criminal charge"></textarea></label>
+        <label>Transport destination<input name="holding_cell" required placeholder="Booking desk, Cell A1, hospital watch" /></label>
+        <section class="mdt-subsection transport-confirm-section">
+          <div class="row"><h4>Transport confirmation</h4><span class="pill red">Required</span></div>
+          <label class="check-row"><input type="checkbox" name="transport_confirmed" value="true" required /> I confirm the suspect has been transported to the booking location.</label>
+          <p class="muted small">Criminal charges are processed through Booking after transport. This action does not issue a warrant.</p>
         </section>
-        <label>Operation plan<textarea name="operation_plan" placeholder="Optional service plan, unit notes, or transport instructions"></textarea></label>
-        <button class="danger" type="submit">Sign and issue warrant</button>
+        <button class="danger" type="submit">Confirm Transport & Continue to Booking</button>
       ` : `
         <label>Narrative<textarea name="narrative" required placeholder="Observed violation, location, vehicle/driver details, and officer notes"></textarea></label>
         <button class="primary" type="submit">Issue citation</button>
@@ -5967,6 +5968,7 @@ function renderBookingCard(booking, active = true) {
         <div><span>Court Case</span><strong>${booking.court_case_id ? `#${booking.court_case_id}` : "Pending"}</strong></div>
         <div><span>Court Date</span><strong>${escapeHtml(booking.court_date || "Pending")}</strong></div>
         <div><span>Holding</span><strong>${escapeHtml(booking.holding_cell || "Unassigned")}</strong></div>
+        <div><span>Transport</span><strong>${booking.transport_confirmed_at ? "Confirmed" : "Not confirmed"}</strong></div>
         <div><span>Bond</span><strong>${money(booking.bond_amount)}</strong></div>
       </div>
       <div class="booking-summary">
@@ -5998,6 +6000,7 @@ function renderBookingSystem() {
   const charges = getMdtCatalog("criminal");
   const civilians = getMdtCivilians();
   const defaultCourt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const draft = state.mdtBookingDraft || {};
   return `
     <div class="booking-workspace">
       <form id="bookingForm" class="mdt-form booking-intake-form">
@@ -6017,21 +6020,25 @@ function renderBookingSystem() {
         <div class="grid-2">
           <label>Arrestee<select name="civ_id" required data-booking-subject>
             <option value="">Select civilian record</option>
-            ${civilians.map((person) => `<option value="${person.id}"${selectedAttr(person.id, state.mdtSelectedCiv)}>${escapeHtml(person.name)} - CIV ${escapeHtml(person.civ_number || "pending")} - ${escapeHtml(person.license_status || "No license")}</option>`).join("")}
+            ${civilians.map((person) => `<option value="${person.id}"${selectedAttr(person.id, draft.civ_id || state.mdtSelectedCiv)}>${escapeHtml(person.name)} - CIV ${escapeHtml(person.civ_number || "pending")} - ${escapeHtml(person.license_status || "No license")}</option>`).join("")}
           </select></label>
           <label>Criminal code<select name="charge_id" required>
             <option value="">Select criminal charge</option>
-            ${renderChargeOptions(charges, state.mdtSelectedChargeId)}
+            ${renderChargeOptions(charges, draft.charge_id || state.mdtSelectedChargeId)}
           </select></label>
-          <label>Arrest location<input name="arrest_location" required placeholder="Street, postal, landmark, or station" /></label>
+          <label>Arrest location<input name="arrest_location" value="${escapeHtml(draft.arrest_location || "")}" required placeholder="Street, postal, landmark, or station" /></label>
           <label>Arrest date/time<input name="arrest_datetime" type="datetime-local" /></label>
           <label>Arresting agency<input name="arresting_agency" value="${escapeHtml(state.session?.user?.primary_agency || "")}" placeholder="Department / agency" /></label>
           <label>Incident / CAD number<input name="incident_number" placeholder="CAD call, report, or scene number" /></label>
-          <label>Holding cell / transport<input name="holding_cell" placeholder="Cell A1, transport van, hospital watch" /></label>
+          <label>Holding cell / transport destination<input name="holding_cell" value="${escapeHtml(draft.holding_cell || "")}" required placeholder="Cell A1, booking desk, hospital watch" /></label>
           <label>Bond amount<input name="bond_amount" type="number" min="0" step="1" value="0" /></label>
           <label>Court date<input name="court_date" type="date" value="${defaultCourt}" /></label>
         </div>
-        <label>Probable cause<textarea name="probable_cause" rows="5" required placeholder="Facts supporting custody, arrest, and the selected criminal code"></textarea></label>
+        <label>Probable cause<textarea name="probable_cause" rows="5" required placeholder="Facts supporting custody, arrest, and the selected criminal code">${escapeHtml(draft.probable_cause || "")}</textarea></label>
+        <section class="mdt-subsection transport-confirm-section">
+          <div class="row"><h4>Custody transport</h4><span class="pill red">Required</span></div>
+          <label class="check-row"><input type="checkbox" name="transport_confirmed" value="true" ${draft.transport_confirmed ? "checked" : ""} required /> Confirm the suspect has arrived at the booking location and is ready for intake.</label>
+        </section>
         <div class="grid-2">
           <label>Property inventory<textarea name="property_inventory" rows="4" placeholder="Cash, weapons, contraband, phone, keys, vehicle, evidence tags"></textarea></label>
           <label>Medical / safety notes<textarea name="medical_notes" rows="4" placeholder="Injuries, EMS check, intoxication, restraints, separation notes"></textarea></label>
@@ -6938,7 +6945,7 @@ function bindMdt() {
     state.mdtTrafficStopActive = false;
     state.mdtNavOpen = false;
     state.mdtSideOpen = false;
-    toast("Driver attached to criminal writer");
+    toast("Driver attached to criminal Booking handoff");
     render();
   }));
   $$("[data-traffic-stop-open-booking]").forEach((button) => button.addEventListener("click", () => {
@@ -7117,6 +7124,8 @@ function bindMdt() {
       const result = await api("/api/mdt/bookings", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
       toast(`Booking ${result.booking_number} filed - court ${result.court_date}`);
       state.mdtSelectedChargeId = "";
+      state.mdtSelectedCiv = "";
+      state.mdtBookingDraft = null;
       await loadAppData("mdt");
       render();
     } catch (error) {
@@ -7249,8 +7258,25 @@ function bindMdt() {
     try {
       const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
       if (state.mdtCatalogMode === "criminal") {
-        const result = await api("/api/mdt/charge-warrants", { method: "POST", body: payload });
-        toast(result.bypass_court ? `Warrant ${result.warrant_number} signed - court bypassed` : `Warrant ${result.warrant_number} signed - court ${result.court_date}`);
+        if (payload.transport_confirmed !== "true") {
+          toast("Confirm transport before continuing to Booking");
+          return;
+        }
+        state.mdtSelectedCiv = payload.civ_id;
+        state.mdtSelectedChargeId = payload.charge_id;
+        state.mdtBookingDraft = {
+          civ_id: payload.civ_id,
+          charge_id: payload.charge_id,
+          arrest_location: payload.location,
+          probable_cause: payload.probable_cause,
+          holding_cell: payload.holding_cell,
+          transport_confirmed: true,
+        };
+        state.mdtTab = "booking";
+        state.mdtCatalogOpen = false;
+        toast("Transport confirmed - complete the Booking intake");
+        render();
+        return;
       } else {
         const result = await api("/api/mdt/citations", { method: "POST", body: payload });
         toast(`Citation issued - court ${result.court_date}`);
@@ -8822,7 +8848,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.79").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.80").catch(() => {}));
 }
 
 bootApp();
