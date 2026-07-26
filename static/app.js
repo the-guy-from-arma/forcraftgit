@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.101";
+const OS_VERSION = "0.0.102";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -8231,6 +8231,7 @@ function devRecentLinks(links) {
 function renderDevAntiCheat(data) {
   const metrics = data.metrics || {};
   const activePlayers = data.active_players || [];
+  const liveSource = data.live_source || {};
   const query = state.devAntiCheatSearch.trim().toLowerCase();
   const players = (data.players || []).filter((player) =>
     !query || [player.player_name, player.uid, player.account_name, player.civ_number]
@@ -8252,8 +8253,9 @@ function renderDevAntiCheat(data) {
     <section class="anticheat-live-roster">
       <header>
         <div><p class="eyebrow">Live game server</p><h2>Active Players</h2><p>Players currently reporting an in-server heartbeat. This is separate from website login activity.</p></div>
-        <span class="anticheat-live-count"><i></i>${activePlayers.length} connected</span>
+        <div class="anticheat-live-status"><span class="pill ${liveSource.status === "live" ? "green" : "red"}">${escapeHtml((liveSource.source || "bridge").toUpperCase())} · ${escapeHtml(liveSource.status || "unknown")}</span><span class="anticheat-live-count"><i></i>${activePlayers.length} connected</span></div>
       </header>
+      ${liveSource.error ? `<div class="anticheat-source-error"><strong>Live query unavailable</strong><span>${escapeHtml(liveSource.error)}</span></div>` : ""}
       <div class="anticheat-live-grid">
         ${activePlayers.map((player) => {
           const flags = Number(player.teleport_flags || 0) + Number(player.aim_flags || 0);
@@ -9356,7 +9358,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.101").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.102").catch(() => {}));
 }
 
 bootApp();

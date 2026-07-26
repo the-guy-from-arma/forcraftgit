@@ -49,6 +49,9 @@ Useful environment variables:
 - `ARMA_RCON_PORT`: UDP RCON port, default `19999`.
 - `ARMA_RCON_PASSWORD`: RCON password; configure only in Railway variables.
 - `ARMA_RCON_TIMEOUT_SECONDS`: optional RCON response timeout, default `5`.
+- `ARMA_A2S_HOST`: optional live-query hostname; defaults to `ARMA_RCON_HOST`.
+- `ARMA_A2S_PORT`: public UDP Steam-query port, default `17777`.
+- `ARMA_A2S_TIMEOUT_SECONDS`: optional A2S response timeout, default `2.5`.
 The Reforger server's `rcon.permission` must be `admin` for ban and unban
 controls. If a command whitelist is configured, include the ban commands used
 by the staff tools. The RCON UDP port must also be reachable from the deployed

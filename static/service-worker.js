@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v101-live-presence-fix";
+const CACHE = "faircroft-rp-v102-a2s-roster";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.101",
-  "/static/roadmap.css?v=0.0.101",
-  "/static/app.js?v=0.0.101",
+  "/static/styles.css?v=0.0.102",
+  "/static/roadmap.css?v=0.0.102",
+  "/static/app.js?v=0.0.102",
   "/static/brand/faircroft-emblem.webp",
   "/static/brand/faircroft-light-sweep.mp4",
   "/static/brand/icon-192.png",

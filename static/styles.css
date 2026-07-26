@@ -12881,6 +12881,24 @@ textarea:focus {
   white-space: nowrap;
 }
 
+.anticheat-live-status {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.anticheat-source-error {
+  background: rgba(255, 83, 105, .08);
+  border-bottom: 1px solid rgba(255, 83, 105, .18);
+  color: #dcaab1;
+  display: flex;
+  font-size: .72rem;
+  gap: 10px;
+  padding: 9px 21px;
+}
+
+.anticheat-source-error strong { color: #ff7183; }
+
 .anticheat-live-count i,
 .anticheat-live-pulse,
 .anticheat-live-empty > i {

@@ -1,6 +1,22 @@
 {
-  "version": "0.0.101",
+  "version": "0.0.102",
   "entries": [
+    {
+      "date": "2026-07-26",
+      "version": "0.0.102",
+      "title": "Authoritative A2S Player Roster",
+      "added": [
+        "Added an independent Steam A2S live-player query for the Shadow Haven server.",
+        "Added visible roster-source health and connection errors to the Anti-Cheat board."
+      ],
+      "changed": [
+        "A2S player results take priority over optional anti-cheat heartbeat events.",
+        "Live names are matched back to anti-cheat intelligence and linked CAD accounts when available."
+      ],
+      "fixed": [
+        "The active-player count no longer depends exclusively on game-mod heartbeat events."
+      ]
+    },
     {
       "date": "2026-07-26",
       "version": "0.0.101",
