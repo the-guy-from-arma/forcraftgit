@@ -47,6 +47,18 @@ SHADOWHAVEN_BANK_FILE = os.environ.get(
     "profile/profile/.db/FCRPMUSSALO/Banks/00bb0001-1e42-6138-7e90-c04752d4fab6.json",
 ).strip()
 SHADOWHAVEN_BANK_SYNC_SECONDS = max(5, int(os.environ.get("SHADOWHAVEN_BANK_SYNC_SECONDS", "15")))
+SHADOWHAVEN_ANTICHEAT_DATABASE_FILE = os.environ.get(
+    "SHADOWHAVEN_ANTICHEAT_DATABASE_FILE",
+    "profile/profile/TB/tb_player_database.json",
+).strip()
+SHADOWHAVEN_ANTICHEAT_ALT_FILE = os.environ.get(
+    "SHADOWHAVEN_ANTICHEAT_ALT_FILE",
+    "profile/profile/TB/tb_alt_accounts.json",
+).strip()
+SHADOWHAVEN_ANTICHEAT_SYNC_SECONDS = max(
+    15, int(os.environ.get("SHADOWHAVEN_ANTICHEAT_SYNC_SECONDS", "30"))
+)
+ANTICHEAT_LIVE_TTL_SECONDS = max(90, int(os.environ.get("ANTICHEAT_LIVE_TTL_SECONDS", "150")))
 ARMA_RCON_HOST = os.environ.get("ARMA_RCON_HOST", os.environ.get("RCON_HOST", "")).strip()
 ARMA_RCON_PORT = int(os.environ.get("ARMA_RCON_PORT", os.environ.get("RCON_PORT", "19999")))
 ARMA_RCON_PASSWORD = os.environ.get("ARMA_RCON_PASSWORD", os.environ.get("RCON_PASSWORD", ""))
@@ -398,6 +410,160 @@ def shadowhaven_bank_sync_worker() -> None:
         time.sleep(SHADOWHAVEN_BANK_SYNC_SECONDS)
 
 
+def sync_shadowhaven_anticheat_once() -> tuple[int, int]:
+    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+        return 0, 0
+    transport = paramiko.Transport((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_PORT))
+    try:
+        transport.connect(username=SHADOWHAVEN_SFTP_USERNAME, password=SHADOWHAVEN_SFTP_PASSWORD)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+        try:
+            with sftp.open(SHADOWHAVEN_ANTICHEAT_DATABASE_FILE, "r") as remote_file:
+                player_payload = json.loads(remote_file.read().decode("utf-8-sig"))
+            with sftp.open(SHADOWHAVEN_ANTICHEAT_ALT_FILE, "r") as remote_file:
+                alt_payload = json.loads(remote_file.read().decode("utf-8-sig"))
+        finally:
+            sftp.close()
+    finally:
+        transport.close()
+
+    players = player_payload.get("players", []) if isinstance(player_payload, dict) else []
+    groups = alt_payload.get("groups", []) if isinstance(alt_payload, dict) else []
+    if not isinstance(players, list) or not isinstance(groups, list):
+        raise RuntimeError("Thunder Buddies Anti-Cheat JSON has an invalid structure")
+
+    synced_at = now_iso()
+    accepted_players = 0
+    accepted_groups = 0
+    with conn() as db:
+        for player in players:
+            if not isinstance(player, dict):
+                continue
+            uid = str(player.get("playerUID") or "").strip()[:160]
+            if not uid:
+                continue
+            db.execute(
+                """
+                INSERT INTO anticheat_players
+                (uid, player_name, teleport_flags, aim_flags, ticket_count, raw_payload,
+                 source_file, first_synced_at, last_synced_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (uid) DO UPDATE SET
+                    player_name = EXCLUDED.player_name,
+                    teleport_flags = EXCLUDED.teleport_flags,
+                    aim_flags = EXCLUDED.aim_flags,
+                    ticket_count = EXCLUDED.ticket_count,
+                    raw_payload = EXCLUDED.raw_payload,
+                    source_file = EXCLUDED.source_file,
+                    last_synced_at = EXCLUDED.last_synced_at
+                """,
+                (
+                    uid,
+                    str(player.get("playerName") or "Unknown")[:120],
+                    int(player.get("teleportFlags") or 0),
+                    int(player.get("aimFlags") or 0),
+                    int(player.get("ticketCount") or 0),
+                    json.dumps(player, separators=(",", ":"), default=str)[:20000],
+                    SHADOWHAVEN_ANTICHEAT_DATABASE_FILE[:255],
+                    synced_at,
+                    synced_at,
+                ),
+            )
+            for event in player.get("events", []) if isinstance(player.get("events"), list) else []:
+                if not isinstance(event, dict):
+                    continue
+                event_type = str(event.get("type") or "unknown")[:80]
+                event_time = str(event.get("time") or "")[:100]
+                details = str(event.get("details") or "")[:4000]
+                fingerprint = hashlib.sha256(
+                    f"{uid}\x1f{event_type}\x1f{event_time}\x1f{details}".encode("utf-8")
+                ).hexdigest()
+                db.execute(
+                    """
+                    INSERT INTO anticheat_events
+                    (event_fingerprint, player_uid, event_type, event_time, details,
+                     source_file, first_synced_at, last_synced_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (event_fingerprint) DO UPDATE SET last_synced_at = EXCLUDED.last_synced_at
+                    """,
+                    (fingerprint, uid, event_type, event_time, details,
+                     SHADOWHAVEN_ANTICHEAT_DATABASE_FILE[:255], synced_at, synced_at),
+                )
+            accepted_players += 1
+
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            group_key = str(group.get("groupKey") or "").strip()[:180]
+            if not group_key:
+                continue
+            db.execute(
+                """
+                INSERT INTO anticheat_alt_groups
+                (group_key, note, first_seen, last_seen, raw_payload, last_synced_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT (group_key) DO UPDATE SET
+                    note = EXCLUDED.note, first_seen = EXCLUDED.first_seen,
+                    last_seen = EXCLUDED.last_seen, raw_payload = EXCLUDED.raw_payload,
+                    last_synced_at = EXCLUDED.last_synced_at
+                """,
+                (
+                    group_key, str(group.get("note") or "")[:2000],
+                    str(group.get("firstSeen") or "")[:100], str(group.get("lastSeen") or "")[:100],
+                    json.dumps(group, separators=(",", ":"), default=str)[:20000], synced_at,
+                ),
+            )
+            uids = group.get("uids") if isinstance(group.get("uids"), list) else []
+            names = group.get("names") if isinstance(group.get("names"), list) else []
+            for index, raw_uid in enumerate(uids):
+                member_uid = str(raw_uid or "").strip()[:160]
+                if not member_uid:
+                    continue
+                observed_name = str(names[index] if index < len(names) else "")[:120]
+                db.execute(
+                    """
+                    INSERT INTO anticheat_alt_members (group_key, uid, observed_name, last_synced_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT (group_key, uid) DO UPDATE SET
+                        observed_name = EXCLUDED.observed_name,
+                        last_synced_at = EXCLUDED.last_synced_at
+                    """,
+                    (group_key, member_uid, observed_name, synced_at),
+                )
+            accepted_groups += 1
+
+        for source_key, source_path, records in (
+            ("players", SHADOWHAVEN_ANTICHEAT_DATABASE_FILE, accepted_players),
+            ("alt_accounts", SHADOWHAVEN_ANTICHEAT_ALT_FILE, accepted_groups),
+        ):
+            db.execute(
+                """
+                INSERT INTO anticheat_sync_status
+                (source_key, source_path, status, records, last_success_at, last_error, updated_at)
+                VALUES (?, ?, 'synced', ?, ?, '', ?)
+                ON CONFLICT (source_key) DO UPDATE SET
+                    source_path = EXCLUDED.source_path, status = EXCLUDED.status,
+                    records = EXCLUDED.records, last_success_at = EXCLUDED.last_success_at,
+                    last_error = '', updated_at = EXCLUDED.updated_at
+                """,
+                (source_key, source_path[:255], records, synced_at, synced_at),
+            )
+    return accepted_players, accepted_groups
+
+
+def shadowhaven_anticheat_sync_worker() -> None:
+    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+        print("Shadowhaven SFTP anti-cheat sync disabled: credentials are not configured")
+        return
+    while True:
+        try:
+            players, groups = sync_shadowhaven_anticheat_once()
+            print(f"Shadowhaven SFTP anti-cheat sync updated {players} player(s), {groups} alt group(s)")
+        except Exception as exc:
+            print(f"Shadowhaven SFTP anti-cheat sync failed: {type(exc).__name__}: {exc}")
+        time.sleep(SHADOWHAVEN_ANTICHEAT_SYNC_SECONDS)
+
+
 def roles_for(user: DbRow) -> list[str]:
     raw = user.get("roles", "[]")
     try:
@@ -730,7 +896,7 @@ APP_VISIBILITY_OPTIONS = (
     ("fine-settlement", "Fine Settlement"),
     ("beta-tasks", "Beta Tasks"),
 )
-PROTECTED_APP_IDS = frozenset(("profile", "dev-tools", "system", "restriction"))
+PROTECTED_APP_IDS = frozenset(("profile", "jobs", "dev-tools", "system", "restriction"))
 
 
 def posting_command_roles(posting: dict[str, Any]) -> tuple[str, ...]:
@@ -991,6 +1157,67 @@ def ensure_schema() -> None:
                 source_saved_at TEXT,
                 raw_payload TEXT NOT NULL DEFAULT '{}',
                 synced_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS anticheat_players (
+                uid TEXT PRIMARY KEY,
+                player_name TEXT NOT NULL DEFAULT '',
+                teleport_flags INTEGER NOT NULL DEFAULT 0,
+                aim_flags INTEGER NOT NULL DEFAULT 0,
+                ticket_count INTEGER NOT NULL DEFAULT 0,
+                raw_payload TEXT NOT NULL DEFAULT '{}',
+                source_file TEXT NOT NULL DEFAULT '',
+                first_synced_at TEXT NOT NULL,
+                last_synced_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS anticheat_events (
+                event_fingerprint TEXT PRIMARY KEY,
+                player_uid TEXT NOT NULL,
+                event_type TEXT NOT NULL DEFAULT '',
+                event_time TEXT NOT NULL DEFAULT '',
+                details TEXT NOT NULL DEFAULT '',
+                source_file TEXT NOT NULL DEFAULT '',
+                first_synced_at TEXT NOT NULL,
+                last_synced_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS anticheat_alt_groups (
+                group_key TEXT PRIMARY KEY,
+                note TEXT NOT NULL DEFAULT '',
+                first_seen TEXT NOT NULL DEFAULT '',
+                last_seen TEXT NOT NULL DEFAULT '',
+                raw_payload TEXT NOT NULL DEFAULT '{}',
+                last_synced_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS anticheat_alt_members (
+                group_key TEXT NOT NULL,
+                uid TEXT NOT NULL,
+                observed_name TEXT NOT NULL DEFAULT '',
+                last_synced_at TEXT NOT NULL,
+                PRIMARY KEY (group_key, uid)
+            );
+
+            CREATE TABLE IF NOT EXISTS anticheat_live_sessions (
+                server_id TEXT NOT NULL,
+                player_uid TEXT NOT NULL,
+                player_name TEXT NOT NULL DEFAULT '',
+                linked_user_id INTEGER,
+                joined_at TEXT NOT NULL,
+                last_heartbeat_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'online',
+                PRIMARY KEY (server_id, player_uid)
+            );
+
+            CREATE TABLE IF NOT EXISTS anticheat_sync_status (
+                source_key TEXT PRIMARY KEY,
+                source_path TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'pending',
+                records INTEGER NOT NULL DEFAULT 0,
+                last_success_at TEXT,
+                last_error TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS developer_unlink_codes (
@@ -2005,6 +2232,9 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS arma_link_codes_code_idx ON arma_link_codes (code)")
     db.execute("CREATE INDEX IF NOT EXISTS arma_link_codes_status_idx ON arma_link_codes (status)")
     db.execute("CREATE INDEX IF NOT EXISTS arma_activity_logs_user_idx ON arma_activity_logs (user_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS anticheat_events_player_idx ON anticheat_events (player_uid, event_time DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS anticheat_alt_members_uid_idx ON anticheat_alt_members (uid)")
+    db.execute("CREATE INDEX IF NOT EXISTS anticheat_live_sessions_heartbeat_idx ON anticheat_live_sessions (last_heartbeat_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS account_sanctions_user_idx ON account_sanctions (user_id, created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS account_warnings_user_idx ON account_internal_warnings (user_id, created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS admin_audit_logs_created_idx ON admin_audit_logs (created_at DESC)")
@@ -2968,7 +3198,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps.append({"id": "fire-settings", "label": "Fire Settings", "icon": "settings", "enabled": True, "hidden": False})
     if has_any(user, "owner"):
         apps.append({"id": "system", "label": "System", "icon": "settings", "enabled": True, "hidden": False})
-    if has_any(user, "owner", "admin", INDEED_ADMIN_ROLE, "judge"):
+    if has_any(user, "owner", "admin", "dev", INDEED_ADMIN_ROLE, "judge"):
         apps.append({"id": "indeed-admin", "label": "Indeed Admin", "icon": "briefcase", "enabled": True, "hidden": False})
     if has_any(user, "owner", "admin"):
         apps.append({"id": "admin", "label": "Admin", "icon": "settings", "enabled": True, "hidden": False})
@@ -4611,6 +4841,42 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 add_transaction(db, user_id, f"arma_{action or 'money'}", amount, reason or source_system)
             if link:
                 db.execute("UPDATE arma_account_links SET last_seen_at = ?, last_sync_at = ? WHERE id = ?", (created_at, received_at, link["id"]))
+            if action in ("anticheat.player_joined", "anticheat.player_heartbeat"):
+                player_uid = str(event.get("Uid") or event.get("IdentityId") or "").strip()[:160]
+                if player_uid:
+                    server_id = str(event.get("ServerId") or data.get("ServerId") or "default")[:80]
+                    player_name = str(event.get("PlayerName") or "")[:120]
+                    if action == "anticheat.player_joined":
+                        db.execute(
+                            """
+                            INSERT INTO anticheat_live_sessions
+                            (server_id, player_uid, player_name, linked_user_id, joined_at,
+                             last_heartbeat_at, status)
+                            VALUES (?, ?, ?, ?, ?, ?, 'online')
+                            ON CONFLICT (server_id, player_uid) DO UPDATE SET
+                                player_name = EXCLUDED.player_name,
+                                linked_user_id = EXCLUDED.linked_user_id,
+                                joined_at = EXCLUDED.joined_at,
+                                last_heartbeat_at = EXCLUDED.last_heartbeat_at,
+                                status = 'online'
+                            """,
+                            (server_id, player_uid, player_name, user_id, created_at, received_at),
+                        )
+                    else:
+                        db.execute(
+                            """
+                            INSERT INTO anticheat_live_sessions
+                            (server_id, player_uid, player_name, linked_user_id, joined_at,
+                             last_heartbeat_at, status)
+                            VALUES (?, ?, ?, ?, ?, ?, 'online')
+                            ON CONFLICT (server_id, player_uid) DO UPDATE SET
+                                player_name = EXCLUDED.player_name,
+                                linked_user_id = EXCLUDED.linked_user_id,
+                                last_heartbeat_at = EXCLUDED.last_heartbeat_at,
+                                status = 'online'
+                            """,
+                            (server_id, player_uid, player_name, user_id, created_at, received_at),
+                        )
             accepted.append(event_id)
         self.send_json(200, {"ok": True, "accepted_event_ids": accepted, "skipped_event_ids": skipped})
 
@@ -8340,7 +8606,79 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             ORDER BY r.created_at DESC LIMIT 200
             """,
         )
-        beta_members = sum(1 for row in users if "beta" in roles_for(row))
+        beta_member_rows = all_rows(
+            db,
+            """
+            SELECT u.id, u.name, u.civ_number, u.email, u.verified, u.roles,
+                   (SELECT MAX(r.responded_at) FROM beta_program_responses r
+                    WHERE r.user_id = u.id AND r.response = 'accepted') AS beta_joined_at,
+                   CASE WHEN link.id IS NULL THEN 0 ELSE 1 END AS arma_linked,
+                   link.identity_id AS linked_arma_id
+            FROM users u
+            LEFT JOIN arma_account_links link ON link.user_id = u.id
+            WHERE u.roles LIKE ?
+            ORDER BY COALESCE(
+                (SELECT MAX(r.responded_at) FROM beta_program_responses r
+                 WHERE r.user_id = u.id AND r.response = 'accepted'),
+                u.created_at
+            ) DESC, u.name
+            """,
+            ("%beta%",),
+        )
+        live_cutoff = (utcnow() - dt.timedelta(seconds=ANTICHEAT_LIVE_TTL_SECONDS)).isoformat()
+        anticheat_players = all_rows(
+            db,
+            """
+            SELECT p.*, link.user_id AS linked_user_id, account.name AS account_name,
+                   account.civ_number, live.server_id, live.joined_at,
+                   live.last_heartbeat_at,
+                   CASE WHEN live.last_heartbeat_at >= ? THEN 1 ELSE 0 END AS online,
+                   COALESCE(alts.alt_group_count, 0) AS alt_group_count
+            FROM anticheat_players p
+            LEFT JOIN LATERAL (
+                SELECT l.user_id FROM arma_account_links l
+                WHERE l.identity_id = p.uid OR l.uid = p.uid
+                ORDER BY l.linked_at DESC LIMIT 1
+            ) link ON TRUE
+            LEFT JOIN users account ON account.id = link.user_id
+            LEFT JOIN LATERAL (
+                SELECT s.server_id, s.joined_at, s.last_heartbeat_at
+                FROM anticheat_live_sessions s
+                WHERE s.player_uid = p.uid
+                ORDER BY s.last_heartbeat_at DESC LIMIT 1
+            ) live ON TRUE
+            LEFT JOIN (
+                SELECT uid, COUNT(*) AS alt_group_count
+                FROM anticheat_alt_members GROUP BY uid
+            ) alts ON alts.uid = p.uid
+            ORDER BY online DESC, p.ticket_count DESC, p.last_synced_at DESC
+            LIMIT 1000
+            """,
+            (live_cutoff,),
+        )
+        anticheat_events = all_rows(
+            db,
+            """
+            SELECT e.*, p.player_name
+            FROM anticheat_events e
+            LEFT JOIN anticheat_players p ON p.uid = e.player_uid
+            ORDER BY e.event_time DESC, e.first_synced_at DESC LIMIT 500
+            """,
+        )
+        anticheat_alt_groups = all_rows(
+            db, "SELECT * FROM anticheat_alt_groups ORDER BY last_seen DESC, group_key LIMIT 300"
+        )
+        anticheat_alt_members = all_rows(
+            db, "SELECT * FROM anticheat_alt_members ORDER BY group_key, observed_name LIMIT 2000"
+        )
+        anticheat_sync_status = all_rows(
+            db, "SELECT * FROM anticheat_sync_status ORDER BY source_key"
+        )
+        anticheat_online = sum(1 for row in anticheat_players if row.get("online"))
+        anticheat_flagged = sum(
+            1 for row in anticheat_players
+            if int(row.get("teleport_flags") or 0) + int(row.get("aim_flags") or 0) > 0
+        )
         self.send_json(
             200,
             {
@@ -8363,9 +8701,25 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "recruiting_enabled": system_settings["beta_recruiting_enabled"],
                     "recruiting_message": system_settings["beta_recruiting_message"],
                     "campaign_id": system_settings["beta_campaign_id"],
-                    "members": beta_members,
+                    "members": len(beta_member_rows),
+                    "member_roster": [dict(row) for row in beta_member_rows],
                     "tasks": [dict(row) for row in beta_tasks],
                     "reports": [dict(row) for row in beta_reports],
+                },
+                "anti_cheat": {
+                    "players": [dict(row) for row in anticheat_players],
+                    "events": [dict(row) for row in anticheat_events],
+                    "alt_groups": [dict(row) for row in anticheat_alt_groups],
+                    "alt_members": [dict(row) for row in anticheat_alt_members],
+                    "sync_status": [dict(row) for row in anticheat_sync_status],
+                    "live_ttl_seconds": ANTICHEAT_LIVE_TTL_SECONDS,
+                    "metrics": {
+                        "players": len(anticheat_players),
+                        "online": anticheat_online,
+                        "flagged": anticheat_flagged,
+                        "alt_groups": len(anticheat_alt_groups),
+                        "events": len(anticheat_events),
+                    },
                 },
                 "app_visibility": {
                     "apps": [
@@ -9601,6 +9955,11 @@ def main() -> None:
     if not schema_ready:
         raise RuntimeError("Database remained unavailable after startup retries")
     threading.Thread(target=shadowhaven_bank_sync_worker, name="shadowhaven-bank-sync", daemon=True).start()
+    threading.Thread(
+        target=shadowhaven_anticheat_sync_worker,
+        name="shadowhaven-anticheat-sync",
+        daemon=True,
+    ).start()
     port = int(os.environ.get("PORT", "8080"))
     host = os.environ.get("HOST", "0.0.0.0")
     server = ThreadingHTTPServer((host, port), RoleplayHandler)

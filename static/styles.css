@@ -1970,6 +1970,69 @@ textarea:focus {
   border-color: rgba(183, 140, 255, 0.3);
 }
 
+.beta-team-roster {
+  border-color: rgba(183, 140, 255, 0.24);
+}
+
+.beta-roster-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.beta-roster-member {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "avatar identity status"
+    "avatar joined joined";
+  align-items: center;
+  gap: 7px 12px;
+  border: 1px solid rgba(183, 140, 255, 0.15);
+  border-radius: 9px;
+  padding: 11px;
+  background: rgba(183, 140, 255, 0.045);
+}
+
+.beta-roster-avatar {
+  grid-area: avatar;
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(183, 140, 255, 0.34);
+  border-radius: 12px;
+  color: #e9ddff;
+  background: linear-gradient(145deg, rgba(183, 140, 255, 0.24), rgba(49, 86, 216, 0.14));
+  font-weight: 950;
+}
+
+.beta-roster-identity {
+  grid-area: identity;
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.beta-roster-identity small,
+.beta-roster-joined {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.beta-roster-status {
+  grid-area: status;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.beta-roster-joined {
+  grid-area: joined;
+  font-size: 11px;
+}
+
 .beta-dev-metrics {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   margin: 14px 0;
@@ -1984,6 +2047,14 @@ textarea:focus {
   .bar-question { padding: 10px 8px; }
   .beta-hero { align-items: flex-start; }
   .beta-dev-metrics { grid-template-columns: 1fr; }
+  .beta-roster-member {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      "avatar identity"
+      "status status"
+      "joined joined";
+  }
+  .beta-roster-status { justify-content: flex-start; }
 }
 
 .department-posting {
@@ -10916,4 +10987,55 @@ textarea:focus {
   .roadmap-edit {
     justify-content: center;
   }
+}
+.anticheat-console {
+  --ac-cyan: #35d6e7;
+  --ac-red: #ff5964;
+}
+
+.anticheat-command {
+  align-items: flex-end;
+  background: linear-gradient(120deg, rgba(8, 21, 31, .98), rgba(14, 34, 45, .94));
+  border: 1px solid rgba(53, 214, 231, .22);
+  border-radius: 18px;
+  display: flex;
+  justify-content: space-between;
+  padding: 24px;
+}
+
+.anticheat-command h2 { font-size: clamp(1.6rem, 3vw, 2.5rem); margin: 4px 0 8px; }
+.anticheat-command p { max-width: 720px; }
+.anticheat-sync { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.anticheat-directory-head { align-items: center; display: flex; gap: 20px; justify-content: space-between; margin-bottom: 16px; }
+.anticheat-directory-head input { max-width: 420px; width: 100%; }
+.anticheat-player-list { display: grid; gap: 7px; }
+
+.anticheat-player-row {
+  align-items: center;
+  background: rgba(255,255,255,.025);
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 12px;
+  color: inherit;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 12px minmax(220px, 1.5fr) minmax(180px, 1fr) minmax(130px, .6fr) auto;
+  padding: 14px 16px;
+  text-align: left;
+  width: 100%;
+}
+
+.anticheat-player-row:hover { background: rgba(53,214,231,.065); border-color: rgba(53,214,231,.3); transform: translateY(-1px); }
+.anticheat-player-row > div { display: grid; gap: 3px; }
+.anticheat-player-row small { color: var(--muted); font-size: .76rem; overflow-wrap: anywhere; }
+.anticheat-player-row > div:last-child { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.anticheat-presence { background: #68727a; border-radius: 50%; height: 9px; width: 9px; }
+.anticheat-presence.online { background: #43e89a; box-shadow: 0 0 0 5px rgba(67,232,154,.11), 0 0 16px rgba(67,232,154,.7); }
+.anticheat-profile .dev-profile-header { border-bottom-color: rgba(53,214,231,.25); }
+
+@media (max-width: 900px) {
+  .anticheat-command, .anticheat-directory-head { align-items: stretch; flex-direction: column; }
+  .anticheat-sync { justify-content: flex-start; }
+  .anticheat-player-row { grid-template-columns: 12px 1fr auto; }
+  .anticheat-player-row > div:nth-of-type(2),
+  .anticheat-player-row > div:nth-of-type(3) { display: none; }
 }

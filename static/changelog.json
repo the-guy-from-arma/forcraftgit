@@ -1,6 +1,44 @@
 {
-  "version": "0.0.76",
+  "version": "0.0.79",
   "entries": [
+    {
+      "date": "2026-07-26",
+      "version": "0.0.79",
+      "title": "Indeed Icon Restoration",
+      "added": [],
+      "changed": [
+        "The public Indeed Jobs icon is now protected from global application-visibility controls.",
+        "Developer accounts now retain access to the Indeed Admin recruitment desk."
+      ],
+      "fixed": [
+        "Restored missing Indeed job and recruitment icons for eligible accounts."
+      ]
+    },
+    {
+      "date": "2026-07-26",
+      "version": "0.0.78",
+      "title": "Anti-Cheat Intelligence",
+      "added": [
+        "Added a developer-only Anti-Cheat workspace with live player presence, detection totals, event evidence, known alt-account groups, and CAD identity matching.",
+        "Added automated Shadowhaven synchronization for the existing Thunder Buddies player and alt-account JSON databases."
+      ],
+      "changed": [
+        "Existing anti-cheat player sessions now report join and heartbeat presence through the established authenticated Arma event bridge."
+      ],
+      "fixed": []
+    },
+    {
+      "date": "2026-07-26",
+      "version": "0.0.77",
+      "title": "Beta Team Roster",
+      "added": [
+        "Added a Beta Testing Team roster to Dev Tools with tester identity, CIV number, account verification, Arma-link status, and latest enrollment time."
+      ],
+      "changed": [],
+      "fixed": [
+        "Developers can now identify every account currently holding the Beta Tester role."
+      ]
+    },
     {
       "date": "2026-07-25",
       "version": "0.0.76",

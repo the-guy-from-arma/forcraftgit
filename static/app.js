@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.76";
+const OS_VERSION = "0.0.79";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -27,6 +27,8 @@ const state = {
   fineSettlementPrompt: "",
   devTab: "dashboard",
   devAccount: null,
+  devAntiCheatUid: null,
+  devAntiCheatSearch: "",
   dmvTab: "overview",
   jobsTab: "state_police",
   mdtTab: "search",
@@ -7558,6 +7560,7 @@ function renderDevWorkspace() {
     enforcement: ["Enforcement Cases", "File, review, and revoke player sanctions"],
     warnings: ["Internal Notes", "Staff-only account history and observations"],
     linking: ["Account Linking", "Linked identities, recent claims, and unlink authorization"],
+    anticheat: ["Anti-Cheat Intelligence", "Live presence, detection history, and linked identity analysis"],
     audit: ["Activity Log", "Chronological record of staff actions"],
     settings: ["App Visibility", "Control which application icons appear for users"],
   }[state.devTab] || ["Staff Operations", "Faircroft administrative console"];
@@ -7565,7 +7568,7 @@ function renderDevWorkspace() {
     <aside class="dev-sidebar">
       <div class="dev-brand"><img class="dev-emblem" src="/static/brand/faircroft-emblem.webp" alt="" /><div><strong>Faircroft RP</strong><small>Staff Operations</small></div></div>
       <p class="dev-nav-label">Workspace</p>
-      <nav>${[["dashboard","Overview"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["audit","Activity Log"],["settings","Settings"]].map(([id,label]) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><span>${label}</span></button>`).join("")}</nav>
+      <nav>${[["dashboard","Overview"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["audit","Activity Log"],["settings","Settings"]].map(([id,label]) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><span>${label}</span></button>`).join("")}</nav>
       <div class="dev-sidebar-footer"><span class="dev-access-dot"></span><div><strong>Authorized Staff</strong><small>${escapeHtml(state.session?.user?.name || "Staff member")}</small></div></div>
     </aside>
     <main class="dev-main">
@@ -7573,6 +7576,7 @@ function renderDevWorkspace() {
       <div class="dev-content">${renderDevTools()}</div>
     </main>
     ${state.devAccount ? renderDevAccountModal(state.devAccount) : ""}
+    ${state.devAntiCheatUid ? renderAntiCheatModal(state.cache["dev-tools"]?.anti_cheat || {}, state.devAntiCheatUid) : ""}
   </section>`;
 }
 
@@ -7600,6 +7604,7 @@ function renderDevTools() {
   const data = state.cache["dev-tools"] || {};
   const users = data.users || [], sanctions = data.sanctions || [], warnings = data.warnings || [], logs = data.audit_logs || [], codes = data.unlink_codes || [];
   const metrics = devMetrics(data, warnings);
+  if (state.devTab === "anticheat") return renderDevAntiCheat(data.anti_cheat || {});
   if (state.devTab === "dashboard") return `<div class="stack">${metrics}<div class="dev-section-heading"><div><h2>Work queue</h2><p>Items requiring staff attention and recent review.</p></div></div><div class="dev-grid-2"><section class="dev-card"><div class="dev-card-header"><div><span>ENFORCEMENT</span><h2>Active cases</h2></div><button class="secondary" data-dev-go="enforcement">View cases</button></div>${sanctions.filter((x) => !x.revoked_at).slice(0,8).map(devSanctionRow).join("") || `<div class="empty">No active enforcement cases</div>`}</section><section class="dev-card"><div class="dev-card-header"><div><span>IDENTITY</span><h2>Recent Arma links</h2></div><button class="secondary" data-dev-go="linking">View accounts</button></div>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card"><div class="dev-card-header"><div><span>STAFF RECORD</span><h2>Latest activity</h2></div><button class="secondary" data-dev-go="audit">View complete log</button></div>${devAudit(logs.slice(0,10))}</section></div>`;
   if (state.devTab === "enforcement") return `<div class="dev-grid-enforcement"><section class="dev-card"><div class="row"><div><p class="eyebrow">Required incident documentation</p><h2>Enforcement Report</h2><p class="muted">A ban or timeout cannot be issued until this report is complete.</p></div><span class="pill red">required</span></div>
     <form id="devSanctionForm" class="dev-report-form">
@@ -7624,7 +7629,7 @@ function renderDevTools() {
   if (state.devTab === "linking") return `<div class="stack">${metrics}<div class="dev-grid-2"><section class="dev-card"><p class="eyebrow">Secure unlink authorization</p><h2>One-time Developer Code</h2><form id="devCodeForm" class="form-grid"><label>Expires in minutes<input name="expiry_minutes" type="number" min="5" max="1440" value="30" required /></label><button class="primary">Generate Code</button></form>${state.generatedDevCode ? `<div class="dev-generated-code"><span>Shown once</span><strong>${escapeHtml(state.generatedDevCode.code)}</strong><small>Expires ${escapeHtml(state.generatedDevCode.expires_at)}</small></div>` : ""}<div class="dev-record-list">${codes.slice(0,12).map((x) => `<div class="dev-case"><span>••••-${escapeHtml(x.code_hint)} · ${escapeHtml(x.created_by_name)}</span><strong>${x.uses_remaining ? "available" : "used"}</strong></div>`).join("")}</div></section><section class="dev-card"><h2>Recent Links</h2>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card"><div class="row"><div><p class="eyebrow">Clickable investigation profiles</p><h2>All Linked Accounts</h2></div><span class="pill green">${users.filter((x) => x.arma_linked).length} loaded</span></div>${devLinkedAccounts(users)}</section></div>`;
   if (state.devTab === "settings") {
     const visibilityApps = data.app_visibility?.apps || [];
-    const beta = data.beta_program || { recruiting_enabled: false, recruiting_message: "", members: 0, tasks: [], reports: [] };
+    const beta = data.beta_program || { recruiting_enabled: false, recruiting_message: "", members: 0, member_roster: [], tasks: [], reports: [] };
     return `<div class="stack">
       <section class="dev-card beta-dev-console">
         <div class="dev-card-header"><div><p class="eyebrow">Release planning</p><h2>Beta Program</h2><p class="muted">Recruit testers, publish test assignments, and review incoming bug reports.</p></div><span class="pill ${beta.recruiting_enabled ? "green" : "amber"}">${beta.recruiting_enabled ? "seeking testers" : "recruitment off"}</span></div>
@@ -7654,6 +7659,27 @@ function renderDevTools() {
           <div class="dev-record-list">${(beta.tasks || []).map((task) => `<article class="dev-case"><div><strong>${escapeHtml(task.title)}</strong><p>${escapeHtml(task.test_area)} · ${escapeHtml(task.priority)}</p></div><button class="secondary" type="button" data-beta-task-toggle="${task.id}" data-active="${task.active ? "false" : "true"}">${task.active ? "Close" : "Reopen"}</button></article>`).join("") || `<div class="empty">No beta tasks published</div>`}</div>
         </section>
       </div>
+      <section class="dev-card beta-team-roster">
+        <div class="dev-card-header">
+          <div><p class="eyebrow">Current membership</p><h2>Beta Testing Team</h2><p class="muted">Everyone currently holding the Beta Tester role.</p></div>
+          <span class="pill green">${(beta.member_roster || []).length} testers</span>
+        </div>
+        <div class="beta-roster-list">
+          ${(beta.member_roster || []).map((member) => `
+            <article class="beta-roster-member">
+              <div class="beta-roster-avatar">${escapeHtml((member.name || "B").slice(0, 1).toUpperCase())}</div>
+              <div class="beta-roster-identity">
+                <strong>${escapeHtml(member.name || "Beta Tester")}</strong>
+                <small>CIV ${escapeHtml(member.civ_number || "pending")} · ${escapeHtml(member.email || "")}</small>
+              </div>
+              <div class="beta-roster-status">
+                <span class="pill ${member.verified ? "green" : "amber"}">${member.verified ? "verified" : "unverified"}</span>
+                <span class="pill ${member.arma_linked ? "green" : ""}">${member.arma_linked ? "Arma linked" : "not linked"}</span>
+              </div>
+              <small class="beta-roster-joined">Joined ${member.beta_joined_at ? new Date(member.beta_joined_at).toLocaleString() : "before campaign tracking"}</small>
+            </article>`).join("") || `<div class="empty">No users have joined the Beta Testing Team yet.</div>`}
+        </div>
+      </section>
       <section class="dev-card"><div class="row"><div><p class="eyebrow">Tester findings</p><h2>Beta Bug Reports</h2></div><span class="pill red">${(beta.reports || []).length}</span></div>
         <div class="dev-record-list">${(beta.reports || []).map((report) => `<article class="dev-case"><div><strong>${escapeHtml(report.summary)}</strong><p>${escapeHtml(report.reporter_name)} · ${escapeHtml(report.task_title || "General")} · ${escapeHtml(report.severity)}</p><small>${escapeHtml(report.actual_result)}</small></div><span class="pill">${escapeHtml(report.status)}</span></article>`).join("") || `<div class="empty">No beta bug reports</div>`}</div>
       </section>
@@ -7682,6 +7708,75 @@ function renderDevTools() {
 
 function devRecentLinks(links) {
   return `<div class="dev-table">${links.slice(0,40).map((x) => `<button class="dev-table-row dev-account-row" data-dev-account="${x.account_id}"><div><strong>${escapeHtml(x.account_name || x.player_name || "Unknown")}</strong><small>${escapeHtml(x.civ_number || "No CIV")} · ${escapeHtml(x.arma_id || "")}</small></div><span>${escapeHtml(x.linked_at || "")}</span></button>`).join("") || `<div class="empty">No completed links</div>`}</div>`;
+}
+
+function renderDevAntiCheat(data) {
+  const metrics = data.metrics || {};
+  const query = state.devAntiCheatSearch.trim().toLowerCase();
+  const players = (data.players || []).filter((player) =>
+    !query || [player.player_name, player.uid, player.account_name, player.civ_number]
+      .some((value) => String(value || "").toLowerCase().includes(query))
+  );
+  const sync = data.sync_status || [];
+  return `<div class="stack anticheat-console">
+    <section class="anticheat-command">
+      <div><p class="eyebrow">Thunder Buddies Security Network</p><h2>Player Intelligence</h2><p>Read-only telemetry from the live anti-cheat database, matched to verified CAD identities by Bohemia UID.</p></div>
+      <div class="anticheat-sync">${sync.map((item) => `<span class="pill ${item.status === "synced" ? "green" : "amber"}">${escapeHtml(item.source_key)} · ${Number(item.records || 0)} · ${escapeHtml(item.status)}</span>`).join("") || `<span class="pill amber">awaiting first SFTP sync</span>`}</div>
+    </section>
+    <div class="dev-metrics">
+      <div class="dev-metric green-tone"><span>Live now</span><strong>${Number(metrics.online || 0)}</strong><small>Heartbeat active</small></div>
+      <div class="dev-metric"><span>Known players</span><strong>${Number(metrics.players || 0)}</strong><small>Anti-cheat records</small></div>
+      <div class="dev-metric red-tone"><span>Flagged</span><strong>${Number(metrics.flagged || 0)}</strong><small>Aim or movement</small></div>
+      <div class="dev-metric amber-tone"><span>Alt groups</span><strong>${Number(metrics.alt_groups || 0)}</strong><small>Known associations</small></div>
+      <div class="dev-metric blue-tone"><span>Events</span><strong>${Number(metrics.events || 0)}</strong><small>Recent evidence</small></div>
+    </div>
+    <section class="dev-card">
+      <div class="anticheat-directory-head"><div><h2>Player directory</h2><p class="muted">${players.length} matching records</p></div><input id="antiCheatSearch" type="search" value="${escapeHtml(state.devAntiCheatSearch)}" placeholder="Search name, UID, account, or CIV…" /></div>
+      <div class="anticheat-player-list">${players.map((player) => {
+        const flags = Number(player.teleport_flags || 0) + Number(player.aim_flags || 0);
+        return `<button class="anticheat-player-row" data-anticheat-player="${escapeHtml(player.uid)}">
+          <span class="anticheat-presence ${player.online ? "online" : ""}"></span>
+          <div class="anticheat-player-id"><strong>${escapeHtml(player.player_name || "Unknown player")}</strong><small>${escapeHtml(player.uid)}</small></div>
+          <div><span>${player.linked_user_id ? escapeHtml(player.account_name || "Linked account") : "No CAD link"}</span><small>${player.civ_number ? `CIV ${escapeHtml(player.civ_number)}` : "Bohemia UID unmatched"}</small></div>
+          <div><span>${Number(player.ticket_count || 0)} tickets</span><small>${flags} detection flags</small></div>
+          <div><span class="pill ${player.online ? "green" : ""}">${player.online ? "live" : "offline"}</span>${Number(player.alt_group_count || 0) ? `<span class="pill amber">${Number(player.alt_group_count)} alt group</span>` : ""}</div>
+        </button>`;
+      }).join("") || `<div class="empty">No anti-cheat players match this search.</div>`}</div>
+    </section>
+  </div>`;
+}
+
+function renderAntiCheatModal(data, uid) {
+  const player = (data.players || []).find((item) => item.uid === uid);
+  if (!player) return "";
+  const events = (data.events || []).filter((item) => item.player_uid === uid);
+  const memberships = (data.alt_members || []).filter((item) => item.uid === uid);
+  const groups = memberships.map((member) => {
+    const group = (data.alt_groups || []).find((item) => item.group_key === member.group_key) || {};
+    const members = (data.alt_members || []).filter((item) => item.group_key === member.group_key);
+    return { ...group, members };
+  });
+  return `<div class="dev-profile-backdrop" data-close-anticheat>
+    <section class="dev-profile-modal anticheat-profile" role="dialog" aria-modal="true">
+      <header class="dev-profile-header"><div><p class="eyebrow">Anti-Cheat Intelligence File</p><h2>${escapeHtml(player.player_name || "Unknown player")}</h2><p>${escapeHtml(player.uid)}</p></div><div class="row">${player.linked_user_id ? `<button class="danger" data-dev-enforce="${player.linked_user_id}">Ban / Timeout</button>` : ""}<button class="secondary" data-close-anticheat>Close</button></div></header>
+      <div class="dev-profile-scroll">
+        <div class="dev-profile-summary">
+          <div><span>Presence</span><strong>${player.online ? "Online now" : "Offline"}</strong></div>
+          <div><span>CAD account</span><strong>${escapeHtml(player.account_name || "Not linked")}</strong></div>
+          <div><span>CIV number</span><strong>${escapeHtml(player.civ_number || "Not matched")}</strong></div>
+          <div><span>Tickets</span><strong>${Number(player.ticket_count || 0)}</strong></div>
+          <div><span>Teleport flags</span><strong>${Number(player.teleport_flags || 0)}</strong></div>
+          <div><span>Aim flags</span><strong>${Number(player.aim_flags || 0)}</strong></div>
+          <div><span>Last heartbeat</span><strong>${escapeHtml(player.last_heartbeat_at || "Not observed")}</strong></div>
+          <div><span>Last database sync</span><strong>${escapeHtml(player.last_synced_at || "")}</strong></div>
+        </div>
+        <div class="dev-profile-grid">
+          <section class="dev-card"><div class="row"><h3>Detection evidence</h3><span class="pill red">${events.length}</span></div>${devDetailList(events, (event) => [event.event_type || "event", `${event.details || "No details"} · ${event.event_time || ""}`])}</section>
+          <section class="dev-card"><div class="row"><h3>Known alt associations</h3><span class="pill amber">${groups.length}</span></div>${devDetailList(groups, (group) => [group.group_key || "Group", `${group.note || "No staff note"} · ${(group.members || []).map((member) => member.observed_name || member.uid).join(", ")}`])}</section>
+        </div>
+      </div>
+    </section>
+  </div>`;
 }
 
 function devLinkedAccounts(users) {
@@ -7734,6 +7829,24 @@ function devDetailList(items, mapper) {
 function bindDevWorkspace() {
   bindDevTools();
   $$("[data-dev-tab], [data-dev-go]").forEach((button) => button.addEventListener("click", () => { state.devTab = button.dataset.devTab || button.dataset.devGo; render(); }));
+  $$("[data-anticheat-player]").forEach((button) => button.addEventListener("click", () => {
+    state.devAntiCheatUid = button.dataset.anticheatPlayer;
+    render();
+  }));
+  $$("[data-close-anticheat]").forEach((button) => button.addEventListener("click", (event) => {
+    if (event.target !== event.currentTarget && event.currentTarget.classList.contains("dev-profile-backdrop")) return;
+    state.devAntiCheatUid = null;
+    render();
+  }));
+  $("#antiCheatSearch")?.addEventListener("input", (event) => {
+    state.devAntiCheatSearch = event.target.value;
+    render();
+    const input = $("#antiCheatSearch");
+    if (input) {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+  });
   $$("[data-dev-account]").forEach((button) => button.addEventListener("click", async () => {
     try {
       state.devAccount = await api(`/api/dev-tools/accounts/${button.dataset.devAccount}`);
@@ -8709,7 +8822,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.76").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.79").catch(() => {}));
 }
 
 bootApp();
