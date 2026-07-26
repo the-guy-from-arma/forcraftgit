@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v80-booking-separation";
+const CACHE = "faircroft-rp-v81-role-only-mdt";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.0.80",
-  "/static/roadmap.css?v=0.0.80",
-  "/static/app.js?v=0.0.80",
+  "/static/styles.css?v=0.0.81",
+  "/static/roadmap.css?v=0.0.81",
+  "/static/app.js?v=0.0.81",
   "/static/brand/faircroft-emblem.webp",
   "/static/brand/faircroft-light-sweep.mp4",
   "/static/brand/icon-192.png",

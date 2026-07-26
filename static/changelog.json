@@ -1,6 +1,20 @@
 {
-  "version": "0.0.80",
+  "version": "0.0.81",
   "entries": [
+    {
+      "date": "2026-07-26",
+      "version": "0.0.81",
+      "title": "Role-Only MDT Access",
+      "added": [],
+      "changed": [
+        "Regular LEO MDT access now requires an explicitly assigned law-enforcement role, including for owners.",
+        "CID Command MDT access now requires an explicitly assigned CID or IU role, including for owners."
+      ],
+      "fixed": [
+        "Owner status no longer grants automatic MDT or CID Command access.",
+        "An open MDT closes and clears CID state immediately after the account loses its qualifying role."
+      ]
+    },
     {
       "date": "2026-07-26",
       "version": "0.0.80",

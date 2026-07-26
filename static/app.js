@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.80";
+const OS_VERSION = "0.0.81";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -444,6 +444,12 @@ function render() {
     app.innerHTML = phone(renderAuth());
     bindAuth();
     return;
+  }
+  if (state.activeApp === "mdt" && !appAvailable("mdt")) {
+    state.activeApp = null;
+    state.mdtTab = "search";
+    state.mdtProfileUserId = null;
+    if (state.cache.mdt) state.cache.mdt.cid = null;
   }
   if (isUpdateLockdown()) {
     if (state.activeApp && !appAvailable(state.activeApp)) {
@@ -1003,14 +1009,14 @@ function isIUUser() {
 }
 
 function mdtCommandEnabled() {
-  return canAny("cid", "cid_director", "iu", "iu_director", "owner");
+  return canAny("cid", "cid_director", "iu", "iu_director");
 }
 
 function mdtCommandLabel() {
   if (canAny("iu_director")) return "IU Director";
   if (canAny("iu")) return "IU";
   if (canAny("cid_director")) return "CID Director";
-  if (canAny("cid", "owner")) return "CID";
+  if (canAny("cid")) return "CID";
   return "LEO";
 }
 
@@ -8848,7 +8854,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.80").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.81").catch(() => {}));
 }
 
 bootApp();

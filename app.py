@@ -3088,7 +3088,7 @@ def contracts_required(user: DbRow | None) -> str | None:
 def leo_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
-    if not has_any(user, *LAW_SERVICE_ROLES, "owner"):
+    if not has_any(user, *LAW_SERVICE_ROLES):
         return "Law enforcement access required"
     return None
 
@@ -3141,7 +3141,7 @@ def emergency_departments_for(user: DbRow) -> list[str]:
 def cid_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
-    if not has_any(user, "cid", "cid_director", "iu", "iu_director", "owner"):
+    if not has_any(user, "cid", "cid_director", "iu", "iu_director"):
         return "CID access required"
     return None
 
@@ -3166,7 +3166,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps: list[dict[str, Any]] = []
         if verified:
             apps.append({"id": "dmv", "label": "Driver License", "icon": "id-card", "enabled": True, "coming_soon": False, "hidden": False})
-        if has_any(user, *LAW_SERVICE_ROLES, "owner"):
+        if has_any(user, *LAW_SERVICE_ROLES):
             apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "coming_soon": False, "hidden": False})
         if has_any(user, "owner"):
             apps.append({"id": "system", "label": "System", "icon": "settings", "enabled": True, "coming_soon": False, "hidden": False})
@@ -3191,7 +3191,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
     ]
     if contracts_enabled:
         apps.append({"id": "contracts", "label": "Contracts", "icon": "target", "enabled": True, "coming_soon": False, "hidden": False})
-    if has_any(user, *LAW_SERVICE_ROLES, "owner"):
+    if has_any(user, *LAW_SERVICE_ROLES):
         apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "hidden": False})
     if has_any(user, "judge", "owner"):
         apps.append({"id": "court", "label": "Court", "icon": "gavel", "enabled": True, "hidden": False})
