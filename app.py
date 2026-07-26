@@ -127,7 +127,7 @@ def arma_rcon_payload(packet: bytes) -> bytes:
     return payload
 
 
-def execute_arma_rcon(command: str) -> dict[str, str]:
+def execute_arma_rcon(command: str, *, accept_timeout_after_send: bool = False) -> dict[str, str]:
     """Execute one command using Arma Reforger's UDP RCON protocol."""
     if not arma_rcon_configured():
         return {"status": "rcon_not_configured", "response": ""}
@@ -142,12 +142,33 @@ def execute_arma_rcon(command: str) -> dict[str, str]:
         if len(login) < 2 or login[0] != 0 or login[1] != 1:
             raise RuntimeError("RCON authentication failed")
         client.send(arma_rcon_packet(b"\x01\x00" + clean_command.encode("utf-8")))
-        reply = arma_rcon_payload(client.recv(65535))
+        try:
+            reply = arma_rcon_payload(client.recv(65535))
+        except TimeoutError:
+            if accept_timeout_after_send:
+                return {
+                    "status": "dispatched",
+                    "response": "Command was dispatched; the server stopped responding while the restart began.",
+                }
+            raise RuntimeError("RCON command timed out waiting for the server response")
         if len(reply) < 2 or reply[0] != 1 or reply[1] != 0:
             raise RuntimeError("RCON returned an unexpected command response")
         response = reply[2:].decode("utf-8", errors="replace").strip()
         lowered = response.lower()
-        if any(marker in lowered for marker in ("error", "failed", "unknown command", "not found")):
+        if any(
+            marker in lowered
+            for marker in (
+                "error",
+                "failed",
+                "unknown command",
+                "not found",
+                "permission denied",
+                "not permitted",
+                "not allowed",
+                "forbidden",
+                "insufficient permission",
+            )
+        ):
             raise RuntimeError(f"RCON rejected the command: {response[:300]}")
         try:
             client.send(arma_rcon_packet(b"\x01\x01@logout"))
@@ -9059,7 +9080,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(400, "Enter a restart reason of at least 10 characters")
             return
         try:
-            result = execute_arma_rcon(ARMA_RCON_RESTART_COMMAND)
+            # Confirm that this deployment can authenticate and exchange command
+            # traffic before issuing a disruptive command. Reforger can stop
+            # replying as soon as #restart begins, which is a valid dispatch.
+            execute_arma_rcon("#players")
+            result = execute_arma_rcon(
+                ARMA_RCON_RESTART_COMMAND,
+                accept_timeout_after_send=True,
+            )
         except Exception as exc:
             add_admin_audit(db, int(user["id"]), "server.restart.rcon_failed", details={"reason": reason[:500], "error": str(exc)[:500]})
             self.error(502, f"RCON restart failed: {exc}")

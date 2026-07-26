@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.0.95";
+const OS_VERSION = "0.0.96";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -8613,9 +8613,11 @@ function bindDevTools() {
     submit.disabled = true;
     submit.textContent = "Sending restart command...";
     try {
-      await api("/api/dev-tools/server/restart", { method: "POST", body: Object.fromEntries(new FormData(form).entries()) });
+      const result = await api("/api/dev-tools/server/restart", { method: "POST", body: Object.fromEntries(new FormData(form).entries()) });
       state.devRestartConfirmOpen = false;
-      toast("RCON restart command accepted");
+      toast(result.status === "dispatched"
+        ? "Restart dispatched; the game server stopped replying as the restart began"
+        : "RCON restart command accepted by the game server");
       await refreshDevTools();
     } catch (error) {
       submit.disabled = false;
@@ -9384,7 +9386,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.95").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.0.96").catch(() => {}));
 }
 
 bootApp();

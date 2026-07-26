@@ -1,6 +1,20 @@
 {
-  "version": "0.0.95",
+  "version": "0.0.96",
   "entries": [
+    {
+      "date": "2026-07-26",
+      "version": "0.0.96",
+      "title": "Reliable RCON Restart Dispatch",
+      "added": [],
+      "changed": [
+        "The restart flow now verifies RCON authentication and command traffic before dispatching the restart.",
+        "A missing reply after restart dispatch is handled correctly because Reforger may restart before acknowledging the command."
+      ],
+      "fixed": [
+        "Expanded RCON permission and command-rejection detection with actionable server errors.",
+        "Corrected the developer restart result message so a successfully dispatched restart is not reported as failed."
+      ]
+    },
     {
       "date": "2026-07-26",
       "version": "0.0.95",
