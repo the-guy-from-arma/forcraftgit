@@ -8302,35 +8302,81 @@ function devLinkedAccounts(users) {
   return `<div class="dev-account-directory">${users.filter((x) => x.arma_linked).map((x) => `<button class="dev-account-tile" data-dev-account="${x.id}"><div><strong>${escapeHtml(x.name)}</strong><small>CIV ${escapeHtml(x.civ_number || "pending")} · ${escapeHtml(x.linked_arma_id || "")}</small></div><span class="pill green">linked</span></button>`).join("") || `<div class="empty">No linked accounts</div>`}</div>`;
 }
 
+function devPlatformIdentity(...values) {
+  const raw = values.find((value) => String(value ?? "").trim()) ?? "";
+  const normalized = String(raw).trim().toLowerCase();
+  const platforms = {
+    "0": ["Unknown", "UN", "No platform signal"],
+    "1": ["PC", "PC", "Windows / Steam"],
+    "2": ["Xbox", "XB", "Xbox network"],
+    "3": ["PlayStation", "PS", "PlayStation Network"],
+    pc: ["PC", "PC", "Windows / Steam"],
+    windows: ["PC", "PC", "Windows / Steam"],
+    steam: ["PC", "PC", "Windows / Steam"],
+    xbox: ["Xbox", "XB", "Xbox network"],
+    xboxone: ["Xbox", "XB", "Xbox network"],
+    xboxseries: ["Xbox", "XB", "Xbox network"],
+    playstation: ["PlayStation", "PS", "PlayStation Network"],
+    ps4: ["PlayStation", "PS", "PlayStation Network"],
+    ps5: ["PlayStation", "PS", "PlayStation Network"],
+  };
+  const match = platforms[normalized] || (
+    normalized.includes("xbox") ? platforms.xbox :
+    normalized.includes("playstation") || /^ps[45]?$/.test(normalized) ? platforms.playstation :
+    normalized.includes("steam") || normalized.includes("windows") || normalized === "pc" ? platforms.pc :
+    null
+  );
+  return {
+    label: match?.[0] || (raw ? String(raw) : "Unknown"),
+    mark: match?.[1] || "UN",
+    detail: match?.[2] || "Unrecognized platform signal",
+    raw: raw ? String(raw) : "",
+  };
+}
+
 function renderDevAccountModal(data) {
   const a = data.account || {};
   const sanctions = data.sanctions || [], warnings = data.warnings || [], tx = data.transactions || [];
   const activity = data.arma_activity || [], characters = data.characters || [], jobs = data.jobs || [], citations = data.citations || [], properties = data.properties || [];
   const gameBank = data.game_database?.bank;
   const antiCheat = data.anti_cheat || {};
+  const platform = devPlatformIdentity(antiCheat.reported_system, antiCheat.detected_system, a.platform);
+  const platformSource = antiCheat.reported_system ? "Anti-cheat telemetry" : a.platform ? "Verified account link" : "No device report";
   return `<div class="dev-profile-backdrop" data-close-dev-account>
-    <section class="dev-profile-modal" role="dialog" aria-modal="true" aria-label="Linked account investigation profile">
-      <header class="dev-profile-header"><div><p class="eyebrow">Linked account intelligence file</p><h2>${escapeHtml(a.name || "Account")}</h2><p>CIV ${escapeHtml(a.civ_number || "pending")} · ${escapeHtml(a.player_name || "Unknown in-game name")}</p></div><div class="row"><button class="danger" data-dev-enforce="${a.id}">Ban / Timeout</button><button class="secondary" data-close-dev-account>Close</button></div></header>
-      <div class="dev-profile-scroll">
-        <div class="dev-profile-summary">
-          <div><span>Website status</span><strong>${a.verified ? "Verified" : "Unverified"}</strong></div>
-          <div><span>Account email</span><strong>${escapeHtml(a.email || "")}</strong></div>
-          <div><span>Platform</span><strong>${escapeHtml(a.platform || "Unknown")}</strong></div>
-          <div><span>Anti-Cheat system</span><strong>${escapeHtml(antiCheat.detected_system || "Unknown")}</strong></div>
-          <div><span>Server</span><strong>${escapeHtml(a.server_id || "Unknown")}</strong></div>
-          <div><span>Bohemia Identity ID</span><strong>${escapeHtml(a.identity_id || "")}</strong></div>
-          <div><span>UID</span><strong>${escapeHtml(a.uid || "")}</strong></div>
-          <div><span>RPL identity</span><strong>${escapeHtml(a.rpl_identity || "")}</strong></div>
-          <div><span>Roles</span><strong>${escapeHtml((a.roles || []).join(", "))}</strong></div>
-          <div><span>Live in-game bank</span><strong>${gameBank ? money(gameBank.balance || 0) : "Awaiting sync"}</strong></div>
-          <div><span>Linked</span><strong>${escapeHtml(a.linked_at || "")}</strong></div>
-          <div><span>Last game sync</span><strong>${escapeHtml(a.last_sync_at || "Not reported")}</strong></div>
+    <section class="dev-profile-modal dev-account-profile" role="dialog" aria-modal="true" aria-label="Linked account investigation profile">
+      <header class="dev-profile-header dev-account-profile-head">
+        <div class="dev-profile-person">
+          <span class="dev-profile-monogram">${escapeHtml((a.name || a.player_name || "?").trim().charAt(0).toUpperCase())}</span>
+          <div><p class="eyebrow">Player intelligence record</p><h2>${escapeHtml(a.name || "Account")}</h2><p>CIV ${escapeHtml(a.civ_number || "pending")} <span>•</span> ${escapeHtml(a.player_name || "Unknown in-game name")}</p></div>
         </div>
-        ${data.active_block ? `<div class="dev-alert red-tone"><strong>Active ${escapeHtml(data.active_block.sanction_type)}</strong><span>${escapeHtml(data.active_block.reason || "")}</span></div>` : ""}
-        <section class="dev-card dev-system-evidence">
-          <div><p class="eyebrow">Anti-Cheat device telemetry</p><h3>Reported System</h3><p>${escapeHtml(antiCheat.detected_system || "Unknown")}</p><small>${antiCheat.reported_system ? "Reported directly by the anti-cheat player record." : a.platform ? "Derived from the verified Arma account-link platform because the anti-cheat record did not report a system." : "No platform information has been reported by the game or anti-cheat telemetry."}</small></div>
-          <span class="pill blue">${escapeHtml(antiCheat.detected_system || "Unknown")}</span>
+        <div class="dev-profile-actions"><span class="dev-profile-state ${a.verified ? "verified" : ""}">${a.verified ? "Verified identity" : "Unverified"}</span><button class="danger" data-dev-enforce="${a.id}">Ban / Timeout</button><button class="secondary" data-close-dev-account>Close</button></div>
+      </header>
+      <div class="dev-profile-scroll">
+        <section class="dev-identity-command">
+          <div class="dev-platform-card">
+            <span class="dev-platform-mark">${escapeHtml(platform.mark)}</span>
+            <div><p class="eyebrow">Active platform</p><h3>${escapeHtml(platform.label)}</h3><p>${escapeHtml(platform.detail)}</p></div>
+            <span class="dev-signal-status"><i></i>${escapeHtml(platformSource)}</span>
+          </div>
+          <div class="dev-command-facts">
+            <div><span>Account email</span><strong>${escapeHtml(a.email || "Not recorded")}</strong></div>
+            <div><span>Live bank</span><strong>${gameBank ? money(gameBank.balance || 0) : "Awaiting sync"}</strong></div>
+            <div><span>Server</span><strong>${escapeHtml(a.server_id || "Unknown")}</strong></div>
+            <div><span>Last game sync</span><strong>${escapeHtml(a.last_sync_at || "Not reported")}</strong></div>
+          </div>
         </section>
+        <section class="dev-identity-ledger">
+          <div class="dev-ledger-heading"><p class="eyebrow">Identity ledger</p><h3>Verified identifiers</h3></div>
+          <dl>
+            <div><dt>Bohemia Identity ID</dt><dd>${escapeHtml(a.identity_id || "Not reported")}</dd></div>
+            <div><dt>UID</dt><dd>${escapeHtml(a.uid || "Not reported")}</dd></div>
+            <div><dt>RPL identity</dt><dd>${escapeHtml(a.rpl_identity || "Not reported")}</dd></div>
+            <div><dt>Roles</dt><dd>${escapeHtml((a.roles || []).join(", ") || "No assigned roles")}</dd></div>
+            <div><dt>Linked</dt><dd>${escapeHtml(a.linked_at || "Not reported")}</dd></div>
+            <div><dt>Raw platform code</dt><dd>${escapeHtml(platform.raw || "Not reported")}</dd></div>
+          </dl>
+        </section>
+        ${data.active_block ? `<div class="dev-alert red-tone"><strong>Active ${escapeHtml(data.active_block.sanction_type)}</strong><span>${escapeHtml(data.active_block.reason || "")}</span></div>` : ""}
         <div class="dev-profile-grid">
           <section class="dev-card"><div class="row"><h3>Characters</h3><span class="pill">${characters.length}</span></div>${devDetailList(characters, (x) => [x.character_name || x.name || "Character", `${x.is_active ? "Active" : "Inactive"} · updated ${x.updated_at || ""}`])}</section>
           <section class="dev-card"><div class="row"><h3>Jobs</h3><span class="pill">${jobs.length}</span></div>${devDetailList(jobs, (x) => [x.title || "Job", `${x.market || ""} · ${x.status || ""} · started ${x.started_at || ""}`])}</section>
