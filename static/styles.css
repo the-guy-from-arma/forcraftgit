@@ -11735,6 +11735,27 @@ textarea:focus {
   --ac-cyan: #35d6e7;
   --ac-red: #ff5964;
 }
+.anticheat-lock-home { gap: 18px; }
+.anticheat-lock-alert { border-color: rgba(255, 89, 100, .45); background: rgba(255, 89, 100, .12); }
+.anticheat-lock-alert svg { color: #ff7680; }
+.anticheat-lock-card { display: grid; gap: 12px; }
+.anticheat-lock-apps { grid-template-columns: repeat(1, minmax(0, 112px)); }
+.anticheat-lock-console { display: grid; gap: 12px; }
+.anticheat-removal-list {
+  width: 100%; min-height: 116px; resize: vertical; border: 1px solid rgba(255, 89, 100, .25);
+  border-radius: 8px; padding: 10px 12px; color: #dfecef; background: #081116;
+  font: 700 .7rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.anticheat-lock-list { display: grid; gap: 7px; }
+.anticheat-lock-list button {
+  width: 100%; min-height: 58px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px;
+  padding: 10px 12px; border: 1px solid rgba(255, 89, 100, .24); border-radius: 8px;
+  color: #dfecef; background: rgba(255, 89, 100, .07); text-align: left;
+}
+.anticheat-lock-list button:hover { border-color: rgba(255, 89, 100, .5); background: rgba(255, 89, 100, .12); }
+.anticheat-lock-list strong { min-width: 0; font-size: .76rem; overflow-wrap: anywhere; }
+.anticheat-lock-list small { grid-column: 1 / -1; color: #8aa0a7; font-size: .64rem; overflow-wrap: anywhere; }
+.anticheat-lock-list span { color: #ff9da4; font-size: .62rem; font-weight: 850; }
 
 .mdt-redesign .mdt-command-index,
 .mdt-redesign .mdt-rail-section {

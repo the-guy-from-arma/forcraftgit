@@ -4,9 +4,12 @@ const app = $("#app");
 const toastEl = $("#toast");
 const OS_VERSION = "0.1.7";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
+const SESSION_REFRESH_MS = 15000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
 let deferredPwaInstallPrompt = null;
+let sessionRefreshTimer = null;
+let sessionRefreshInFlight = false;
 
 const state = {
   boot: {
@@ -376,8 +379,61 @@ async function api(path, options = {}) {
   return request;
 }
 
+function antiCheatLockToken(session) {
+  const lock = session?.anti_cheat_lock;
+  return lock ? `${lock.id || ""}:${lock.player_uid || ""}:${lock.grey_screened_at || ""}` : "";
+}
+
+function startSessionRefresh() {
+  if (sessionRefreshTimer) return;
+  sessionRefreshTimer = window.setInterval(refreshSessionInBackground, SESSION_REFRESH_MS);
+}
+
+function stopSessionRefresh() {
+  if (!sessionRefreshTimer) return;
+  window.clearInterval(sessionRefreshTimer);
+  sessionRefreshTimer = null;
+}
+
+async function refreshSessionInBackground() {
+  if (sessionRefreshInFlight || !state.session?.user) return;
+  sessionRefreshInFlight = true;
+  try {
+    const previousLock = antiCheatLockToken(state.session);
+    const previousUnread = Number(state.session?.unread_messages || 0);
+    const nextSession = await api("/api/session", { timeoutMs: 8000 });
+    const nextLock = antiCheatLockToken(nextSession);
+    state.session = nextSession;
+    if (!nextSession?.user) {
+      stopSessionRefresh();
+      state.activeApp = null;
+      render();
+      return;
+    }
+    if (nextLock !== previousLock) {
+      if (nextLock) {
+        state.activeApp = null;
+        toast("Faircroft profile locked by Anti-Cheat");
+      } else {
+        toast("Anti-Cheat profile lock removed");
+      }
+      render();
+      return;
+    }
+    if (Number(nextSession?.unread_messages || 0) !== previousUnread && (!state.activeApp || state.activeApp === "messages")) {
+      render();
+    }
+  } catch (error) {
+    console.warn("Session refresh failed", error);
+  } finally {
+    sessionRefreshInFlight = false;
+  }
+}
+
 async function loadSession() {
   state.session = await api("/api/session", { timeoutMs: SESSION_BOOT_TIMEOUT_MS });
+  if (state.session?.user) startSessionRefresh();
+  else stopSessionRefresh();
   if (state.session?.user && state.pendingArmaCode && !state.activeApp) {
     state.activeApp = "profile";
     await loadAppData("profile");
@@ -462,6 +518,9 @@ function render() {
     app.innerHTML = phone(renderAuth());
     bindAuth();
     return;
+  }
+  if (state.session?.anti_cheat_lock && state.activeApp && state.activeApp !== "messages") {
+    state.activeApp = null;
   }
   if (state.activeApp === "mdt" && !appAvailable("mdt")) {
     state.activeApp = null;
@@ -782,6 +841,7 @@ function bindRequiredProfileModals() {
 
 function renderHome() {
   const { user, apps, unread_messages: unread } = state.session;
+  if (state.session?.anti_cheat_lock) return renderAntiCheatLockedHome(apps);
   if (isUpdateLockdown()) return renderUpdateLockdownHome(apps);
   const locked = !user.verified && !user.roles.includes("owner") && !user.roles.includes("admin");
   return `
@@ -817,6 +877,41 @@ function renderHome() {
               ${item.coming_soon ? `<span class="soon-badge">SOON</span>` : item.enabled ? "" : `<span class="lock-badge">${iconSvg.lock}</span>`}
             </span>
             <span>${escapeHtml(item.label)}${item.id === "messages" && unread ? ` (${unread})` : ""}</span>
+          </button>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderAntiCheatLockedHome(apps) {
+  const lock = state.session?.anti_cheat_lock || {};
+  const unread = Number(state.session?.unread_messages || 0);
+  const chatApps = (apps || []).filter((item) => item.id === "messages");
+  return `
+    <section class="home-stack anticheat-lock-home">
+      <header class="home-header">
+        <div class="home-identity">
+          <img class="home-emblem" src="/static/brand/faircroft-emblem.webp" alt="" />
+          <div><p class="eyebrow">Thunder Buddies Anti-Cheat</p><h1>Profile Locked</h1></div>
+        </div>
+        <button class="icon-action" data-logout aria-label="Sign out">${iconSvg.logout}</button>
+      </header>
+      <div class="home-alert anticheat-lock-alert">
+        ${iconSvg.lock}
+        <div><strong>You were grey-screened in game</strong><p>${escapeHtml(lock.reason || "Thunder Buddies Anti-Cheat opened a cheating review for your profile.")}</p></div>
+      </div>
+      <section class="profile-link-card anticheat-lock-card">
+        <div class="restriction-detail"><span>Player</span><strong>${escapeHtml(lock.player_name || "Unknown player")}</strong></div>
+        <div class="restriction-detail"><span>Bohemia UID</span><strong>${escapeHtml(lock.player_uid || "Not reported")}</strong></div>
+        <div class="restriction-detail"><span>Logged</span><strong>${escapeHtml(lock.grey_screened_at || "Just now")}</strong></div>
+        <p class="muted small">All Faircroft apps are closed while dev staff reviews the grey screen. Dev Chat remains open so this can be handled directly.</p>
+      </section>
+      <div class="app-grid anticheat-lock-apps">
+        ${(chatApps.length ? chatApps : [{ id: "messages", label: "Dev Chat", icon: "message", enabled: true }]).map((item, index) => `
+          <button class="app-icon" style="--i:${index}" data-open-app="messages">
+            <span class="icon-tile" style="--tile:${tileColors.messages}">${iconSvg.message}${unread ? `<span class="soon-badge">${unread}</span>` : ""}</span>
+            <span>${escapeHtml(item.label || "Dev Chat")}${unread ? ` (${unread})` : ""}</span>
           </button>
         `).join("")}
       </div>
@@ -1153,6 +1248,7 @@ function bindHome() {
   });
   $("[data-logout]")?.addEventListener("click", async () => {
     await api("/api/auth/logout", { method: "POST" });
+    stopSessionRefresh();
     state.session = { user: null, apps: [] };
     state.activeApp = null;
     render();
@@ -8870,9 +8966,11 @@ function renderDevAntiCheat(data) {
       <div class="dev-metric green-tone"><span>Online now</span><strong>${Number(metrics.online || 0)}</strong><small>Anti-Cheat JSON status</small></div>
       <div class="dev-metric"><span>Known players</span><strong>${Number(metrics.players || 0)}</strong><small>Anti-cheat records</small></div>
       <div class="dev-metric red-tone"><span>Flagged</span><strong>${Number(metrics.flagged || 0)}</strong><small>Aim or movement</small></div>
-      <div class="dev-metric amber-tone"><span>Alt groups</span><strong>${Number(metrics.alt_groups || 0)}</strong><small>Known associations</small></div>
+      <div class="dev-metric red-tone"><span>Grey screened</span><strong>${Number(metrics.grey_screened || 0)}</strong><small>Profile locks</small></div>
+      <div class="dev-metric amber-tone"><span>Active locks</span><strong>${Number(metrics.active_locks || 0)}</strong><small>Dev Chat only</small></div>
       <div class="dev-metric blue-tone"><span>Events</span><strong>${Number(metrics.events || 0)}</strong><small>Recent evidence</small></div>
     </div>
+    ${renderAntiCheatRemovalList(data.profile_locks || [])}
     <section class="dev-card anticheat-directory">
       <div class="anticheat-directory-head"><div><p class="eyebrow">IDENTITY DIRECTORY</p><h2>Players & telemetry</h2><p class="muted">${players.length} matching records</p></div><label class="dev-command-search"><span>Search records</span><input id="antiCheatSearch" type="search" value="${escapeHtml(state.devAntiCheatSearch)}" placeholder="Name, UID, account, or CIV…" /></label></div>
       <div class="anticheat-player-head"><span></span><span>Player identity</span><span>Faircroft account</span><span>Telemetry</span><span>Operational status</span></div>
@@ -8884,7 +8982,7 @@ function renderDevAntiCheat(data) {
           <div class="anticheat-player-id"><strong>${escapeHtml(player.player_name || "Unknown player")}</strong><small>${escapeHtml(player.uid)}</small></div>
           <div><span>${player.linked_user_id ? escapeHtml(player.account_name || "Linked account") : "No CAD link"}</span><small>${player.civ_number ? `CIV ${escapeHtml(player.civ_number)}` : "Bohemia UID unmatched"}</small></div>
           <div><span>${Number(player.ticket_count || 0)} tickets</span><small>${flags} detection flags</small></div>
-          <div><span class="dev-record-status ${player.online ? "verified" : "closed"}">${player.online ? "Live" : "Offline"}</span><span class="dev-platform-mini">${platform.asset ? `<img src="${escapeHtml(platform.asset)}" alt="" />` : `<b>${escapeHtml(platform.mark)}</b>`}<span>${escapeHtml(platform.label)}</span></span>${Number(player.alt_group_count || 0) ? `<span class="dev-record-status alert">${Number(player.alt_group_count)} alt group</span>` : ""}<i>›</i></div>
+          <div><span class="dev-record-status ${player.online ? "verified" : "closed"}">${player.online ? "Live" : "Offline"}</span>${player.active_lock_id || Number(player.grey_screened || 0) || Number(player.profile_locked || 0) ? `<span class="dev-record-status alert">grey screen</span>` : ""}<span class="dev-platform-mini">${platform.asset ? `<img src="${escapeHtml(platform.asset)}" alt="" />` : `<b>${escapeHtml(platform.mark)}</b>`}<span>${escapeHtml(platform.label)}</span></span>${Number(player.alt_group_count || 0) ? `<span class="dev-record-status alert">${Number(player.alt_group_count)} alt group</span>` : ""}<i>›</i></div>
         </button>`;
       }).join("") || `<div class="empty">No anti-cheat players match this search.</div>`}</div>
       <footer class="anticheat-directory-footer">
@@ -8893,6 +8991,18 @@ function renderDevAntiCheat(data) {
       </footer>
     </section>
   </div>`;
+}
+
+function renderAntiCheatRemovalList(locks) {
+  const active = (locks || []).filter((lock) => !lock.cleared_at);
+  if (!active.length) return "";
+  const removalText = active.map((lock) => `${lock.player_name || "Unknown player"} | ${lock.player_uid || ""} | ${lock.reason || "Anti-cheat review"}`).join("\n");
+  return `<section class="dev-card anticheat-lock-console">
+    <div class="row"><div><p class="eyebrow">12 AM EST RESTART LIST</p><h3>Remove these from Thunder Buddies JSON</h3><p class="muted">Faircroft cannot push the Arma unlock. Dev staff must remove these UID records or grey-screen fields from the server JSON before the 12 AM EST restart.</p></div><span class="pill red">${active.length}</span></div>
+    <textarea class="anticheat-removal-list" readonly>${escapeHtml(removalText)}</textarea>
+    <button class="secondary" type="button" data-copy-anticheat-removals>Copy restart list</button>
+    <div class="anticheat-lock-list">${active.slice(0, 8).map((lock) => `<button type="button" data-anticheat-player="${escapeHtml(lock.player_uid)}"><strong>${escapeHtml(lock.player_name || "Unknown player")}</strong><small>${escapeHtml(lock.reason || "Anti-cheat review")} · ${escapeHtml(lock.grey_screened_at || "")}</small><span>${escapeHtml(lock.account_name || "No linked CAD")}</span></button>`).join("")}</div>
+  </section>`;
 }
 
 function renderAntiCheatModal(data, uid) {
@@ -8905,9 +9015,10 @@ function renderAntiCheatModal(data, uid) {
     const members = (data.alt_members || []).filter((item) => item.group_key === member.group_key);
     return { ...group, members };
   });
+  const isLocked = player.active_lock_id || Number(player.grey_screened || 0) || Number(player.profile_locked || 0);
   return `<div class="dev-profile-backdrop" data-close-anticheat>
     <section class="dev-profile-modal anticheat-profile" role="dialog" aria-modal="true">
-      <header class="dev-profile-header"><div><p class="eyebrow">Anti-Cheat Intelligence File</p><h2>${escapeHtml(player.player_name || "Unknown player")}</h2><p>${escapeHtml(player.uid)}</p></div><div class="row">${player.linked_user_id ? `<button class="danger" data-dev-enforce="${player.linked_user_id}">Ban / Timeout</button>` : ""}<button class="secondary" data-close-anticheat>Close</button></div></header>
+      <header class="dev-profile-header"><div><p class="eyebrow">Anti-Cheat Intelligence File</p><h2>${escapeHtml(player.player_name || "Unknown player")}</h2><p>${escapeHtml(player.uid)}</p></div><div class="row">${isLocked ? `<span class="pill red">Restart JSON removal required</span>` : ""}${player.linked_user_id ? `<button class="danger" data-dev-enforce="${player.linked_user_id}">Ban / Timeout</button>` : ""}<button class="secondary" data-close-anticheat>Close</button></div></header>
       <div class="dev-profile-scroll">
         <div class="dev-profile-summary">
           <div><span>Presence</span><strong>${player.online ? "Online now" : "Offline"}</strong></div>
@@ -8915,6 +9026,8 @@ function renderAntiCheatModal(data, uid) {
           <div><span>CAD account</span><strong>${escapeHtml(player.account_name || "Not linked")}</strong></div>
           <div><span>CIV number</span><strong>${escapeHtml(player.civ_number || "Not matched")}</strong></div>
           <div><span>Tickets</span><strong>${Number(player.ticket_count || 0)}</strong></div>
+          <div><span>Profile lock</span><strong>${isLocked ? "Active" : "Clear"}</strong></div>
+          <div><span>Reason</span><strong>${escapeHtml(player.active_lock_reason || player.grey_screen_reason || "None")}</strong></div>
           <div><span>Teleport flags</span><strong>${Number(player.teleport_flags || 0)}</strong></div>
           <div><span>Aim flags</span><strong>${Number(player.aim_flags || 0)}</strong></div>
           <div><span>Last Anti-Cheat sighting</span><strong>${escapeHtml(player.last_seen_at || "Not observed")}</strong></div>
@@ -9082,6 +9195,10 @@ function bindDevWorkspace() {
     state.devAntiCheatPage = Number(button.dataset.anticheatPage);
     render();
   }));
+  $("[data-copy-anticheat-removals]")?.addEventListener("click", async () => {
+    const copied = await copyToClipboard($(".anticheat-removal-list")?.value || "");
+    toast(copied ? "Restart removal list copied" : "Nothing to copy");
+  });
   $$("[data-dev-account]").forEach((button) => button.addEventListener("click", async () => {
     try {
       state.devAccount = await api(`/api/dev-tools/accounts/${button.dataset.devAccount}`);

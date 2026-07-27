@@ -587,19 +587,30 @@ def sync_shadowhaven_anticheat_once() -> tuple[int, int]:
     synced_at = now_iso()
     accepted_players = 0
     accepted_groups = 0
+    active_json_locked_uids: set[str] = set()
+    current_json_uids: set[str] = set()
     with conn() as db:
+        db.execute("DELETE FROM anticheat_events WHERE source_file = ?", (SHADOWHAVEN_ANTICHEAT_DATABASE_FILE[:255],))
         for player in players:
             if not isinstance(player, dict):
                 continue
             uid = str(player.get("playerUID") or "").strip()[:160]
             if not uid:
                 continue
+            current_json_uids.add(uid)
+            profile_locked = 1 if player.get("profileLocked") is True else 0
+            grey_screened = 1 if player.get("greyScreened") is True else 0
+            grey_screen_reason = str(player.get("greyScreenReason") or "")[:500]
+            grey_screened_at = str(player.get("greyScreenedAt") or "")[:100]
+            grey_screen_teleport_hits = int(player.get("greyScreenTeleportHits") or 0)
+            grey_screen_evidence = str(player.get("greyScreenEvidence") or "")[:4000]
             db.execute(
                 """
                 INSERT INTO anticheat_players
-                (uid, player_name, reported_system, is_online, last_seen_at, teleport_flags, aim_flags, ticket_count, raw_payload,
-                 source_file, first_synced_at, last_synced_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (uid, player_name, reported_system, is_online, last_seen_at, teleport_flags, aim_flags, ticket_count,
+                 profile_locked, grey_screened, grey_screen_reason, grey_screened_at, grey_screen_teleport_hits,
+                 grey_screen_evidence, raw_payload, source_file, first_synced_at, last_synced_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (uid) DO UPDATE SET
                     player_name = EXCLUDED.player_name,
                     reported_system = CASE
@@ -611,6 +622,12 @@ def sync_shadowhaven_anticheat_once() -> tuple[int, int]:
                     teleport_flags = EXCLUDED.teleport_flags,
                     aim_flags = EXCLUDED.aim_flags,
                     ticket_count = EXCLUDED.ticket_count,
+                    profile_locked = EXCLUDED.profile_locked,
+                    grey_screened = EXCLUDED.grey_screened,
+                    grey_screen_reason = EXCLUDED.grey_screen_reason,
+                    grey_screened_at = EXCLUDED.grey_screened_at,
+                    grey_screen_teleport_hits = EXCLUDED.grey_screen_teleport_hits,
+                    grey_screen_evidence = EXCLUDED.grey_screen_evidence,
                     raw_payload = EXCLUDED.raw_payload,
                     source_file = EXCLUDED.source_file,
                     last_synced_at = EXCLUDED.last_synced_at
@@ -631,12 +648,29 @@ def sync_shadowhaven_anticheat_once() -> tuple[int, int]:
                     int(player.get("teleportFlags") or 0),
                     int(player.get("aimFlags") or 0),
                     int(player.get("ticketCount") or 0),
+                    profile_locked,
+                    grey_screened,
+                    grey_screen_reason,
+                    grey_screened_at,
+                    grey_screen_teleport_hits,
+                    grey_screen_evidence,
                     json.dumps(player, separators=(",", ":"), default=str)[:20000],
                     SHADOWHAVEN_ANTICHEAT_DATABASE_FILE[:255],
                     synced_at,
                     synced_at,
                 ),
             )
+            if profile_locked or grey_screened:
+                active_json_locked_uids.add(uid)
+                upsert_anticheat_profile_lock(
+                    db,
+                    uid,
+                    str(player.get("playerName") or "Unknown")[:120],
+                    grey_screen_reason or "Thunder Buddies Anti-Cheat grey screen",
+                    grey_screen_evidence or json.dumps(player, separators=(",", ":"), default=str)[:4000],
+                    grey_screened_at or synced_at,
+                    "shadowhaven-json-sync",
+                )
             for event in player.get("events", []) if isinstance(player.get("events"), list) else []:
                 if not isinstance(event, dict):
                     continue
@@ -699,6 +733,9 @@ def sync_shadowhaven_anticheat_once() -> tuple[int, int]:
                     (group_key, member_uid, observed_name, synced_at),
                 )
             accepted_groups += 1
+
+        prune_anticheat_players_absent_from_json(db, current_json_uids)
+        clear_anticheat_locks_absent_from_json(db, active_json_locked_uids, synced_at)
 
         for source_key, source_path, records in (
             ("players", SHADOWHAVEN_ANTICHEAT_DATABASE_FILE, accepted_players),
@@ -1776,6 +1813,12 @@ def ensure_schema() -> None:
                 teleport_flags INTEGER NOT NULL DEFAULT 0,
                 aim_flags INTEGER NOT NULL DEFAULT 0,
                 ticket_count INTEGER NOT NULL DEFAULT 0,
+                profile_locked INTEGER NOT NULL DEFAULT 0,
+                grey_screened INTEGER NOT NULL DEFAULT 0,
+                grey_screen_reason TEXT NOT NULL DEFAULT '',
+                grey_screened_at TEXT NOT NULL DEFAULT '',
+                grey_screen_teleport_hits INTEGER NOT NULL DEFAULT 0,
+                grey_screen_evidence TEXT NOT NULL DEFAULT '',
                 raw_payload TEXT NOT NULL DEFAULT '{}',
                 source_file TEXT NOT NULL DEFAULT '',
                 first_synced_at TEXT NOT NULL,
@@ -1819,6 +1862,21 @@ def ensure_schema() -> None:
                 last_heartbeat_at TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'online',
                 PRIMARY KEY (server_id, player_uid)
+            );
+
+            CREATE TABLE IF NOT EXISTS anticheat_profile_locks (
+                id SERIAL PRIMARY KEY,
+                player_uid TEXT NOT NULL,
+                player_name TEXT NOT NULL DEFAULT '',
+                linked_user_id INTEGER,
+                reason TEXT NOT NULL DEFAULT '',
+                details TEXT NOT NULL DEFAULT '',
+                source_event_id TEXT NOT NULL DEFAULT '',
+                grey_screened_at TEXT NOT NULL,
+                cleared_at TEXT,
+                clear_reason TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS anticheat_sync_status (
@@ -2627,6 +2685,30 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE anticheat_players ADD COLUMN IF NOT EXISTS reported_system TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE anticheat_players ADD COLUMN IF NOT EXISTS is_online INTEGER NOT NULL DEFAULT 0")
     db.execute("ALTER TABLE anticheat_players ADD COLUMN IF NOT EXISTS last_seen_at TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE anticheat_players ADD COLUMN IF NOT EXISTS profile_locked INTEGER NOT NULL DEFAULT 0")
+    db.execute("ALTER TABLE anticheat_players ADD COLUMN IF NOT EXISTS grey_screened INTEGER NOT NULL DEFAULT 0")
+    db.execute("ALTER TABLE anticheat_players ADD COLUMN IF NOT EXISTS grey_screen_reason TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE anticheat_players ADD COLUMN IF NOT EXISTS grey_screened_at TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE anticheat_players ADD COLUMN IF NOT EXISTS grey_screen_teleport_hits INTEGER NOT NULL DEFAULT 0")
+    db.execute("ALTER TABLE anticheat_players ADD COLUMN IF NOT EXISTS grey_screen_evidence TEXT NOT NULL DEFAULT ''")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS anticheat_profile_locks (
+            id SERIAL PRIMARY KEY,
+            player_uid TEXT NOT NULL,
+            player_name TEXT NOT NULL DEFAULT '',
+            linked_user_id INTEGER,
+            reason TEXT NOT NULL DEFAULT '',
+            details TEXT NOT NULL DEFAULT '',
+            source_event_id TEXT NOT NULL DEFAULT '',
+            grey_screened_at TEXT NOT NULL,
+            cleared_at TEXT,
+            clear_reason TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
     db.execute("UPDATE citations SET judge_id = NULL WHERE judge_id = civ_id")
     db.execute("UPDATE citations SET final_result = status WHERE final_result = '' AND status NOT IN ('issued','contested','reviewed','reduced')")
     db.execute(
@@ -3002,6 +3084,8 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS anticheat_events_player_idx ON anticheat_events (player_uid, event_time DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS anticheat_alt_members_uid_idx ON anticheat_alt_members (uid)")
     db.execute("CREATE INDEX IF NOT EXISTS anticheat_live_sessions_heartbeat_idx ON anticheat_live_sessions (last_heartbeat_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS anticheat_profile_locks_uid_idx ON anticheat_profile_locks (player_uid, grey_screened_at DESC)")
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS anticheat_profile_locks_active_uid_idx ON anticheat_profile_locks (player_uid) WHERE cleared_at IS NULL")
     db.execute("CREATE INDEX IF NOT EXISTS game_persistence_category_idx ON game_persistence_records (category, synced_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS game_persistence_record_idx ON game_persistence_records (record_id)")
     db.execute("CREATE INDEX IF NOT EXISTS arma_game_reputation_player_key_idx ON arma_game_reputation (LOWER(player_key))")
@@ -4014,6 +4098,147 @@ def add_message(db: Database, recipient_id: int, subject: str, body: str, sender
     )
 
 
+def anticheat_linked_user_id(db: Database, player_uid: str) -> int | None:
+    uid = str(player_uid or "").strip()
+    if not uid:
+        return None
+    link = one(
+        db,
+        """
+        SELECT user_id FROM arma_account_links
+        WHERE identity_id = ? OR uid = ?
+        ORDER BY linked_at DESC LIMIT 1
+        """,
+        (uid, uid),
+    )
+    return int(link["user_id"]) if link and link.get("user_id") else None
+
+
+def public_anticheat_profile_lock(row: DbRow | dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    return {
+        "id": int(row.get("id") or 0),
+        "player_uid": row.get("player_uid") or row.get("uid") or "",
+        "player_name": row.get("player_name") or "Unknown player",
+        "reason": row.get("reason") or row.get("grey_screen_reason") or "Thunder Buddies Anti-Cheat grey screen",
+        "details": row.get("details") or row.get("grey_screen_evidence") or "",
+        "grey_screened_at": row.get("grey_screened_at") or "",
+        "source_event_id": row.get("source_event_id") or "",
+    }
+
+
+def active_anticheat_profile_lock(db: Database, user_id: int) -> DbRow | None:
+    return one(
+        db,
+        """
+        SELECT l.*, COALESCE(NULLIF(l.player_name, ''), p.player_name, link.player_name, 'Unknown player') AS player_name
+        FROM anticheat_profile_locks l
+        LEFT JOIN anticheat_players p ON p.uid = l.player_uid
+        LEFT JOIN arma_account_links link ON link.identity_id = l.player_uid OR link.uid = l.player_uid OR link.user_id = l.linked_user_id
+        WHERE l.cleared_at IS NULL
+          AND (l.linked_user_id = ? OR link.user_id = ?)
+        ORDER BY l.grey_screened_at DESC, l.id DESC LIMIT 1
+        """,
+        (user_id, user_id),
+    )
+
+
+def anticheat_lock_allowed_path(path: str) -> bool:
+    return path in {"/api/health", "/api/session", "/api/auth/logout", "/api/messages", "/api/presence"}
+
+
+def upsert_anticheat_profile_lock(
+    db: Database,
+    player_uid: str,
+    player_name: str,
+    reason: str,
+    details: str,
+    grey_screened_at: str,
+    source_event_id: str = "",
+    linked_user_id: int | None = None,
+) -> dict[str, Any]:
+    uid = str(player_uid or "").strip()[:160]
+    if not uid:
+        return {"created": False, "linked_user_id": linked_user_id}
+    linked_user_id = linked_user_id if linked_user_id is not None else anticheat_linked_user_id(db, uid)
+    ts = now_iso()
+    existing = one(db, "SELECT * FROM anticheat_profile_locks WHERE player_uid = ? AND cleared_at IS NULL", (uid,))
+    if existing:
+        db.execute(
+            """
+            UPDATE anticheat_profile_locks
+            SET player_name = CASE WHEN ? <> '' THEN ? ELSE player_name END,
+                linked_user_id = COALESCE(?, linked_user_id),
+                reason = CASE WHEN ? <> '' THEN ? ELSE reason END,
+                details = CASE WHEN ? <> '' THEN ? ELSE details END,
+                source_event_id = CASE WHEN ? <> '' THEN ? ELSE source_event_id END,
+                grey_screened_at = CASE WHEN ? <> '' THEN ? ELSE grey_screened_at END,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                player_name[:120], player_name[:120], linked_user_id,
+                reason[:500], reason[:500], details[:4000], details[:4000],
+                source_event_id[:120], source_event_id[:120], grey_screened_at[:100], grey_screened_at[:100],
+                ts, existing["id"],
+            ),
+        )
+        return {"created": False, "linked_user_id": linked_user_id, "id": int(existing["id"])}
+    created = one(
+        db,
+        """
+        INSERT INTO anticheat_profile_locks
+        (player_uid, player_name, linked_user_id, reason, details, source_event_id, grey_screened_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
+        """,
+        (uid, player_name[:120], linked_user_id, reason[:500], details[:4000], source_event_id[:120], grey_screened_at[:100] or ts, ts, ts),
+    )
+    if linked_user_id:
+        add_message(
+            db,
+            linked_user_id,
+            "Faircroft profile locked by Thunder Buddies Anti-Cheat",
+            f"Your Faircroft profile was locked because Thunder Buddies Anti-Cheat grey-screened your in-game profile. Reason: {reason or 'Anti-cheat review'}. Only Dev Chat is open until staff clears the review.",
+        )
+    return {"created": True, "linked_user_id": linked_user_id, "id": int(created["id"] if created else 0)}
+
+
+def prune_anticheat_players_absent_from_json(db: Database, current_json_uids: set[str]) -> None:
+    source_file = SHADOWHAVEN_ANTICHEAT_DATABASE_FILE[:255]
+    if current_json_uids:
+        db.execute(
+            "DELETE FROM anticheat_players WHERE source_file = ? AND NOT (uid = ANY(?))",
+            (source_file, list(current_json_uids)),
+        )
+        return
+    db.execute("DELETE FROM anticheat_players WHERE source_file = ?", (source_file,))
+
+
+def clear_anticheat_locks_absent_from_json(db: Database, active_json_locked_uids: set[str], synced_at: str) -> None:
+    active_locks = all_rows(db, "SELECT * FROM anticheat_profile_locks WHERE cleared_at IS NULL")
+    for lock in active_locks:
+        uid = str(lock.get("player_uid") or "").strip()
+        if not uid or uid in active_json_locked_uids:
+            continue
+        db.execute(
+            """
+            UPDATE anticheat_profile_locks
+            SET cleared_at = ?, clear_reason = ?, updated_at = ?
+            WHERE id = ? AND cleared_at IS NULL
+            """,
+            (synced_at, "Thunder Buddies JSON no longer contains an active grey screen after restart cleanup", synced_at, lock["id"]),
+        )
+        linked_user_id = lock.get("linked_user_id")
+        if linked_user_id:
+            add_message(
+                db,
+                int(linked_user_id),
+                "Anti-cheat profile lock removed",
+                "Your Faircroft profile lock was removed after the Thunder Buddies JSON restart cleanup synced back clean.",
+            )
+
+
 def public_fnn_edition(row: DbRow | None) -> dict[str, Any] | None:
     if not row:
         return None
@@ -4675,10 +4900,19 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 user = self.current_user(db)
                 if user and path not in ("/api/session", "/api/auth/logout"):
                     block = active_account_block(db, int(user["id"]))
-                    timeout_allowed = path in ("/api/health", "/api/profile", "/api/bank", "/api/presence")
-                    if block and (block["sanction_type"] == "ban" or not timeout_allowed):
+                    anticheat_lock = active_anticheat_profile_lock(db, int(user["id"]))
+                    if block and block["sanction_type"] == "ban":
                         self.error(403, f"Account {block['sanction_type']}: {block['reason']}")
                         return
+                    if anticheat_lock and not has_any(user, "owner", "admin", "dev"):
+                        if not anticheat_lock_allowed_path(path):
+                            self.error(403, f"Anti-cheat profile lock: {anticheat_lock['reason']}")
+                            return
+                    else:
+                        timeout_allowed = path in ("/api/health", "/api/profile", "/api/bank", "/api/presence")
+                        if block and not timeout_allowed:
+                            self.error(403, f"Account {block['sanction_type']}: {block['reason']}")
+                            return
                 if path == "/api/health" and method == "GET":
                     self.send_json(200, {"ok": True, "time": now_iso()})
                 elif path == "/api/auth/register" and method == "POST":
@@ -5146,7 +5380,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             and not beta_response
         )
         apps = app_catalog(user, settings)
-        if block and block["sanction_type"] == "timeout":
+        anticheat_lock = active_anticheat_profile_lock(db, int(user["id"]))
+        anticheat_profile_locked = bool(anticheat_lock and not has_any(user, "owner", "admin", "dev"))
+        if anticheat_profile_locked:
+            apps = [
+                {"id": "messages", "label": "Dev Chat", "icon": "message", "enabled": True, "coming_soon": False, "hidden": False},
+            ]
+        if block and block["sanction_type"] == "timeout" and not anticheat_profile_locked:
             apps = [
                 {"id": "profile", "label": "Profile", "icon": "user", "enabled": True, "coming_soon": False, "hidden": False},
                 {"id": "bank", "label": "Bank", "icon": "bank", "enabled": True, "coming_soon": False, "hidden": False},
@@ -5182,6 +5422,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     if block and block["sanction_type"] == "timeout"
                     else None
                 ),
+                "anti_cheat_lock": public_anticheat_profile_lock(anticheat_lock) if anticheat_profile_locked else None,
                 "system": {
                     "update_lockdown_enabled": settings["update_lockdown_enabled"],
                     "update_lockdown_message": settings["update_lockdown_message"],
@@ -6186,6 +6427,51 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                             """,
                             (server_id, player_uid, player_name, user_id, created_at, received_at),
                         )
+            grey_screen_values = {action.strip().lower(), event_type.strip().lower()}
+            grey_screen_event = bool(grey_screen_values & {"anticheat.grey_screened", "grey_screened", "grey_screen", "profile.locked"})
+            if grey_screen_event:
+                player_uid = str(event.get("Uid") or event.get("IdentityId") or "").strip()[:160]
+                player_name = str(event.get("PlayerName") or "Unknown player")[:120]
+                if player_uid:
+                    lock_result = upsert_anticheat_profile_lock(
+                        db,
+                        player_uid,
+                        player_name,
+                        reason or "Thunder Buddies Anti-Cheat grey screen",
+                        json.dumps(event, separators=(",", ":"), default=str)[:4000],
+                        created_at,
+                        event_id,
+                        int(user_id) if user_id else None,
+                    )
+                    db.execute(
+                        """
+                        INSERT INTO anticheat_players
+                        (uid, player_name, reported_system, is_online, last_seen_at, profile_locked, grey_screened,
+                         grey_screen_reason, grey_screened_at, grey_screen_evidence, raw_payload, source_file,
+                         first_synced_at, last_synced_at)
+                        VALUES (?, ?, ?, 1, ?, 1, 1, ?, ?, ?, ?, 'arma_event_outbox', ?, ?)
+                        ON CONFLICT (uid) DO UPDATE SET
+                            player_name = EXCLUDED.player_name,
+                            reported_system = CASE WHEN EXCLUDED.reported_system <> '' THEN EXCLUDED.reported_system ELSE anticheat_players.reported_system END,
+                            is_online = 1,
+                            last_seen_at = EXCLUDED.last_seen_at,
+                            profile_locked = 1,
+                            grey_screened = 1,
+                            grey_screen_reason = EXCLUDED.grey_screen_reason,
+                            grey_screened_at = EXCLUDED.grey_screened_at,
+                            grey_screen_evidence = EXCLUDED.grey_screen_evidence,
+                            raw_payload = EXCLUDED.raw_payload,
+                            source_file = EXCLUDED.source_file,
+                            last_synced_at = EXCLUDED.last_synced_at
+                        """,
+                        (
+                            player_uid, player_name, str(event.get("Platform") or "")[:80], created_at,
+                            reason or "Thunder Buddies Anti-Cheat grey screen", created_at,
+                            json.dumps(event, separators=(",", ":"), default=str)[:4000],
+                            json.dumps(event, separators=(",", ":"), default=str)[:20000], received_at, received_at,
+                        ),
+                    )
+                    print(f"Faircroft anti-cheat lock recorded for {player_name} ({player_uid}); linked_user_id={lock_result.get('linked_user_id')}")
             accepted.append(event_id)
         self.send_json(200, {"ok": True, "accepted_event_ids": accepted, "skipped_event_ids": skipped})
 
@@ -10430,6 +10716,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                    account.name AS account_name,
                    account.civ_number, p.last_seen_at,
                    p.is_online AS online,
+                   active_lock.id AS active_lock_id,
+                   active_lock.reason AS active_lock_reason,
+                   active_lock.grey_screened_at AS active_lock_at,
                    COALESCE(alts.alt_group_count, 0) AS alt_group_count
             FROM anticheat_players p
             LEFT JOIN LATERAL (
@@ -10437,6 +10726,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 WHERE l.identity_id = p.uid OR l.uid = p.uid
                 ORDER BY l.linked_at DESC LIMIT 1
             ) link ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT l.id, l.reason, l.grey_screened_at FROM anticheat_profile_locks l
+                WHERE l.player_uid = p.uid AND l.cleared_at IS NULL
+                ORDER BY l.grey_screened_at DESC, l.id DESC LIMIT 1
+            ) active_lock ON TRUE
             LEFT JOIN users account ON account.id = link.user_id
             LEFT JOIN (
                 SELECT uid, COUNT(*) AS alt_group_count
@@ -10464,11 +10758,26 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         anticheat_sync_status = all_rows(
             db, "SELECT * FROM anticheat_sync_status ORDER BY source_key"
         )
+        anticheat_profile_locks = all_rows(
+            db,
+            """
+            SELECT l.*, account.name AS account_name, account.civ_number
+            FROM anticheat_profile_locks l
+            LEFT JOIN users account ON account.id = l.linked_user_id
+            ORDER BY CASE WHEN l.cleared_at IS NULL THEN 0 ELSE 1 END, l.grey_screened_at DESC, l.id DESC
+            LIMIT 300
+            """,
+        )
         anticheat_online = sum(1 for row in anticheat_players if row.get("online"))
         anticheat_flagged = sum(
             1 for row in anticheat_players
             if int(row.get("teleport_flags") or 0) + int(row.get("aim_flags") or 0) > 0
         )
+        anticheat_grey_screened = sum(
+            1 for row in anticheat_players
+            if int(row.get("grey_screened") or 0) or int(row.get("profile_locked") or 0) or row.get("active_lock_id")
+        )
+        anticheat_active_locks = sum(1 for row in anticheat_profile_locks if not row.get("cleared_at"))
         persistence_sync = one(
             db,
             "SELECT * FROM game_persistence_sync_status ORDER BY updated_at DESC LIMIT 1",
@@ -10586,12 +10895,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "events": [dict(row) for row in anticheat_events],
                     "alt_groups": [dict(row) for row in anticheat_alt_groups],
                     "alt_members": [dict(row) for row in anticheat_alt_members],
+                    "profile_locks": [dict(row) for row in anticheat_profile_locks],
                     "sync_status": [dict(row) for row in anticheat_sync_status],
                     "presence_source": "anticheat_player_json",
                     "metrics": {
                         "players": len(anticheat_players),
                         "online": anticheat_online,
                         "flagged": anticheat_flagged,
+                        "grey_screened": anticheat_grey_screened,
+                        "active_locks": anticheat_active_locks,
                         "alt_groups": len(anticheat_alt_groups),
                         "events": len(anticheat_events),
                     },
