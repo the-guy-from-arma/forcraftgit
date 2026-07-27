@@ -7,6 +7,7 @@ import hmac
 import json
 import mimetypes
 import os
+import re
 import secrets
 import socket
 import stat
@@ -981,6 +982,7 @@ def public_user(user: DbRow) -> dict[str, Any]:
         "name_change_locked": bool(user.get("name_change_locked", 0)),
         "referral_code": user.get("referral_code") or "",
         "referred_by_user_id": user.get("referred_by_user_id"),
+        "profile_photo": user.get("profile_photo") or "",
         "created_at": user["created_at"],
     }
 
@@ -1071,6 +1073,116 @@ def generate_vehicle_vin(db: Database) -> str:
         if not one(db, "SELECT id FROM dmv_vehicles WHERE vin = ?", (vin,)):
             return vin
     raise RuntimeError("Unable to generate unique vehicle VIN")
+
+
+def linked_game_vehicle_rows(db: Database, user_id: int) -> list[DbRow]:
+    link = one(db, "SELECT identity_id, uid, rpl_identity FROM arma_account_links WHERE user_id = ?", (user_id,))
+    if not link:
+        return []
+    identifiers = [str(link.get(key) or "").strip() for key in ("identity_id", "uid", "rpl_identity")]
+    identifiers = [value for value in dict.fromkeys(identifiers) if len(value) >= 8]
+    if not identifiers:
+        return []
+    clauses: list[str] = []
+    params: list[str] = []
+    for identity in identifiers:
+        clauses.extend(["owner_identity = ?", "identity_values LIKE ?"])
+        params.extend([identity, f'%"{identity}"%'])
+    return all_rows(
+        db,
+        f"""SELECT record_id, title, prefab, record_status, summary_payload, raw_payload, source_modified_at
+            FROM game_persistence_records
+            WHERE LOWER(category) = 'vehicles' AND ({" OR ".join(clauses)})
+            ORDER BY source_modified_at DESC LIMIT 60""",
+        tuple(params),
+    )
+
+
+def imported_vehicle_details(row: DbRow) -> dict[str, Any]:
+    try:
+        raw = json.loads(row.get("raw_payload") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        raw = {}
+    fields = persistence_scalar_fields(raw, 4000)
+    lowered = [(path.lower().rsplit(".", 1)[-1], value) for path, value in fields]
+
+    def first(*needles: str) -> str:
+        for leaf, value in lowered:
+            if any(needle in leaf for needle in needles):
+                return str(value).strip()
+        return ""
+
+    current_year = utcnow().year
+    year_text = first("vehicleyear", "modelyear", "year")
+    year_match = re.search(r"\b(19\d{2}|20\d{2})\b", year_text)
+    year = int(year_match.group(1)) if year_match else current_year
+    if year < 1900 or year > current_year + 1:
+        year = current_year
+    title = str(row.get("title") or "").strip()
+    prefab_name = Path(str(row.get("prefab") or "")).stem.replace("_", " ").strip()
+    make = first("manufacturer", "vehiclemake", "make")[:40] or "Imported"
+    model = first("vehiclemodel", "model", "vehiclename", "displayname")[:40] or title[:40] or prefab_name[:40] or "Arma Vehicle"
+    color = first("vehiclecolor", "colour", "color")[:30] or "Unspecified"
+    return {"vehicle_year": year, "vehicle_make": make, "vehicle_model": model, "vehicle_color": color}
+
+
+def imported_vehicle_plate(db: Database, record_id: str) -> str:
+    base = f"FC{hashlib.sha256(record_id.encode('utf-8')).hexdigest()[:7]}".upper()
+    plate = base
+    suffix = 1
+    while one(db, "SELECT id FROM dmv_vehicles WHERE plate = ?", (plate,)):
+        suffix += 1
+        plate = f"{base[:9]}{suffix}"[:12]
+    return plate
+
+
+def sync_linked_vehicles_to_dmv(db: Database, user_id: int) -> list[dict[str, Any]]:
+    rows = linked_game_vehicle_rows(db, user_id)
+    if not rows:
+        return []
+    if not one(db, "SELECT id FROM dmv_records WHERE user_id = ?", (user_id,)):
+        create_default_dmv(db, user_id)
+    ts = now_iso()
+    imported: list[dict[str, Any]] = []
+    for row in rows:
+        record_id = str(row.get("record_id") or "").strip()[:180]
+        if not record_id:
+            continue
+        existing = one(
+            db,
+            "SELECT * FROM dmv_vehicles WHERE user_id = ? AND source = 'fcrpmussalo' AND source_record_id = ?",
+            (user_id, record_id),
+        )
+        if existing:
+            imported.append(dict(existing))
+            continue
+        details = imported_vehicle_details(row)
+        plate = imported_vehicle_plate(db, record_id)
+        vin = generate_vehicle_vin(db)
+        created = db.execute(
+            """
+            INSERT INTO dmv_vehicles
+            (user_id, vehicle_year, vehicle_make, vehicle_model, vehicle_color, plate, vin,
+             registration_status, insurance_status, source, source_record_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'Registration Required', 'Not Insured',
+                    'fcrpmussalo', ?, ?, ?)
+            ON CONFLICT DO NOTHING
+            RETURNING *
+            """,
+            (
+                user_id, details["vehicle_year"], details["vehicle_make"], details["vehicle_model"],
+                details["vehicle_color"], plate, vin, record_id, ts, ts,
+            ),
+        ).fetchone()
+        if created:
+            imported.append(dict(created))
+            add_message(
+                db,
+                user_id,
+                "Vehicle detected — DMV action required",
+                f"{details['vehicle_year']} {details['vehicle_make']} {details['vehicle_model']} was imported from your linked Arma profile. Confirm its registration details and add insurance before driving.",
+            )
+    return imported
 
 
 def generate_record_number(db: Database, table: str, column: str, prefix: str) -> str:
@@ -1245,6 +1357,19 @@ BAR_EXAM_BANKS = {
     "defense": DEFENSE_ATTORNEY_EXAM_QUESTIONS,
     "press": PRESS_PASS_EXAM_QUESTIONS,
 }
+
+DRIVER_EXAM_QUESTIONS = (
+    ("Before beginning a traffic stop, what should a driver do?", ("Stop immediately in the travel lane", "Pull safely to the right and remain in the vehicle", "Exit and approach the officer", "Continue until reaching home"), "B"),
+    ("At an uncontrolled intersection, who generally has the right of way?", ("The larger vehicle", "The fastest vehicle", "The vehicle arriving first", "The vehicle on the left"), "C"),
+    ("What should you do when an emergency vehicle approaches with lights and siren?", ("Speed up", "Stop wherever you are", "Pull over safely and yield", "Follow it through traffic"), "C"),
+    ("When may you drive after consuming alcohol?", ("Whenever you feel fine", "Only when you can operate safely and are not impaired", "After drinking coffee", "After ten minutes"), "B"),
+    ("What does a solid red traffic signal require?", ("Slow and continue", "Stop before the line and proceed only when legally permitted", "Yield without stopping", "Turn in any direction"), "B"),
+    ("What is the safest response to a vehicle following too closely?", ("Brake-check it", "Increase following distance ahead and allow it to pass", "Accelerate far above the limit", "Block it from passing"), "B"),
+    ("Before changing lanes, a driver should:", ("Signal, check mirrors, and check the blind spot", "Only sound the horn", "Brake to a complete stop", "Turn without signaling"), "A"),
+    ("If involved in a collision, a driver should:", ("Leave before police arrive", "Stop, secure the scene, exchange information, and report as required", "Hide the vehicle", "Only call a friend"), "B"),
+    ("A yellow center line generally separates:", ("Traffic moving in opposite directions", "Parking spaces", "Bicycle lanes only", "Traffic moving in the same direction"), "A"),
+    ("During roleplay, why must a driver carry a license, registration, and insurance?", ("They are optional decorations", "They establish lawful driving and vehicle responsibility during a stop", "Only commercial drivers need them", "They replace vehicle plates"), "B"),
+)
 DEPARTMENT_POSTINGS = (
     {
         "key": "sheriff",
@@ -1279,7 +1404,7 @@ DEPARTMENT_POSTINGS = (
         "command_roles": ("judge",),
         "badge": "Take the Faircroft Bar Exam",
         "schedule": "Represent clients, review case law, prepare arguments, and work inside the Faircroft justice system.",
-        "requirements": "Complete all 20 Bar Exam questions. Results are reviewed by the judiciary and Indeed staff.",
+        "requirements": "Complete all 20 Bar Exam questions. Examination review and lawyer licensing are handled exclusively by the Court.",
     },
     {
         "key": "prosecutor",
@@ -1306,7 +1431,7 @@ DEPARTMENT_POSTINGS = (
         "command_roles": ("judge",),
         "badge": "Public Defender Candidate",
         "schedule": "Represent defendants, protect client rights, challenge unsupported evidence, and provide ethical courtroom advocacy.",
-        "requirements": "Complete the Defense Attorney Certification Examination. Results and appointment are reviewed by the judiciary and Indeed staff.",
+        "requirements": "Complete the Defense Attorney Certification Examination. Certification and lawyer licensing are handled exclusively by the Court.",
     },
     {
         "key": "press",
@@ -1344,6 +1469,8 @@ SYSTEM_SETTING_DEFAULTS = {
     "splash_start_at": "",
     "splash_end_at": "",
     "splash_revision": "1",
+    "applications_accepting": "1",
+    "fnn_press_pass_limit": "25",
     "app_visibility": "{}",
 }
 APP_VISIBILITY_OPTIONS = (
@@ -1863,7 +1990,7 @@ def ensure_schema() -> None:
             CREATE TABLE IF NOT EXISTS dmv_records (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL UNIQUE,
-                license_status TEXT NOT NULL DEFAULT 'Pending verification',
+                license_status TEXT NOT NULL DEFAULT 'Exam Required',
                 license_class TEXT NOT NULL DEFAULT 'Class D',
                 vehicle_make TEXT NOT NULL DEFAULT 'Unregistered',
                 vehicle_model TEXT NOT NULL DEFAULT 'Vehicle',
@@ -2426,6 +2553,26 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS name_change_unlocked_at TEXT")
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code TEXT")
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by_user_id INTEGER")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_photo TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE dmv_vehicles ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'faircroft_dmv'")
+    db.execute("ALTER TABLE dmv_vehicles ADD COLUMN IF NOT EXISTS source_record_id TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE dmv_vehicles ADD COLUMN IF NOT EXISTS insurance_policy_number TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE dmv_vehicles ADD COLUMN IF NOT EXISTS insurance_expires_at TEXT")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dmv_driver_exam_attempts (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            score INTEGER NOT NULL,
+            total INTEGER NOT NULL DEFAULT 10,
+            passed INTEGER NOT NULL DEFAULT 0,
+            answers_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS dmv_driver_exam_user_idx ON dmv_driver_exam_attempts (user_id, created_at DESC)")
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_civ_number_unique ON users (civ_number)")
     for user in all_rows(db, "SELECT id FROM users WHERE civ_number IS NULL"):
         db.execute("UPDATE users SET civ_number = ? WHERE id = ?", (generate_civ_number(db), user["id"]))
@@ -2983,6 +3130,10 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         splash_revision = max(1, int(raw.get("splash_revision") or "1"))
     except (TypeError, ValueError):
         splash_revision = 1
+    try:
+        fnn_press_pass_limit = max(0, min(500, int(raw.get("fnn_press_pass_limit") or "25")))
+    except (TypeError, ValueError):
+        fnn_press_pass_limit = 25
     banner_tone = str(raw.get("system_banner_tone") or "info").strip().lower()
     if banner_tone not in ("info", "success", "warning", "critical"):
         banner_tone = "info"
@@ -3030,6 +3181,8 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "splash_start_at": splash_start_at,
         "splash_end_at": splash_end_at,
         "splash_revision": splash_revision,
+        "applications_accepting": str(raw.get("applications_accepting") or "1") in ("1", "true", "True", "yes", "on"),
+        "fnn_press_pass_limit": fnn_press_pass_limit,
         "app_visibility": app_visibility,
     }
 
@@ -3112,7 +3265,7 @@ def apply_auto_verification(db: Database) -> int:
         db.execute("UPDATE users SET verified = 1 WHERE id = ?", (user_id,))
         create_default_dmv(db, user_id)
         db.execute(
-            "UPDATE dmv_records SET license_status = 'Valid', registration_status = 'Active', insurance_status = 'Active', updated_at = ? WHERE user_id = ?",
+            "UPDATE dmv_records SET license_status = 'Exam Required', updated_at = ? WHERE user_id = ?",
             (ts, user_id),
         )
         add_message(
@@ -3125,44 +3278,9 @@ def apply_auto_verification(db: Database) -> int:
 
 
 def apply_auto_license_approval(db: Database) -> int:
-    settings = get_system_settings(db)
-    if not settings["autopilot_license_enabled"]:
-        return 0
-    cutoff = (utcnow() - dt.timedelta(minutes=int(settings["autopilot_license_minutes"]))).isoformat()
-    rows = all_rows(
-        db,
-        """
-        SELECT a.id, a.user_id, a.application_type, a.license_class, u.name
-        FROM dmv_license_applications a
-        JOIN users u ON u.id = a.user_id
-        LEFT JOIN dmv_records d ON d.user_id = a.user_id
-        WHERE a.status IN ('submitted','pending','under_review')
-          AND a.created_at <= ?
-          AND COALESCE(d.license_status, '') NOT IN ('Suspended','Revoked')
-        ORDER BY a.created_at ASC
-        LIMIT 100
-        """,
-        (cutoff,),
-    )
-    ts = now_iso()
-    for row in rows:
-        user_id = int(row["user_id"])
-        create_default_dmv(db, user_id)
-        db.execute(
-            "UPDATE dmv_license_applications SET status = 'approved', updated_at = ? WHERE id = ?",
-            (ts, row["id"]),
-        )
-        db.execute(
-            "UPDATE dmv_records SET license_status = 'Valid', license_class = ?, updated_at = ? WHERE user_id = ?",
-            (row["license_class"], ts, user_id),
-        )
-        add_message(
-            db,
-            user_id,
-            "Driver license approved",
-            f"Your {row['application_type']} was automatically approved after {settings['autopilot_license_minutes']} minutes.",
-        )
-    return len(rows)
+    # Licenses are now issued exclusively by the scored DMV driver exam.
+    # Retaining this no-op prevents legacy scheduled callers from bypassing it.
+    return 0
 
 
 def seed_owner(db: Database) -> None:
@@ -3571,7 +3689,7 @@ def create_default_dmv(db: Database, user_id: int) -> None:
         """
         INSERT INTO dmv_records
         (user_id, license_status, license_class, vehicle_make, vehicle_model, vehicle_color, plate, registration_status, insurance_status, updated_at)
-        VALUES (?, 'Pending verification', 'Class D', 'Unregistered', 'Vehicle', 'Gray', ?, 'Pending', 'Pending', ?)
+        VALUES (?, 'Exam Required', 'Class D', 'Unregistered', 'Vehicle', 'Gray', ?, 'Pending', 'Pending', ?)
         ON CONFLICT (user_id) DO NOTHING
         """,
         (user_id, plate, now_iso()),
@@ -4597,6 +4715,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_profile_update_car_entry_code(db, user)
                 elif path == "/api/profile/callsign" and method == "POST":
                     self.api_profile_update_callsign(db, user)
+                elif path == "/api/profile/photo" and method == "POST":
+                    self.api_profile_update_photo(db, user)
                 elif path == "/api/profile/name" and method == "POST":
                     self.api_profile_change_name(db, user)
                 elif path == "/api/profile/characters" and method == "POST":
@@ -4641,8 +4761,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dmv_update(db, user)
                 elif path == "/api/dmv/license-applications" and method == "POST":
                     self.api_dmv_apply_license(db, user)
+                elif path == "/api/dmv/driver-exam" and method == "POST":
+                    self.api_dmv_driver_exam(db, user)
                 elif path == "/api/dmv/vehicles" and method == "POST":
                     self.api_dmv_register_vehicle(db, user)
+                elif path.startswith("/api/dmv/vehicles/") and path.endswith("/insurance") and method == "PATCH":
+                    self.api_dmv_vehicle_insurance(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/dmv/vehicles/") and method == "PATCH":
+                    self.api_dmv_update_vehicle(db, user, self.path_int(path, 3))
                 elif path == "/api/messages" and method == "GET":
                     self.api_messages(db, user)
                 elif path == "/api/messages" and method == "POST":
@@ -4693,6 +4819,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_contest_case(db, user, self.path_int(path, 3))
                 elif path == "/api/court/cases" and method == "GET":
                     self.api_judge_cases(db, user)
+                elif path.startswith("/api/court/licenses/") and method == "PATCH":
+                    self.api_admin_review_department_application(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/court/cases/") and method == "PATCH":
                     self.api_update_case(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/court/petitions/") and method == "PATCH":
@@ -4787,6 +4915,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_create_warning(db, user)
                 elif path == "/api/dev-tools/app-visibility" and method == "PATCH":
                     self.api_dev_update_app_visibility(db, user)
+                elif path == "/api/dev-tools/application-intake" and method == "PATCH":
+                    self.api_dev_update_application_intake(db, user)
+                elif path == "/api/dev-tools/fnn-settings" and method == "PATCH":
+                    self.api_dev_update_fnn_settings(db, user)
                 elif path.startswith("/api/dev-tools/warnings/") and path.endswith("/resolve") and method == "POST":
                     self.api_dev_resolve_warning(db, user, self.path_int(path, 3))
                 elif path == "/api/fine-settlement" and method == "GET":
@@ -4976,6 +5108,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         apply_auto_license_approval(db)
         settings = get_system_settings(db)
         user = one(db, "SELECT * FROM users WHERE id = ?", (user["id"],)) or user
+        sync_linked_vehicles_to_dmv(db, int(user["id"]))
         block = active_account_block(db, int(user["id"]))
         if block and block["sanction_type"] == "ban":
             self.send_json(
@@ -4993,6 +5126,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         unread = one(db, "SELECT COUNT(*) AS count FROM messages WHERE recipient_id = ? AND read_at IS NULL", (user["id"],))
         arma_linked = bool(one(db, "SELECT id FROM arma_account_links WHERE user_id = ?", (user["id"],)))
+        vehicle_compliance = all_rows(
+            db,
+            """SELECT id, vehicle_year, vehicle_make, vehicle_model, plate, registration_status, insurance_status
+               FROM dmv_vehicles
+               WHERE user_id = ?
+                 AND (registration_status <> 'Active' OR insurance_status <> 'Active')
+               ORDER BY created_at DESC""",
+            (user["id"],),
+        )
         beta_response = one(
             db,
             "SELECT response FROM beta_program_responses WHERE user_id = ? AND campaign_id = ?",
@@ -5025,6 +5167,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "income": income_snapshot(db, user),
                 "arma_linked": arma_linked,
                 "requires_arma_link": bool(user["verified"]) and not arma_linked,
+                "dmv_compliance": {
+                    "required": bool(vehicle_compliance),
+                    "vehicles": [dict(row) for row in vehicle_compliance],
+                },
                 "sanction": (
                     {
                         "type": block["sanction_type"],
@@ -5375,6 +5521,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         active_character = ensure_default_character(db, int(user["id"]), str(user["name"] or "Civilian"))
         user = one(db, "SELECT * FROM users WHERE id = ?", (user["id"],)) or user
+        sync_linked_vehicles_to_dmv(db, int(user["id"]))
+        profile_vehicles = all_rows(
+            db,
+            """SELECT id, vehicle_year, vehicle_make, vehicle_model, vehicle_color, plate,
+                      registration_status, insurance_status, source
+               FROM dmv_vehicles WHERE user_id = ? ORDER BY created_at DESC""",
+            (user["id"],),
+        )
         characters = all_rows(
             db,
             """
@@ -5446,6 +5600,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "arma_link": dict(link) if link else None,
                 "recent_activity": [dict(row) for row in activity],
                 "claimed_codes": [dict(row) for row in pending_codes],
+                "dmv_vehicles": [dict(row) for row in profile_vehicles],
                 "referrals": {
                     "code": user.get("referral_code") or "",
                     "bonus_amount": REFERRAL_BONUS_AMOUNT,
@@ -5511,6 +5666,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("UPDATE users SET callsign = ? WHERE id = ?", (callsign, user["id"]))
         updated = one(db, "SELECT * FROM users WHERE id = ?", (user["id"],))
         self.send_json(200, {"ok": True, "user": public_user(updated), "callsign": callsign})
+
+    def api_profile_update_photo(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        photo = str(self.read_json().get("profile_photo") or "").strip()
+        if not photo.startswith(("data:image/jpeg;base64,", "data:image/png;base64,", "data:image/webp;base64,")):
+            self.error(400, "Profile photo must be a JPEG, PNG, or WebP image")
+            return
+        if len(photo) > 1_500_000:
+            self.error(413, "Profile photo is too large; use a cropped face image under 1 MB")
+            return
+        db.execute("UPDATE users SET profile_photo = ? WHERE id = ?", (photo, user["id"]))
+        self.send_json(200, {"ok": True, "profile_photo": photo})
 
     def api_profile_activate_character(self, db: Database, user: DbRow | None, character_id: int) -> None:
         if not user:
@@ -6085,6 +6254,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "active_jobs": [],
                 "income": income_snapshot(db, user),
                 "department_postings": [dict(posting) for posting in DEPARTMENT_POSTINGS],
+                "applications_accepting": get_system_settings(db)["applications_accepting"],
                 "exam_questions": {
                     key: [[question, list(options)] for question, options, _answer in questions]
                     for key, questions in BAR_EXAM_BANKS.items()
@@ -6096,6 +6266,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
     def api_apply_department(self, db: Database, user: DbRow | None) -> None:
         if not user:
             self.error(401, "Authentication required")
+            return
+        if not get_system_settings(db)["applications_accepting"]:
+            self.error(403, "Applications are not being accepted at this time. Please try again later. Sincerely, Faircroft Government.")
             return
         payload = self.read_json()
         department_key = str(payload.get("department_key") or "").strip().lower()
@@ -6156,7 +6329,31 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 ts,
             ),
         ).fetchone()
-        add_message(db, user["id"], "Department application submitted", f"Your {posting['label']} application {created['application_number']} was submitted for command review.")
+        press_pass_awarded = False
+        press_pass_capacity_reached = False
+        if posting.get("form_type") == "press_exam":
+            exam_record = json.loads(statement)
+            if int(exam_record.get("score") or 0) >= 8:
+                settings = get_system_settings(db)
+                pass_limit = int(settings["fnn_press_pass_limit"])
+                press_holders = sum(1 for account in all_rows(db, "SELECT roles FROM users") if has_any(account, "press"))
+                if press_holders < pass_limit:
+                    applicant = one(db, "SELECT * FROM users WHERE id = ?", (user["id"],))
+                    updated_roles = sorted(set([*roles_for(applicant), "press"])) if applicant else ["press"]
+                    db.execute("UPDATE users SET verified = 1, roles = ? WHERE id = ?", (json.dumps(updated_roles), user["id"]))
+                    db.execute(
+                        "UPDATE department_applications SET status = 'approved', reviewer_notes = ?, updated_at = ? WHERE id = ?",
+                        ("Automatically certified by the FNN examination system.", ts, created["id"]),
+                    )
+                    press_pass_awarded = True
+                else:
+                    press_pass_capacity_reached = True
+        if not press_pass_awarded:
+            add_message(db, user["id"], "Department application submitted", f"Your {posting['label']} application {created['application_number']} was submitted for review.")
+        if press_pass_awarded:
+            add_message(db, user["id"], "FNN Press Pass issued", "You passed the FNN examination. Your Press Pass was issued automatically and Press Desk access is now active.")
+        elif press_pass_capacity_reached:
+            add_message(db, user["id"], "FNN Press Pass waitlisted", "You passed the FNN examination, but the current Press Pass limit has been reached. Your result remains on file for newsroom review.")
         recipient_roles = posting_command_roles(posting)
         recipient_patterns = tuple(f"%{role}%" for role in recipient_roles)
         staff = all_rows(
@@ -6173,7 +6370,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     f"{user['name']} applied for {posting['label']} ({created['application_number']}).\n\n{message_body}",
                     user["id"],
                 )
-        self.send_json(201, {"ok": True, "id": int(created["id"]), "application_number": created["application_number"]})
+        self.send_json(201, {"ok": True, "id": int(created["id"]), "application_number": created["application_number"], "press_pass_awarded": press_pass_awarded, "press_pass_capacity_reached": press_pass_capacity_reached})
 
     def api_apply_job(self, db: Database, user: DbRow | None, job_id: int) -> None:
         self.error(410, "Passive income jobs have been removed from this server.")
@@ -6374,13 +6571,34 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not record:
             create_default_dmv(db, user["id"])
             record = one(db, "SELECT * FROM dmv_records WHERE user_id = ?", (user["id"],))
+        sync_linked_vehicles_to_dmv(db, int(user["id"]))
         vehicles = all_rows(db, "SELECT * FROM dmv_vehicles WHERE user_id = ? ORDER BY created_at DESC", (user["id"],))
+        game_vehicles: list[dict[str, Any]] = []
+        for row in linked_game_vehicle_rows(db, int(user["id"])):
+            item = dict(row)
+            item.pop("raw_payload", None)
+            try:
+                item["summary"] = json.loads(item.pop("summary_payload") or "{}")
+            except json.JSONDecodeError:
+                item["summary"] = {}
+            game_vehicles.append(item)
         applications = all_rows(
             db,
             "SELECT * FROM dmv_license_applications WHERE user_id = ? ORDER BY created_at DESC",
             (user["id"],),
         )
         server_now = utcnow()
+        exam_attempts = all_rows(db, "SELECT score, total, passed, created_at FROM dmv_driver_exam_attempts WHERE user_id = ? ORDER BY created_at DESC LIMIT 12", (user["id"],))
+        failures = 0
+        for attempt in exam_attempts:
+            if bool(attempt["passed"]):
+                break
+            failures += 1
+        locked_until = ""
+        if failures >= 3 and exam_attempts:
+            lock_end = parse_iso(exam_attempts[0]["created_at"]) + dt.timedelta(hours=48)
+            if lock_end > server_now:
+                locked_until = lock_end.isoformat()
         application_payload = []
         approval_minutes = int(settings["autopilot_license_minutes"])
         for application in applications:
@@ -6398,6 +6616,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             {
                 "record": dict(record),
                 "vehicles": vehicles,
+                "game_vehicles": game_vehicles,
+                "driver_exam": {
+                    "questions": [[question, list(options)] for question, options, _answer in DRIVER_EXAM_QUESTIONS],
+                    "attempts": [dict(row) for row in exam_attempts],
+                    "consecutive_failures": failures,
+                    "locked_until": locked_until,
+                    "passing_score": 8,
+                },
                 "license_applications": application_payload,
                 "license_autopilot": {
                     "enabled": settings["autopilot_license_enabled"],
@@ -6416,14 +6642,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(423, "DMV vehicle updates are locked during system update mode")
             return
         payload = self.read_json()
-        allowed = ["vehicle_make", "vehicle_model", "vehicle_color", "plate", "insurance_status"]
+        allowed = ["vehicle_make", "vehicle_model", "vehicle_color", "plate"]
         updates = {key: str(payload[key]).strip()[:40] for key in allowed if key in payload and str(payload[key]).strip()}
         if not updates:
             self.error(400, "No DMV fields provided")
             return
         keys = ", ".join([f"{key} = ?" for key in updates])
         values = list(updates.values()) + [now_iso(), user["id"]]
-        db.execute(f"UPDATE dmv_records SET {keys}, registration_status = 'Active', license_status = 'Valid', updated_at = ? WHERE user_id = ?", values)
+        db.execute(f"UPDATE dmv_records SET {keys}, registration_status = 'Active', updated_at = ? WHERE user_id = ?", values)
         self.send_json(200, {"ok": True})
 
     def api_dmv_apply_license(self, db: Database, user: DbRow | None) -> None:
@@ -6457,6 +6683,56 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             add_message(db, admin["id"], "DMV application pending", f"{user['name']} submitted a {application_type} application.", user["id"])
         self.send_json(201, {"ok": True, "application_id": int(created["id"])})
 
+    def api_dmv_driver_exam(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        attempts = all_rows(db, "SELECT * FROM dmv_driver_exam_attempts WHERE user_id = ? ORDER BY created_at DESC LIMIT 12", (user["id"],))
+        failures = 0
+        for attempt in attempts:
+            if bool(attempt["passed"]):
+                break
+            failures += 1
+        if failures >= 3 and attempts:
+            locked_until = parse_iso(attempts[0]["created_at"]) + dt.timedelta(hours=48)
+            if locked_until > utcnow():
+                self.error(429, f"Three failed attempts require a 48-hour waiting period. You may retest after {locked_until.isoformat()}.")
+                return
+        payload = self.read_json()
+        letters = ("A", "B", "C", "D")
+        answers: dict[str, str] = {}
+        score = 0
+        for index, (_question, _options, correct) in enumerate(DRIVER_EXAM_QUESTIONS, start=1):
+            answer = str(payload.get(f"q{index}") or "").upper().strip()
+            if answer not in letters:
+                self.error(400, f"Question {index} requires an answer")
+                return
+            answers[f"q{index}"] = answer
+            score += int(answer == correct)
+        passed = score >= 8
+        ts = now_iso()
+        db.execute(
+            "INSERT INTO dmv_driver_exam_attempts (user_id, score, total, passed, answers_json, created_at) VALUES (?, ?, 10, ?, ?, ?)",
+            (user["id"], score, 1 if passed else 0, json.dumps(answers), ts),
+        )
+        if passed:
+            if not one(db, "SELECT id FROM dmv_records WHERE user_id = ?", (user["id"],)):
+                create_default_dmv(db, user["id"])
+            db.execute("UPDATE dmv_records SET license_status = 'Valid', license_class = 'Class D', updated_at = ? WHERE user_id = ?", (ts, user["id"]))
+            db.execute(
+                """INSERT INTO dmv_license_applications
+                   (user_id, application_type, license_class, legal_name, date_of_birth, notes, status, reviewer_notes, created_at, updated_at)
+                   VALUES (?, 'Driver Knowledge Examination', 'Class D', ?, '', ?, 'approved', ?, ?, ?)""",
+                (user["id"], user["name"], f"Score {score}/10", "Automatically issued after passing the Faircroft driver examination.", ts, ts),
+            )
+            add_message(db, user["id"], "Driver license issued", f"You passed the Faircroft driver examination with {score}/10. Your Class D license is now valid.")
+        else:
+            remaining = max(0, 3 - (failures + 1))
+            add_message(db, user["id"], "Driver examination result", f"Score: {score}/10. A score of 8 is required. Attempts remaining before the 48-hour wait: {remaining}.")
+        self.send_json(200, {"ok": True, "score": score, "total": 10, "passed": passed, "attempts_before_lock": max(0, 3 - (failures + (0 if passed else 1)))})
+
     def api_dmv_register_vehicle(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
         if err:
@@ -6466,7 +6742,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(423, "Vehicle registration is locked during system update mode")
             return
         payload = self.read_json()
-        missing = require_fields(payload, "vehicle_year", "vehicle_make", "vehicle_model", "vehicle_color", "plate", "insurance_status")
+        missing = require_fields(payload, "vehicle_year", "vehicle_make", "vehicle_model", "vehicle_color", "plate")
         if missing:
             self.error(400, missing)
             return
@@ -6483,8 +6759,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         created = db.execute(
             """
             INSERT INTO dmv_vehicles
-            (user_id, vehicle_year, vehicle_make, vehicle_model, vehicle_color, plate, vin, registration_status, insurance_status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'Active', ?, ?, ?)
+            (user_id, vehicle_year, vehicle_make, vehicle_model, vehicle_color, plate, vin, registration_status, insurance_status, source, source_record_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'Active', 'Not Insured', ?, ?, ?, ?)
             RETURNING id
             """,
             (
@@ -6495,7 +6771,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 str(payload["vehicle_color"]).strip()[:30],
                 plate,
                 vin,
-                str(payload["insurance_status"]).strip()[:30],
+                "fcrpmussalo" if payload.get("source_record_id") else "faircroft_dmv",
+                str(payload.get("source_record_id") or "").strip()[:180],
                 ts,
                 ts,
             ),
@@ -6503,7 +6780,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute(
             """
             UPDATE dmv_records
-            SET vehicle_make = ?, vehicle_model = ?, vehicle_color = ?, plate = ?, registration_status = 'Active', insurance_status = ?, updated_at = ?
+            SET vehicle_make = ?, vehicle_model = ?, vehicle_color = ?, plate = ?, registration_status = 'Active', insurance_status = 'Not Insured', updated_at = ?
             WHERE user_id = ?
             """,
             (
@@ -6511,13 +6788,70 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 str(payload["vehicle_model"]).strip()[:40],
                 str(payload["vehicle_color"]).strip()[:30],
                 plate,
-                str(payload["insurance_status"]).strip()[:30],
                 ts,
                 user["id"],
             ),
         )
         add_message(db, user["id"], "Vehicle registered", f"{year} {payload['vehicle_make']} {payload['vehicle_model']} was registered with plate {plate} and VIN {vin}.")
+        license_record = one(db, "SELECT license_status FROM dmv_records WHERE user_id = ?", (user["id"],))
+        if not license_record or license_record["license_status"] != "Valid":
+            add_message(db, user["id"], "Driver license required", f"Vehicle {plate} is registered to you, but no valid driver license is on file. Open DMV → Driver Exam to become licensed before operating it.")
         self.send_json(201, {"ok": True, "vehicle_id": int(created["id"]), "vin": vin})
+
+    def api_dmv_update_vehicle(self, db: Database, user: DbRow | None, vehicle_id: int) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        vehicle = one(db, "SELECT * FROM dmv_vehicles WHERE id = ? AND user_id = ?", (vehicle_id, user["id"]))
+        if not vehicle:
+            self.error(404, "Vehicle record not found")
+            return
+        payload = self.read_json()
+        try:
+            year = int(payload.get("vehicle_year") or vehicle["vehicle_year"])
+        except (TypeError, ValueError):
+            self.error(400, "Vehicle year is invalid")
+            return
+        if year < 1900 or year > utcnow().year + 1:
+            self.error(400, "Vehicle year is outside the accepted range")
+            return
+        make = str(payload.get("vehicle_make") or vehicle["vehicle_make"]).strip()[:40]
+        model = str(payload.get("vehicle_model") or vehicle["vehicle_model"]).strip()[:40]
+        color = str(payload.get("vehicle_color") or vehicle["vehicle_color"]).strip()[:30]
+        ts = now_iso()
+        db.execute(
+            """UPDATE dmv_vehicles
+               SET vehicle_year = ?, vehicle_make = ?, vehicle_model = ?, vehicle_color = ?,
+                   registration_status = 'Active', updated_at = ?
+               WHERE id = ?""",
+            (year, make, model, color, ts, vehicle_id),
+        )
+        db.execute(
+            """UPDATE dmv_records
+               SET vehicle_make = ?, vehicle_model = ?, vehicle_color = ?, plate = ?,
+                   registration_status = 'Active', updated_at = ?
+               WHERE user_id = ?""",
+            (make, model, color, vehicle["plate"], ts, user["id"]),
+        )
+        self.send_json(200, {"ok": True, "registration_status": "Active"})
+
+    def api_dmv_vehicle_insurance(self, db: Database, user: DbRow | None, vehicle_id: int) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        vehicle = one(db, "SELECT * FROM dmv_vehicles WHERE id = ? AND user_id = ?", (vehicle_id, user["id"]))
+        if not vehicle:
+            self.error(404, "Vehicle record not found")
+            return
+        policy = f"FCI-{vehicle_id:06d}-{secrets.randbelow(9000) + 1000}"
+        expires = (utcnow() + dt.timedelta(days=30)).isoformat()
+        ts = now_iso()
+        db.execute("UPDATE dmv_vehicles SET insurance_status = 'Active', insurance_policy_number = ?, insurance_expires_at = ?, updated_at = ? WHERE id = ?", (policy, expires, ts, vehicle_id))
+        db.execute("UPDATE dmv_records SET insurance_status = 'Active', updated_at = ? WHERE user_id = ?", (ts, user["id"]))
+        add_message(db, user["id"], "Vehicle insurance active", f"Policy {policy} is active for plate {vehicle['plate']} through {expires[:10]}.")
+        self.send_json(200, {"ok": True, "policy_number": policy, "expires_at": expires})
 
     def api_messages(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -7774,6 +8108,22 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             LIMIT 160
             """
         )
+        license_applications = all_rows(
+            db,
+            """
+            SELECT a.*, applicant.name AS applicant_name,
+                   applicant.email AS applicant_email,
+                   applicant.civ_number AS applicant_civ_number,
+                   reviewer.name AS reviewer_name
+            FROM department_applications a
+            JOIN users applicant ON applicant.id = a.user_id
+            LEFT JOIN users reviewer ON reviewer.id = a.reviewed_by
+            WHERE a.department_key IN ('lawyer', 'public_defender')
+            ORDER BY CASE a.status WHEN 'submitted' THEN 0 WHEN 'under_review' THEN 1 ELSE 2 END,
+                     a.updated_at DESC
+            LIMIT 160
+            """,
+        )
         def court_conflict(row: DbRow) -> dict[str, Any]:
             item = dict(row)
             reasons = []
@@ -7795,12 +8145,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "decided": decided_payload,
                 "standards": [dict(row) for row in standards],
                 "petitions": petition_payload,
+                "license_applications": [dict(row) for row in license_applications],
                 "stats": {
                     "active": len(active),
                     "contested": sum(1 for row in active if row["status"] == "contested"),
                     "criminal": sum(1 for row in active if row["kind"] == "criminal"),
                     "decided": len(decided),
                     "petitions": sum(1 for row in petitions if row["status"] == "pending"),
+                    "licenses": sum(1 for row in license_applications if row["status"] in ("submitted", "under_review")),
                     "conflicts": sum(1 for row in active_payload if row["conflict_of_interest"]),
                 },
             },
@@ -7992,7 +8344,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         rows = all_rows(
             db,
             f"""
-            SELECT u.id, u.civ_number, u.name{email_column}, u.verified, u.roles, u.car_entry_code, u.callsign, d.license_status, d.license_class, d.vehicle_make,
+            SELECT u.id, u.civ_number, u.name{email_column}, u.verified, u.roles, u.car_entry_code, u.callsign, u.profile_photo, d.license_status, d.license_class, d.vehicle_make,
                    d.vehicle_model, d.vehicle_color, d.plate, d.registration_status, d.insurance_status
             FROM users u
             LEFT JOIN dmv_records d ON d.user_id = u.id
@@ -8028,7 +8380,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             )
             vehicles = all_rows(
                 db,
-                "SELECT vehicle_year, vehicle_make, vehicle_model, vehicle_color, plate, registration_status, insurance_status FROM dmv_vehicles WHERE user_id = ? ORDER BY created_at DESC LIMIT 6",
+                "SELECT id, vehicle_year, vehicle_make, vehicle_model, vehicle_color, plate, vin, registration_status, insurance_status, insurance_policy_number, insurance_expires_at, source FROM dmv_vehicles WHERE user_id = ? ORDER BY created_at DESC LIMIT 6",
                 (row["id"],),
             )
             applications = all_rows(
@@ -10274,6 +10626,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     ],
                     "protected": sorted(PROTECTED_APP_IDS),
                 },
+                "applications_accepting": system_settings["applications_accepting"],
+                "fnn_settings": {
+                    "press_pass_limit": system_settings["fnn_press_pass_limit"],
+                    "active_press_passes": sum(1 for account in all_rows(db, "SELECT roles FROM users") if has_any(account, "press")),
+                },
             },
         )
 
@@ -10507,6 +10864,72 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "SELECT * FROM arma_game_bank_balances WHERE identity_id = ?",
             (account.get("identity_id") or "",),
         )
+
+    def api_dev_update_application_intake(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        accepting = bool(payload.get("accepting"))
+        set_system_setting(db, "applications_accepting", "1" if accepting else "0")
+        add_admin_audit(
+            db,
+            int(user["id"]),
+            "system.application_intake.updated",
+            details={"accepting": accepting},
+        )
+        self.send_json(200, {"ok": True, "applications_accepting": accepting})
+
+    def api_dev_update_fnn_settings(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        try:
+            pass_limit = max(0, min(500, int(payload.get("press_pass_limit"))))
+        except (TypeError, ValueError):
+            self.error(400, "Press Pass limit must be a whole number from 0 to 500")
+            return
+        set_system_setting(db, "fnn_press_pass_limit", str(pass_limit))
+        active_count = sum(1 for account in all_rows(db, "SELECT roles FROM users") if has_any(account, "press"))
+        issued_now = 0
+        if active_count < pass_limit:
+            waiting = all_rows(
+                db,
+                """
+                SELECT a.*, applicant.roles
+                FROM department_applications a
+                JOIN users applicant ON applicant.id = a.user_id
+                WHERE a.department_key = 'press' AND a.status IN ('submitted','under_review')
+                ORDER BY a.created_at ASC
+                """,
+            )
+            for application in waiting:
+                if active_count >= pass_limit:
+                    break
+                try:
+                    exam = json.loads(application["statement"])
+                    eligible = int(exam.get("score") or 0) >= 8
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    eligible = False
+                if not eligible:
+                    continue
+                updated_roles = sorted(set([*roles_for(application), "press"]))
+                ts = now_iso()
+                db.execute("UPDATE users SET verified = 1, roles = ? WHERE id = ?", (json.dumps(updated_roles), application["user_id"]))
+                db.execute(
+                    "UPDATE department_applications SET status = 'approved', reviewer_notes = ?, updated_at = ? WHERE id = ?",
+                    ("Automatically certified after FNN Press Pass capacity became available.", ts, application["id"]),
+                )
+                add_message(db, application["user_id"], "FNN Press Pass issued", "Press Pass capacity became available. Your passing examination was certified automatically and Press Desk access is now active.")
+                active_count += 1
+                issued_now += 1
+        add_admin_audit(db, int(user["id"]), "fnn.press_pass_limit.updated", details={"press_pass_limit": pass_limit, "issued_now": issued_now})
+        self.send_json(200, {"ok": True, "press_pass_limit": pass_limit, "issued_now": issued_now})
         identity_candidates = [
             str(account.get("identity_id") or "").strip(),
             str(account.get("uid") or "").strip(),
@@ -11457,8 +11880,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403, "Judges may only review legal office and certification applications")
             return
         if is_bar_exam and status == "approved":
-            if not has_any(user, "judge", "owner"):
-                self.error(403, "A Judge must sign the Bar certificate")
+            if not has_any(user, "judge"):
+                self.error(403, "Only the Court may approve and issue a lawyer license")
                 return
             try:
                 exam_record = json.loads(application["statement"])
@@ -11470,18 +11893,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 self.error(409, "This Bar Exam is not eligible for judicial certification")
                 return
         if is_press_exam and status == "approved":
-            if not has_any(user, "owner", "admin", "dev", INDEED_ADMIN_ROLE):
-                self.error(403, "Authorized FNN or Indeed staff must approve a Press Pass")
-                return
-            try:
-                exam_record = json.loads(application["statement"])
-                exam_score = int(exam_record.get("score", 0))
-            except (TypeError, ValueError, json.JSONDecodeError):
-                self.error(409, "This application does not contain a valid Press Pass Exam result")
-                return
-            if exam_score < 8:
-                self.error(409, "This exam is not eligible for a Press Pass")
-                return
+            self.error(409, "Press Passes are issued automatically by the FNN examination system and cannot be manually approved")
+            return
         reviewer_notes = str(payload.get("reviewer_notes") or application.get("reviewer_notes") or "").strip()[:1500]
         ts = now_iso()
         db.execute(
@@ -11572,11 +11985,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         dmv = one(db, "SELECT id FROM dmv_records WHERE user_id = ?", (target_id,))
         if not dmv:
             create_default_dmv(db, target_id)
-        if verified:
-            db.execute(
-                "UPDATE dmv_records SET license_status = 'Valid', registration_status = 'Active', insurance_status = 'Active', updated_at = ? WHERE user_id = ?",
-                (now_iso(), target_id),
-            )
         add_message(db, target_id, "Account updated", "An owner/admin updated your account settings.", user["id"])
         self.send_json(200, {"ok": True})
 

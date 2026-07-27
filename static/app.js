@@ -20,11 +20,14 @@ const state = {
   returnToMdtOnClose: false,
   pendingArmaCode: new URL(window.location.href).searchParams.get("code") || "",
   profileTab: "overview",
+  profilePhotoOpen: false,
+  starterStep: 0,
   pwaInstallHelpOpen: false,
   systemBannerDismissed: false,
   splashDismissedRevision: null,
   armaUnlinkOpen: false,
   armaLinkPromptDismissed: false,
+  dmvComplianceDismissed: false,
   generatedDevCode: null,
   fineSettlementCode: null,
   taxSettlementCode: null,
@@ -75,6 +78,8 @@ const state = {
   contractProofId: null,
   roadmapFilter: "all",
   roadmapEditorId: null,
+  pressComposeOpen: false,
+  pressSelectedReportId: null,
   businessTab: "apply",
   businessReviewFilter: "active",
   businessLicensePage: 1,
@@ -500,6 +505,12 @@ function render() {
     bindRequiredProfileModals();
     return;
   }
+  if (state.activeApp === "dmv") {
+    app.innerHTML = renderSystemBanner() + renderDmvWorkspace() + renderRequiredProfileModals();
+    bindDmvWorkspace();
+    bindRequiredProfileModals();
+    return;
+  }
   if (state.activeApp === "court") {
     app.innerHTML = renderSystemBanner() + renderCourtWorkspace() + renderRequiredProfileModals();
     bindCourtWorkspace();
@@ -509,6 +520,12 @@ function render() {
   if (state.activeApp === "fnn") {
     app.innerHTML = renderSystemBanner() + renderFnnWorkspace() + renderRequiredProfileModals();
     bindFnnWorkspace();
+    bindRequiredProfileModals();
+    return;
+  }
+  if (state.activeApp === "press") {
+    app.innerHTML = renderSystemBanner() + renderPressWorkspace() + renderRequiredProfileModals();
+    bindPressDesk();
     bindRequiredProfileModals();
     return;
   }
@@ -646,7 +663,31 @@ function renderCallsignRequiredModal() {
 
 function renderRequiredProfileModals() {
   if (state.session?.sanction?.type === "timeout") return "";
-  return renderSystemSplash() || renderCarEntryRequiredModal() || renderArmaLinkRequiredModal() || renderBetaInviteModal();
+  return renderSystemSplash() || renderCarEntryRequiredModal() || renderArmaLinkRequiredModal() || renderDmvComplianceModal() || renderBetaInviteModal();
+}
+
+function renderDmvComplianceModal() {
+  const compliance = state.session?.dmv_compliance;
+  if (!compliance?.required || state.dmvComplianceDismissed) return "";
+  const vehicles = compliance.vehicles || [];
+  return `
+    <div class="modal-backdrop dmv-compliance-backdrop">
+      <section class="mdt-modal dmv-compliance-modal" role="dialog" aria-modal="true" aria-label="DMV vehicle compliance required">
+        <header><p class="eyebrow">Vehicle detected from linked profile</p><h2>Complete your DMV file</h2></header>
+        <div class="dmv-compliance-list">
+          ${vehicles.slice(0, 4).map((vehicle) => `
+            <article>
+              <div><span>${escapeHtml(vehicle.plate)}</span><strong>${escapeHtml(vehicle.vehicle_year)} ${escapeHtml(vehicle.vehicle_make)} ${escapeHtml(vehicle.vehicle_model)}</strong></div>
+              <small>${vehicle.registration_status === "Active" ? "Registration confirmed" : "Registration details required"} · ${vehicle.insurance_status === "Active" ? "Insured" : "Insurance required"}</small>
+            </article>`).join("")}
+        </div>
+        <p class="muted small">Faircroft detected ${vehicles.length} vehicle${vehicles.length === 1 ? "" : "s"} on your Arma profile. Confirm the imported make, model, year, and color, then activate insurance before driving.</p>
+        <div class="row">
+          <button class="primary" type="button" data-open-dmv-compliance>Open DMV vehicle dashboard</button>
+          <button class="secondary" type="button" data-dismiss-dmv-compliance>Remind me next login</button>
+        </div>
+      </section>
+    </div>`;
 }
 
 function renderBetaInviteModal() {
@@ -714,6 +755,17 @@ function bindRequiredProfileModals() {
   });
   $("[data-dismiss-arma-link]")?.addEventListener("click", () => {
     state.armaLinkPromptDismissed = true;
+    render();
+  });
+  $("[data-open-dmv-compliance]")?.addEventListener("click", async () => {
+    state.dmvComplianceDismissed = true;
+    state.activeApp = "dmv";
+    state.dmvTab = "vehicles";
+    await loadAppData("dmv");
+    render();
+  });
+  $("[data-dismiss-dmv-compliance]")?.addEventListener("click", () => {
+    state.dmvComplianceDismissed = true;
     render();
   });
   $$("[data-beta-response]").forEach((button) => button.addEventListener("click", async () => {
@@ -963,39 +1015,110 @@ function bindFnnWorkspace() {
 
 function renderPressDesk() {
   const reports = state.cache.press?.reports || [];
-  return `<div class="stack press-desk">
-    <section class="press-desk-hero">
-      <div><p class="eyebrow">FNN source newsroom</p><h3>Press Report Desk</h3><p>File factual reporter briefs for consideration in future Faircroft News Now editions.</p></div>
-      <span>${reports.length}<small>filed reports</small></span>
+  const selected = reports.find((report) => String(report.id) === String(state.pressSelectedReportId));
+  const categories = new Set(reports.map((report) => report.category)).size;
+  return `<div class="press-newsroom">
+    <section class="press-newsroom-command">
+      <div class="press-newsroom-brand"><span><b>F</b><b>N</b><b>N</b></span><div><p>REPORTER OPERATIONS</p><h3>Newsroom Desk</h3><small>Develop source briefs for the Faircroft daily edition.</small></div></div>
+      <button class="primary" type="button" data-press-compose>New story brief</button>
     </section>
-    <section class="press-guidance">
-      <strong>Write for the newsroom, not the AI.</strong>
-      <p>Be as detailed and factual as possible. Gemini can only build a reliable story from the information you provide. Include names, sequence of events, locations, verified quotes, relevant history, and public impact. Do not invent facts or submit rumors as confirmed information.</p>
+    <section class="press-newsroom-stats">
+      <div><span>Submitted</span><strong>${reports.length}</strong><small>Permanent newsroom files</small></div>
+      <div><span>Active desks</span><strong>${categories}</strong><small>Coverage categories</small></div>
+      <div><span>FNN source status</span><strong>${reports.length ? "Ready" : "Open"}</strong><small>${reports.length ? "Available to the edition engine" : "Awaiting first report"}</small></div>
     </section>
-    <form id="pressReportForm" class="press-report-form">
-      <div class="press-form-heading"><div><p class="eyebrow">New source brief</p><h3>File a press report</h3></div><span class="pill red">FNN SOURCE</span></div>
-      <div class="press-form-grid">
-        <label class="wide">Working headline<input name="headline" minlength="5" maxlength="180" required placeholder="Clear description of the event or story" /></label>
-        <label>Desk<select name="category"><option value="breaking">Breaking News</option><option value="community" selected>Community</option><option value="public_safety">Public Safety</option><option value="justice">Justice</option><option value="business">Business</option><option value="events">Events</option><option value="government">Government</option><option value="opinion">Opinion</option></select></label>
-        <label>Location<input name="location" maxlength="240" placeholder="Street, district, venue, or jurisdiction" /></label>
-        <label>Date and time of event<input name="event_at" type="datetime-local" /></label>
-        <label>People involved<input name="people" maxlength="2000" placeholder="Names, roles, and how each person is involved" /></label>
-        <label class="wide">Organizations involved<input name="organizations" maxlength="2000" placeholder="Departments, gangs, businesses, community groups, or agencies" /></label>
-        <label class="wide">Verified facts and complete sequence of events<textarea name="facts" minlength="80" maxlength="10000" required placeholder="Explain exactly what happened, in order, with every confirmed detail available."></textarea></label>
-        <label class="wide">Direct quotes and attribution<textarea name="quotes" maxlength="6000" placeholder="Quote — speaker name and role. Separate verified quotes from paraphrased statements."></textarea></label>
-        <label class="wide">Background and prior context<textarea name="background" maxlength="6000" placeholder="Earlier events, history, prior announcements, or context readers need to understand the story."></textarea></label>
-        <label>Public impact<textarea name="public_impact" maxlength="4000" placeholder="Why this matters to Faircroft residents and what may happen next."></textarea></label>
-        <label>Verification and sourcing notes<textarea name="verification_notes" maxlength="4000" placeholder="What you personally witnessed, who confirmed each fact, and anything still unverified."></textarea></label>
+    <section class="press-newsroom-guidance"><i>EDITOR'S NOTE</i><div><strong>Detail creates credible coverage.</strong><p>Gemini can only build a reliable story from the facts supplied. Include the full sequence, names, locations, attributed quotes, background, public impact, and what remains unverified.</p></div></section>
+    <section class="press-story-library">
+      <header><div><p class="eyebrow">Newsroom archive</p><h3>Submitted stories</h3><span>Every brief filed by this Press Desk account.</span></div><strong>${reports.length} FILES</strong></header>
+      <div class="press-story-grid">${reports.map((report) => `<button type="button" class="press-story-card" data-press-report="${report.id}">
+        <span><i>${escapeHtml(humanLabel(report.category))}</i><b>${escapeHtml(report.report_number)}</b></span>
+        <h4>${escapeHtml(report.headline)}</h4>
+        <p>${escapeHtml(String(report.facts || "").slice(0, 180))}${String(report.facts || "").length > 180 ? "…" : ""}</p>
+        <footer><time>${new Date(report.created_at).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}</time><em>${escapeHtml(humanLabel(report.status))}</em></footer>
+      </button>`).join("") || `<div class="press-empty-library"><span>FNN</span><h4>No submitted stories</h4><p>Create the first detailed press brief for the newsroom archive.</p><button class="primary" type="button" data-press-compose>New story brief</button></div>`}</div>
+    </section>
+    ${state.pressComposeOpen ? `<div class="modal-backdrop press-modal-backdrop" data-close-press-modal><section class="press-editor-modal" role="dialog" aria-modal="true" aria-label="New story brief">
+      <header><div><p>FNN / SOURCE INTAKE</p><h3>New story brief</h3></div><button type="button" data-close-press-modal aria-label="Close">×</button></header>
+      <div class="press-editor-scroll">
+        <div class="press-editor-notice"><strong>Be as detailed and factual as possible.</strong><span>Gemini requires complete source information to create accurate coverage. Never submit rumor as confirmed fact.</span></div>
+        <form id="pressReportForm" class="press-report-form">
+          <div class="press-form-grid">
+            <label class="wide">Working headline<input name="headline" minlength="5" maxlength="180" required placeholder="Clear description of the event or story" /></label>
+            <label>Desk<select name="category"><option value="breaking">Breaking News</option><option value="community" selected>Community</option><option value="public_safety">Public Safety</option><option value="justice">Justice</option><option value="business">Business</option><option value="events">Events</option><option value="government">Government</option><option value="opinion">Opinion</option></select></label>
+            <label>Location<input name="location" maxlength="240" placeholder="Street, district, venue, or jurisdiction" /></label>
+            <label>Date and time of event<input name="event_at" type="datetime-local" /></label>
+            <label>People involved<input name="people" maxlength="2000" placeholder="Names, roles, and involvement" /></label>
+            <label class="wide">Organizations involved<input name="organizations" maxlength="2000" placeholder="Departments, gangs, businesses, groups, or agencies" /></label>
+            <label class="wide">Verified facts and complete sequence<textarea name="facts" minlength="80" maxlength="10000" required placeholder="Explain exactly what happened, in order, with every confirmed detail."></textarea></label>
+            <label class="wide">Direct quotes and attribution<textarea name="quotes" maxlength="6000" placeholder="Quote — speaker name and role."></textarea></label>
+            <label class="wide">Background and prior context<textarea name="background" maxlength="6000" placeholder="History and context readers need to understand this story."></textarea></label>
+            <label>Public impact<textarea name="public_impact" maxlength="4000" placeholder="Why this matters and what may happen next."></textarea></label>
+            <label>Verification notes<textarea name="verification_notes" maxlength="4000" placeholder="Who confirmed each fact and what remains unverified."></textarea></label>
+          </div>
+          <button class="primary" type="submit">File with FNN newsroom</button>
+        </form>
       </div>
-      <button class="primary" type="submit">Submit report to FNN sources</button>
-    </form>
-    <section class="press-report-library"><div class="row"><div><p class="eyebrow">Your newsroom file</p><h3>Submitted reports</h3></div><span class="pill">${reports.length}</span></div>
-      <div>${reports.map((report) => `<article><span>${escapeHtml(report.report_number)} · ${humanLabel(report.category)}</span><strong>${escapeHtml(report.headline)}</strong><small>${new Date(report.created_at).toLocaleString()} · ${humanLabel(report.status)}</small></article>`).join("") || `<div class="empty">No press reports submitted yet.</div>`}</div>
-    </section>
+    </section></div>` : ""}
+    ${selected ? `<div class="modal-backdrop press-modal-backdrop" data-close-press-modal><article class="press-reader-modal" role="dialog" aria-modal="true" aria-label="Submitted press report">
+      <header><div><span>${escapeHtml(selected.report_number)} · ${escapeHtml(humanLabel(selected.category))}</span><h3>${escapeHtml(selected.headline)}</h3></div><button type="button" data-close-press-modal aria-label="Close">×</button></header>
+      <div class="press-reader-body">
+        <div class="press-reader-meta"><span><b>Filed</b>${new Date(selected.created_at).toLocaleString()}</span><span><b>Location</b>${escapeHtml(selected.location || "Not specified")}</span><span><b>Status</b>${escapeHtml(humanLabel(selected.status))}</span></div>
+        <section><h4>Verified facts</h4><p>${escapeHtml(selected.facts || "")}</p></section>
+        ${selected.people ? `<section><h4>People involved</h4><p>${escapeHtml(selected.people)}</p></section>` : ""}
+        ${selected.organizations ? `<section><h4>Organizations</h4><p>${escapeHtml(selected.organizations)}</p></section>` : ""}
+        ${selected.quotes ? `<section><h4>Quotes and attribution</h4><p>${escapeHtml(selected.quotes)}</p></section>` : ""}
+        ${selected.background ? `<section><h4>Background</h4><p>${escapeHtml(selected.background)}</p></section>` : ""}
+        ${selected.public_impact ? `<section><h4>Public impact</h4><p>${escapeHtml(selected.public_impact)}</p></section>` : ""}
+        ${selected.verification_notes ? `<section><h4>Verification notes</h4><p>${escapeHtml(selected.verification_notes)}</p></section>` : ""}
+      </div>
+    </article></div>` : ""}
   </div>`;
 }
 
+function renderPressWorkspace() {
+  return `<section class="press-workspace">
+    <header class="press-workspace-topbar">
+      <div class="press-workspace-identity">
+        <span class="press-workspace-mark"><b>F</b><b>N</b><b>N</b></span>
+        <div><p>FAIRCROFT NEWS NOW / PRESS OPERATIONS</p><h1>Press Desk</h1><span>Source development, field reporting, and newsroom submissions</span></div>
+      </div>
+      <div class="press-workspace-actions">
+        <span><i></i>Newsroom connected</span>
+        <button class="secondary" type="button" data-refresh-press>Refresh desk</button>
+        <button class="primary" type="button" data-close-press>Exit Press Desk</button>
+      </div>
+    </header>
+    <main class="press-workspace-content">${renderPressDesk()}</main>
+  </section>`;
+}
+
 function bindPressDesk() {
+  $("[data-close-press]")?.addEventListener("click", async () => {
+    state.activeApp = null;
+    state.pressComposeOpen = false;
+    state.pressSelectedReportId = null;
+    await loadSession();
+  });
+  $("[data-refresh-press]")?.addEventListener("click", async () => {
+    await loadAppData("press");
+    render();
+  });
+  $$("[data-press-compose]").forEach((button) => button.addEventListener("click", () => {
+    state.pressComposeOpen = true;
+    state.pressSelectedReportId = null;
+    render();
+  }));
+  $$("[data-press-report]").forEach((button) => button.addEventListener("click", () => {
+    state.pressSelectedReportId = button.dataset.pressReport;
+    state.pressComposeOpen = false;
+    render();
+  }));
+  $$("[data-close-press-modal]").forEach((control) => control.addEventListener("click", (event) => {
+    if (event.currentTarget.classList.contains("press-modal-backdrop") && event.target !== event.currentTarget) return;
+    state.pressComposeOpen = false;
+    state.pressSelectedReportId = null;
+    render();
+  }));
   $("#pressReportForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -1005,6 +1128,7 @@ function bindPressDesk() {
     try {
       const result = await api("/api/press/reports", { method: "POST", body: Object.fromEntries(new FormData(form).entries()) });
       toast(`Press report ${result.report_number} submitted`);
+      state.pressComposeOpen = false;
       await loadAppData("press");
       render();
     } catch (error) {
@@ -1208,6 +1332,7 @@ function bindPanel() {
 
   const binders = {
     profile: bindProfile,
+    "getting-started": bindGettingStarted,
     dmv: bindDmv,
     jobs: bindJobs,
     "my-faircroft": bindMyFaircroft,
@@ -1363,11 +1488,12 @@ function renderProfile() {
   const nameChangeBlocked = nameChange.locked || Number(nameChange.remaining || 0) <= 0;
   const nameChangeLabel = nameChange.locked ? "locked" : `${nameChange.remaining}/${nameChange.limit} left`;
   const referrals = data.referrals || { code: user.referral_code || "", bonus_amount: 50000, count: 0, total_bonus: 0, pending_count: 0, pending_total: 0, recent: [] };
+  const profileVehicles = data.dmv_vehicles || [];
   const canSetCallsign = canAny("owner", "admin", "leo", "cid", "iu", "iu_director", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "fireman", "ems", "dispatcher", "fire_chief", "deputy_chief", "fire_marshal");
   return `
     <div class="resident-profile" data-profile-view="${escapeHtml(state.profileTab)}">
       <header class="resident-profile-hero">
-        <span class="resident-profile-avatar">${escapeHtml((user.name || "?").trim().charAt(0).toUpperCase())}</span>
+        <button class="resident-profile-avatar resident-photo-button" type="button" data-open-profile-photo>${user.profile_photo ? `<img src="${escapeHtml(user.profile_photo)}" alt="Profile" />` : escapeHtml((user.name || "?").trim().charAt(0).toUpperCase())}</button>
         <div class="resident-profile-person">
           <p>FAIRCROFT RESIDENT IDENTITY</p>
           <h2>${escapeHtml(user.name)}</h2>
@@ -1378,6 +1504,7 @@ function renderProfile() {
           <small>${link ? "Game account connected" : "Game link required"}</small>
         </div>
       </header>
+      ${state.profilePhotoOpen ? `<div class="modal-backdrop profile-photo-backdrop" data-close-profile-photo><section class="profile-photo-modal" role="dialog" aria-modal="true"><header><div><p class="eyebrow">Official identity image</p><h3>Upload DMV profile photo</h3></div><button type="button" data-close-profile-photo>×</button></header><div class="profile-photo-guidance"><strong>Photo standard</strong><p>Use a clear face shot of your current Arma character. The face must be visible and the character should have a defining feature or recognizable clothing article. Do not upload real-world photographs, scenery, memes, vehicles, or group images.</p></div><form id="profilePhotoForm"><label class="profile-photo-drop"><input name="photo" type="file" accept="image/jpeg,image/png,image/webp" required /><span>Select Arma character face shot</span><small>Square or portrait image recommended</small></label><button class="primary" type="submit">Save official profile photo</button></form></section></div>` : ""}
       <nav class="resident-profile-nav" aria-label="Profile sections">
         <button class="${state.profileTab === "overview" ? "active" : ""}" type="button" data-profile-tab="overview">${iconSvg.user}<span>Overview</span></button>
         <button class="${state.profileTab === "characters" ? "active" : ""}" type="button" data-profile-tab="characters">${iconSvg["id-card"]}<span>Characters</span><em>${characters.length}</em></button>
@@ -1405,6 +1532,10 @@ function renderProfile() {
             <button type="button" data-profile-tab="connections"><span>Arma connection</span><strong>${link ? "Connected" : "Action required"}</strong><em>Review ›</em></button>
             <button type="button" data-profile-tab="account"><span>Account controls</span><strong>${user.car_entry_code ? "Up to date" : "Needs attention"}</strong><em>Open ›</em></button>
           </div>
+          <section class="resident-vehicle-summary">
+            <header><div><span>DMV vehicle profile</span><h3>${profileVehicles.length ? `${profileVehicles.length} vehicle${profileVehicles.length === 1 ? "" : "s"} on file` : "No linked vehicles detected"}</h3></div><button class="secondary" type="button" data-profile-open-dmv>Open DMV dashboard</button></header>
+            <div>${profileVehicles.slice(0, 4).map((vehicle) => `<article><span>${escapeHtml(vehicle.plate)}</span><strong>${escapeHtml(vehicle.vehicle_year)} ${escapeHtml(vehicle.vehicle_make)} ${escapeHtml(vehicle.vehicle_model)}</strong><small class="${vehicle.registration_status === "Active" && vehicle.insurance_status === "Active" ? "valid" : "warning"}">${escapeHtml(vehicle.registration_status)} · ${escapeHtml(vehicle.insurance_status)}</small></article>`).join("") || `<p class="muted small">Vehicles from your linked Arma profile will appear here automatically.</p>`}</div>
+          </section>
         </section>
       <section class="profile-link-card referral-card resident-profile-panel" data-profile-panel="account">
         <div class="row">
@@ -1602,6 +1733,37 @@ async function saveCallsignFromForm(form) {
 }
 
 function bindProfile() {
+  $("[data-profile-open-dmv]")?.addEventListener("click", async () => {
+    state.activeApp = "dmv";
+    state.dmvTab = "vehicles";
+    await loadAppData("dmv");
+    render();
+  });
+  $("[data-open-profile-photo]")?.addEventListener("click", () => {
+    state.profilePhotoOpen = true;
+    render();
+  });
+  $$("[data-close-profile-photo]").forEach((control) => control.addEventListener("click", (event) => {
+    if (event.currentTarget.classList.contains("profile-photo-backdrop") && event.target !== event.currentTarget) return;
+    state.profilePhotoOpen = false;
+    render();
+  }));
+  $("#profilePhotoForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const file = new FormData(event.currentTarget).get("photo");
+    if (!(file instanceof File) || !file.size) return;
+    try {
+      const encoded = await encodeTreasuryProof(file);
+      await api("/api/profile/photo", { method: "POST", body: { profile_photo: encoded.data_url } });
+      state.profilePhotoOpen = false;
+      toast("Official profile photo updated");
+      await loadAppData("profile");
+      await loadSession();
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
   $$("[data-profile-tab]").forEach((button) => button.addEventListener("click", () => {
     state.profileTab = button.dataset.profileTab;
     render();
@@ -1732,75 +1894,99 @@ function renderGettingStarted() {
   const steps = [
     {
       number: "01",
-      title: "Spawn In & Get a Vehicle",
-      location: "Airport / Used Car Dealership",
-      image: "/static/getting-started/used-cars.jpg",
-      body: "When you first join the server, you spawn at the airport. Your first priority should be getting transportation. Head to the used car dealership and buy a vehicle as soon as possible so you can move around the city, take jobs, and start making money.",
-      note: "Make sure your character is created in the online CAD profile system.",
+      title: "Connect, Spawn & Get Moving",
+      location: "Server Resources → Spawn → Used Cars",
+      images: ["/static/getting-started/01-used-cars.webp"],
+      body: "Open the website from #server-resources, create your account, and link it to your Arma account using the code shown at the top of your screen on first join. You will spawn at the starter location, where an admin will meet you and provide $5,000 starter cash. Then head to the Used Car dealership for your first vehicle.",
+      note: "Complete the account link before leaving spawn so your Faircroft records stay attached to your character.",
+      action: "Account linked and first car purchased",
     },
     {
       number: "02",
-      title: "Military Base Fishing",
-      location: "Military Base / Dirty Pond",
-      image: "/static/getting-started/dirty-pond.jpg",
-      body: "Go to the Military Base on the map and head to the pond area called the Dirty Pond. In this spot you can go into the water, collect sticks, and sell them to make early money.",
-      note: "This is a starter grind spot and works best once you have a vehicle.",
+      title: "Collect Sticks for Starter Cash",
+      location: "Kotka Rail Area",
+      images: ["/static/getting-started/02-stick-route.webp", "/static/getting-started/02-stick-collection.webp"],
+      body: "After getting your car, drive to the marked area near Kotka and begin collecting sticks. This is your first reliable money route and will help fund the equipment needed for the next stages.",
+      note: "Use the map image to find the rail-side collection area; the second image shows what the stick piles look like.",
+      action: "Build an early cash reserve",
     },
     {
       number: "03",
-      title: "Visit the Bag Store",
-      location: "Bag Store near Police Station",
-      image: "/static/getting-started/bag-store.jpg",
-      body: "After getting your vehicle, head to the Bag Store and buy bags. Bags increase inventory space, which lets you carry more items while looting, working, or grinding money.",
-      note: "More bag space means fewer trips back and forth.",
+      title: "Upgrade Your Carry Capacity",
+      location: "Bag / Phone Store",
+      images: ["/static/getting-started/03-bag-store.webp"],
+      body: "Once you have money saved, visit the Bag / Phone Store and purchase a bag. Extra storage lets you carry more while looting, working, collecting, and grinding money.",
+      note: "A larger inventory means fewer return trips and more profit per run.",
+      action: "Purchase and equip a bag",
     },
     {
       number: "04",
-      title: "Buy Your IL License",
+      title: "Purchase Your IL License",
       location: "Town Hall",
-      image: "/static/getting-started/townhall.jpg",
+      images: ["/static/getting-started/04-town-hall.webp"],
       body: "Go to Town Hall and buy your IL license. This license is used for mining so you can start progressing toward better money routes.",
-      note: "Do this before going all-in on mining.",
+      note: "The IL license is separate from your DMV driver license and is required for the mining progression route.",
+      action: "Buy the IL mining license",
     },
     {
       number: "05",
-      title: "Start Mining",
-      location: "Mining Area / Hardware Store",
-      image: "/static/getting-started/hardware-store.jpg",
-      body: "Go to the mining area on the map where the ore is located in the middle of the castle. The ore you want is iron. To mine it, buy the required tool from the hardware store for 7.5k.",
-      note: "Buy the tool first, then head to the iron mining location.",
+      title: "Buy Your Mining Tool",
+      location: "Hardware Store",
+      images: ["/static/getting-started/05-hardware-store.webp"],
+      body: "Head to the Hardware Store and purchase a shovel for $7,500. The shovel unlocks ore collection and is required before traveling to the mine.",
+      note: "Keep enough cash after your bag and license purchases to cover the full shovel price.",
+      action: "Purchase the $7,500 shovel",
+    },
+    {
+      number: "06",
+      title: "Mine, Smelt & Sell",
+      location: "Mining Site → Smeltery",
+      images: ["/static/getting-started/06-mine-smeltery.webp"],
+      body: "Travel to the marked Mining Site and collect ore with your shovel. Take the ore west to the Smeltery, process it, and sell the finished material to begin earning substantially more money.",
+      note: "The mine and smeltery are close together on the same island; follow the marked road between them.",
+      action: "Mine ore, smelt it, and complete your first sale",
     },
   ];
+  const index = Math.max(0, Math.min(steps.length - 1, Number(state.starterStep || 0)));
+  const active = steps[index];
   return `
     <div class="getting-started-app">
       <section class="getting-started-hero">
         <div>
-          <p class="eyebrow">Civilian starter guide</p>
-          <h3>Getting Started</h3>
-          <p>Follow this route after spawning to get mobile, expand inventory space, unlock mining, and begin earning money.</p>
+          <p class="eyebrow">Faircroft newcomer route</p>
+          <h3>Your First Day, Simplified.</h3>
+          <p>Six focused stops take you from account linking and starter transportation to a complete mining income route.</p>
         </div>
-        <a class="secondary" href="https://forcraftrp.up.railway.app/" target="_blank" rel="noopener">Open CAD</a>
+        <div class="starter-hero-progress"><strong>${index + 1}<span>/ ${steps.length}</span></strong><small>CURRENT STAGE</small></div>
       </section>
-      <div class="starter-route">
-        ${steps.map((step) => `
-          <article class="starter-step-card">
-            <img src="${step.image}" alt="${escapeHtml(step.location)} map location" loading="lazy" />
-            <div class="starter-step-body">
-              <div class="starter-step-head">
-                <span>${step.number}</span>
-                <div>
-                  <h3>${escapeHtml(step.title)}</h3>
-                  <p>${escapeHtml(step.location)}</p>
-                </div>
-              </div>
-              <p>${escapeHtml(step.body)}</p>
-              <div class="starter-note">${escapeHtml(step.note)}</div>
-            </div>
-          </article>
-        `).join("")}
-      </div>
+      <nav class="starter-step-rail" aria-label="Getting started stages">${steps.map((step, stepIndex) => `<button type="button" class="${stepIndex === index ? "active" : stepIndex < index ? "complete" : ""}" data-starter-step="${stepIndex}"><i>${stepIndex < index ? "✓" : step.number}</i><span><strong>${escapeHtml(step.title)}</strong><small>${escapeHtml(step.location)}</small></span></button>`).join("")}</nav>
+      <article class="starter-focus-card" key="${index}">
+        <div class="starter-focus-media ${active.images.length > 1 ? "gallery" : ""}">${active.images.map((image, imageIndex) => `<figure><img src="${image}" alt="${escapeHtml(active.location)} ${imageIndex ? "collection example" : "map location"}" /><figcaption>${imageIndex ? "What to collect" : "Route location"}</figcaption></figure>`).join("")}<span class="starter-map-badge">MAP ${active.number}</span></div>
+        <section class="starter-focus-copy">
+          <header><span>STEP ${active.number}</span><p>${escapeHtml(active.location)}</p><h2>${escapeHtml(active.title)}</h2></header>
+          <p>${escapeHtml(active.body)}</p>
+          <div class="starter-objective"><i>OBJECTIVE</i><strong>${escapeHtml(active.action)}</strong></div>
+          <div class="starter-field-note"><span>FIELD NOTE</span><p>${escapeHtml(active.note)}</p></div>
+          <footer><button class="secondary" type="button" data-starter-prev ${index === 0 ? "disabled" : ""}>Previous</button><div><span>${String(index + 1).padStart(2, "0")}</span>${steps.map((_, dot) => `<i class="${dot === index ? "active" : dot < index ? "complete" : ""}"></i>`).join("")}</div><button class="primary" type="button" data-starter-next ${index === steps.length - 1 ? "disabled" : ""}>${index === steps.length - 1 ? "Route complete" : "Next step"}</button></footer>
+        </section>
+      </article>
     </div>
   `;
+}
+
+function bindGettingStarted() {
+  $$("[data-starter-step]").forEach((button) => button.addEventListener("click", () => {
+    state.starterStep = Number(button.dataset.starterStep);
+    render();
+  }));
+  $("[data-starter-prev]")?.addEventListener("click", () => {
+    state.starterStep = Math.max(0, Number(state.starterStep || 0) - 1);
+    render();
+  });
+  $("[data-starter-next]")?.addEventListener("click", () => {
+    state.starterStep = Math.min(5, Number(state.starterStep || 0) + 1);
+    render();
+  });
 }
 
 function isPendingLicenseApplication(item) {
@@ -1884,14 +2070,16 @@ function renderDmv() {
   if (!record) return `<div class="empty">DMV record loading</div>`;
   const vehicles = data.vehicles || [];
   const applications = data.license_applications || [];
-  const licenseAutopilot = data.license_autopilot || { enabled: true, minutes: 6 };
+  const driverExam = data.driver_exam || { questions: [], attempts: [], consecutive_failures: 0, locked_until: "", passing_score: 8 };
+  const gameVehicles = data.game_vehicles || [];
   const activeVehicle = vehicles[0] || record;
   const lockdown = isUpdateLockdown();
   if (lockdown && state.dmvTab !== "license") {
     state.dmvTab = "license";
   }
   return `
-    <div class="stack">
+    <div class="dmv-modern">
+      <section class="dmv-modern-hero"><div><p>FAIRCROFT DEPARTMENT OF MOTOR VEHICLES</p><h2>Driver & Vehicle Services</h2><span>Licensing, registration, insurance, and official identity records.</span></div><strong class="${record.license_status === "Valid" ? "valid" : ""}">${escapeHtml(record.license_status)}</strong></section>
       ${lockdown ? `
         <section class="update-lockdown-mini">
           <p class="eyebrow">Software Update</p>
@@ -1899,97 +2087,56 @@ function renderDmv() {
           <p class="muted small">${escapeHtml(updateLockdownMessage())}</p>
         </section>
       ` : `
-        <div class="segmented">
-          <button class="${state.dmvTab === "overview" ? "active" : ""}" data-dmv-tab="overview">Overview</button>
-          <button class="${state.dmvTab === "license" ? "active" : ""}" data-dmv-tab="license">License</button>
-          <button class="${state.dmvTab === "vehicles" ? "active" : ""}" data-dmv-tab="vehicles">Vehicles</button>
+        <div class="dmv-modern-tabs">
+          <button class="${state.dmvTab === "overview" ? "active" : ""}" data-dmv-tab="overview">Digital ID</button>
+          <button class="${state.dmvTab === "license" ? "active" : ""}" data-dmv-tab="license">Driver Exam</button>
+          <button class="${state.dmvTab === "vehicles" ? "active" : ""}" data-dmv-tab="vehicles">Vehicle Garage</button>
         </div>
       `}
-      ${state.dmvTab === "license" ? renderDmvLicense(applications, licenseAutopilot) : state.dmvTab === "vehicles" ? renderDmvVehicles(vehicles, record) : renderDmvOverview(record, vehicles, applications, activeVehicle)}
+      ${state.dmvTab === "license" ? renderDmvLicense(record, driverExam) : state.dmvTab === "vehicles" ? renderDmvVehicles(vehicles, record, gameVehicles) : renderDmvOverview(record, vehicles, applications, activeVehicle)}
     </div>
   `;
 }
 
 function renderDmvOverview(record, vehicles, applications, activeVehicle) {
+  const user = state.cache.profile?.user || state.session.user;
   return `
-    <div class="stack">
-      <div class="record-card">
-        <p class="eyebrow">Driver profile</p>
-        <h3>${escapeHtml(state.session.user.name)}</h3>
-        <div class="grid-2">
-          <div class="metric"><span>License</span><strong>${escapeHtml(record.license_status)}</strong></div>
-          <div class="metric"><span>Class</span><strong>${escapeHtml(record.license_class)}</strong></div>
-          <div class="metric"><span>Plate</span><strong>${escapeHtml(record.plate)}</strong></div>
-          <div class="metric"><span>Insurance</span><strong>${escapeHtml(record.insurance_status)}</strong></div>
-        </div>
-      </div>
-      <div class="grid-2">
-        <div class="metric"><span>Vehicles</span><strong>${vehicles.length}</strong></div>
-        <div class="metric"><span>Applications</span><strong>${applications.length}</strong></div>
-      </div>
-      <article class="record-card">
-        <div class="row"><h3>Primary vehicle</h3><span class="pill green">${escapeHtml(activeVehicle.registration_status || "Active")}</span></div>
-        <p class="muted small">${escapeHtml([activeVehicle.vehicle_year, activeVehicle.vehicle_color, activeVehicle.vehicle_make, activeVehicle.vehicle_model].filter(Boolean).join(" ")) || "No registered vehicle yet"}</p>
-        <div class="grid-2">
-          <div class="metric"><span>Plate</span><strong>${escapeHtml(activeVehicle.plate || "None")}</strong></div>
-          <div class="metric"><span>Insurance</span><strong>${escapeHtml(activeVehicle.insurance_status || "Pending")}</strong></div>
-        </div>
+    <div class="dmv-id-layout">
+      <article class="dmv-digital-license ${record.license_status === "Valid" ? "valid" : "pending"}">
+        <header><div class="dmv-seal">FC</div><div><span>STATE OF FAIRCROFT</span><strong>DRIVER LICENSE</strong></div><b>${escapeHtml(record.license_class)}</b></header>
+        <div class="dmv-license-body"><div class="dmv-license-photo">${user?.profile_photo ? `<img src="${escapeHtml(user.profile_photo)}" alt="Driver identification" />` : `<span>${escapeHtml((user?.name || "?").slice(0,1))}</span><small>PHOTO REQUIRED</small>`}</div><dl><div><dt>NAME</dt><dd>${escapeHtml(user?.name || "")}</dd></div><div><dt>CIVILIAN ID</dt><dd>${escapeHtml(user?.civ_number || "PENDING")}</dd></div><div><dt>STATUS</dt><dd>${escapeHtml(record.license_status)}</dd></div><div><dt>CLASS</dt><dd>${escapeHtml(record.license_class)}</dd></div></dl></div>
+        <footer><span>FAIRCROFT DMV · OFFICIAL RP IDENTIFICATION</span><strong>${escapeHtml(user?.civ_number || "TEMPORARY")}</strong></footer>
       </article>
-      <div class="card">
-        <div class="row"><h3>Recent applications</h3><button class="secondary" data-dmv-tab="license">Apply</button></div>
-        <div class="list">
-          ${applications.slice(0, 3).map((item) => `
-            <div class="row"><span>${escapeHtml(item.application_type)} · ${escapeHtml(item.license_class)}</span><span class="pill ${item.status === "approved" ? "green" : "amber"}">${escapeHtml(item.status)}</span></div>
-          `).join("") || `<div class="empty">No license applications yet</div>`}
-        </div>
-      </div>
+      <aside class="dmv-record-summary"><div><span>Registered vehicles</span><strong>${vehicles.length}</strong></div><div><span>Primary plate</span><strong>${escapeHtml(activeVehicle.plate || "NONE")}</strong></div><div><span>Registration</span><strong>${escapeHtml(activeVehicle.registration_status || "None")}</strong></div><div><span>Insurance</span><strong class="${activeVehicle.insurance_status === "Active" ? "valid" : "warning"}">${escapeHtml(activeVehicle.insurance_status || "Not Insured")}</strong></div>${record.license_status !== "Valid" ? `<button class="primary" type="button" data-dmv-tab="license">Take driver exam</button>` : ""}</aside>
     </div>
   `;
 }
 
-function renderDmvLicense(applications, settings) {
+function renderDmvLicense(record, exam) {
+  const lockedUntil = exam.locked_until ? new Date(exam.locked_until) : null;
+  const locked = lockedUntil && lockedUntil > new Date();
   return `
-    <div class="stack">
-      ${renderDmvApprovalTracker(applications, settings)}
-      <form id="dmvLicenseForm" class="card form-grid">
-        <div class="grid-2">
-          <label>Application type<select name="application_type" required>
-            <option>New Driver License</option>
-            <option>License Renewal</option>
-            <option>Motorcycle Endorsement</option>
-            <option>Commercial License Permit</option>
-            <option>Replacement License</option>
-          </select></label>
-          <label>Class<select name="license_class" required>
-            <option>Class D</option>
-            <option>Class M</option>
-            <option>Class A CDL</option>
-            <option>Class B CDL</option>
-            <option>Class C CDL</option>
-          </select></label>
-        </div>
-        <label>Legal name<input name="legal_name" value="${escapeHtml(state.session.user.name)}" required /></label>
-        <label>Date of birth<input name="date_of_birth" type="date" required /></label>
-        <label>Notes<textarea name="notes" placeholder="Medical restrictions, endorsements, or DMV notes"></textarea></label>
-        <button class="primary" type="submit">Submit application</button>
-      </form>
-      <div class="list">
-        ${applications.map((item) => `
-          <article class="message-card">
-            <div class="row"><h3>${escapeHtml(item.application_type)}</h3><span class="pill ${item.status === "approved" ? "green" : "amber"}">${escapeHtml(item.status)}</span></div>
-            <p class="muted small">${escapeHtml(item.license_class)} · filed ${new Date(item.created_at).toLocaleDateString()}</p>
-            <p>${escapeHtml(item.notes || "No additional notes")}</p>
-          </article>
-        `).join("") || `<div class="empty">No license applications filed</div>`}
-      </div>
+    <div class="dmv-exam-center">
+      <section class="dmv-exam-intro"><div><p>CLASS D KNOWLEDGE EXAMINATION</p><h3>Faircroft Driver Certification</h3><span>Ten RP driving questions · 8 correct required · license issued immediately on passing</span></div><strong>${Number(exam.consecutive_failures || 0)} / 3 FAILS</strong></section>
+      ${record.license_status === "Valid" ? `<div class="dmv-exam-passed"><span>✓</span><div><strong>Valid Class D license on file</strong><p>Your digital credential is active in DMV and NCIC.</p></div></div>` : ""}
+      ${locked ? `<div class="dmv-exam-lock"><strong>48-HOUR RETEST HOLD</strong><span>Three unsuccessful attempts were recorded. Testing reopens ${lockedUntil.toLocaleString()}.</span></div>` : `<form id="dmvDriverExamForm" class="dmv-driver-exam">${(exam.questions || []).map(([question, options], index) => `<fieldset><legend><span>${String(index+1).padStart(2,"0")}</span>${escapeHtml(question)}</legend><div>${options.map((option, optionIndex) => { const letter=String.fromCharCode(65+optionIndex); return `<label><input type="radio" name="q${index+1}" value="${letter}" required /><b>${letter}</b><span>${escapeHtml(option)}</span></label>`; }).join("")}</div></fieldset>`).join("")}<button class="primary" type="submit">Submit driver examination</button></form>`}
+      <section class="dmv-attempt-ledger"><header><span>EXAM HISTORY</span><strong>${(exam.attempts || []).length} attempts</strong></header>${(exam.attempts || []).map((item) => `<div><time>${new Date(item.created_at).toLocaleString()}</time><strong>${item.score}/${item.total}</strong><span class="${item.passed ? "valid" : "failed"}">${item.passed ? "PASSED" : "NOT PASSED"}</span></div>`).join("") || `<p>No exam attempts recorded.</p>`}</section>
     </div>
   `;
 }
 
-function renderDmvVehicles(vehicles, record) {
+function renderDmvVehicles(vehicles, record, gameVehicles = []) {
+  const importedIds = new Set(vehicles.map((vehicle) => String(vehicle.source_record_id || "")).filter(Boolean));
+  const compliantCount = vehicles.filter((vehicle) => vehicle.registration_status === "Active" && vehicle.insurance_status === "Active").length;
   return `
-    <div class="stack">
-      <form id="dmvVehicleForm" class="card form-grid">
+    <div class="dmv-garage">
+      <section class="dmv-fleet-command">
+        <div><p>LINKED PROFILE VEHICLE REGISTRY</p><h3>Your DMV fleet dashboard</h3><span>Vehicles detected on your Arma profile are imported automatically. Confirm their identity and carry insurance to become road legal.</span></div>
+        <dl><div><dt>Detected</dt><dd>${gameVehicles.length}</dd></div><div><dt>DMV files</dt><dd>${vehicles.length}</dd></div><div><dt>Road legal</dt><dd>${compliantCount}</dd></div><div><dt>Action required</dt><dd class="${vehicles.length === compliantCount ? "valid" : "warning"}">${Math.max(0, vehicles.length - compliantCount)}</dd></div></dl>
+      </section>
+      ${gameVehicles.length ? `<section class="dmv-game-vehicles"><header><div><p>FCRPMUSSALO LIVE SYNC</p><h3>Profile vehicle source</h3></div><strong>${gameVehicles.length} DETECTED</strong></header><div>${gameVehicles.map((vehicle) => `<article class="${importedIds.has(String(vehicle.record_id)) ? "imported" : ""}"><span>${importedIds.has(String(vehicle.record_id)) ? "DMV FILE CREATED" : "SYNC PENDING"}</span><strong>${escapeHtml(vehicle.title || "Arma vehicle")}</strong><small>${escapeHtml(vehicle.prefab || vehicle.record_id)}</small></article>`).join("")}</div></section>` : ""}
+      <details class="dmv-manual-intake"><summary>Register a vehicle that is not on your linked profile</summary><form id="dmvVehicleForm" class="dmv-registration-form">
+        <header><div><p>FC-DMV VEHICLE INTAKE</p><h3>Register a vehicle</h3></div><span>Registration does not include insurance</span></header>
         <div class="grid-2">
           <label>Year<input name="vehicle_year" type="number" min="1900" max="2100" required /></label>
           <label>Plate<input name="plate" value="${escapeHtml(record.plate || "")}" maxlength="12" required /></label>
@@ -2000,20 +2147,18 @@ function renderDmvVehicles(vehicles, record) {
         </div>
         <div class="grid-2">
           <label>Color<input name="vehicle_color" value="${escapeHtml(record.vehicle_color === "Gray" ? "" : record.vehicle_color)}" required /></label>
-          <label>Insurance<select name="insurance_status" required><option>Active</option><option>Pending Verification</option><option>Expired</option></select></label>
+          <label>Registration type<select><option>Passenger vehicle</option><option>Motorcycle</option><option>Commercial vehicle</option></select></label>
         </div>
-        <p class="muted small">VIN will be generated automatically by DMV records.</p>
+        <p class="muted small">Make, model, year, and color remain editable after filing. A Faircroft VIN is generated automatically. Insurance must be activated separately.</p>
         <button class="primary" type="submit">Register vehicle</button>
-      </form>
-      <div class="list">
+      </form></details>
+      <div class="dmv-vehicle-grid">
         ${vehicles.map((vehicle) => `
-          <article class="property-card">
-            <div class="row"><h3>${escapeHtml(vehicle.vehicle_year)} ${escapeHtml(vehicle.vehicle_make)} ${escapeHtml(vehicle.vehicle_model)}</h3><span class="pill green">${escapeHtml(vehicle.registration_status)}</span></div>
-            <p class="muted small">${escapeHtml(vehicle.vehicle_color)} · plate ${escapeHtml(vehicle.plate)} · VIN ${escapeHtml(vehicle.vin)}</p>
-            <div class="grid-2">
-              <div class="metric"><span>Insurance</span><strong>${escapeHtml(vehicle.insurance_status)}</strong></div>
-              <div class="metric"><span>Registered</span><strong>${new Date(vehicle.created_at).toLocaleDateString()}</strong></div>
-            </div>
+          <article class="dmv-vehicle-file ${vehicle.registration_status !== "Active" || vehicle.insurance_status !== "Active" ? "action-required" : "compliant"}">
+            <header><div><span>${escapeHtml(vehicle.plate)}</span><h3>${escapeHtml(vehicle.vehicle_year)} ${escapeHtml(vehicle.vehicle_make)} ${escapeHtml(vehicle.vehicle_model)}</h3><small>${escapeHtml(vehicle.vehicle_color)} · VIN ${escapeHtml(vehicle.vin)}</small></div><span class="pill ${vehicle.insurance_status === "Active" ? "green" : "red"}">${escapeHtml(vehicle.insurance_status)}</span></header>
+            <dl><div><dt>Registration</dt><dd>${escapeHtml(vehicle.registration_status)}</dd></div><div><dt>Source</dt><dd>${vehicle.source === "fcrpmussalo" ? "FCRPMUSSALO" : "DMV filing"}</dd></div><div><dt>Insurance policy</dt><dd>${escapeHtml(vehicle.insurance_policy_number || "None")}</dd></div><div><dt>Expires</dt><dd>${vehicle.insurance_expires_at ? new Date(vehicle.insurance_expires_at).toLocaleDateString() : "Not insured"}</dd></div></dl>
+            <details ${vehicle.registration_status !== "Active" ? "open" : ""}><summary>${vehicle.registration_status === "Active" ? "Edit vehicle identity" : "Confirm make, model, year, and registration"}</summary><form class="dmv-vehicle-edit-form" data-vehicle-id="${vehicle.id}"><div class="grid-2"><label>Year<input name="vehicle_year" type="number" min="1900" max="2100" value="${vehicle.vehicle_year}" required /></label><label>Color<input name="vehicle_color" value="${escapeHtml(vehicle.vehicle_color)}" required /></label><label>Make<input name="vehicle_make" value="${escapeHtml(vehicle.vehicle_make)}" required /></label><label>Model<input name="vehicle_model" value="${escapeHtml(vehicle.vehicle_model)}" required /></label></div><button class="secondary" type="submit">${vehicle.registration_status === "Active" ? "Save vehicle details" : "Confirm registration"}</button></form></details>
+            ${vehicle.insurance_status === "Active" ? `<div class="dmv-policy-active"><span>✓</span><strong>Valid insurance carried</strong></div>` : `<button class="primary dmv-insurance-action" type="button" data-insure-vehicle="${vehicle.id}">Add insurance coverage</button>`}
           </article>
         `).join("") || `<div class="empty">No registered vehicles</div>`}
       </div>
@@ -2058,12 +2203,13 @@ function bindDmv() {
     render();
   }));
   setupDmvCountdown();
-  $("#dmvLicenseForm")?.addEventListener("submit", async (event) => {
+  $("#dmvDriverExamForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
-      await api("/api/dmv/license-applications", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
-      toast("License application submitted");
+      const result = await api("/api/dmv/driver-exam", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast(result.passed ? `Driver exam passed ${result.score}/10 — license issued` : `Driver exam score ${result.score}/10 — 8 required`);
       await loadAppData("dmv");
+      await loadSession();
       render();
     } catch (error) {
       toast(error.message);
@@ -2244,6 +2390,7 @@ function renderJobs() {
   if (!data) return `<div class="empty">Jobs loading</div>`;
   const postings = data.department_postings || [];
   const applications = data.department_applications || [];
+  const acceptingApplications = data.applications_accepting !== false;
   const activeApplications = applications.filter((item) => !["approved", "denied", "withdrawn", "closed"].includes(item.status));
   return `
     <div class="stack jobs-portal">
@@ -2258,8 +2405,12 @@ function renderJobs() {
           <div><span>Active</span><strong>${activeApplications.length}</strong></div>
         </div>
       </section>
+      ${acceptingApplications ? "" : `<section class="applications-closed-notice">
+        <span>RECRUITMENT INTAKE CLOSED</span>
+        <div><h3>Applications are not being accepted at this time.</h3><p>Please try again later.</p><strong>Sincerely, Faircroft Government</strong></div>
+      </section>`}
       <div class="job-ad-board">
-        ${postings.map((posting, index) => renderJobAdvertisement(posting, applications, index)).join("") || `<div class="empty">No job advertisements are open</div>`}
+        ${postings.map((posting, index) => renderJobAdvertisement(posting, applications, index, acceptingApplications)).join("") || `<div class="empty">No job advertisements are open</div>`}
       </div>
       <details class="jobs-history" ${applications.length ? "" : ""}>
         <summary><span>My application files</span><strong>${applications.length}</strong></summary>
@@ -2271,7 +2422,44 @@ function renderJobs() {
   `;
 }
 
-function renderJobAdvertisement(posting, applications, index) {
+function renderDmvWorkspace() {
+  return `<section class="dmv-workspace"><header class="dmv-workspace-topbar"><div><p>STATE OF FAIRCROFT · MOTOR VEHICLE SERVICES</p><h1>Department of Motor Vehicles</h1><span>Secure civilian licensing and vehicle records</span></div><div><span class="dmv-system-online"><i></i>DMV records online</span><button class="secondary" type="button" data-refresh-dmv>Refresh records</button><button class="primary" type="button" data-close-dmv>Exit DMV</button></div></header><main class="dmv-workspace-content">${renderDmv()}</main></section>`;
+}
+
+function bindDmvWorkspace() {
+  bindDmv();
+  $("[data-close-dmv]")?.addEventListener("click", async () => {
+    state.activeApp = null;
+    await loadSession();
+  });
+  $("[data-refresh-dmv]")?.addEventListener("click", async () => {
+    await loadAppData("dmv");
+    render();
+  });
+  $$(".dmv-vehicle-edit-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api(`/api/dmv/vehicles/${form.dataset.vehicleId}`, { method: "PATCH", body: Object.fromEntries(new FormData(form).entries()) });
+      toast("Vehicle identity confirmed and registration activated");
+      await loadAppData("dmv");
+      await loadSession();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+  $$("[data-insure-vehicle]").forEach((button) => button.addEventListener("click", async () => {
+    try {
+      const result = await api(`/api/dmv/vehicles/${button.dataset.insureVehicle}/insurance`, { method: "PATCH", body: {} });
+      toast(`Insurance policy ${result.policy_number} activated`);
+      await loadAppData("dmv");
+      await loadSession();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+}
+
+function renderJobAdvertisement(posting, applications, index, acceptingApplications = true) {
   const latestApplication = applications.find((item) => item.department_key === posting.key);
   const hasActiveApplication = latestApplication && !["denied", "withdrawn", "closed"].includes(latestApplication.status);
   const isLegal = ["lawyer", "prosecutor", "public_defender"].includes(posting.key);
@@ -2283,18 +2471,18 @@ function renderJobAdvertisement(posting, applications, index) {
         <div><p class="eyebrow">${escapeHtml(posting.division)}</p><h3>${escapeHtml(posting.label)}</h3><p>${escapeHtml(posting.schedule)}</p></div>
         <div class="job-ad-action">
           <span class="pill ${hasActiveApplication ? "amber" : latestApplication?.status === "approved" ? "green" : ""}">${latestApplication ? humanLabel(latestApplication.status) : "Now hiring"}</span>
-          <strong>${hasActiveApplication ? "View application" : "Open & apply"} <i>›</i></strong>
+          <strong>${hasActiveApplication ? "View application" : acceptingApplications ? "Open & apply" : "Applications closed"} <i>›</i></strong>
         </div>
       </summary>
       <div class="job-ad-body">
         <div class="department-meta">
           <div><span>Position</span><strong>${escapeHtml(posting.badge)}</strong></div>
           <div><span>Role track</span><strong>${escapeHtml(posting.role_label || humanLabel(posting.role_key))}</strong></div>
-          <div><span>Review</span><strong>${isLegal ? "Judiciary and Indeed staff" : isPress ? "FNN and Indeed staff" : "Command staff"}</strong></div>
+          <div><span>Review</span><strong>${isLegal ? "Faircroft Court" : isPress ? "Automated FNN certification" : "Command staff"}</strong></div>
         </div>
         <div class="department-requirements"><span>What you need</span><p>${escapeHtml(posting.requirements)}</p></div>
         ${latestApplication ? `<div class="department-application-status"><div><p class="eyebrow">${escapeHtml(latestApplication.application_number)}</p><h3>Your application</h3><p class="muted small">Submitted ${new Date(latestApplication.created_at).toLocaleString()}${latestApplication.reviewer_name ? ` / Reviewer ${escapeHtml(latestApplication.reviewer_name)}` : ""}</p></div><span class="pill ${businessStatusClass(latestApplication.status)}">${humanLabel(latestApplication.status)}</span></div>` : ""}
-        ${hasActiveApplication ? `<div class="empty">This application is active and waiting for review.</div>` : renderDepartmentApplicationForm(posting)}
+        ${hasActiveApplication ? `<div class="empty">This application is active and waiting for review.</div>` : acceptingApplications ? renderDepartmentApplicationForm(posting) : `<div class="job-intake-closed"><strong>Applications are not being accepted at this time.</strong><span>Please try again later.</span><em>Sincerely, Faircroft Government</em></div>`}
       </div>
     </details>
   `;
@@ -2323,11 +2511,11 @@ function bindJobs() {
       event.preventDefault();
       try {
         const payload = Object.fromEntries(new FormData(form).entries());
-        await api("/api/jobs/department-applications", {
+        const result = await api("/api/jobs/department-applications", {
           method: "POST",
           body: { ...payload, department_key: form.dataset.departmentKey },
         });
-        toast("Department application submitted");
+        toast(result.press_pass_awarded ? "Press Pass issued — Press Desk access is active" : result.press_pass_capacity_reached ? "Exam passed — Press Pass capacity is currently full" : "Department application submitted");
         await loadAppData("jobs");
         render();
       } catch (error) {
@@ -4266,13 +4454,15 @@ function renderCourt() {
   const decided = data.decided || [];
   const stats = data.stats || {};
   const petitions = data.petitions || [];
-  const tabs = [["docket", "Active docket"], ["petitions", `Petitions (${Number(stats.petitions || 0)})`], ["decisions", `Completed docket (${Number(stats.decided || 0)})`], ["standards", "Sentencing"]];
+  const tabs = [["docket", "Active docket"], ["licenses", `Lawyer Licenses (${Number(stats.licenses || 0)})`], ["petitions", `Petitions (${Number(stats.petitions || 0)})`], ["decisions", `Completed docket (${Number(stats.decided || 0)})`], ["standards", "Sentencing"]];
   if (!tabs.some(([id]) => id === state.courtTab)) state.courtTab = "docket";
   if (!active.some((item) => Number(item.id) === Number(state.courtSelectedCaseId))) {
     state.courtSelectedCaseId = active[0]?.id || null;
   }
   const content = state.courtTab === "docket"
     ? renderCourtDocket(active)
+    : state.courtTab === "licenses"
+      ? renderCourtLicenses(data.license_applications || [])
     : state.courtTab === "petitions"
       ? renderCourtPetitions(petitions)
       : state.courtTab === "decisions"
@@ -4295,6 +4485,25 @@ function renderCourt() {
       ${content}
     </div>
   `;
+}
+
+function renderCourtLicenses(applications) {
+  return `<section class="court-license-docket">
+    <header><div><p class="eyebrow">Judicial certification authority</p><h3>Lawyer License Review</h3><p>Bar examinations are reviewed and licenses are issued exclusively by the Court.</p></div><span>${applications.filter((item) => ["submitted","under_review"].includes(item.status)).length} pending</span></header>
+    <div class="court-license-grid">${applications.map((item) => {
+      const packet = departmentApplicationPacket(item);
+      const passed = Number(packet?.score || 0) >= 14;
+      return `<article class="court-license-file">
+        <header><div><span>${escapeHtml(item.application_number)}</span><h4>${escapeHtml(item.applicant_name || "Applicant")}</h4><small>CIV ${escapeHtml(item.applicant_civ_number || "pending")} · ${escapeHtml(item.department_name)}</small></div><span class="pill ${businessStatusClass(item.status)}">${humanLabel(item.status)}</span></header>
+        <div class="court-license-score ${passed ? "passed" : "failed"}"><span>INTERNAL EXAM RESULT</span><strong>${Number(packet?.score || 0)} / ${Number(packet?.total || 20)}</strong><em>${passed ? "Eligible for judicial certification" : "Not eligible for certification"}</em></div>
+        ${renderDepartmentApplicationPacket(item)}
+        <form class="court-license-form" data-license-application-id="${item.id}">
+          <label>Judicial certification notes<textarea name="reviewer_notes" maxlength="1500" placeholder="Record the Court's examination review and licensing determination.">${escapeHtml(item.reviewer_notes || "")}</textarea></label>
+          <div><button class="secondary" type="submit" name="status" value="under_review">Hold for review</button><button class="danger" type="submit" name="status" value="denied">Deny license</button><button class="primary" type="submit" name="status" value="approved" ${passed ? "" : "disabled"}>Sign & issue lawyer license</button></div>
+        </form>
+      </article>`;
+    }).join("") || `<div class="empty">No lawyer examinations have been filed.</div>`}</div>
+  </section>`;
 }
 
 function renderCourtPetitions(petitions) {
@@ -4450,6 +4659,17 @@ function bindCourt() {
   }));
   $$("[data-court-select]").forEach((button) => button.addEventListener("click", () => {
     state.courtSelectedCaseId = Number(button.dataset.courtSelect);
+    render();
+  }));
+  $$(".court-license-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submitter = event.submitter;
+    await api(`/api/court/licenses/${form.dataset.licenseApplicationId}`, {
+      method: "PATCH",
+      body: { status: submitter?.value || "under_review", reviewer_notes: new FormData(form).get("reviewer_notes") || "" },
+    });
+    toast(submitter?.value === "approved" ? "Lawyer license signed and issued" : "License file updated");
+    await loadAppData("court");
     render();
   }));
   $$(".court-decision-form").forEach((form) => form.addEventListener("submit", async (event) => {
@@ -6060,6 +6280,7 @@ function renderMdtSearch() {
       ${results.map((item) => `
         <article class="mdt-return">
           <div class="row">
+            ${item.profile_photo ? `<img class="ncic-result-photo" src="${escapeHtml(item.profile_photo)}" alt="Civilian identification" />` : ""}
             <div>
               <h3>${escapeHtml(item.name)}</h3>
               <p class="muted small">CIV ${escapeHtml(item.civ_number || "pending")} / Record #${item.id}${canViewAccountEmail && item.email ? ` / ${escapeHtml(item.email)}` : ""}</p>
@@ -6070,6 +6291,7 @@ function renderMdtSearch() {
             <div class="metric"><span>License</span><strong>${escapeHtml(item.license_status || "None")}</strong></div>
             <div class="metric"><span>Class</span><strong>${escapeHtml(item.license_class || "None")}</strong></div>
             <div class="metric"><span>Primary Plate</span><strong>${escapeHtml(item.plate || "None")}</strong></div>
+            <div class="metric"><span>Insurance</span><strong>${escapeHtml(item.insurance_status || "None")}</strong></div>
             <div class="metric"><span>Car Entry</span><strong>${escapeHtml(item.car_entry_code || "Not filed")}</strong></div>
           </div>
           <div class="mdt-subsection">
@@ -6157,6 +6379,7 @@ function renderMdtProfileModal() {
     <div class="modal-backdrop mdt-profile-backdrop" data-close-mdt-profile>
       <section class="mdt-modal mdt-profile-modal" role="dialog" aria-modal="true" aria-label="Civilian MDT profile">
         <header class="row">
+          ${person.profile_photo ? `<img class="ncic-profile-photo" src="${escapeHtml(person.profile_photo)}" alt="Civilian identification" />` : ""}
           <div>
             <p class="eyebrow">Civilian profile file</p>
             <h2>${escapeHtml(person.name)}</h2>
@@ -8320,6 +8543,7 @@ function renderDevWorkspace() {
     intelligence: ["Game Intelligence", "Read-only FCRPMUSSALO assets, records, and identity matches"],
     anticheat: ["Anti-Cheat Intelligence", "Live presence, detection history, and linked identity analysis"],
     campaigns: ["Active Campaigns", "Schedule banners, events, promotions, and entrance bulletins"],
+    "fnn-settings": ["FNN Settings", "Control newsroom publishing and Press Pass capacity"],
     audit: ["Activity Log", "Chronological record of staff actions"],
     settings: ["App Visibility", "Control which application icons appear for users"],
   }[state.devTab] || ["Staff Operations", "Faircroft administrative console"];
@@ -8327,7 +8551,7 @@ function renderDevWorkspace() {
     <aside class="dev-sidebar">
       <div class="dev-brand"><img class="dev-emblem" src="/static/brand/faircroft-emblem.webp" alt="" /><div><strong>Faircroft RP</strong><small>Staff Operations</small></div></div>
       <p class="dev-nav-label">Operations index</p>
-      <nav>${[["dashboard","Command Center"],["intelligence","Game Intelligence"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["campaigns","Active Campaigns"],["audit","Activity Log"],["settings","Settings"]].map(([id,label], index) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><small>${String(index + 1).padStart(2, "0")}</small><span>${label}</span><i></i></button>`).join("")}</nav>
+      <nav>${[["dashboard","Command Center"],["intelligence","Game Intelligence"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["campaigns","Active Campaigns"],["fnn-settings","FNN Settings"],["audit","Activity Log"],["settings","Settings"]].map(([id,label], index) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><small>${String(index + 1).padStart(2, "0")}</small><span>${label}</span><i></i></button>`).join("")}</nav>
       <div class="dev-sidebar-footer"><span class="dev-access-dot"></span><div><strong>Authorized Staff</strong><small>${escapeHtml(state.session?.user?.name || "Staff member")}</small></div></div>
     </aside>
     <main class="dev-main">
@@ -8456,6 +8680,26 @@ function renderDevTools() {
       </form>
     </div>`;
   }
+  if (state.devTab === "fnn-settings") {
+    const fnn = data.fnn_settings || { press_pass_limit: 25, active_press_passes: 0 };
+    const remaining = Math.max(0, Number(fnn.press_pass_limit || 0) - Number(fnn.active_press_passes || 0));
+    return `<div class="stack dev-fnn-settings-view">
+      <div class="dev-view-intro"><div><span>FAIRCROFT NEWS NOW CONTROL</span><h2>FNN Settings</h2><p>Manage newsroom publishing and automated Press Pass certification.</p></div><strong>${Number(fnn.active_press_passes || 0)} / ${Number(fnn.press_pass_limit || 0)} PASSES</strong></div>
+      <section class="dev-card dev-fnn-pass-control">
+        <div><p class="eyebrow">Automated credentialing</p><h2>Press Pass Capacity</h2><p>Applicants who score at least 8 of 10 are automatically issued a Press Pass while capacity remains. Passing applicants are waitlisted when the limit is full.</p></div>
+        <div class="dev-metrics">
+          <div class="dev-metric red-tone"><span>Issued</span><strong>${Number(fnn.active_press_passes || 0)}</strong><small>Accounts with Press access</small></div>
+          <div class="dev-metric"><span>Capacity</span><strong>${Number(fnn.press_pass_limit || 0)}</strong><small>Maximum active passes</small></div>
+          <div class="dev-metric green-tone"><span>Available</span><strong>${remaining}</strong><small>Automatic passes remaining</small></div>
+        </div>
+        <form id="devFnnSettingsForm" class="dev-fnn-limit-form"><label>Maximum Press Passes<input name="press_pass_limit" type="number" min="0" max="500" step="1" value="${Number(fnn.press_pass_limit || 0)}" required /><small>Set 0 to pause automatic Press Pass issuance.</small></label><button class="primary" type="submit">Save FNN capacity</button></form>
+      </section>
+      <section class="dev-card dev-fnn-control">
+        <div><p class="eyebrow">Newsroom publishing</p><h2>Faircroft News Now Edition</h2><p class="muted">Generate or replace today's public edition from eligible CAD, court, citation, criminal, and Press Desk records.</p></div>
+        <button class="danger" type="button" data-dev-generate-fnn>Regenerate today's edition</button>
+      </section>
+    </div>`;
+  }
   if (state.devTab === "settings") {
     const visibilityApps = data.app_visibility?.apps || [];
     const beta = data.beta_program || { recruiting_enabled: false, recruiting_message: "", members: 0, member_roster: [], tasks: [], reports: [] };
@@ -8480,13 +8724,23 @@ function renderDevTools() {
         <button class="secondary" type="button" data-beta-modal="tasks">Open assignment library <span>${(beta.tasks || []).length}</span></button>
       </section>
       ${renderDevBetaModal(beta)}
-      <section class="dev-card dev-fnn-control">
+      <section class="dev-card dev-application-intake">
         <div>
-          <p class="eyebrow">Newsroom administration</p>
-          <h2>Faircroft News Now</h2>
-          <p class="muted">Generate or replace today’s public edition from eligible CAD reports, citations, and criminal records.</p>
+          <p class="eyebrow">Government recruitment control</p>
+          <h2>Application Intake</h2>
+          <p class="muted">Close every department, legal, and FNN application without removing the job advertisements. Active applications remain available for staff review.</p>
         </div>
-        <button class="danger" type="button" data-dev-generate-fnn>Regenerate today’s edition</button>
+        <form id="devApplicationIntakeForm">
+          <div class="dev-intake-status ${data.applications_accepting === false ? "closed" : ""}">
+            <i></i>
+            <span><small>CURRENT STATUS</small><strong>${data.applications_accepting === false ? "Applications closed" : "Accepting applications"}</strong></span>
+          </div>
+          <label class="dev-experience-section">
+            <span><b>PUBLIC INTAKE</b><strong>Allow users to submit new applications</strong></span>
+            <input type="checkbox" name="accepting" ${data.applications_accepting === false ? "" : "checked"} />
+          </label>
+          <button class="primary" type="submit">Save application status</button>
+        </form>
       </section>
       <section class="dev-card dev-visibility-intro">
         <div><p class="eyebrow">Global user interface controls</p><h2>Application Icon Visibility</h2><p class="muted">Checked applications appear for users who have permission. Unchecked applications vanish from every user home screen.</p></div>
@@ -9119,6 +9373,22 @@ function bindDevTools() {
     toast("Application visibility updated");
     await refreshDevTools();
   });
+  $("#devApplicationIntakeForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const accepting = event.currentTarget.accepting.checked;
+    await api("/api/dev-tools/application-intake", { method: "PATCH", body: { accepting } });
+    toast(accepting ? "Applications are now open" : "Application intake has been closed");
+    await refreshDevTools();
+  });
+  $("#devFnnSettingsForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await api("/api/dev-tools/fnn-settings", {
+      method: "PATCH",
+      body: { press_pass_limit: new FormData(event.currentTarget).get("press_pass_limit") },
+    });
+    toast("FNN Press Pass capacity updated");
+    await refreshDevTools();
+  });
   $("#devRuleSelect")?.addEventListener("change", (event) => {
     const option = event.currentTarget.selectedOptions[0];
     const reason = $("#devPublicReason");
@@ -9425,15 +9695,15 @@ function renderAdminDepartmentApplicationCard(item, mode = "admin") {
           </div>
           ${renderDepartmentApplicationPacket(item)}
           ${item.reviewer_notes ? `<p class="muted small">Review notes: ${escapeHtml(item.reviewer_notes)}</p>` : ""}
-          <form class="${formClass}" data-application-id="${item.id}">
+          ${isIndeed && isBarExam ? `<div class="application-authority-notice"><strong>COURT AUTHORITY REQUIRED</strong><span>This examination is visible for recruitment records only. Review and lawyer-license issuance are handled in Court → Lawyer Licenses.</span></div>` : isPressExam ? `<div class="application-authority-notice fnn"><strong>AUTOMATED FNN CREDENTIALING</strong><span>Press Passes are issued automatically to passing applicants while newsroom capacity remains.</span></div>` : `<form class="${formClass}" data-application-id="${item.id}">
             <label>Review notes<textarea name="reviewer_notes" maxlength="1500" placeholder="Optional notes sent to the applicant">${escapeHtml(item.reviewer_notes || "")}</textarea></label>
             <div class="admin-application-actions">
               <button class="secondary" type="button" ${statusAttr}="under_review" ${item.status === "under_review" ? "disabled" : ""}>Mark Review</button>
-              <button class="primary" type="button" ${statusAttr}="approved" ${item.status === "approved" ? "disabled" : ""}>${isBarExam ? "Judge: Sign Certificate" : isPressExam ? "Approve Press Pass" : "Approve"}</button>
+              <button class="primary" type="button" ${statusAttr}="approved" ${item.status === "approved" ? "disabled" : ""}>${isBarExam ? "Judge: Sign Certificate" : "Approve"}</button>
               <button class="danger" type="button" ${statusAttr}="denied" ${item.status === "denied" ? "disabled" : ""}>Deny</button>
               <button class="secondary" type="button" ${statusAttr}="closed" ${isClosed ? "disabled" : ""}>Close</button>
             </div>
-          </form>
+          </form>`}
         </div>
       </details>
     </article>
@@ -9853,7 +10123,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-press-pass").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-dmv-profile-sync").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {

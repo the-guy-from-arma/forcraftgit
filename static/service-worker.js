@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v017-press-pass";
+const CACHE = "faircroft-rp-v017-dmv-profile-sync";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.1.7-press-pass",
+  "/static/styles.css?v=0.1.7-dmv-profile-sync",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.1.7-press-pass",
+  "/static/app.js?v=0.1.7-dmv-profile-sync",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
   "/static/brand/platforms/playstation.svg",
@@ -12,11 +12,13 @@ const ASSETS = [
   "/static/brand/icon-192.png",
   "/static/brand/icon-512.png",
   "/static/brand/apple-touch-icon.png",
-  "/static/getting-started/used-cars.jpg",
-  "/static/getting-started/dirty-pond.jpg",
-  "/static/getting-started/bag-store.jpg",
-  "/static/getting-started/townhall.jpg",
-  "/static/getting-started/hardware-store.jpg",
+  "/static/getting-started/01-used-cars.webp",
+  "/static/getting-started/02-stick-route.webp",
+  "/static/getting-started/02-stick-collection.webp",
+  "/static/getting-started/03-bag-store.webp",
+  "/static/getting-started/04-town-hall.webp",
+  "/static/getting-started/05-hardware-store.webp",
+  "/static/getting-started/06-mine-smeltery.webp",
   "/manifest.webmanifest"
 ];
 
