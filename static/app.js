@@ -29,6 +29,7 @@ const state = {
   devAccount: null,
   devAntiCheatUid: null,
   devAntiCheatSearch: "",
+  devAntiCheatPage: 1,
   dmvTab: "overview",
   jobsTab: "state_police",
   mdtTab: "search",
@@ -8272,6 +8273,12 @@ function renderDevAntiCheat(data) {
     !query || [player.player_name, player.uid, player.account_name, player.civ_number]
       .some((value) => String(value || "").toLowerCase().includes(query))
   );
+  const pageSize = 8;
+  const pageCount = Math.max(1, Math.ceil(players.length / pageSize));
+  const page = Math.min(Math.max(1, Number(state.devAntiCheatPage || 1)), pageCount);
+  state.devAntiCheatPage = page;
+  const pageStart = (page - 1) * pageSize;
+  const visiblePlayers = players.slice(pageStart, pageStart + pageSize);
   const sync = data.sync_status || [];
   return `<div class="stack anticheat-console dev-ops-view">
     <section class="anticheat-command">
@@ -8288,7 +8295,7 @@ function renderDevAntiCheat(data) {
     <section class="dev-card anticheat-directory">
       <div class="anticheat-directory-head"><div><p class="eyebrow">IDENTITY DIRECTORY</p><h2>Players & telemetry</h2><p class="muted">${players.length} matching records</p></div><label class="dev-command-search"><span>Search records</span><input id="antiCheatSearch" type="search" value="${escapeHtml(state.devAntiCheatSearch)}" placeholder="Name, UID, account, or CIV…" /></label></div>
       <div class="anticheat-player-head"><span></span><span>Player identity</span><span>Faircroft account</span><span>Telemetry</span><span>Operational status</span></div>
-      <div class="anticheat-player-list">${players.map((player) => {
+      <div class="anticheat-player-list">${visiblePlayers.map((player) => {
         const flags = Number(player.teleport_flags || 0) + Number(player.aim_flags || 0);
         const platform = devPlatformIdentity(player.reported_system, player.detected_system);
         return `<button class="anticheat-player-row" data-anticheat-player="${escapeHtml(player.uid)}">
@@ -8299,6 +8306,10 @@ function renderDevAntiCheat(data) {
           <div><span class="dev-record-status ${player.online ? "verified" : "closed"}">${player.online ? "Live" : "Offline"}</span><span class="dev-platform-mini">${escapeHtml(platform.mark)} · ${escapeHtml(platform.label)}</span>${Number(player.alt_group_count || 0) ? `<span class="dev-record-status alert">${Number(player.alt_group_count)} alt group</span>` : ""}<i>›</i></div>
         </button>`;
       }).join("") || `<div class="empty">No anti-cheat players match this search.</div>`}</div>
+      <footer class="anticheat-directory-footer">
+        <span>${players.length ? `${pageStart + 1}–${Math.min(pageStart + pageSize, players.length)} of ${players.length} records` : "0 records"}</span>
+        <div><button class="secondary" type="button" data-anticheat-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>Previous</button><strong>Page ${page} / ${pageCount}</strong><button class="secondary" type="button" data-anticheat-page="${page + 1}" ${page >= pageCount ? "disabled" : ""}>Next</button></div>
+      </footer>
     </section>
   </div>`;
 }
@@ -8451,6 +8462,7 @@ function bindDevWorkspace() {
   }));
   $("#antiCheatSearch")?.addEventListener("input", (event) => {
     state.devAntiCheatSearch = event.target.value;
+    state.devAntiCheatPage = 1;
     render();
     const input = $("#antiCheatSearch");
     if (input) {
@@ -8458,6 +8470,10 @@ function bindDevWorkspace() {
       input.setSelectionRange(input.value.length, input.value.length);
     }
   });
+  $$("[data-anticheat-page]").forEach((button) => button.addEventListener("click", () => {
+    state.devAntiCheatPage = Number(button.dataset.anticheatPage);
+    render();
+  }));
   $$("[data-dev-account]").forEach((button) => button.addEventListener("click", async () => {
     try {
       state.devAccount = await api(`/api/dev-tools/accounts/${button.dataset.devAccount}`);
@@ -9433,7 +9449,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.1-ops2").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.1-ops3").catch(() => {}));
 }
 
 bootApp();
