@@ -4,6 +4,124 @@
     {
       "date": "2026-07-27",
       "version": "0.1.7",
+      "title": "Newcomer Field Guide",
+      "added": [
+        "Added a six-stage first-day route covering account linking, starter transportation, stick collection, bag storage, the IL mining license, shovel purchasing, mining, smelting, and ore sales.",
+        "Added current in-game map images for the Used Car dealership, Kotka collection route, Bag and Phone Store, Town Hall, Hardware Store, Mining Site, and Smeltery.",
+        "Added direct stage selection, previous and next controls, progress tracking, and route restart controls."
+      ],
+      "changed": [
+        "Rebuilt Getting Started as a dedicated full-screen field guide instead of displaying it inside the simulated phone.",
+        "Desktop now gives route maps and instructions a full records-workspace layout while phones use a true single-column guide."
+      ],
+      "fixed": [
+        "Fixed route images being compressed into unusable vertical strips.",
+        "Fixed the desktop layout responding to the browser width instead of the narrow phone container.",
+        "Removed the retired Getting Started image set."
+      ]
+    },
+    {
+      "date": "2026-07-27",
+      "version": "0.1.7",
+      "title": "DMV Vehicle Intelligence & Compliance",
+      "added": [
+        "Added automatic DMV intake for vehicles detected through a resident's linked FCRPMUSSALO Arma profile.",
+        "Added imported make, model, year, color, generated plate, VIN, registration status, insurance status, and source tracking.",
+        "Added a next-login compliance notice when a detected vehicle still requires registration confirmation or insurance.",
+        "Added linked vehicle records to the resident Profile overview and NCIC-accessible DMV history.",
+        "Added a full-screen fleet dashboard with detected, filed, road-legal, and action-required totals.",
+        "Added a ten-question Class D roleplay driver examination with an 8/10 passing score, automatic license issuance, and a 48-hour hold after three consecutive failures."
+      ],
+      "changed": [
+        "Rebuilt DMV as a full-screen Motor Vehicle Authority records desk with an official credential, compliance ledger, examination workspace, and vehicle registry.",
+        "Confirming imported vehicle identity now activates its registration while insurance remains a separate required action.",
+        "Manual vehicle intake remains available for vehicles not present in the linked game profile."
+      ],
+      "fixed": [
+        "Fixed vehicle registration and insurance controls being bound to the Court workspace instead of DMV.",
+        "Fixed linked game vehicles appearing as informational records without becoming actionable DMV files.",
+        "Fixed the previous DMV identity view using excessive generic cards and unused space."
+      ]
+    },
+    {
+      "date": "2026-07-27",
+      "version": "0.1.7",
+      "title": "Press Desk & FNN Recruitment",
+      "added": [
+        "Added a dedicated Press role, Press Desk app, and structured newsroom report submission workflow.",
+        "Added detailed press reports as an eligible source for Faircroft News Now editions.",
+        "Added an FNN-branded job application and ten-question press roleplay examination.",
+        "Added automatic Press Pass issuance for applicants who pass the internal examination requirement.",
+        "Added developer-controlled Press Pass capacity settings and newsroom application intake controls."
+      ],
+      "changed": [
+        "Press Desk now opens as a full-screen newsroom dashboard instead of a phone-sized form.",
+        "FNN publishing controls are restricted to Developer Tools settings rather than the public newsroom."
+      ],
+      "fixed": [
+        "Improved newsroom generation feedback when Gemini quota or model availability prevents publishing.",
+        "Updated FNN navigation, story interactions, animations, and mobile article flow."
+      ]
+    },
+    {
+      "date": "2026-07-27",
+      "version": "0.1.7",
+      "title": "Legal Careers & Court Licensing",
+      "added": [
+        "Added revised Faircroft Bar examinations and internal passing evaluation.",
+        "Added Faircroft Prosecutor's Office and Public Defender Office recruitment applications.",
+        "Added a judicial license docket for reviewing examinations and approving lawyer certificates.",
+        "Added judicial certificate signatures before a successful Bar candidate receives an active lawyer license.",
+        "Added continued-hearing date controls that publish the new court date to the resident's Court tab."
+      ],
+      "changed": [
+        "Lawyer examinations remain available through Indeed while completed examinations route to Court and authorized administration.",
+        "Court, rather than Indeed administration, is the final authority for lawyer licensing."
+      ],
+      "fixed": []
+    },
+    {
+      "date": "2026-07-27",
+      "version": "0.1.7",
+      "title": "Recruitment & Application Controls",
+      "added": [
+        "Added developer settings for opening or closing public job application intake.",
+        "Added an official Faircroft Government applications-closed notice when intake is disabled.",
+        "Added separate Sheriff, combined Fire and EMS, legal, and FNN recruitment paths."
+      ],
+      "changed": [
+        "Sheriff is now the remaining public law-enforcement application department.",
+        "Fire and EMS recruitment is combined into one application route.",
+        "Indeed job advertisements use focused open-and-apply panels instead of one long application page."
+      ],
+      "fixed": [
+        "Restored the Indeed job icon and protected public job access from unrelated visibility settings."
+      ],
+      "removed": [
+        "Removed State Police and Metro Police from public recruitment."
+      ]
+    },
+    {
+      "date": "2026-07-27",
+      "version": "0.1.7",
+      "title": "Responsive Workspaces & Campaign Operations",
+      "added": [
+        "Added an Active Campaigns area in Developer Tools for promotional banners and entrance splash experiences.",
+        "Added campaign enablement, scheduling, media, message, and expiration controls for community announcements, events, organizations, and rule changes."
+      ],
+      "changed": [
+        "Developer Tools, FNN, Court, Press Desk, DMV, and Getting Started use dedicated responsive workspaces rather than congested phone layouts.",
+        "Mobile safe-area handling and RP OS footer placement were updated for different device heights."
+      ],
+      "fixed": [
+        "Fixed published splash experiences appearing immediately to the publisher but not reliably on the next entrance.",
+        "Fixed nested scrolling and desktop-width content appearing zoomed or clipped on mobile devices.",
+        "Removed static MDT citation and booking metric tiles from the mobile terminal header."
+      ]
+    },
+    {
+      "date": "2026-07-27",
+      "version": "0.1.7",
       "title": "System Communications",
       "added": [
         "Added developer-published system banners with informational, success, warning, and critical presentation.",
