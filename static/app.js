@@ -4572,17 +4572,12 @@ function bindMdtLegacy() {
 }
 
 function renderMdtWorkspace() {
-  const charges = state.cache.mdt?.charges || {};
-  const alerts = state.cache.mdt?.alerts?.alerts || [];
-  const activeBolos = state.cache.mdt?.bolos?.active || [];
-  const activeBookings = state.cache.mdt?.bookings?.active || [];
   const cid = state.cache.mdt?.cid;
   const mdtCommandEnabledNow = mdtCommandEnabled();
   const commandLabel = mdtCommandLabel();
   if (!mdtCommandEnabledNow && String(state.mdtTab || "").startsWith("cid-")) {
     state.mdtTab = "search";
   }
-  const priorityCases = (cid?.investigations || []).filter((item) => ["critical", "elevated"].includes(item.priority));
   const cidWarrantModal = mdtCommandEnabledNow && state.cidWarrantModalId
     ? renderCidWarrantModal((cid?.warrants || []).find((item) => String(item.id) === String(state.cidWarrantModalId)))
     : "";
@@ -4634,22 +4629,6 @@ function renderMdtWorkspace() {
         </div>
       </header>
       ${renderMdtQuickRail()}
-      <div class="mdt-stat-strip ${mdtCommandEnabledNow ? "cid-stat-strip" : "leo-stat-strip"}">
-        ${mdtCommandEnabledNow ? `
-          <div class="metric"><span>Case folders</span><strong>${cid?.stats?.open_investigations || 0}</strong></div>
-          <div class="metric"><span>Priority watch</span><strong>${priorityCases.length}</strong></div>
-          <div class="metric"><span>Active warrants</span><strong>${cid?.stats?.active_warrants || 0}</strong></div>
-          <div class="metric"><span>Bookings</span><strong>${activeBookings.length}</strong></div>
-          <div class="metric"><span>IA open</span><strong>${cid?.stats?.ia_open || 0}</strong></div>
-          <div class="metric"><span>Active BOLOs</span><strong>${activeBolos.length}</strong></div>
-        ` : `
-          <div class="metric"><span>Citations</span><strong>${(charges.citations || []).length}</strong></div>
-          <div class="metric"><span>Criminal Codes</span><strong>${(charges.criminal_charges || []).length}</strong></div>
-          <div class="metric"><span>Bookings</span><strong>${activeBookings.length}</strong></div>
-          <div class="metric"><span>Officer Alerts</span><strong>${alerts.filter((alert) => alert.status === "active").length}</strong></div>
-          <div class="metric"><span>Active BOLOs</span><strong>${activeBolos.length}</strong></div>
-        `}
-      </div>
       <div class="mdt-layout">
         <aside class="mdt-nav ${state.mdtNavOpen ? "open" : ""}">
           <div class="mdt-drawer-head"><strong>MDT Menu</strong><button class="icon-action" data-close-mdt-drawers aria-label="Close">x</button></div>
@@ -9830,7 +9809,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-fnn-control").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-device-fit").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {

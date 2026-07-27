@@ -14990,6 +14990,39 @@ textarea:focus {
 
 /* Phone-native layouts for Staff Operations and FNN */
 @media (max-width: 650px) {
+  .phone-shell {
+    height: 100dvh;
+    min-height: 100dvh;
+  }
+  .phone-screen {
+    height: 100dvh;
+    min-height: 0;
+    padding-bottom: max(30px, calc(env(safe-area-inset-bottom) + 24px));
+  }
+  .phone-screen > .home-stack {
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding-bottom: 34px;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+  }
+  .phone-screen > .home-stack::-webkit-scrollbar { display: none; }
+  .app-panel .panel-body { padding-bottom: max(38px, calc(env(safe-area-inset-bottom) + 30px)); }
+  .os-version {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 60;
+    min-height: calc(25px + env(safe-area-inset-bottom));
+    display: grid;
+    place-items: start center;
+    padding-top: 7px;
+    color: rgba(255,255,255,.42);
+    background: linear-gradient(to bottom, rgba(8,12,14,0), rgba(8,12,14,.94) 42%);
+  }
+
   #app:has(.dev-workspace),
   #app:has(.fnn-workspace) {
     width: 100%;

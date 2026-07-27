@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v017-fnn-control";
+const CACHE = "faircroft-rp-v017-device-fit";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.1.7-fnn-control",
+  "/static/styles.css?v=0.1.7-device-fit",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.1.7-fnn-control",
+  "/static/app.js?v=0.1.7-device-fit",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
   "/static/brand/platforms/playstation.svg",
