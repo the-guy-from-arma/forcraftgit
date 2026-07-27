@@ -151,6 +151,7 @@ const iconSvg = {
   settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V22a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 18l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1A2 2 0 1 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>',
   code: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M14 5l-4 14"/><circle cx="19" cy="5" r="2"/></svg>',
   news: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h6v5H7zM15 8h2M15 11h2M7 16h10"/></svg>',
+  press: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 4h12v16H6a2 2 0 0 1-2-2V4Z"/><path d="M16 8h4v10a2 2 0 0 1-2 2H8"/><path d="M7 8h6M7 12h6M7 16h4"/></svg>',
   route: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M8.5 19h3a3 3 0 0 0 3-3v-1a3 3 0 0 0-3-3h-1a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3h5"/></svg>',
   link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.2 1.2"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.2-1.2"/></svg>',
   rocket: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 5c3-3 6-3 7-2 1 1 1 4-2 7l-6 6-5-5 6-6Z"/><path d="m9 10-4 1-2 3 5 1M14 15l-1 4-3 2-1-5M15 6l3 3"/><path d="M5 18c-1 0-2 1-2 3 2 0 3-1 3-2"/></svg>',
@@ -170,6 +171,7 @@ const tileColors = {
   court: "linear-gradient(145deg, #b78cff, #4f3175)",
   "my-faircroft": "linear-gradient(145deg, #78e4d0, #2e628e 55%, #d5ab4e)",
   fnn: "linear-gradient(145deg, #f44747, #9c1019 58%, #18191d)",
+  press: "linear-gradient(145deg, #ff6b67, #8f1422 55%, #12161b)",
   properties: "linear-gradient(145deg, #28d17c, #17623d)",
   cash: "linear-gradient(145deg, #f15f79, #7a1e31)",
   bank: "linear-gradient(145deg, #5c9cff, #21497e)",
@@ -913,7 +915,7 @@ function renderFnnWorkspace() {
           <p class="fnn-deck">${escapeHtml(edition.deck || "")}</p>
           <div class="fnn-byline"><span>FNN NEWSROOM</span><time>Published ${escapeHtml(dateLabel)}</time></div>
           <div class="fnn-lead-copy">${fnnStoryText(edition.lead_story)}</div>
-          <p class="fnn-source-note">Newsroom review compiled from ${Number(edition.source_report_count || 0)} official CAD, citation, and criminal-court source record${Number(edition.source_report_count || 0) === 1 ? "" : "s"} across the complete Faircroft archive.</p>
+          <p class="fnn-source-note">Newsroom review compiled from ${Number(edition.source_report_count || 0)} CAD, citation, criminal-court, and press source record${Number(edition.source_report_count || 0) === 1 ? "" : "s"} across the complete Faircroft archive.</p>
         </section>
         <aside class="fnn-brief" id="fnn-safety">
           <div class="fnn-brief-title"><span>PUBLIC SAFETY DESK</span><strong>Daily Brief</strong></div>
@@ -956,6 +958,60 @@ function bindFnnWorkspace() {
       $$(".fnn-sections button").forEach((item) => item.classList.toggle("active", item === button));
       target.scrollIntoView({ behavior: "smooth", block: "start" });
     });
+  });
+}
+
+function renderPressDesk() {
+  const reports = state.cache.press?.reports || [];
+  return `<div class="stack press-desk">
+    <section class="press-desk-hero">
+      <div><p class="eyebrow">FNN source newsroom</p><h3>Press Report Desk</h3><p>File factual reporter briefs for consideration in future Faircroft News Now editions.</p></div>
+      <span>${reports.length}<small>filed reports</small></span>
+    </section>
+    <section class="press-guidance">
+      <strong>Write for the newsroom, not the AI.</strong>
+      <p>Be as detailed and factual as possible. Gemini can only build a reliable story from the information you provide. Include names, sequence of events, locations, verified quotes, relevant history, and public impact. Do not invent facts or submit rumors as confirmed information.</p>
+    </section>
+    <form id="pressReportForm" class="press-report-form">
+      <div class="press-form-heading"><div><p class="eyebrow">New source brief</p><h3>File a press report</h3></div><span class="pill red">FNN SOURCE</span></div>
+      <div class="press-form-grid">
+        <label class="wide">Working headline<input name="headline" minlength="5" maxlength="180" required placeholder="Clear description of the event or story" /></label>
+        <label>Desk<select name="category"><option value="breaking">Breaking News</option><option value="community" selected>Community</option><option value="public_safety">Public Safety</option><option value="justice">Justice</option><option value="business">Business</option><option value="events">Events</option><option value="government">Government</option><option value="opinion">Opinion</option></select></label>
+        <label>Location<input name="location" maxlength="240" placeholder="Street, district, venue, or jurisdiction" /></label>
+        <label>Date and time of event<input name="event_at" type="datetime-local" /></label>
+        <label>People involved<input name="people" maxlength="2000" placeholder="Names, roles, and how each person is involved" /></label>
+        <label class="wide">Organizations involved<input name="organizations" maxlength="2000" placeholder="Departments, gangs, businesses, community groups, or agencies" /></label>
+        <label class="wide">Verified facts and complete sequence of events<textarea name="facts" minlength="80" maxlength="10000" required placeholder="Explain exactly what happened, in order, with every confirmed detail available."></textarea></label>
+        <label class="wide">Direct quotes and attribution<textarea name="quotes" maxlength="6000" placeholder="Quote — speaker name and role. Separate verified quotes from paraphrased statements."></textarea></label>
+        <label class="wide">Background and prior context<textarea name="background" maxlength="6000" placeholder="Earlier events, history, prior announcements, or context readers need to understand the story."></textarea></label>
+        <label>Public impact<textarea name="public_impact" maxlength="4000" placeholder="Why this matters to Faircroft residents and what may happen next."></textarea></label>
+        <label>Verification and sourcing notes<textarea name="verification_notes" maxlength="4000" placeholder="What you personally witnessed, who confirmed each fact, and anything still unverified."></textarea></label>
+      </div>
+      <button class="primary" type="submit">Submit report to FNN sources</button>
+    </form>
+    <section class="press-report-library"><div class="row"><div><p class="eyebrow">Your newsroom file</p><h3>Submitted reports</h3></div><span class="pill">${reports.length}</span></div>
+      <div>${reports.map((report) => `<article><span>${escapeHtml(report.report_number)} · ${humanLabel(report.category)}</span><strong>${escapeHtml(report.headline)}</strong><small>${new Date(report.created_at).toLocaleString()} · ${humanLabel(report.status)}</small></article>`).join("") || `<div class="empty">No press reports submitted yet.</div>`}</div>
+    </section>
+  </div>`;
+}
+
+function bindPressDesk() {
+  $("#pressReportForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector('button[type="submit"]');
+    button.disabled = true;
+    button.textContent = "Filing report…";
+    try {
+      const result = await api("/api/press/reports", { method: "POST", body: Object.fromEntries(new FormData(form).entries()) });
+      toast(`Press report ${result.report_number} submitted`);
+      await loadAppData("press");
+      render();
+    } catch (error) {
+      toast(error.message);
+      button.disabled = false;
+      button.textContent = "Submit report to FNN sources";
+    }
   });
 }
 
@@ -1005,6 +1061,7 @@ function renderPanel(id) {
     "dev-tools": "Dev Tools",
     "fine-settlement": "Fine Settlement",
     "beta-tasks": "Beta Tasks",
+    press: "Press Desk",
   };
   const body = {
     profile: renderProfile,
@@ -1031,6 +1088,7 @@ function renderPanel(id) {
     "dev-tools": renderDevTools,
     "fine-settlement": renderFineSettlement,
     "beta-tasks": renderBetaTasks,
+    press: renderPressDesk,
   }[id]?.() || `<div class="empty">Module unavailable</div>`;
 
   return `
@@ -1083,6 +1141,7 @@ async function loadAppData(id) {
     "dev-tools": () => api("/api/dev-tools"),
     "fine-settlement": () => api("/api/fine-settlement"),
     "beta-tasks": () => api("/api/beta/tasks"),
+    press: () => api("/api/press/reports"),
     admin: async () => ({
       overview: await api("/api/admin/overview"),
       users: await api("/api/admin/users"),
@@ -1169,6 +1228,7 @@ function bindPanel() {
     "dev-tools": bindDevTools,
     "fine-settlement": bindFineSettlement,
     "beta-tasks": bindBetaTasks,
+    press: bindPressDesk,
   };
   binders[state.activeApp]?.();
 }
@@ -2023,28 +2083,6 @@ function bindDmv() {
 }
 
 const lawEnforcementDepartmentChoices = ["Faircroft Sheriff's Office"];
-const barExamQuestions = [
-  ["Which offense is labeled Assault - Violent Crime with a $1,200 penalty?", ["Criminally negligent homicide", "Assault - Violent Crime", "Robbery in the 3rd degree", "Possession of burglar's tools"]],
-  ["Which offense involves physical injury with a deadly weapon or dangerous instrument and carries a $500 penalty?", ["Assault with a deadly weapon (lower degree)", "Murder in the 2nd degree", "Unlawful weapon possession", "Reckless endangerment"]],
-  ["Which serious assault carries a $2,500 penalty for serious physical injury by a deadly weapon or depraved-risk conduct?", ["Simple assault", "Aggravated assault on an officer", "Serious assault by deadly weapon", "Criminal facilitation"]],
-  ["Which offense is aggravated assault against a police or peace officer with a $5,000 penalty?", ["Assault - Violent Crime", "Aggravated assault upon a police or peace officer", "Robbery in the 1st degree", "Coercion in the 1st degree"]],
-  ["Which item is unlawful weapon possession with a $1,500 penalty?", ["WPN-style unlawful weapon possession", "Possession of burglar's tools", "Controlled substance possession", "Failure to identify"]],
-  ["Which offense causes death through criminal negligence and carries a $1,000 penalty?", ["Manslaughter in the 2nd degree", "Criminally negligent homicide", "Murder in the 1st degree", "Robbery in the 2nd degree"]],
-  ["Which offense carries a $10,000 penalty and involves intentionally causing death or depraved-risk conduct?", ["Manslaughter in the 1st degree", "Murder in the 2nd degree", "Criminal attempt", "Trespass in the 1st degree"]],
-  ["Which description best matches Robbery in the 2nd degree with a $2,500 penalty?", ["Forcibly stealing property with no aggravation", "Forcible stealing aided by another present, causing injury, or displaying what appears to be a firearm", "Simple theft below felony threshold", "Possession of burglar's tools"]],
-  ["Which offense is rape by forcible compulsion or when the victim is physically helpless and carries a $5,000 penalty?", ["Sexual misconduct", "Rape in the 1st degree", "Consensual sodomy (legacy)", "Criminal solicitation"]],
-  ["Which offense is listed as a legacy consensual sodomy offense with a $250 penalty?", ["Sexual misconduct", "Consensual sodomy (legacy)", "Sodomy in the 3rd degree", "Sodomy in the 1st degree"]],
-  ["Which item is the Class A misdemeanor carrying a $500 penalty for soliciting felony conduct?", ["Solicitation violation ($150)", "Solicitation for felony conduct ($500)", "Solicitation involving under 16 ($1,000)", "Solicitation for Class A felony ($2,500)"]],
-  ["Which facilitation offense applies when someone provides means to help commit a Class A felony and carries a $2,500 penalty?", ["Minor facilitation - $500", "Facilitation involving under 16 - $1,000", "Facilitation for Class A felony - $2,500", "Highest-level facilitation involving under 16 - $5,000"]],
-  ["Which conspiracy offense carries a $10,000 penalty for agreeing to commit a Class A felony with a participant under 16?", ["Low-level conspiracy - $250", "Mid-level conspiracy - $1,500", "Conspiracy to commit Class A felony - $5,000", "Conspiracy with under-16 participant - $10,000"]],
-  ["Which offense is Trespass in the 2nd degree for unlawfully entering a dwelling with a $500 penalty?", ["Trespass in the 3rd degree (building)", "Trespass in the 2nd degree (dwelling)", "Trespass in the 1st degree (weapon present)", "Burglary in the 3rd degree"]],
-  ["Which description best fits Burglary in the 1st degree with a $5,000 penalty?", ["Entering a building to commit any crime", "Burglary of a dwelling involving a deadly weapon, injury, or displayed firearm", "Possession of burglar's tools only", "Simple trespass on enclosed property"]],
-  ["Which basic idea describes Coercion in the 1st degree with a $1,500 penalty?", ["Minor annoyance or persuasion", "Using fear of physical injury or property damage to force serious acts", "Friendly suggestion to comply", "Only economic pressure"]],
-  ["Reckless Endangerment in the 1st degree shows depraved indifference and carries which penalty?", ["$500", "$1,000", "$1,500", "$5,000"]],
-  ["Which item is Controlled Substance Possession listed as a narcotics misdemeanor with a $900 penalty?", ["Controlled substance possession - $900", "Petty theft - $600", "Trespassing property - $450", "Failure to identify - $350"]],
-  ["Which traffic citation is Speeding 16-30 Over with a $300 fine and 4 points?", ["Speeding 1-15 Over - $150", "Speeding 16-30 Over - $300", "Speed Not Reasonable and Prudent - $200", "Speed in Zone - $250"]],
-  ["Which violation is portable electronic device use while driving with a $200 fine and 5 points?", ["Portable electronic device use - $200 and 5 points", "Seat belt violation - $100", "Vehicle equipment violation - $110", "Speeding 1-15 Over - $150"]],
-];
 const lawEnforcementApplicationFields = [
   { key: "in_game_name", label: "What is your in-game name?", kind: "text", min: 2, max: 120, placeholder: "Your RP character name" },
   { key: "discord_name", label: "Discord Name", kind: "text", min: 2, max: 120, placeholder: "Discord username" },
@@ -2145,6 +2183,7 @@ function renderDepartmentApplicationField(field, posting) {
 
 function renderDepartmentApplicationForm(posting) {
   if (posting.form_type === "bar_exam") {
+    const examQuestions = state.cache.jobs?.exam_questions?.[posting.exam_key || "judicial"] || [];
     return `
       <form class="department-application-form bar-exam-form" data-department-key="${escapeHtml(posting.key)}">
         <div class="application-form-head">
@@ -2156,7 +2195,7 @@ function renderDepartmentApplicationForm(posting) {
           <label>Discord name<input name="discord_name" minlength="2" maxlength="120" required /></label>
         </div>
         <div class="bar-question-list">
-          ${barExamQuestions.map(([question, options], index) => `
+          ${examQuestions.map(([question, options], index) => `
             <fieldset class="bar-question">
               <legend><span>${index + 1}</span>${escapeHtml(question)}</legend>
               <div class="bar-options">
@@ -2234,11 +2273,11 @@ function renderJobs() {
 function renderJobAdvertisement(posting, applications, index) {
   const latestApplication = applications.find((item) => item.department_key === posting.key);
   const hasActiveApplication = latestApplication && !["denied", "withdrawn", "closed"].includes(latestApplication.status);
-  const isLawyer = posting.key === "lawyer";
+  const isLegal = ["lawyer", "prosecutor", "public_defender"].includes(posting.key);
   return `
-    <details class="job-advertisement ${isLawyer ? "lawyer-ad" : ""}" ${index === 0 ? "open" : ""}>
+    <details class="job-advertisement ${isLegal ? "lawyer-ad" : ""}" ${index === 0 ? "open" : ""}>
       <summary>
-        <div class="job-ad-icon">${isLawyer ? "§" : posting.key === "fire_ems" ? "✚" : "★"}</div>
+        <div class="job-ad-icon">${isLegal ? "§" : posting.key === "fire_ems" ? "✚" : "★"}</div>
         <div><p class="eyebrow">${escapeHtml(posting.division)}</p><h3>${escapeHtml(posting.label)}</h3><p>${escapeHtml(posting.schedule)}</p></div>
         <div class="job-ad-action">
           <span class="pill ${hasActiveApplication ? "amber" : latestApplication?.status === "approved" ? "green" : ""}">${latestApplication ? humanLabel(latestApplication.status) : "Now hiring"}</span>
@@ -2249,7 +2288,7 @@ function renderJobAdvertisement(posting, applications, index) {
         <div class="department-meta">
           <div><span>Position</span><strong>${escapeHtml(posting.badge)}</strong></div>
           <div><span>Role track</span><strong>${escapeHtml(posting.role_label || humanLabel(posting.role_key))}</strong></div>
-          <div><span>Review</span><strong>${isLawyer ? "Judicial certification" : "Command staff"}</strong></div>
+          <div><span>Review</span><strong>${isLegal ? "Judiciary and Indeed staff" : "Command staff"}</strong></div>
         </div>
         <div class="department-requirements"><span>What you need</span><p>${escapeHtml(posting.requirements)}</p></div>
         ${latestApplication ? `<div class="department-application-status"><div><p class="eyebrow">${escapeHtml(latestApplication.application_number)}</p><h3>Your application</h3><p class="muted small">Submitted ${new Date(latestApplication.created_at).toLocaleString()}${latestApplication.reviewer_name ? ` / Reviewer ${escapeHtml(latestApplication.reviewer_name)}` : ""}</p></div><span class="pill ${businessStatusClass(latestApplication.status)}">${humanLabel(latestApplication.status)}</span></div>` : ""}
@@ -9009,7 +9048,7 @@ function bindDevTools() {
     try {
       const result = await api("/api/fnn/generate", { method: "POST" });
       if (result.status === "no_reports") {
-        toast("No eligible newsroom records are available");
+        toast("No eligible CAD, court, citation, or press records are available");
       } else if (result.status === "configuration_required") {
         toast("The Gemini newsroom connection is not configured");
       } else {
@@ -9233,7 +9272,7 @@ function renderSystem() {
   `;
 }
 
-const roleOptions = ["civ", "owner", "admin", "dev", "beta", "indeed_admin", "leo", "judge", "lawyer", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "business_owner", "business_registrar", "city_hall", "economy_manager"];
+const roleOptions = ["civ", "owner", "admin", "dev", "beta", "press", "indeed_admin", "leo", "judge", "lawyer", "prosecutor", "public_defender", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "business_owner", "business_registrar", "city_hall", "economy_manager"];
 
 function adminUserSearchText(user) {
   return [
@@ -9349,7 +9388,7 @@ function renderAdminDepartmentApplications(data, mode = "admin") {
 
 function renderAdminDepartmentApplicationCard(item, mode = "admin") {
   const isClosed = ["approved", "denied", "withdrawn", "closed"].includes(item.status);
-  const isBarExam = item.department_key === "lawyer";
+  const isBarExam = ["lawyer", "public_defender"].includes(item.department_key);
   const isIndeed = mode === "indeed";
   const statusAttr = isIndeed ? "data-indeed-application-status" : "data-admin-application-status";
   const formClass = isIndeed ? "indeed-application-review-form admin-application-review-form" : "admin-application-review-form";
@@ -9811,7 +9850,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-campaigns").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-press-desk").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {

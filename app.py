@@ -1184,28 +1184,54 @@ LAW_ENFORCEMENT_APPLICATION_FIELDS = (
     {"key": "chain_of_command", "label": "Do you agree to follow chain of command", "kind": "yesno"},
     {"key": "truth_acknowledgement", "label": "Do you acknowledge that falsifying any information on this application will result in an automatic denial and could result in blacklisting", "kind": "yesno"},
 )
-BAR_EXAM_QUESTIONS = (
-    ("Which offense is labeled Assault - Violent Crime with a $1,200 penalty?", ("Criminally negligent homicide", "Assault - Violent Crime", "Robbery in the 3rd degree", "Possession of burglar's tools"), "B"),
-    ("Which offense involves physical injury with a deadly weapon or dangerous instrument and carries a $500 penalty?", ("Assault with a deadly weapon (lower degree)", "Murder in the 2nd degree", "Unlawful weapon possession", "Reckless endangerment"), "A"),
-    ("Which serious assault carries a $2,500 penalty for serious physical injury by a deadly weapon or depraved-risk conduct?", ("Simple assault", "Aggravated assault on an officer", "Serious assault by deadly weapon", "Criminal facilitation"), "C"),
-    ("Which offense is aggravated assault against a police or peace officer with a $5,000 penalty?", ("Assault - Violent Crime", "Aggravated assault upon a police or peace officer", "Robbery in the 1st degree", "Coercion in the 1st degree"), "B"),
-    ("Which item is unlawful weapon possession with a $1,500 penalty?", ("WPN-style unlawful weapon possession", "Possession of burglar's tools", "Controlled substance possession", "Failure to identify"), "A"),
-    ("Which offense causes death through criminal negligence and carries a $1,000 penalty?", ("Manslaughter in the 2nd degree", "Criminally negligent homicide", "Murder in the 1st degree", "Robbery in the 2nd degree"), "B"),
-    ("Which offense carries a $10,000 penalty and involves intentionally causing death or depraved-risk conduct?", ("Manslaughter in the 1st degree", "Murder in the 2nd degree", "Criminal attempt", "Trespass in the 1st degree"), "B"),
-    ("Which description best matches Robbery in the 2nd degree with a $2,500 penalty?", ("Forcibly stealing property with no aggravation", "Forcible stealing aided by another present, causing injury, or displaying what appears to be a firearm", "Simple theft below felony threshold", "Possession of burglar's tools"), "B"),
-    ("Which offense is rape by forcible compulsion or when the victim is physically helpless and carries a $5,000 penalty?", ("Sexual misconduct", "Rape in the 1st degree", "Consensual sodomy (legacy)", "Criminal solicitation"), "B"),
-    ("Which offense is listed as a legacy consensual sodomy offense with a $250 penalty?", ("Sexual misconduct", "Consensual sodomy (legacy)", "Sodomy in the 3rd degree", "Sodomy in the 1st degree"), "B"),
-    ("Which item is the Class A misdemeanor carrying a $500 penalty for soliciting felony conduct?", ("Solicitation violation ($150)", "Solicitation for felony conduct ($500)", "Solicitation involving under 16 ($1,000)", "Solicitation for Class A felony ($2,500)"), "B"),
-    ("Which facilitation offense applies when someone provides means to help commit a Class A felony and carries a $2,500 penalty?", ("Minor facilitation - $500", "Facilitation involving under 16 - $1,000", "Facilitation for Class A felony - $2,500", "Highest-level facilitation involving under 16 - $5,000"), "C"),
-    ("Which conspiracy offense carries a $10,000 penalty for agreeing to commit a Class A felony with a participant under 16?", ("Low-level conspiracy - $250", "Mid-level conspiracy - $1,500", "Conspiracy to commit Class A felony - $5,000", "Conspiracy with under-16 participant - $10,000"), "D"),
-    ("Which offense is Trespass in the 2nd degree for unlawfully entering a dwelling with a $500 penalty?", ("Trespass in the 3rd degree (building)", "Trespass in the 2nd degree (dwelling)", "Trespass in the 1st degree (weapon present)", "Burglary in the 3rd degree"), "B"),
-    ("Which description best fits Burglary in the 1st degree with a $5,000 penalty?", ("Entering a building to commit any crime", "Burglary of a dwelling involving a deadly weapon, injury, or displayed firearm", "Possession of burglar's tools only", "Simple trespass on enclosed property"), "B"),
-    ("Which basic idea describes Coercion in the 1st degree with a $1,500 penalty?", ("Minor annoyance or persuasion", "Using fear of physical injury or property damage to force serious acts", "Friendly suggestion to comply", "Only economic pressure"), "B"),
-    ("Reckless Endangerment in the 1st degree shows depraved indifference and carries which penalty?", ("$500", "$1,000", "$1,500", "$5,000"), "C"),
-    ("Which item is Controlled Substance Possession listed as a narcotics misdemeanor with a $900 penalty?", ("Controlled substance possession - $900", "Petty theft - $600", "Trespassing property - $450", "Failure to identify - $350"), "A"),
-    ("Which traffic citation is Speeding 16-30 Over with a $300 fine and 4 points?", ("Speeding 1-15 Over - $150", "Speeding 16-30 Over - $300", "Speed Not Reasonable and Prudent - $200", "Speed in Zone - $250"), "B"),
-    ("Which violation is portable electronic device use while driving with a $200 fine and 5 points?", ("Portable electronic device use - $200 and 5 points", "Seat belt violation - $100", "Vehicle equipment violation - $110", "Speeding 1-15 Over - $150"), "A"),
+JUDICIAL_CERTIFICATION_QUESTIONS = (
+    ("Body camera footage clearly shows a defendant charged with Assault acted entirely in lawful self-defense. What should the judge do?", ("Find the defendant guilty because an arrest was made", "Reduce the fine", "Find the defendant not guilty due to lawful self-defense", "Continue the case indefinitely"), "C"),
+    ("The prosecutor charges Criminal Solicitation 3rd Degree, but the evidence only proves 5th Degree. The judge should:", ("Convict on the original charge", "Dismiss the case entirely", "Convict only on the charge supported by the evidence", "Increase the charge"), "C"),
+    ("A defense attorney repeatedly interrupts witnesses despite multiple warnings. The judge should first:", ("Hold the attorney in contempt immediately", "Ignore the behavior", "Issue a final warning and restore courtroom order", "End the trial"), "C"),
+    ("Who has the burden of proving guilt beyond a reasonable doubt?", ("Judge", "Defendant", "Prosecutor", "Arresting officer"), "C"),
+    ("The prosecutor presents evidence obtained illegally after violating court or server rules. The judge should:", ("Admit it because it proves guilt", "Exclude it if it violates court rules", "Ignore the violation", "Allow the jury to decide"), "B"),
+    ("During trial, the defendant becomes verbally abusive toward the judge. The best response is:", ("Find them guilty immediately", "Maintain order, warn the defendant, and remove them if necessary", "End the trial", "Increase every fine"), "B"),
+    ("A defendant is charged with Assault and Unlawful Weapon Possession, but evidence proves only Assault. The judge should:", ("Convict on both", "Convict only on Assault", "Dismiss everything", "Double the Assault fine"), "B"),
+    ("Which listed charge carries the highest monetary fine?", ("Assault", "Criminal Solicitation 1st", "Rape 1st Degree", "Weapon Possession"), "C"),
+    ("A witness admits under oath they never saw the crime happen. What should the judge do?", ("Treat it as eyewitness evidence", "Give the testimony the weight it deserves based on credibility", "Ignore all other evidence", "Automatically dismiss the case"), "B"),
+    ("The defense objects because a question calls for speculation. The judge should:", ("Sustain the objection if appropriate", "Ignore all objections", "Allow every question", "Remove the attorney"), "A"),
+    ("The prosecution cannot prove Unlawful Weapon Possession because the defendant produces a valid permit. The correct verdict is:", ("Guilty", "Guilty with a reduced fine", "Not guilty", "Continue sentencing"), "C"),
+    ("A judge personally dislikes a defendant from a previous case. The judge should:", ("Sentence more harshly", "Ignore the law", "Remain impartial and decide only on current evidence", "Allow the prosecutor to choose the sentence"), "C"),
+    ("Who may object to improper questioning?", ("Prosecutor only", "Defense only", "Judge only", "Either attorney"), "D"),
+    ("The prosecution requests maximum jail time solely because the defendant has a bad reputation. The judge should:", ("Grant the request", "Sentence based on reputation", "Use the conviction, evidence, and sentencing guidelines", "Dismiss the case"), "C"),
+    ("Two witnesses give opposite accounts. The judge should:", ("Believe whoever spoke first", "Evaluate credibility alongside all other evidence", "Ignore both", "Automatically dismiss"), "B"),
+    ("A defendant may only be convicted of crimes supported by sufficient evidence.", ("True", "False"), "A"),
+    ("Judges should remain neutral even if they personally know one of the parties.", ("True", "False"), "A"),
+    ("An attorney may interrupt opposing counsel whenever they disagree.", ("True", "False"), "B"),
+    ("A guilty plea should only be accepted if made knowingly and voluntarily.", ("True", "False"), "A"),
+    ("Respectful courtroom conduct is required from judges, attorneys, officers, witnesses, and defendants.", ("True", "False"), "A"),
 )
+DEFENSE_ATTORNEY_EXAM_QUESTIONS = (
+    ("Your client is charged with Assault, but video shows the alleged victim attacked first and your client only defended themselves. Your best argument is:", ("Request a reduced sentence", "Self-defense creates reasonable doubt as to criminal liability", "Assault cannot be defended", "Ask the judge to ignore the video"), "B"),
+    ("The prosecution charges Solicitation 1st Degree but presents evidence supporting only 5th Degree. You should:", ("Accept the higher charge", "Move to reduce or dismiss the unsupported charge", "Tell the client to plead guilty", "Request a harsher sentence"), "B"),
+    ("The prosecutor asks a witness to speculate about what your client intended. You should:", ("Allow it", "Object because it calls for speculation", "Interrupt the witness", "Leave the courtroom"), "B"),
+    ("The prosecutor introduces body-camera footage never disclosed before trial. Your first action should be:", ("Object and request the court address the late disclosure", "Ignore it", "Admit guilt", "Cross-examine immediately"), "A"),
+    ("Your client possesses a firearm but produces a valid weapons permit. You should argue:", ("The permit defeats Unlawful Weapon Possession", "The client is guilty anyway", "The judge should lower the fine", "Permits do not matter"), "A"),
+    ("A witness contradicts their earlier written statement. The best defense strategy is:", ("Ignore it", "Use the prior statement to challenge credibility", "End questioning", "Ask unrelated questions"), "B"),
+    ("The prosecution cannot prove every element of Assault beyond a reasonable doubt. You should request:", ("A guilty verdict", "A reduced sentence", "A not guilty verdict", "Community service"), "C"),
+    ("Only Assault is proved where your client faces Assault and Weapon Possession. Which outcome should you seek?", ("Conviction on both", "Conviction only for Assault", "Conviction only for Weapon Possession", "Automatic dismissal of both"), "B"),
+    ("The prosecutor insults your client during closing instead of discussing evidence. You should:", ("Yell over them", "Object to improper argument", "Ignore it", "Leave"), "B"),
+    ("Which principle is most important to a defense attorney?", ("Win regardless of ethics", "Protect the client's rights while acting honestly before the court", "Convict guilty defendants", "Assist prosecution"), "B"),
+    ("Your client does not understand the consequences of a guilty plea. You should:", ("Tell them to plead anyway", "Request time to advise the client before a plea", "Answer for the client", "Withdraw"), "B"),
+    ("The prosecutor objects during your cross-examination. The proper response is:", ("Speak over the judge", "Wait for the judge to rule", "Ignore the objection", "Argue with the prosecutor"), "B"),
+    ("The defense attorney's role is to:", ("Ensure the defendant receives a fair legal defense", "Help police win", "Decide guilt", "Determine sentencing"), "A"),
+    ("Your client privately admits the offense but pleads not guilty. Your ethical responsibility is:", ("Reveal the confession", "Continue representation while requiring truthful statements in court", "Quit immediately", "Lie to the court"), "B"),
+    ("A witness says they heard from a friend that your client committed Assault. Your strongest objection is:", ("Relevance", "Speculation", "Hearsay", "Asked and answered"), "C"),
+    ("A defense attorney should object only when there is a legitimate legal basis.", ("True", "False"), "A"),
+    ("A defense attorney may knowingly present false evidence if it helps the client.", ("True", "False"), "B"),
+    ("A defendant is presumed innocent until proven guilty beyond a reasonable doubt.", ("True", "False"), "A"),
+    ("A defense attorney should treat all courtroom participants professionally.", ("True", "False"), "A"),
+    ("A defense attorney must protect the client's legal rights even when the case is difficult.", ("True", "False"), "A"),
+)
+BAR_EXAM_BANKS = {
+    "judicial": JUDICIAL_CERTIFICATION_QUESTIONS,
+    "defense": DEFENSE_ATTORNEY_EXAM_QUESTIONS,
+}
 DEPARTMENT_POSTINGS = (
     {
         "key": "sheriff",
@@ -1236,10 +1262,38 @@ DEPARTMENT_POSTINGS = (
         "role_key": "lawyer",
         "role_label": "Licensed Attorney",
         "form_type": "bar_exam",
+        "exam_key": "judicial",
         "command_roles": ("judge",),
         "badge": "Take the Faircroft Bar Exam",
         "schedule": "Represent clients, review case law, prepare arguments, and work inside the Faircroft justice system.",
         "requirements": "Complete all 20 Bar Exam questions. Results are reviewed by the judiciary and Indeed staff.",
+    },
+    {
+        "key": "prosecutor",
+        "label": "Faircroft Prosecutor's Office",
+        "division": "Faircroft Prosecutor's Office",
+        "role_key": "prosecutor",
+        "role_label": "Assistant Prosecutor",
+        "additional_roles": ("lawyer",),
+        "form_type": "legal_office",
+        "command_roles": ("judge",),
+        "badge": "Assistant Prosecutor Candidate",
+        "schedule": "Review criminal filings, prepare court arguments, present evidence, and represent Faircroft in criminal proceedings.",
+        "requirements": "Professional courtroom conduct, sound charging judgment, evidence review, impartial ethics, and an active Faircroft Bar certification.",
+    },
+    {
+        "key": "public_defender",
+        "label": "Public Defender's Office",
+        "division": "Faircroft Public Defender's Office",
+        "role_key": "public_defender",
+        "role_label": "Assistant Public Defender",
+        "additional_roles": ("lawyer",),
+        "form_type": "bar_exam",
+        "exam_key": "defense",
+        "command_roles": ("judge",),
+        "badge": "Public Defender Candidate",
+        "schedule": "Represent defendants, protect client rights, challenge unsupported evidence, and provide ethical courtroom advocacy.",
+        "requirements": "Complete the Defense Attorney Certification Examination. Results and appointment are reviewed by the judiciary and Indeed staff.",
     },
 )
 SYSTEM_SETTING_DEFAULTS = {
@@ -1272,6 +1326,7 @@ APP_VISIBILITY_OPTIONS = (
     ("jobs", "Jobs"),
     ("my-faircroft", "MyFaircroft"),
     ("fnn", "Faircroft News Now"),
+    ("press", "Press Desk"),
     ("court", "Court"),
     ("business", "Business"),
     ("properties", "Properties"),
@@ -1362,7 +1417,8 @@ def clean_bar_exam_application(payload: dict[str, Any], posting: dict[str, Any],
     answers: list[dict[str, str]] = []
     correct = 0
     letters = ("A", "B", "C", "D")
-    for index, (question, options, answer_key) in enumerate(BAR_EXAM_QUESTIONS, start=1):
+    questions = BAR_EXAM_BANKS.get(str(posting.get("exam_key") or "judicial"), JUDICIAL_CERTIFICATION_QUESTIONS)
+    for index, (question, options, answer_key) in enumerate(questions, start=1):
         selected = str(payload.get(f"bar_q{index}") or "").strip().upper()
         if selected not in letters:
             raise ValueError(f"Question {index} requires an answer")
@@ -1373,7 +1429,7 @@ def clean_bar_exam_application(payload: dict[str, Any], posting: dict[str, Any],
             "question": f"{index}. {question}",
             "answer": f"{selected}. {options[option_index]}",
         })
-    score_percent = round(correct * 100 / len(BAR_EXAM_QUESTIONS))
+    score_percent = round(correct * 100 / len(questions))
     record = {
         "type": "bar_exam_application",
         "version": 1,
@@ -1384,14 +1440,14 @@ def clean_bar_exam_application(payload: dict[str, Any], posting: dict[str, Any],
         "applicant_name": applicant_name,
         "discord_name": discord_name,
         "score": correct,
-        "total": len(BAR_EXAM_QUESTIONS),
+        "total": len(questions),
         "score_percent": score_percent,
         "answers": answers,
     }
     message = (
         f"Applicant: {applicant_name} / CIV {user.get('civ_number') or 'pending'}\n"
         f"Discord: {discord_name}\n"
-        f"Bar Exam score: {correct}/{len(BAR_EXAM_QUESTIONS)} ({score_percent}%)"
+        f"Bar Exam score: {correct}/{len(questions)} ({score_percent}%)"
     )
     return json.dumps(record, ensure_ascii=False), message
 
@@ -2150,6 +2206,27 @@ def ensure_schema() -> None:
                 published_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS press_reports (
+                id SERIAL PRIMARY KEY,
+                report_number TEXT NOT NULL UNIQUE,
+                author_id INTEGER NOT NULL,
+                headline TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'community',
+                location TEXT NOT NULL DEFAULT '',
+                event_at TEXT NOT NULL DEFAULT '',
+                people TEXT NOT NULL DEFAULT '',
+                organizations TEXT NOT NULL DEFAULT '',
+                facts TEXT NOT NULL,
+                quotes TEXT NOT NULL DEFAULT '',
+                background TEXT NOT NULL DEFAULT '',
+                public_impact TEXT NOT NULL DEFAULT '',
+                verification_notes TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'submitted',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS mdt_bolos (
                 id SERIAL PRIMARY KEY,
                 bolo_number TEXT NOT NULL UNIQUE,
@@ -2667,6 +2744,30 @@ def ensure_migrations(db: Database) -> None:
     )
     db.execute(
         """
+        CREATE TABLE IF NOT EXISTS press_reports (
+            id SERIAL PRIMARY KEY,
+            report_number TEXT NOT NULL UNIQUE,
+            author_id INTEGER NOT NULL,
+            headline TEXT NOT NULL,
+            category TEXT NOT NULL DEFAULT 'community',
+            location TEXT NOT NULL DEFAULT '',
+            event_at TEXT NOT NULL DEFAULT '',
+            people TEXT NOT NULL DEFAULT '',
+            organizations TEXT NOT NULL DEFAULT '',
+            facts TEXT NOT NULL,
+            quotes TEXT NOT NULL DEFAULT '',
+            background TEXT NOT NULL DEFAULT '',
+            public_impact TEXT NOT NULL DEFAULT '',
+            verification_notes TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'submitted',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute(
+        """
         CREATE TABLE IF NOT EXISTS mdt_bolos (
             id SERIAL PRIMARY KEY,
             bolo_number TEXT NOT NULL UNIQUE,
@@ -2743,6 +2844,7 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS cad_after_call_reports_alert_idx ON cad_after_call_reports (related_alert_id)")
     db.execute("CREATE INDEX IF NOT EXISTS cad_after_call_reports_disposition_idx ON cad_after_call_reports (disposition)")
     db.execute("CREATE INDEX IF NOT EXISTS fnn_editions_published_idx ON fnn_editions (published_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS press_reports_created_idx ON press_reports (created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS mdt_bolos_status_idx ON mdt_bolos (status, updated_at)")
     db.execute("CREATE INDEX IF NOT EXISTS mdt_bolos_created_by_idx ON mdt_bolos (created_by, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS mdt_bookings_status_idx ON mdt_bookings (status, updated_at)")
@@ -3689,6 +3791,14 @@ def judge_required(user: DbRow | None) -> str | None:
     return None
 
 
+def press_required(user: DbRow | None) -> str | None:
+    if not user:
+        return "Authentication required"
+    if not has_any(user, "press", "owner", "dev"):
+        return "Press Desk access required"
+    return None
+
+
 def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     if not user:
         return []
@@ -3745,6 +3855,8 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps.append({"id": "dev-tools", "label": "Dev Tools", "icon": "code", "enabled": True, "hidden": False})
     if has_any(user, "beta"):
         apps.append({"id": "beta-tasks", "label": "Beta Tasks", "icon": "target", "enabled": True, "hidden": False})
+    if has_any(user, "press", "owner", "dev"):
+        apps.append({"id": "press", "label": "Press Desk", "icon": "press", "enabled": True, "hidden": False})
     if has_any(user, "owner", "dev"):
         apps.append({"id": "fine-settlement", "label": "Fine Settlement", "icon": "gavel", "enabled": True, "hidden": False})
     visibility = settings.get("app_visibility") or {}
@@ -3806,7 +3918,17 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
             ORDER BY c.created_at DESC
             """,
         )
-    if not reports and not court_records:
+        press_reports = all_rows(
+            db,
+            """
+            SELECT r.*, u.name AS author_name
+            FROM press_reports r
+            JOIN users u ON u.id = r.author_id
+            WHERE r.status IN ('submitted', 'included')
+            ORDER BY r.created_at DESC
+            """,
+        )
+    if not reports and not court_records and not press_reports:
         return {"status": "no_reports", "edition": None}
     if not GEMINI_API_KEY:
         return {"status": "configuration_required", "edition": None}
@@ -3847,6 +3969,25 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
         }
         for row in court_records
     ]
+    source_press_reports = [
+        {
+            "report_number": str(row["report_number"]),
+            "headline": str(row["headline"])[:180],
+            "category": str(row["category"])[:40],
+            "location": str(row["location"] or "")[:240],
+            "event_at": str(row["event_at"] or "")[:80],
+            "people": str(row["people"] or "")[:2000],
+            "organizations": str(row["organizations"] or "")[:2000],
+            "verified_facts": str(row["facts"] or "")[:10000],
+            "quotes": str(row["quotes"] or "")[:6000],
+            "background": str(row["background"] or "")[:6000],
+            "public_impact": str(row["public_impact"] or "")[:4000],
+            "verification_notes": str(row["verification_notes"] or "")[:4000],
+            "reporter": str(row["author_name"] or "")[:140],
+            "filed_at": row["created_at"],
+        }
+        for row in press_reports
+    ]
     response_schema = {
         "type": "OBJECT",
         "required": ["headline", "deck", "lead_story", "stories", "public_safety"],
@@ -3883,7 +4024,9 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
     prompt = (
         "Create today's extensive Faircroft News Now edition from the complete supplied "
         "archive of fictional Arma Reforger roleplay CAD after-action reports, citations, "
-        "and criminal court records, regardless of when each record was filed. Produce a "
+        "criminal court records, and reporter-submitted press briefs, regardless of when "
+        "each record was filed. Treat press verification notes as sourcing guidance and "
+        "never invent missing facts. Produce a "
         "substantial local newspaper edition suitable for a "
         "long player reading session. Write a detailed lead story of approximately 900 to "
         "1,400 words and up to eight supporting stories. Each supporting story must include "
@@ -3899,7 +4042,8 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
         "guilty. Do not report expunged records. Prioritize significant and recent events "
         "while using older records for historical context.\n\n"
         f"CAD_AFTER_ACTION_REPORTS:\n{json.dumps(source_reports, separators=(',', ':'), ensure_ascii=False)}\n\n"
-        f"COURT_CITATIONS_AND_CRIMINAL_CHARGES:\n{json.dumps(source_court_records, separators=(',', ':'), ensure_ascii=False)}"
+        f"COURT_CITATIONS_AND_CRIMINAL_CHARGES:\n{json.dumps(source_court_records, separators=(',', ':'), ensure_ascii=False)}\n\n"
+        f"PRESS_REPORTS:\n{json.dumps(source_press_reports, separators=(',', ':'), ensure_ascii=False)}"
     )
     request_body = {
         "systemInstruction": {
@@ -3982,6 +4126,7 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
     source_ids = {
         "cad_after_action_reports": [int(row["id"]) for row in reports],
         "court_records": [int(row["id"]) for row in court_records],
+        "press_reports": [int(row["id"]) for row in press_reports],
     }
     with conn() as db:
         if force:
@@ -4001,7 +4146,7 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
                 json.dumps(stories[:8], separators=(",", ":")),
                 json.dumps(public_safety[:10], separators=(",", ":")),
                 json.dumps(source_ids, separators=(",", ":")),
-                len(reports) + len(court_records), generation_model, generated_at, generated_at,
+                len(reports) + len(court_records) + len(press_reports), generation_model, generated_at, generated_at,
             ),
         ).fetchone()
         if not created:
@@ -4406,6 +4551,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_fnn(db, user)
                 elif path == "/api/fnn/generate" and method == "POST":
                     self.api_generate_fnn(user)
+                elif path == "/api/press/reports" and method == "GET":
+                    self.api_press_reports(db, user)
+                elif path == "/api/press/reports" and method == "POST":
+                    self.api_create_press_report(db, user)
                 elif path == "/api/roadmap" and method == "GET":
                     self.api_roadmap(db, user)
                 elif path == "/api/roadmap/items" and method == "POST":
@@ -4919,6 +5068,75 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         result = generate_fnn_daily_edition(force=True)
         status = 201 if result["status"] == "published" else 200
         self.send_json(status, result)
+
+    def api_press_reports(self, db: Database, user: DbRow | None) -> None:
+        err = press_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        rows = all_rows(
+            db,
+            """
+            SELECT r.*, u.name AS author_name
+            FROM press_reports r
+            JOIN users u ON u.id = r.author_id
+            WHERE r.author_id = ? OR ? = 1
+            ORDER BY r.created_at DESC
+            LIMIT 100
+            """,
+            (user["id"], int(has_any(user, "owner", "dev"))),
+        )
+        self.send_json(200, {"reports": [dict(row) for row in rows]})
+
+    def api_create_press_report(self, db: Database, user: DbRow | None) -> None:
+        err = press_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        headline = str(payload.get("headline") or "").strip()[:180]
+        facts = str(payload.get("facts") or "").strip()[:10000]
+        if len(headline) < 5 or len(facts) < 80:
+            self.error(400, "A headline and at least 80 characters of verified story facts are required")
+            return
+        category = str(payload.get("category") or "community").strip().lower()[:40]
+        if category not in ("breaking", "community", "public_safety", "justice", "business", "events", "government", "opinion"):
+            category = "community"
+        ts = now_iso()
+        created = db.execute(
+            """
+            INSERT INTO press_reports
+            (report_number, author_id, headline, category, location, event_at, people,
+             organizations, facts, quotes, background, public_impact, verification_notes,
+             status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', ?, ?)
+            RETURNING id, report_number
+            """,
+            (
+                generate_record_number(db, "press_reports", "report_number", "PRESS"),
+                user["id"], headline, category,
+                str(payload.get("location") or "").strip()[:240],
+                str(payload.get("event_at") or "").strip()[:80],
+                str(payload.get("people") or "").strip()[:2000],
+                str(payload.get("organizations") or "").strip()[:2000],
+                facts,
+                str(payload.get("quotes") or "").strip()[:6000],
+                str(payload.get("background") or "").strip()[:6000],
+                str(payload.get("public_impact") or "").strip()[:4000],
+                str(payload.get("verification_notes") or "").strip()[:4000],
+                ts, ts,
+            ),
+        ).fetchone()
+        add_admin_audit(
+            db,
+            int(user["id"]),
+            "press.report.submitted",
+            int(user["id"]),
+            {"report_number": str(created["report_number"]), "headline": headline, "category": category},
+        )
+        self.send_json(201, {"ok": True, "id": int(created["id"]), "report_number": created["report_number"]})
 
     def api_roadmap(self, db: Database, user: DbRow | None) -> None:
         if not user:
@@ -5841,6 +6059,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "active_jobs": [],
                 "income": income_snapshot(db, user),
                 "department_postings": [dict(posting) for posting in DEPARTMENT_POSTINGS],
+                "exam_questions": {
+                    key: [[question, list(options)] for question, options, _answer in questions]
+                    for key, questions in BAR_EXAM_BANKS.items()
+                },
                 "department_applications": [dict(row) for row in applications],
             },
         )
@@ -11201,9 +11423,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if status not in ("submitted", "under_review", "approved", "denied", "withdrawn", "closed"):
             self.error(400, "Invalid application status")
             return
-        is_bar_exam = application["department_key"] == "lawyer"
-        if has_any(user, "judge") and not has_any(user, "owner", "admin", INDEED_ADMIN_ROLE) and not is_bar_exam:
-            self.error(403, "Judges may only review Bar Exam applications")
+        posting = next((item for item in DEPARTMENT_POSTINGS if item["key"] == application["department_key"]), {})
+        is_bar_exam = posting.get("form_type") == "bar_exam"
+        is_legal_application = application["department_key"] in ("lawyer", "prosecutor", "public_defender")
+        if has_any(user, "judge") and not has_any(user, "owner", "admin", INDEED_ADMIN_ROLE) and not is_legal_application:
+            self.error(403, "Judges may only review legal office and certification applications")
             return
         if is_bar_exam and status == "approved":
             if not has_any(user, "judge", "owner"):
@@ -11232,7 +11456,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             applicant = one(db, "SELECT * FROM users WHERE id = ?", (application["user_id"],))
             if applicant:
                 desired_role = normalize_role(application["desired_role"])
-                granted_roles = [desired_role]
+                granted_roles = [desired_role, *posting.get("additional_roles", ())]
                 if application["department_key"] == "fire_ems":
                     granted_roles = ["fireman", "ems"]
                 updated_roles = sorted(set([*roles_for(applicant), *granted_roles]))
@@ -11244,9 +11468,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         subject = f"{application['department_name']} application {status.replace('_', ' ')}"
         note = reviewer_notes or f"Your {application['department_name']} application is now {status.replace('_', ' ')}."
         if is_bar_exam and status == "approved":
-            subject = "Faircroft Bar certificate signed"
+            subject = f"{application['department_name']} certification signed"
             note = f"{reviewer_notes}\n\n" if reviewer_notes else ""
-            note += f"Judge {user['name']} signed your Faircroft Bar certificate. Licensed Attorney access has been added to your account."
+            note += f"Judge {user['name']} signed your legal certification. Approved legal-office access has been added to your account."
         elif status == "approved":
             note = f"{note}\n\nDepartment access has been added to your account."
         add_message(db, application["user_id"], subject, note, user["id"])

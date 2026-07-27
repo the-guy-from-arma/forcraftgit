@@ -14529,6 +14529,44 @@ textarea:focus {
   .fire-personnel-grid { grid-template-columns: 1fr; }
 }
 
+/* Press Desk */
+.press-desk { gap: 14px; }
+.press-desk-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 22px;
+  border: 1px solid rgba(244,71,71,.24);
+  border-radius: 14px;
+  background: radial-gradient(circle at 92% 0, rgba(244,71,71,.18), transparent 38%), #11191f;
+}
+.press-desk-hero h3 { margin: 4px 0 7px; font-size: 28px; }
+.press-desk-hero p:last-child { margin: 0; color: var(--muted); }
+.press-desk-hero > span { display: grid; justify-items: center; color: #ff7a7a; font-size: 32px; font-weight: 950; }
+.press-desk-hero > span small { color: var(--muted); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
+.press-guidance { padding: 16px 18px; border-left: 4px solid #e6424b; border-radius: 7px; background: rgba(230,66,75,.08); }
+.press-guidance strong { color: #ffd5d5; }
+.press-guidance p { margin: 5px 0 0; color: #b6c1c6; font-size: 13px; line-height: 1.55; }
+.press-report-form, .press-report-library { padding: 20px; border: 1px solid var(--line); border-radius: 13px; background: rgba(14,21,26,.92); }
+.press-form-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 17px; }
+.press-form-heading h3 { margin: 3px 0 0; }
+.press-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.press-form-grid label { display: grid; gap: 6px; color: #93a2a9; font-size: 12px; font-weight: 800; }
+.press-form-grid .wide { grid-column: 1 / -1; }
+.press-form-grid textarea { min-height: 105px; }
+.press-report-form > button { width: 100%; margin-top: 15px; }
+.press-report-library > div:last-child { display: grid; gap: 7px; margin-top: 14px; }
+.press-report-library article { display: grid; gap: 4px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.025); }
+.press-report-library article span, .press-report-library article small { color: var(--muted); font-size: 10px; }
+@media (max-width: 650px) {
+  .press-desk-hero { align-items: flex-start; padding: 17px; }
+  .press-desk-hero h3 { font-size: 23px; }
+  .press-report-form, .press-report-library { padding: 14px; }
+  .press-form-grid { grid-template-columns: 1fr; }
+  .press-form-grid .wide { grid-column: auto; }
+}
+
 /* Faircroft Financial */
 .faircroft-bank {
   min-height: 100%;
