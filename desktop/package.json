@@ -1,0 +1,66 @@
+{
+  "name": "faircroft-rp-desktop",
+  "version": "1.0.0",
+  "description": "Official Faircroft RP desktop client",
+  "main": "src/main.js",
+  "author": "Faircroft RP",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win nsis",
+    "publish": "electron-builder --win nsis --publish always"
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.2"
+  },
+  "devDependencies": {
+    "electron": "^37.2.4",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "online.faircroft.desktop",
+    "productName": "Faircroft RP",
+    "artifactName": "Faircroft-RP-Desktop-Setup.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/faircroft.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Faircroft RP",
+      "installerIcon": "build/faircroft.ico",
+      "uninstallerIcon": "build/faircroft.ico",
+      "installerHeaderIcon": "build/faircroft.ico",
+      "license": "build/license.txt",
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "the-guy-from-arma",
+        "repo": "forcraftgit",
+        "releaseType": "release"
+      }
+    ]
+  }
+}

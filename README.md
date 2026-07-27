@@ -39,6 +39,7 @@ Useful environment variables:
 - `DATABASE_URL`: required PostgreSQL connection string.
 - `DATABASE_MAX_CONNECTIONS`: maximum concurrent app database connections, default `5`.
 - `DATABASE_CONNECT_TIMEOUT_SECONDS`: wait time for a database connection, default `10`.
+- `DESKTOP_INSTALLER_URL`: official Faircroft Windows installer URL returned only after an authenticated Beta Program access check.
 - `OWNER_EMAIL`: owner bootstrap email.
 - `OWNER_PASSWORD`: owner bootstrap password.
 - `OWNER_NAME`: owner display name.

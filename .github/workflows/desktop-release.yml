@@ -1,0 +1,73 @@
+name: Faircroft Desktop Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag, for example desktop-v1.0.0"
+        required: true
+        default: "desktop-v1.0.0"
+  push:
+    tags:
+      - "desktop-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Build Windows installer
+        run: pnpm dist
+        env:
+          CSC_LINK: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      - name: Scan official installer with Microsoft Defender
+        shell: powershell
+        run: |
+          $installer = Resolve-Path "release\Faircroft-RP-Desktop-Setup.exe"
+          $defender = Join-Path $env:ProgramFiles "Windows Defender\MpCmdRun.exe"
+          & $defender -Scan -ScanType 3 -File $installer
+          if ($LASTEXITCODE -ne 0) {
+            throw "Microsoft Defender did not return a clean scan result. Release blocked."
+          }
+      - name: Generate public SHA-256 checksum
+        shell: powershell
+        run: |
+          $hash = (Get-FileHash "release\Faircroft-RP-Desktop-Setup.exe" -Algorithm SHA256).Hash
+          "$hash  Faircroft-RP-Desktop-Setup.exe" | Out-File "release\SHA256SUMS.txt" -Encoding ascii
+      - name: Publish verified desktop release
+        shell: powershell
+        run: |
+          $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.release_tag }}" } else { "${{ github.ref_name }}" }
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag `
+              "release\Faircroft-RP-Desktop-Setup.exe" `
+              "release\Faircroft-RP-Desktop-Setup.exe.blockmap" `
+              "release\latest.yml" `
+              "release\SHA256SUMS.txt" --clobber
+          } else {
+            gh release create $tag `
+              "release\Faircroft-RP-Desktop-Setup.exe" `
+              "release\Faircroft-RP-Desktop-Setup.exe.blockmap" `
+              "release\latest.yml" `
+              "release\SHA256SUMS.txt" `
+              --title "Faircroft RP Desktop $tag" --generate-notes
+          }
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

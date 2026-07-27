@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.1.6";
+const OS_VERSION = "0.1.7";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -21,6 +21,7 @@ const state = {
   pendingArmaCode: new URL(window.location.href).searchParams.get("code") || "",
   profileTab: "overview",
   pwaInstallHelpOpen: false,
+  systemBannerDismissed: false,
   armaUnlinkOpen: false,
   armaLinkPromptDismissed: false,
   generatedDevCode: null,
@@ -436,6 +437,7 @@ function phone(content) {
           <span>${time}</span>
           <span class="status-icons"><span class="signal"></span><span>5G</span><span class="battery"></span></span>
         </div>
+        ${renderSystemBanner()}
         ${content}
         ${renderPwaInstallBar()}
         <footer class="os-version">RP OS ${OS_VERSION}</footer>
@@ -468,13 +470,13 @@ function render() {
     }
   }
   if (state.activeApp === "roadmap") {
-    app.innerHTML = renderRoadmapWorkspace() + renderRequiredProfileModals();
+    app.innerHTML = renderSystemBanner() + renderRoadmapWorkspace() + renderRequiredProfileModals();
     bindRoadmapWorkspace();
     bindRequiredProfileModals();
     return;
   }
   if (state.activeApp === "mdt" || state.activeApp === "fire" || state.activeApp === "fire-settings") {
-    app.innerHTML = (
+    app.innerHTML = renderSystemBanner() + (
       state.activeApp === "fire" || state.activeApp === "fire-settings"
         ? renderFireWorkspace()
         : renderMdtWorkspace()
@@ -484,25 +486,25 @@ function render() {
     return;
   }
   if (state.activeApp === "dev-tools") {
-    app.innerHTML = renderDevWorkspace() + renderRequiredProfileModals();
+    app.innerHTML = renderSystemBanner() + renderDevWorkspace() + renderRequiredProfileModals();
     bindDevWorkspace();
     bindRequiredProfileModals();
     return;
   }
   if (state.activeApp === "business") {
-    app.innerHTML = renderBusinessWorkspace() + renderRequiredProfileModals();
+    app.innerHTML = renderSystemBanner() + renderBusinessWorkspace() + renderRequiredProfileModals();
     bindBusinessWorkspace();
     bindRequiredProfileModals();
     return;
   }
   if (state.activeApp === "court") {
-    app.innerHTML = renderCourtWorkspace() + renderRequiredProfileModals();
+    app.innerHTML = renderSystemBanner() + renderCourtWorkspace() + renderRequiredProfileModals();
     bindCourtWorkspace();
     bindRequiredProfileModals();
     return;
   }
   if (state.activeApp === "fnn") {
-    app.innerHTML = renderFnnWorkspace() + renderRequiredProfileModals();
+    app.innerHTML = renderSystemBanner() + renderFnnWorkspace() + renderRequiredProfileModals();
     bindFnnWorkspace();
     bindRequiredProfileModals();
     return;
@@ -641,7 +643,7 @@ function renderCallsignRequiredModal() {
 
 function renderRequiredProfileModals() {
   if (state.session?.sanction?.type === "timeout") return "";
-  return renderCarEntryRequiredModal() || renderArmaLinkRequiredModal() || renderBetaInviteModal();
+  return renderSystemSplash() || renderCarEntryRequiredModal() || renderArmaLinkRequiredModal() || renderBetaInviteModal();
 }
 
 function renderBetaInviteModal() {
@@ -686,6 +688,10 @@ function renderArmaLinkRequiredModal() {
 }
 
 function bindRequiredProfileModals() {
+  $("[data-system-splash-dismiss]")?.addEventListener("click", (event) => {
+    localStorage.setItem(`faircroft.splash.seen.${event.currentTarget.dataset.splashRevision || "1"}`, "1");
+    render();
+  });
   bindCarEntryRequiredModal();
   $("#forcedCallsignForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -763,6 +769,42 @@ function renderHome() {
   `;
 }
 
+function renderSystemBanner() {
+  const system = state.session?.system;
+  if (!system?.system_banner_enabled || !system.system_banner_message || state.systemBannerDismissed) return "";
+  return `
+    <aside class="system-message-banner ${escapeHtml(system.system_banner_tone || "info")}">
+      <span></span>
+      <strong>${escapeHtml(system.system_banner_message)}</strong>
+      <button type="button" data-system-banner-dismiss aria-label="Dismiss announcement">×</button>
+    </aside>`;
+}
+
+function renderSystemSplash() {
+  const system = state.session?.system;
+  if (!system?.splash_enabled || !system.splash_message) return "";
+  const revision = String(system.splash_revision || "1");
+  if (localStorage.getItem(`faircroft.splash.seen.${revision}`) === "1") return "";
+  const mediaUrl = String(system.splash_media_url || "");
+  const media = mediaUrl
+    ? (/\.(mp4|webm)(\?|$)/i.test(mediaUrl)
+      ? `<video autoplay muted loop playsinline src="${escapeHtml(mediaUrl)}"></video>`
+      : `<img src="${escapeHtml(mediaUrl)}" alt="" />`)
+    : `<div class="system-splash-mark">FC</div>`;
+  return `
+    <div class="modal-backdrop system-splash-backdrop">
+      <section class="system-splash-card" role="dialog" aria-modal="true" aria-label="${escapeHtml(system.splash_title || "Faircroft announcement")}">
+        <div class="system-splash-media">${media}</div>
+        <div class="system-splash-copy">
+          <p>FAIRCROFT BULLETIN</p>
+          <h2>${escapeHtml(system.splash_title || "Welcome to Faircroft")}</h2>
+          <span>${escapeHtml(system.splash_message)}</span>
+          <button class="primary" type="button" data-system-splash-dismiss data-splash-revision="${escapeHtml(revision)}">Continue to Faircroft</button>
+        </div>
+      </section>
+    </div>`;
+}
+
 function isPwaStandalone() {
   return window.matchMedia?.("(display-mode: standalone)")?.matches || window.navigator.standalone === true;
 }
@@ -770,16 +812,22 @@ function isPwaStandalone() {
 function renderPwaInstallBar() {
   if (!state.session?.user || isPwaStandalone() || localStorage.getItem("faircroft.pwa.install.dismissed") === "1") return "";
   const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const isWindows = /windows/i.test(navigator.userAgent);
   return `
     <aside class="pwa-install-bar ${state.pwaInstallHelpOpen ? "expanded" : ""}" aria-label="Install Faircroft">
       <span class="pwa-install-icon">FC</span>
       <div>
-        <strong>Keep Faircroft on your Home Screen</strong>
-        <p>${state.pwaInstallHelpOpen
+        <strong>${isWindows ? "Faircroft for Windows" : "Keep Faircroft on your Home Screen"}</strong>
+        <p>${isWindows
+          ? "Install the desktop client with automatic updates. Android APK coming soon."
+          : state.pwaInstallHelpOpen
           ? (isIos ? "Tap Share in Safari, then choose Add to Home Screen." : "Open your browser menu and choose Install app or Add to Home screen.")
           : "Open RP OS like an app. Android APK coming soon."}</p>
       </div>
-      <button class="pwa-install-action" type="button" data-pwa-install>${deferredPwaInstallPrompt ? "Install" : (state.pwaInstallHelpOpen ? "Got it" : "How")}</button>
+      <div class="pwa-install-actions">
+        ${isWindows ? "" : `<button class="pwa-install-action" type="button" data-pwa-install>${deferredPwaInstallPrompt ? "Install" : (state.pwaInstallHelpOpen ? "Got it" : "How")}</button>`}
+        <button class="pwa-install-action desktop" type="button" data-desktop-download>${isWindows ? "Download EXE" : "PC app"}</button>
+      </div>
       <button class="pwa-install-close" type="button" data-pwa-install-dismiss aria-label="Dismiss install prompt">×</button>
     </aside>
   `;
@@ -8396,7 +8444,32 @@ function renderDevTools() {
   if (state.devTab === "settings") {
     const visibilityApps = data.app_visibility?.apps || [];
     const beta = data.beta_program || { recruiting_enabled: false, recruiting_message: "", members: 0, member_roster: [], tasks: [], reports: [] };
+    const experience = data.experience || {};
     return `<div class="stack beta-operations">
+      <section class="dev-card dev-experience-control">
+        <div class="dev-card-header">
+          <div><span>USER EXPERIENCE CONTROL</span><h2>System communications</h2><p>Publish a persistent top banner or a one-time cinematic splash screen across Faircroft.</p></div>
+          <strong>${experience.system_banner_enabled || experience.splash_enabled ? "LIVE" : "OFF"}</strong>
+        </div>
+        <form id="devExperienceForm" class="form-grid">
+          <div class="dev-experience-section">
+            <div><span>SYSTEM BANNER</span><strong>Top-of-screen announcement</strong></div>
+            <label class="check-row"><input type="checkbox" name="system_banner_enabled" ${experience.system_banner_enabled ? "checked" : ""} /> Enable system banner</label>
+          </div>
+          <label>Banner tone<select name="system_banner_tone">
+            ${["info","success","warning","critical"].map((tone) => `<option value="${tone}" ${experience.system_banner_tone === tone ? "selected" : ""}>${humanLabel(tone)}</option>`).join("")}
+          </select></label>
+          <label class="wide">Banner message<textarea name="system_banner_message" maxlength="240" placeholder="Short operational announcement shown at the top of every screen.">${escapeHtml(experience.system_banner_message || "")}</textarea></label>
+          <div class="dev-experience-section wide">
+            <div><span>SPLASH SCREEN</span><strong>Login bulletin or event takeover</strong></div>
+            <label class="check-row"><input type="checkbox" name="splash_enabled" ${experience.splash_enabled ? "checked" : ""} /> Enable splash screen</label>
+          </div>
+          <label>Splash title<input name="splash_title" maxlength="100" value="${escapeHtml(experience.splash_title || "Welcome to Faircroft")}" /></label>
+          <label class="wide">Splash message<textarea name="splash_message" maxlength="800" placeholder="Event, update, or community announcement.">${escapeHtml(experience.splash_message || "")}</textarea></label>
+          <label class="wide">Photo or video URL<input name="splash_media_url" maxlength="500" value="${escapeHtml(experience.splash_media_url || "")}" placeholder="https://.../event.mp4 or /static/brand/..." /><small>HTTPS images, MP4/WebM videos, or approved Faircroft static assets.</small></label>
+          <button class="primary wide" type="submit">Publish experience settings</button>
+        </form>
+      </section>
       <section class="dev-card beta-command-hero">
         <div class="beta-command-copy"><p class="eyebrow">Release planning</p><h2>Beta Operations</h2><p>Coordinate recruitment, assignments, the testing team, and incoming findings from one focused workspace.</p></div>
         <div class="beta-command-status"><i></i><span>PROGRAM STATUS</span><strong>${beta.recruiting_enabled ? "Recruiting" : "Closed"}</strong></div>
@@ -8971,6 +9044,23 @@ function bindFineSettlement() {
 }
 
 function bindDevTools() {
+  $("#devExperienceForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = Object.fromEntries(new FormData(form).entries());
+    await api("/api/dev-tools/experience", {
+      method: "PATCH",
+      body: {
+        ...values,
+        system_banner_enabled: form.system_banner_enabled.checked,
+        splash_enabled: form.splash_enabled.checked,
+      },
+    });
+    toast("System communications published");
+    state.systemBannerDismissed = false;
+    await loadSession();
+    await refreshDevTools();
+  });
   $$("[data-beta-modal]").forEach((button) => button.addEventListener("click", () => {
     state.betaDevModal = button.dataset.betaModal;
     render();
@@ -9743,7 +9833,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.6-install").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-experience").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {
@@ -9753,6 +9843,26 @@ window.addEventListener("beforeinstallprompt", (event) => {
 });
 
 app.addEventListener("click", async (event) => {
+  if (event.target.closest("[data-system-banner-dismiss]")) {
+    state.systemBannerDismissed = true;
+    render();
+    return;
+  }
+  if (event.target.closest("[data-desktop-download]")) {
+    let access;
+    try {
+      access = await api("/api/desktop/access");
+    } catch (error) {
+      window.alert(`${error.message || "You must be in the Faircroft Beta Program to download the desktop app."}\n\n:(`);
+      return;
+    }
+    const confirmed = window.confirm(
+      "Download the official Faircroft RP Windows installer?\n\nOfficial releases are scanned with Microsoft Defender and include a public SHA-256 checksum. Only install files downloaded from Faircroft or the official Faircroft GitHub release. Faircroft cannot accept responsibility for modified copies, unsupported computers, interrupted downloads, or incorrect installation.\n\nThe installer will show the complete safety notice before installation."
+    );
+    if (!confirmed) return;
+    window.location.href = access.download_url;
+    return;
+  }
   const installButton = event.target.closest("[data-pwa-install]");
   if (installButton) {
     if (deferredPwaInstallPrompt) {

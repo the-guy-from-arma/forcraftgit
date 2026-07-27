@@ -39,6 +39,10 @@ SESSION_DAYS = 7
 OWNER_EMAIL = os.environ.get("OWNER_EMAIL", "owner@rp.local").strip().lower()
 OWNER_PASSWORD = os.environ.get("OWNER_PASSWORD", "owner1234")
 OWNER_NAME = os.environ.get("OWNER_NAME", "Server Owner")
+DESKTOP_INSTALLER_URL = os.environ.get(
+    "DESKTOP_INSTALLER_URL",
+    "https://github.com/the-guy-from-arma/forcraftgit/releases/latest/download/Faircroft-RP-Desktop-Setup.exe",
+).strip()
 ARMA_BRIDGE_API_KEY = os.environ.get("ARMA_BRIDGE_API_KEY", "").strip()
 ARMA_LINK_CODE_TTL_MINUTES = int(os.environ.get("ARMA_LINK_CODE_TTL_MINUTES", "30"))
 SHADOWHAVEN_SFTP_HOST = os.environ.get("SHADOWHAVEN_SFTP_HOST", "").strip()
@@ -1248,6 +1252,14 @@ SYSTEM_SETTING_DEFAULTS = {
     "beta_recruiting_enabled": "0",
     "beta_recruiting_message": "Help test upcoming Faircroft features before public release. Beta testers receive guided tasks and can report issues directly to the development team.",
     "beta_campaign_id": "1",
+    "system_banner_enabled": "0",
+    "system_banner_message": "",
+    "system_banner_tone": "info",
+    "splash_enabled": "0",
+    "splash_title": "Welcome to Faircroft",
+    "splash_message": "",
+    "splash_media_url": "",
+    "splash_revision": "1",
     "app_visibility": "{}",
 }
 APP_VISIBILITY_OPTIONS = (
@@ -2835,6 +2847,13 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         beta_campaign_id = max(1, int(raw.get("beta_campaign_id") or "1"))
     except (TypeError, ValueError):
         beta_campaign_id = 1
+    try:
+        splash_revision = max(1, int(raw.get("splash_revision") or "1"))
+    except (TypeError, ValueError):
+        splash_revision = 1
+    banner_tone = str(raw.get("system_banner_tone") or "info").strip().lower()
+    if banner_tone not in ("info", "success", "warning", "critical"):
+        banner_tone = "info"
     return {
         "autopilot_verify_enabled": str(raw.get("autopilot_verify_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "autopilot_verify_minutes": minutes,
@@ -2845,6 +2864,14 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "beta_recruiting_enabled": str(raw.get("beta_recruiting_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "beta_recruiting_message": str(raw.get("beta_recruiting_message") or SYSTEM_SETTING_DEFAULTS["beta_recruiting_message"]).strip()[:600],
         "beta_campaign_id": beta_campaign_id,
+        "system_banner_enabled": str(raw.get("system_banner_enabled") or "0") in ("1", "true", "True", "yes", "on"),
+        "system_banner_message": str(raw.get("system_banner_message") or "").strip()[:240],
+        "system_banner_tone": banner_tone,
+        "splash_enabled": str(raw.get("splash_enabled") or "0") in ("1", "true", "True", "yes", "on"),
+        "splash_title": str(raw.get("splash_title") or SYSTEM_SETTING_DEFAULTS["splash_title"]).strip()[:100],
+        "splash_message": str(raw.get("splash_message") or "").strip()[:800],
+        "splash_media_url": str(raw.get("splash_media_url") or "").strip()[:500],
+        "splash_revision": splash_revision,
         "app_visibility": app_visibility,
     }
 
@@ -4531,8 +4558,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_beta_tasks(db, user)
                 elif path == "/api/beta/reports" and method == "POST":
                     self.api_beta_report(db, user)
+                elif path == "/api/desktop/access" and method == "GET":
+                    self.api_desktop_access(user)
                 elif path == "/api/dev-tools" and method == "GET":
                     self.api_dev_tools(db, user)
+                elif path == "/api/dev-tools/experience" and method == "PATCH":
+                    self.api_dev_update_experience(db, user)
                 elif path == "/api/dev-tools/beta-program" and method == "PATCH":
                     self.api_dev_beta_program(db, user)
                 elif path == "/api/dev-tools/beta-tasks" and method == "POST":
@@ -4805,6 +4836,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "update_lockdown_message": settings["update_lockdown_message"],
                     "beta_invite": beta_invite,
                     "beta_recruiting_message": settings["beta_recruiting_message"],
+                    "desktop_beta_access": has_any(user, "beta"),
+                    "system_banner_enabled": settings["system_banner_enabled"],
+                    "system_banner_message": settings["system_banner_message"],
+                    "system_banner_tone": settings["system_banner_tone"],
+                    "splash_enabled": settings["splash_enabled"],
+                    "splash_title": settings["splash_title"],
+                    "splash_message": settings["splash_message"],
+                    "splash_media_url": settings["splash_media_url"],
+                    "splash_revision": settings["splash_revision"],
                 },
             },
         )
@@ -9503,6 +9543,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         stats = {**auto_verify_stats(db, settings), **auto_license_stats(db, settings)}
         self.send_json(200, {"ok": True, "settings": settings, "stats": stats, "auto_verified_now": auto_verified, "auto_licensed_now": auto_licensed})
 
+    def api_desktop_access(self, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Sign in before requesting the desktop beta.")
+            return
+        if not has_any(user, "beta"):
+            self.error(403, "You must be in the Faircroft Beta Program to download the desktop app. We are sad you cannot join us yet.")
+            return
+        self.send_json(200, {"allowed": True, "download_url": DESKTOP_INSTALLER_URL})
+
     def api_beta_respond(self, db: Database, user: DbRow | None) -> None:
         if not user:
             self.error(401, "Authentication required")
@@ -9886,6 +9935,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "tasks": [dict(row) for row in beta_tasks],
                     "reports": [dict(row) for row in beta_reports],
                 },
+                "experience": {
+                    "system_banner_enabled": system_settings["system_banner_enabled"],
+                    "system_banner_message": system_settings["system_banner_message"],
+                    "system_banner_tone": system_settings["system_banner_tone"],
+                    "splash_enabled": system_settings["splash_enabled"],
+                    "splash_title": system_settings["splash_title"],
+                    "splash_message": system_settings["splash_message"],
+                    "splash_media_url": system_settings["splash_media_url"],
+                    "splash_revision": system_settings["splash_revision"],
+                },
                 "anti_cheat": {
                     "players": [dict(row) for row in anticheat_players],
                     "events": [dict(row) for row in anticheat_events],
@@ -9933,6 +9992,62 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 },
             },
         )
+
+    def api_dev_update_experience(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        current = get_system_settings(db)
+        banner_enabled = bool(payload.get("system_banner_enabled"))
+        banner_message = str(payload.get("system_banner_message") or "").strip()[:240]
+        banner_tone = str(payload.get("system_banner_tone") or "info").strip().lower()
+        if banner_tone not in ("info", "success", "warning", "critical"):
+            self.error(400, "Unsupported banner tone")
+            return
+        splash_enabled = bool(payload.get("splash_enabled"))
+        splash_title = str(payload.get("splash_title") or "Welcome to Faircroft").strip()[:100]
+        splash_message = str(payload.get("splash_message") or "").strip()[:800]
+        splash_media_url = str(payload.get("splash_media_url") or "").strip()[:500]
+        if splash_media_url and not (
+            splash_media_url.startswith("https://")
+            or splash_media_url.startswith("/static/")
+        ):
+            self.error(400, "Splash media must use HTTPS or an approved /static/ asset")
+            return
+        if banner_enabled and not banner_message:
+            self.error(400, "An enabled system banner requires a message")
+            return
+        if splash_enabled and (not splash_title or not splash_message):
+            self.error(400, "An enabled splash screen requires a title and message")
+            return
+        revision = int(current["splash_revision"]) + 1
+        updates = {
+            "system_banner_enabled": "1" if banner_enabled else "0",
+            "system_banner_message": banner_message,
+            "system_banner_tone": banner_tone,
+            "splash_enabled": "1" if splash_enabled else "0",
+            "splash_title": splash_title,
+            "splash_message": splash_message,
+            "splash_media_url": splash_media_url,
+            "splash_revision": str(revision),
+        }
+        for key, value in updates.items():
+            set_system_setting(db, key, value)
+        add_admin_audit(
+            db,
+            int(user["id"]),
+            "system.experience.updated",
+            details={
+                "banner_enabled": banner_enabled,
+                "banner_tone": banner_tone,
+                "splash_enabled": splash_enabled,
+                "splash_revision": revision,
+            },
+        )
+        self.send_json(200, {"ok": True, "experience": get_system_settings(db)})
 
     def api_dev_update_app_visibility(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)

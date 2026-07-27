@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 .env
 .pythonlibs/
+desktop/node_modules/
+desktop/release/
+desktop/dist/

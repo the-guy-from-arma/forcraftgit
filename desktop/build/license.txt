@@ -1,0 +1,38 @@
+FAIRCROFT RP DESKTOP CLIENT
+INSTALLATION NOTICE, SAFETY WARNING, AND DISCLAIMER
+
+PLEASE READ BEFORE INSTALLING.
+
+This installer is the official Faircroft RP Windows desktop client. The client displays the live Faircroft web application at faircroft.online and uses the same Faircroft account, permissions, features, and server-side systems as the Progressive Web App.
+
+OFFICIAL DOWNLOADS AND FILE INTEGRITY
+
+Only install Faircroft RP when downloaded from the official Faircroft website or the official Faircroft GitHub release page. Official release files are scanned by Microsoft Defender during the release process and are published with a SHA-256 checksum. Faircroft RP cannot verify, support, or accept responsibility for files that have been renamed, repackaged, modified, mirrored, or obtained from another source.
+
+USER RESPONSIBILITY
+
+You are responsible for confirming that:
+
+1. You downloaded the installer from an official Faircroft source.
+2. Your computer meets the application requirements.
+3. You have permission to install software on the computer.
+4. Your operating system, security software, storage, and network are functioning correctly.
+5. You do not interrupt, alter, or incorrectly perform the installation or update process.
+
+RISK AND LIABILITY
+
+Software installation always carries some risk, including conflicts caused by operating-system configuration, antivirus software, insufficient storage, interrupted updates, damaged hardware, third-party utilities, or modified installer files.
+
+To the maximum extent permitted by applicable law, Faircroft RP and its operators are not responsible for damage, data loss, downtime, account loss, security incidents, system instability, or other harm arising from an unofficial copy, user modification, unsupported configuration, interrupted installation, incorrect installation, misuse, or failure to follow these instructions.
+
+This notice does not exclude any right or protection that cannot legally be excluded.
+
+DATA AND ACCOUNT CONNECTION
+
+The desktop client connects to faircroft.online over HTTPS. It does not connect directly to the Arma Reforger server, RCON, SFTP, or game-mod secrets. Closing or uninstalling the desktop client does not delete your Faircroft web account or unlink your Arma account.
+
+UPDATES
+
+The client checks the official Faircroft GitHub release channel for updates. Updates may download in the background. You will be offered the option to restart and install an available update; choosing Later installs it when the application closes.
+
+By continuing, you confirm that you have read this notice, obtained the installer from an official source, and accept responsibility for installing it correctly.

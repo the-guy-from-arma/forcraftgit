@@ -1,6 +1,20 @@
 {
-  "version": "0.1.6",
+  "version": "0.1.7",
   "entries": [
+    {
+      "date": "2026-07-27",
+      "version": "0.1.7",
+      "title": "System Communications",
+      "added": [
+        "Added developer-published system banners with informational, success, warning, and critical presentation.",
+        "Added configurable cinematic splash screens supporting Faircroft-hosted or HTTPS images and videos.",
+        "Added Beta Program authorization for Windows desktop installer access."
+      ],
+      "changed": [
+        "Desktop downloads now require an authenticated Faircroft Beta Program account."
+      ],
+      "fixed": []
+    },
     {
       "date": "2026-07-27",
       "version": "0.1.6",
