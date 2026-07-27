@@ -1,6 +1,16 @@
 {
-  "version": "0.1.7",
+  "version": "0.2.0",
   "entries": [
+    {
+      "date": "2026-07-27",
+      "version": "0.2.0",
+      "title": "RP OS 0.2.0",
+      "added": [],
+      "changed": [
+        "Advanced the visible RP OS release designation and PWA installation cache to version 0.2.0."
+      ],
+      "fixed": []
+    },
     {
       "date": "2026-07-27",
       "version": "0.1.7",
