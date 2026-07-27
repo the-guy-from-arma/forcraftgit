@@ -13133,7 +13133,9 @@ textarea:focus {
 .anticheat-player-row { min-height: 66px; border-color: var(--dev-line); background: #0f181d; }
 .anticheat-player-row:hover { border-color: var(--dev-line); background: #142127; box-shadow: inset 2px 0 0 var(--dev-accent); transform: none; }
 .anticheat-player-row > div:last-child { align-items: center; }
-.dev-platform-mini { color: #8ca1a8; font-size: .62rem; font-weight: 800; }
+.dev-platform-mini { display: inline-flex; align-items: center; gap: 6px; color: #8ca1a8; font-size: .62rem; font-weight: 800; }
+.dev-platform-mini img { width: 17px; height: 17px; object-fit: contain; }
+.dev-platform-mini b { font-size: .56rem; }
 .anticheat-player-row > div:last-child > i { color: #5b7179; font-size: 1rem; font-style: normal; }
 .anticheat-player-list { min-height: 0; }
 .anticheat-directory-footer {
@@ -13276,6 +13278,7 @@ textarea:focus {
   font-weight: 950;
   letter-spacing: -.03em;
 }
+.dev-platform-mark img { width: 46px; height: 46px; object-fit: contain; filter: drop-shadow(0 5px 12px rgba(0,0,0,.28)); }
 
 .dev-platform-card h3 { margin: 3px 0 2px; font-size: 1.65rem; letter-spacing: -.035em; }
 .dev-platform-card > div > p:last-child { margin: 0; color: #92a6b0; }

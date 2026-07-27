@@ -8303,7 +8303,7 @@ function renderDevAntiCheat(data) {
           <div class="anticheat-player-id"><strong>${escapeHtml(player.player_name || "Unknown player")}</strong><small>${escapeHtml(player.uid)}</small></div>
           <div><span>${player.linked_user_id ? escapeHtml(player.account_name || "Linked account") : "No CAD link"}</span><small>${player.civ_number ? `CIV ${escapeHtml(player.civ_number)}` : "Bohemia UID unmatched"}</small></div>
           <div><span>${Number(player.ticket_count || 0)} tickets</span><small>${flags} detection flags</small></div>
-          <div><span class="dev-record-status ${player.online ? "verified" : "closed"}">${player.online ? "Live" : "Offline"}</span><span class="dev-platform-mini">${escapeHtml(platform.mark)} · ${escapeHtml(platform.label)}</span>${Number(player.alt_group_count || 0) ? `<span class="dev-record-status alert">${Number(player.alt_group_count)} alt group</span>` : ""}<i>›</i></div>
+          <div><span class="dev-record-status ${player.online ? "verified" : "closed"}">${player.online ? "Live" : "Offline"}</span><span class="dev-platform-mini">${platform.asset ? `<img src="${escapeHtml(platform.asset)}" alt="" />` : `<b>${escapeHtml(platform.mark)}</b>`}<span>${escapeHtml(platform.label)}</span></span>${Number(player.alt_group_count || 0) ? `<span class="dev-record-status alert">${Number(player.alt_group_count)} alt group</span>` : ""}<i>›</i></div>
         </button>`;
       }).join("") || `<div class="empty">No anti-cheat players match this search.</div>`}</div>
       <footer class="anticheat-directory-footer">
@@ -8357,19 +8357,19 @@ function devPlatformIdentity(...values) {
   const raw = values.find((value) => String(value ?? "").trim()) ?? "";
   const normalized = String(raw).trim().toLowerCase();
   const platforms = {
-    "0": ["Unknown", "UN", "No platform signal"],
-    "1": ["PC", "PC", "Windows / Steam"],
-    "2": ["Xbox", "XB", "Xbox network"],
-    "3": ["PlayStation", "PS", "PlayStation Network"],
-    pc: ["PC", "PC", "Windows / Steam"],
-    windows: ["PC", "PC", "Windows / Steam"],
-    steam: ["PC", "PC", "Windows / Steam"],
-    xbox: ["Xbox", "XB", "Xbox network"],
-    xboxone: ["Xbox", "XB", "Xbox network"],
-    xboxseries: ["Xbox", "XB", "Xbox network"],
-    playstation: ["PlayStation", "PS", "PlayStation Network"],
-    ps4: ["PlayStation", "PS", "PlayStation Network"],
-    ps5: ["PlayStation", "PS", "PlayStation Network"],
+    "0": ["Unknown", "UN", "No platform signal", ""],
+    "1": ["PC", "PC", "Windows / Steam", "/static/brand/platforms/windows.svg"],
+    "2": ["Xbox", "XB", "Xbox network", "/static/brand/platforms/xbox.svg"],
+    "3": ["PlayStation 5", "PS5", "PlayStation Network", "/static/brand/platforms/playstation.svg"],
+    pc: ["PC", "PC", "Windows / Steam", "/static/brand/platforms/windows.svg"],
+    windows: ["PC", "PC", "Windows / Steam", "/static/brand/platforms/windows.svg"],
+    steam: ["PC", "PC", "Windows / Steam", "/static/brand/platforms/windows.svg"],
+    xbox: ["Xbox", "XB", "Xbox network", "/static/brand/platforms/xbox.svg"],
+    xboxone: ["Xbox", "XB", "Xbox network", "/static/brand/platforms/xbox.svg"],
+    xboxseries: ["Xbox", "XB", "Xbox network", "/static/brand/platforms/xbox.svg"],
+    playstation: ["PlayStation 5", "PS5", "PlayStation Network", "/static/brand/platforms/playstation.svg"],
+    ps4: ["PlayStation", "PS", "PlayStation Network", "/static/brand/platforms/playstation.svg"],
+    ps5: ["PlayStation 5", "PS5", "PlayStation Network", "/static/brand/platforms/playstation.svg"],
   };
   const match = platforms[normalized] || (
     normalized.includes("xbox") ? platforms.xbox :
@@ -8381,6 +8381,7 @@ function devPlatformIdentity(...values) {
     label: match?.[0] || (raw ? String(raw) : "Unknown"),
     mark: match?.[1] || "UN",
     detail: match?.[2] || "Unrecognized platform signal",
+    asset: match?.[3] || "",
     raw: raw ? String(raw) : "",
   };
 }
@@ -8405,7 +8406,7 @@ function renderDevAccountModal(data) {
       <div class="dev-profile-scroll">
         <section class="dev-identity-command">
           <div class="dev-platform-card">
-            <span class="dev-platform-mark">${escapeHtml(platform.mark)}</span>
+            <span class="dev-platform-mark">${platform.asset ? `<img src="${escapeHtml(platform.asset)}" alt="${escapeHtml(platform.label)}" />` : escapeHtml(platform.mark)}</span>
             <div><p class="eyebrow">Active platform</p><h3>${escapeHtml(platform.label)}</h3><p>${escapeHtml(platform.detail)}</p></div>
             <span class="dev-signal-status"><i></i>${escapeHtml(platformSource)}</span>
           </div>
@@ -9449,7 +9450,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.1-ops3").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.1-ops4").catch(() => {}));
 }
 
 bootApp();
