@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v016-profile";
+const CACHE = "faircroft-rp-v016-install";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.1.6-profile",
+  "/static/styles.css?v=0.1.6-install",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.1.6-profile",
+  "/static/app.js?v=0.1.6-install",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
   "/static/brand/platforms/playstation.svg",

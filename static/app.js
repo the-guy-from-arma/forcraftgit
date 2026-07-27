@@ -6,6 +6,7 @@ const OS_VERSION = "0.1.6";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
+let deferredPwaInstallPrompt = null;
 
 const state = {
   boot: {
@@ -19,6 +20,7 @@ const state = {
   returnToMdtOnClose: false,
   pendingArmaCode: new URL(window.location.href).searchParams.get("code") || "",
   profileTab: "overview",
+  pwaInstallHelpOpen: false,
   armaUnlinkOpen: false,
   armaLinkPromptDismissed: false,
   generatedDevCode: null,
@@ -435,6 +437,7 @@ function phone(content) {
           <span class="status-icons"><span class="signal"></span><span>5G</span><span class="battery"></span></span>
         </div>
         ${content}
+        ${renderPwaInstallBar()}
         <footer class="os-version">RP OS ${OS_VERSION}</footer>
       </div>
     </section>
@@ -757,6 +760,28 @@ function renderHome() {
         `).join("")}
       </div>
     </section>
+  `;
+}
+
+function isPwaStandalone() {
+  return window.matchMedia?.("(display-mode: standalone)")?.matches || window.navigator.standalone === true;
+}
+
+function renderPwaInstallBar() {
+  if (!state.session?.user || isPwaStandalone() || localStorage.getItem("faircroft.pwa.install.dismissed") === "1") return "";
+  const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  return `
+    <aside class="pwa-install-bar ${state.pwaInstallHelpOpen ? "expanded" : ""}" aria-label="Install Faircroft">
+      <span class="pwa-install-icon">FC</span>
+      <div>
+        <strong>Keep Faircroft on your Home Screen</strong>
+        <p>${state.pwaInstallHelpOpen
+          ? (isIos ? "Tap Share in Safari, then choose Add to Home Screen." : "Open your browser menu and choose Install app or Add to Home screen.")
+          : "Open RP OS like an app. Android APK coming soon."}</p>
+      </div>
+      <button class="pwa-install-action" type="button" data-pwa-install>${deferredPwaInstallPrompt ? "Install" : (state.pwaInstallHelpOpen ? "Got it" : "How")}</button>
+      <button class="pwa-install-close" type="button" data-pwa-install-dismiss aria-label="Dismiss install prompt">×</button>
+    </aside>
   `;
 }
 
@@ -9718,8 +9743,43 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.6-profile").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.6-install").catch(() => {}));
 }
+
+window.addEventListener("beforeinstallprompt", (event) => {
+  event.preventDefault();
+  deferredPwaInstallPrompt = event;
+  if (state.session?.user) render();
+});
+
+app.addEventListener("click", async (event) => {
+  const installButton = event.target.closest("[data-pwa-install]");
+  if (installButton) {
+    if (deferredPwaInstallPrompt) {
+      deferredPwaInstallPrompt.prompt();
+      const choice = await deferredPwaInstallPrompt.userChoice;
+      if (choice.outcome === "accepted") {
+        localStorage.setItem("faircroft.pwa.install.dismissed", "1");
+      }
+      deferredPwaInstallPrompt = null;
+      render();
+      return;
+    }
+    if (state.pwaInstallHelpOpen) {
+      localStorage.setItem("faircroft.pwa.install.dismissed", "1");
+      state.pwaInstallHelpOpen = false;
+    } else {
+      state.pwaInstallHelpOpen = true;
+    }
+    render();
+    return;
+  }
+  if (event.target.closest("[data-pwa-install-dismiss]")) {
+    localStorage.setItem("faircroft.pwa.install.dismissed", "1");
+    state.pwaInstallHelpOpen = false;
+    render();
+  }
+});
 
 bootApp();
 

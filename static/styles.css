@@ -14824,3 +14824,72 @@ textarea:focus {
 @media (prefers-reduced-motion: reduce) {
   .resident-profile .resident-profile-panel { animation: none; }
 }
+
+/* Lightweight PWA install notice */
+.pwa-install-bar {
+  position: absolute;
+  z-index: 70;
+  left: 11px;
+  right: 11px;
+  bottom: max(31px, calc(env(safe-area-inset-bottom) + 25px));
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 58px;
+  padding: 9px 34px 9px 9px;
+  color: #eaf5fb;
+  border: 1px solid rgba(84, 194, 218, .3);
+  border-radius: 15px;
+  background: rgba(8, 19, 30, .96);
+  box-shadow: 0 16px 45px rgba(0,0,0,.48), inset 0 1px rgba(255,255,255,.05);
+  backdrop-filter: blur(20px);
+  animation: pwa-install-in .35s cubic-bezier(.2,.8,.2,1) both;
+}
+.pwa-install-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  color: white;
+  border-radius: 10px;
+  background: linear-gradient(145deg, #08c9e8, #736cff 55%, #f51b94);
+  box-shadow: 0 7px 18px rgba(37,136,220,.24);
+  font-size: 11px;
+  font-style: italic;
+  font-weight: 950;
+}
+.pwa-install-bar > div { min-width: 0; display: grid; gap: 2px; }
+.pwa-install-bar strong { overflow: hidden; text-overflow: ellipsis; font-size: 10px; white-space: nowrap; }
+.pwa-install-bar p { margin: 0; color: #8298aa; font-size: 8px; line-height: 1.35; }
+.pwa-install-action {
+  min-height: 30px;
+  padding: 0 10px;
+  color: #9ef3ff;
+  border: 1px solid #28576a;
+  border-radius: 9px;
+  background: #102b39;
+  font-size: 9px;
+  font-weight: 900;
+}
+.pwa-install-close {
+  position: absolute;
+  right: 7px;
+  top: 4px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: #688092;
+  border: 0;
+  background: transparent;
+  font-size: 17px;
+  line-height: 1;
+}
+.pwa-install-bar.expanded { border-color: rgba(121, 110, 255, .38); }
+@keyframes pwa-install-in {
+  from { opacity: 0; transform: translateY(12px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pwa-install-bar { animation: none; }
+}
