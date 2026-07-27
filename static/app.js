@@ -893,7 +893,6 @@ function renderFnnWorkspace() {
       <a class="fnn-brand" href="#" aria-label="Faircroft News Now home"><b>F</b><b>N</b><b>N</b><span>Faircroft News Now</span></a>
       <div class="fnn-header-actions">
         <span class="fnn-live-dot"><i></i>RP NEWSROOM</span>
-        ${data.can_generate ? `<button type="button" data-generate-fnn>${edition ? "Regenerate today" : "Publish today"}</button>` : ""}
       </div>
     </header>
     <nav class="fnn-sections" aria-label="News sections">
@@ -935,7 +934,6 @@ function renderFnnWorkspace() {
         <p class="fnn-kicker">FAIRCROFT NEWS NOW</p>
         <h1>The newsroom is preparing today’s edition.</h1>
         <p>${data.generation_configured ? "The newsroom will build an extensive edition from the complete archive of CAD reports, citations, and criminal matters." : "A developer must configure the Gemini newsroom connection before editions can publish."}</p>
-        ${data.can_generate && data.generation_configured ? `<button class="primary" type="button" data-generate-fnn>Generate today’s edition</button>` : ""}
       </section>
     `}
     <footer class="fnn-footer"><strong>FNN</strong><span>${escapeHtml(data.disclaimer || "Fictional roleplay news.")}</span><small>Stories summarize officer-authored RP reports and may be updated as reports develop.</small></footer>
@@ -956,35 +954,6 @@ function bindFnnWorkspace() {
       }
       $$(".fnn-sections button").forEach((item) => item.classList.toggle("active", item === button));
       target.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  });
-  $$("[data-generate-fnn]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      const buttons = $$("[data-generate-fnn]");
-      buttons.forEach((item) => {
-        item.disabled = true;
-        item.classList.add("publishing");
-        item.textContent = "Building edition…";
-      });
-      try {
-        const result = await api("/api/fnn/generate", { method: "POST" });
-        if (result.status === "no_reports") {
-          toast("No CAD reports, citations, or criminal records are available");
-        } else if (result.status === "configuration_required") {
-          toast("GEMINI_API_KEY is not configured");
-        } else {
-          toast("Today’s FNN edition is published");
-        }
-        await loadAppData("fnn");
-        render();
-      } catch (error) {
-        toast(error.message);
-        buttons.forEach((item) => {
-          item.disabled = false;
-          item.classList.remove("publishing");
-          item.textContent = "Try again";
-        });
-      }
     });
   });
 }
@@ -8490,6 +8459,14 @@ function renderDevTools() {
         <button class="secondary" type="button" data-beta-modal="tasks">Open assignment library <span>${(beta.tasks || []).length}</span></button>
       </section>
       ${renderDevBetaModal(beta)}
+      <section class="dev-card dev-fnn-control">
+        <div>
+          <p class="eyebrow">Newsroom administration</p>
+          <h2>Faircroft News Now</h2>
+          <p class="muted">Generate or replace today’s public edition from eligible CAD reports, citations, and criminal records.</p>
+        </div>
+        <button class="danger" type="button" data-dev-generate-fnn>Regenerate today’s edition</button>
+      </section>
       <section class="dev-card dev-visibility-intro">
         <div><p class="eyebrow">Global user interface controls</p><h2>Application Icon Visibility</h2><p class="muted">Checked applications appear for users who have permission. Unchecked applications vanish from every user home screen.</p></div>
         <span class="pill amber">global setting</span>
@@ -9044,6 +9021,27 @@ function bindFineSettlement() {
 }
 
 function bindDevTools() {
+  $("[data-dev-generate-fnn]")?.addEventListener("click", async (event) => {
+    if (!window.confirm("Replace today’s FNN edition? This will publish a newly generated edition to every reader.")) return;
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = "Building newsroom edition…";
+    try {
+      const result = await api("/api/fnn/generate", { method: "POST" });
+      if (result.status === "no_reports") {
+        toast("No eligible newsroom records are available");
+      } else if (result.status === "configuration_required") {
+        toast("The Gemini newsroom connection is not configured");
+      } else {
+        toast("Today’s FNN edition has been published");
+      }
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      button.disabled = false;
+      button.textContent = "Regenerate today’s edition";
+    }
+  });
   $("#devExperienceForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -9832,7 +9830,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-mobile-layouts").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-fnn-control").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {

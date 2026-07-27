@@ -14966,12 +14966,26 @@ textarea:focus {
 .dev-experience-section > div { display: grid; gap: 3px; }
 .dev-experience-section > div span { color: #55cbdc; font-size: 8px; font-weight: 900; letter-spacing: .12em; }
 .dev-experience-section > div strong { font-size: 12px; }
+.dev-fnn-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 20px;
+  border-color: rgba(217,31,42,.24);
+  background: linear-gradient(120deg, rgba(217,31,42,.075), rgba(15,24,30,.92) 42%);
+}
+.dev-fnn-control h2 { margin: 3px 0 5px; }
+.dev-fnn-control p { margin-bottom: 0; }
+.dev-fnn-control button { flex: 0 0 auto; }
 @media (max-width: 650px) {
   .system-splash-media { min-height: 180px; }
   .system-splash-copy { padding: 19px; }
   .dev-experience-control form { grid-template-columns: 1fr; }
   .dev-experience-control .wide { grid-column: auto; }
   .dev-experience-section { align-items: flex-start; flex-direction: column; }
+  .dev-fnn-control { align-items: stretch; flex-direction: column; gap: 15px; }
+  .dev-fnn-control button { width: 100%; }
 }
 
 /* Phone-native layouts for Staff Operations and FNN */
