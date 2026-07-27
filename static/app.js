@@ -8481,7 +8481,7 @@ function renderDevAntiCheat(data) {
       <div class="anticheat-sync">${sync.map((item) => `<span class="pill ${item.status === "synced" ? "green" : "amber"}">${escapeHtml(item.source_key)} · ${Number(item.records || 0)} · ${escapeHtml(item.status)}</span>`).join("") || `<span class="pill amber">awaiting first SFTP sync</span>`}</div>
     </section>
     <div class="dev-metrics">
-      <div class="dev-metric green-tone"><span>Live now</span><strong>${Number(metrics.online || 0)}</strong><small>Heartbeat active</small></div>
+      <div class="dev-metric green-tone"><span>Online now</span><strong>${Number(metrics.online || 0)}</strong><small>Anti-Cheat JSON status</small></div>
       <div class="dev-metric"><span>Known players</span><strong>${Number(metrics.players || 0)}</strong><small>Anti-cheat records</small></div>
       <div class="dev-metric red-tone"><span>Flagged</span><strong>${Number(metrics.flagged || 0)}</strong><small>Aim or movement</small></div>
       <div class="dev-metric amber-tone"><span>Alt groups</span><strong>${Number(metrics.alt_groups || 0)}</strong><small>Known associations</small></div>
@@ -8531,7 +8531,7 @@ function renderAntiCheatModal(data, uid) {
           <div><span>Tickets</span><strong>${Number(player.ticket_count || 0)}</strong></div>
           <div><span>Teleport flags</span><strong>${Number(player.teleport_flags || 0)}</strong></div>
           <div><span>Aim flags</span><strong>${Number(player.aim_flags || 0)}</strong></div>
-          <div><span>Last heartbeat</span><strong>${escapeHtml(player.last_heartbeat_at || "Not observed")}</strong></div>
+          <div><span>Last Anti-Cheat sighting</span><strong>${escapeHtml(player.last_seen_at || "Not observed")}</strong></div>
           <div><span>Last database sync</span><strong>${escapeHtml(player.last_synced_at || "")}</strong></div>
         </div>
         <div class="dev-profile-grid">
@@ -9671,7 +9671,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.4").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.4-presence").catch(() => {}));
 }
 
 bootApp();

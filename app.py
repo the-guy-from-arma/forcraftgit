@@ -487,15 +487,17 @@ def sync_shadowhaven_anticheat_once() -> tuple[int, int]:
             db.execute(
                 """
                 INSERT INTO anticheat_players
-                (uid, player_name, reported_system, teleport_flags, aim_flags, ticket_count, raw_payload,
+                (uid, player_name, reported_system, is_online, last_seen_at, teleport_flags, aim_flags, ticket_count, raw_payload,
                  source_file, first_synced_at, last_synced_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (uid) DO UPDATE SET
                     player_name = EXCLUDED.player_name,
                     reported_system = CASE
                         WHEN EXCLUDED.reported_system <> '' THEN EXCLUDED.reported_system
                         ELSE anticheat_players.reported_system
                     END,
+                    is_online = EXCLUDED.is_online,
+                    last_seen_at = EXCLUDED.last_seen_at,
                     teleport_flags = EXCLUDED.teleport_flags,
                     aim_flags = EXCLUDED.aim_flags,
                     ticket_count = EXCLUDED.ticket_count,
@@ -514,6 +516,8 @@ def sync_shadowhaven_anticheat_once() -> tuple[int, int]:
                         or player.get("deviceType")
                         or ""
                     ).strip()[:80],
+                    1 if player.get("online") is True else 0,
+                    str(player.get("lastSeen") or "")[:80],
                     int(player.get("teleportFlags") or 0),
                     int(player.get("aimFlags") or 0),
                     int(player.get("ticketCount") or 0),
@@ -1429,6 +1433,8 @@ def ensure_schema() -> None:
                 uid TEXT PRIMARY KEY,
                 player_name TEXT NOT NULL DEFAULT '',
                 reported_system TEXT NOT NULL DEFAULT '',
+                is_online INTEGER NOT NULL DEFAULT 0,
+                last_seen_at TEXT NOT NULL DEFAULT '',
                 teleport_flags INTEGER NOT NULL DEFAULT 0,
                 aim_flags INTEGER NOT NULL DEFAULT 0,
                 ticket_count INTEGER NOT NULL DEFAULT 0,
@@ -2240,6 +2246,8 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS maximum_sentence_minutes INTEGER NOT NULL DEFAULT 0")
     db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS decided_at TEXT")
     db.execute("ALTER TABLE anticheat_players ADD COLUMN IF NOT EXISTS reported_system TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE anticheat_players ADD COLUMN IF NOT EXISTS is_online INTEGER NOT NULL DEFAULT 0")
+    db.execute("ALTER TABLE anticheat_players ADD COLUMN IF NOT EXISTS last_seen_at TEXT NOT NULL DEFAULT ''")
     db.execute("UPDATE citations SET judge_id = NULL WHERE judge_id = civ_id")
     db.execute("UPDATE citations SET final_result = status WHERE final_result = '' AND status NOT IN ('issued','contested','reviewed','reduced')")
     db.execute(
@@ -9548,16 +9556,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             """,
             ("%beta%",),
         )
-        live_cutoff = (utcnow() - dt.timedelta(seconds=ANTICHEAT_LIVE_TTL_SECONDS)).isoformat()
         anticheat_players = all_rows(
             db,
             """
             SELECT p.*, link.user_id AS linked_user_id, link.linked_platform,
                    COALESCE(NULLIF(p.reported_system, ''), NULLIF(link.linked_platform, ''), 'Unknown') AS detected_system,
                    account.name AS account_name,
-                   account.civ_number, live.server_id, live.joined_at,
-                   live.last_heartbeat_at,
-                   CASE WHEN live.last_heartbeat_at >= ? THEN 1 ELSE 0 END AS online,
+                   account.civ_number, p.last_seen_at,
+                   p.is_online AS online,
                    COALESCE(alts.alt_group_count, 0) AS alt_group_count
             FROM anticheat_players p
             LEFT JOIN LATERAL (
@@ -9566,12 +9572,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 ORDER BY l.linked_at DESC LIMIT 1
             ) link ON TRUE
             LEFT JOIN users account ON account.id = link.user_id
-            LEFT JOIN LATERAL (
-                SELECT s.server_id, s.joined_at, s.last_heartbeat_at
-                FROM anticheat_live_sessions s
-                WHERE s.player_uid = p.uid
-                ORDER BY s.last_heartbeat_at DESC LIMIT 1
-            ) live ON TRUE
             LEFT JOIN (
                 SELECT uid, COUNT(*) AS alt_group_count
                 FROM anticheat_alt_members GROUP BY uid
@@ -9579,7 +9579,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             ORDER BY online DESC, p.ticket_count DESC, p.last_synced_at DESC
             LIMIT 1000
             """,
-            (live_cutoff,),
         )
         anticheat_events = all_rows(
             db,
@@ -9706,7 +9705,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "alt_groups": [dict(row) for row in anticheat_alt_groups],
                     "alt_members": [dict(row) for row in anticheat_alt_members],
                     "sync_status": [dict(row) for row in anticheat_sync_status],
-                    "live_ttl_seconds": ANTICHEAT_LIVE_TTL_SECONDS,
+                    "presence_source": "anticheat_player_json",
                     "metrics": {
                         "players": len(anticheat_players),
                         "online": anticheat_online,

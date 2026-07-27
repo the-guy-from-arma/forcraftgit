@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v014-fire-command";
+const CACHE = "faircroft-rp-v014-json-presence";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.1.4",
+  "/static/styles.css?v=0.1.4-presence",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.1.4",
+  "/static/app.js?v=0.1.4-presence",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
   "/static/brand/platforms/playstation.svg",
