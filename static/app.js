@@ -2498,7 +2498,7 @@ function renderBank() {
           <em>${data.balance_synced ? "LIVE" : "SYNCING"}</em>
         </div>
         <strong class="faircroft-account-balance">${data.balance_synced ? money(data.balance) : "Awaiting sync"}</strong>
-        <div class="faircroft-account-meta"><span>FCRPMUSSALO</span><span>•••• ${identitySuffix}</span></div>
+        <div class="faircroft-account-meta"><span>FAIRCROFT CHECKING</span><span>•••• ${identitySuffix}</span></div>
       </section>
       <section class="faircroft-credit-card">
         <div class="faircroft-credit-heading">
@@ -2512,8 +2512,8 @@ function renderBank() {
           <div class="faircroft-credit-copy">
             <span class="faircroft-credit-rating">${escapeHtml(credit.rating || "Awaiting reputation sync")}</span>
             <p>${credit.synced
-              ? `Based on ${Number(credit.reputation || 0).toLocaleString()} of ${Number(credit.reputation_max || 2000).toLocaleString()} persistent in-game reputation.`
-              : "Your linked player name has not matched a MedicalHUD reputation record yet."}</p>
+              ? "Your standing reflects your established financial reputation across Faircroft."
+              : "Your credit standing is being prepared. Check back shortly."}</p>
             <div class="faircroft-score-scale"><span>300</span><i><b style="width:${creditProgress}%"></b></i><span>850</span></div>
           </div>
         </div>
@@ -2521,13 +2521,13 @@ function renderBank() {
       <section class="faircroft-bank-details">
         <h3>Account details</h3>
         <div>
-          <span><small>Bank source</small><strong>In-game account</strong></span>
-          <span><small>Bank updated</small><strong>${data.balance_synced_at ? escapeHtml(new Date(data.balance_synced_at).toLocaleString()) : "Awaiting sync"}</strong></span>
-          <span><small>Credit source</small><strong>MedicalHUD reputation</strong></span>
-          <span><small>Credit updated</small><strong>${credit.synced_at ? escapeHtml(new Date(credit.synced_at).toLocaleString()) : "Awaiting sync"}</strong></span>
+          <span><small>Account type</small><strong>Faircroft Game Checking</strong></span>
+          <span><small>Balance status</small><strong>${data.balance_synced ? "Current" : "Updating"}</strong></span>
+          <span><small>Credit monitoring</small><strong>${credit.synced ? "Active" : "Activating"}</strong></span>
+          <span><small>Last refreshed</small><strong>${data.balance_synced_at ? escapeHtml(new Date(data.balance_synced_at).toLocaleString()) : "Awaiting update"}</strong></span>
         </div>
       </section>
-      <p class="faircroft-credit-disclaimer">The Faircroft Credit Index is an in-roleplay metric derived from server reputation. It is not a real-world credit score.</p>
+      <p class="faircroft-credit-disclaimer"><strong>FCIC insured*</strong> because even imaginary banks need very official-looking acronyms.<br>*Faircroft Citizens Insurance Corporation. Coverage valid until the Governor loses the paperwork.</p>
     </div>
   `;
 }
@@ -9690,7 +9690,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.5-credit").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.5-credit2").catch(() => {}));
 }
 
 bootApp();

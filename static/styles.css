@@ -14646,6 +14646,7 @@ textarea:focus {
 .faircroft-bank-details small { color: #657c92; font-size: 8px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
 .faircroft-bank-details strong { color: #dce9f5; overflow-wrap: anywhere; font-size: 10px; }
 .faircroft-credit-disclaimer { margin: 13px 8px 2px; color: #5f7184; text-align: center; font-size: 8px; line-height: 1.45; }
+.faircroft-credit-disclaimer strong { color: #8ca6bf; letter-spacing: .04em; }
 @media (max-width: 430px) {
   .faircroft-credit-body { align-items: flex-start; }
   .faircroft-credit-ring { flex-basis: 94px; width: 94px; height: 94px; }
