@@ -14902,7 +14902,7 @@ textarea:focus {
   z-index: 90;
   min-height: 38px;
   display: grid;
-  grid-template-columns: 8px minmax(0, 1fr);
+  grid-template-columns: 8px minmax(0, 1fr) 24px;
   align-items: center;
   gap: 8px;
   padding: 7px 8px;
@@ -14915,6 +14915,8 @@ textarea:focus {
 #app > .system-message-banner { position: fixed; top: 12px; left: 50%; width: min(720px, calc(100% - 24px)); transform: translateX(-50%); }
 .system-message-banner > span { width: 7px; height: 7px; border-radius: 50%; background: #49d9ef; box-shadow: 0 0 0 4px rgba(73,217,239,.1); }
 .system-message-banner strong { font-size: 10px; line-height: 1.35; }
+.system-message-banner button { width: 24px; height: 24px; padding: 0; color: #7890a2; border: 0; border-radius: 50%; background: rgba(255,255,255,.035); font-size: 15px; line-height: 1; }
+.system-message-banner button:hover { color: #effaff; background: rgba(255,255,255,.09); }
 .system-message-banner.success { border-color: rgba(71,222,163,.35); background: rgba(9,44,34,.96); }
 .system-message-banner.success > span { background: #47dea3; }
 .system-message-banner.warning { border-color: rgba(244,183,72,.4); background: rgba(50,36,12,.97); }

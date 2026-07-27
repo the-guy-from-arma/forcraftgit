@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v017-banner";
+const CACHE = "faircroft-rp-v017-banner-dismiss";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.1.7-banner",
+  "/static/styles.css?v=0.1.7-banner-dismiss",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.1.7-banner",
+  "/static/app.js?v=0.1.7-banner-dismiss",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
   "/static/brand/platforms/playstation.svg",
