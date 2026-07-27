@@ -8316,9 +8316,8 @@ function renderDevBetaModal(beta) {
       <button class="primary" type="submit">Publish beta task</button>
     </form>`,
     tasks: `<div class="beta-modal-ledger">${(beta.tasks || []).map((task) => `<article><div><span>${escapeHtml(task.test_area || "General testing")} · ${escapeHtml(task.priority)}</span><strong>${escapeHtml(task.title)}</strong><small>${task.active ? "Currently available to testers" : "Assignment closed"}</small></div><button class="secondary" type="button" data-beta-task-toggle="${task.id}" data-active="${task.active ? "false" : "true"}">${task.active ? "Close task" : "Reopen"}</button></article>`).join("") || `<div class="empty">No beta tasks published</div>`}</div>`,
-    team: `<div class="beta-modal-ledger beta-team-directory">${(beta.member_roster || []).map((member) => `<article>
-      <div class="beta-roster-avatar">${escapeHtml((member.name || "B").slice(0, 1).toUpperCase())}</div>
-      <div><span>CIV ${escapeHtml(member.civ_number || "pending")}</span><strong>${escapeHtml(member.name || "Beta Tester")}</strong><small>${escapeHtml(member.email || "")}</small></div>
+    team: `<div class="beta-directory-head"><span>Tester</span><span>Account status</span></div><div class="beta-modal-ledger beta-team-directory">${(beta.member_roster || []).map((member) => `<article>
+      <div><strong>${escapeHtml(member.name || "Beta Tester")}</strong><span>CIV ${escapeHtml(member.civ_number || "pending")} · ${escapeHtml(member.email || "")}</span></div>
       <div class="beta-roster-status"><span class="pill ${member.verified ? "green" : "amber"}">${member.verified ? "verified" : "unverified"}</span><span class="pill ${member.arma_linked ? "green" : ""}">${member.arma_linked ? "Arma linked" : "not linked"}</span></div>
     </article>`).join("") || `<div class="empty">No users have joined the Beta Testing Team yet.</div>`}</div>`,
     reports: `<div class="beta-modal-ledger">${(beta.reports || []).map((report) => `<article><div><span>${escapeHtml(report.reporter_name)} · ${escapeHtml(report.severity)}</span><strong>${escapeHtml(report.summary)}</strong><small>${escapeHtml(report.task_title || "General report")} — ${escapeHtml(report.actual_result)}</small></div><span class="pill">${escapeHtml(report.status)}</span></article>`).join("") || `<div class="empty">No beta bug reports</div>`}</div>`
@@ -9710,7 +9709,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.4-beta-ui").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.4-beta-roster").catch(() => {}));
 }
 
 bootApp();

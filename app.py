@@ -3752,13 +3752,37 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+    result = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as exc:
+            try:
+                error_payload = json.loads(exc.read().decode("utf-8", errors="replace"))
+                error_detail = str(error_payload.get("error", {}).get("message") or "").strip()
+            except (json.JSONDecodeError, AttributeError):
+                error_detail = ""
+            if exc.code in (429, 500, 502, 503, 504) and attempt < 2:
+                time.sleep(2 ** attempt)
+                continue
+            safe_detail = error_detail[:500] or exc.reason or "request rejected"
+            raise RuntimeError(f"Gemini news generation failed (HTTP {exc.code}): {safe_detail}") from exc
+        except urllib.error.URLError as exc:
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+                continue
+            raise RuntimeError(f"Gemini news generation connection failed: {str(exc.reason)[:300]}") from exc
     try:
-        with urllib.request.urlopen(request, timeout=90) as response:
-            result = json.loads(response.read().decode("utf-8"))
         generated_text = result["candidates"][0]["content"]["parts"][0]["text"]
         generated = json.loads(generated_text)
-    except (urllib.error.URLError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"Gemini news generation failed: {type(exc).__name__}") from exc
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+        block_reason = ""
+        if isinstance(result, dict):
+            block_reason = str(result.get("promptFeedback", {}).get("blockReason") or "").strip()
+        detail = f": {block_reason}" if block_reason else ""
+        raise RuntimeError(f"Gemini returned an unreadable news edition{detail}") from exc
 
     headline = str(generated.get("headline") or "").strip()[:220]
     deck = str(generated.get("deck") or "").strip()[:500]

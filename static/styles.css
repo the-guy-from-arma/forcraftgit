@@ -2333,7 +2333,44 @@ textarea:focus {
 .beta-modal-ledger article > div:not(.beta-roster-avatar) { min-width: 0; display: grid; gap: 3px; }
 .beta-modal-ledger article span:not(.pill), .beta-modal-ledger article small { color: #83959f; font-size: 11px; overflow-wrap: anywhere; }
 .beta-modal-ledger article strong { color: #f1f6f8; }
-.beta-team-directory article { grid-template-columns: auto minmax(0,1fr) auto; }
+.beta-directory-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  padding: 0 14px 8px;
+  color: #71848e;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+}
+.beta-team-directory { gap: 4px; }
+.beta-team-directory article {
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: none;
+  padding: 10px 14px;
+  border-radius: 6px;
+}
+.beta-team-directory article > div:first-child {
+  grid-area: auto;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.beta-team-directory article strong { flex: 0 0 auto; font-size: 13px; line-height: 1.25; }
+.beta-team-directory article span:not(.pill) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.beta-team-directory .beta-roster-status {
+  grid-area: auto;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+.beta-team-directory .pill { white-space: nowrap; font-size: 9px; }
 
 @media (max-width: 560px) {
   .job-advertisement > summary { grid-template-columns: 44px minmax(0, 1fr); gap: 10px; padding: 13px; }
@@ -2358,6 +2395,9 @@ textarea:focus {
   .beta-assignment-strip button { width: 100%; }
   .beta-control-modal-body { padding: 15px; }
   .beta-modal-ledger article, .beta-team-directory article { grid-template-columns: 1fr; }
+  .beta-directory-head { display: none; }
+  .beta-team-directory article > div:first-child { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .beta-team-directory .beta-roster-status { justify-content: flex-start; }
 }
 
 @media (min-width: 561px) and (max-width: 900px) {
