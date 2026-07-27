@@ -536,6 +536,12 @@ function render() {
       state.dmvTab = "license";
     }
   }
+  if (state.activeApp === "getting-started") {
+    app.innerHTML = renderSystemBanner() + renderGettingStartedWorkspace() + renderRequiredProfileModals();
+    bindGettingStartedWorkspace();
+    bindRequiredProfileModals();
+    return;
+  }
   if (state.activeApp === "roadmap") {
     app.innerHTML = renderSystemBanner() + renderRoadmapWorkspace() + renderRequiredProfileModals();
     bindRoadmapWorkspace();
@@ -2082,6 +2088,29 @@ function bindGettingStarted() {
   $("[data-starter-next]")?.addEventListener("click", () => {
     state.starterStep = Math.min(5, Number(state.starterStep || 0) + 1);
     render();
+  });
+}
+
+function renderGettingStartedWorkspace() {
+  return `
+    <section class="starter-workspace">
+      <header class="starter-workspace-topbar">
+        <div class="starter-workspace-brand"><span>FC</span><div><p>FAIRCROFT RESIDENT SERVICES</p><h1>Newcomer Field Guide</h1></div></div>
+        <div class="starter-workspace-actions"><span><i></i>Six-stage arrival route</span><button class="secondary" type="button" data-starter-reset>Restart route</button><button class="primary" type="button" data-close-starter>Close guide</button></div>
+      </header>
+      <main class="starter-workspace-content">${renderGettingStarted()}</main>
+    </section>`;
+}
+
+function bindGettingStartedWorkspace() {
+  bindGettingStarted();
+  $("[data-starter-reset]")?.addEventListener("click", () => {
+    state.starterStep = 0;
+    render();
+  });
+  $("[data-close-starter]")?.addEventListener("click", async () => {
+    state.activeApp = null;
+    await loadSession();
   });
 }
 
@@ -10241,7 +10270,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-dmv-records-desk").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-starter-workspace").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {

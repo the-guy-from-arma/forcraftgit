@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v017-dmv-records-desk";
+const CACHE = "faircroft-rp-v017-starter-workspace";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.1.7-dmv-records-desk",
+  "/static/styles.css?v=0.1.7-starter-workspace",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.1.7-dmv-records-desk",
+  "/static/app.js?v=0.1.7-starter-workspace",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
   "/static/brand/platforms/playstation.svg",

@@ -14903,6 +14903,57 @@ textarea:focus {
   .dmv-identity-file { grid-template-columns: 1fr; }
   .dmv-identity-file .dmv-record-summary { border-top: 1px solid #2b393f; border-left: 0; }
 }
+
+/* Full-screen newcomer field guide */
+.starter-workspace { min-height: 100dvh; color: #edf4f1; background: radial-gradient(circle at 8% 0,rgba(50,151,126,.1),transparent 27%),#090e10; }
+.starter-workspace-topbar { min-height: 78px; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 12px clamp(18px,3vw,44px); border-bottom: 1px solid #24312f; background: rgba(9,14,16,.96); }
+.starter-workspace-brand,.starter-workspace-actions { display: flex; align-items: center; gap: 13px; }
+.starter-workspace-brand > span { width: 42px; height: 42px; display: grid; place-items: center; color: #66dab9; border: 1px solid #3d7465; border-radius: 50%; font-size: 11px; font-weight: 950; }
+.starter-workspace-brand p { margin: 0; color: #58caa9; font-size: 7px; font-weight: 950; letter-spacing: .15em; }
+.starter-workspace-brand h1 { margin: 3px 0 0; font-size: 21px; letter-spacing: -.025em; }
+.starter-workspace-actions > span { color: #71827e; font-size: 9px; font-weight: 800; text-transform: uppercase; }.starter-workspace-actions > span i { width: 6px; height: 6px; display: inline-block; margin-right: 7px; border-radius: 50%; background: #55d0ac; box-shadow: 0 0 9px #55d0ac; }
+.starter-workspace-actions button { min-height: 39px; border-radius: 4px; }
+.starter-workspace-content { width: min(1320px,100%); margin: 0 auto; padding: clamp(18px,2.6vw,36px); }
+.starter-workspace .getting-started-app { gap: 14px; }
+.starter-workspace .getting-started-hero { min-height: 105px; padding: 19px 22px; border-radius: 5px; background: linear-gradient(110deg,#122622,#0e1918); }
+.starter-workspace .getting-started-hero h3 { font-size: clamp(24px,2.6vw,36px); }
+.starter-workspace .starter-step-rail { border-radius: 4px; }
+.starter-workspace .starter-step-rail button { min-height: 62px; }
+.starter-workspace .starter-focus-card { min-height: 520px; grid-template-columns: minmax(0,1.45fr) minmax(340px,.55fr); border-radius: 5px; }
+.starter-workspace .starter-focus-media img { min-height: 520px; }
+.starter-workspace .starter-focus-copy { padding: clamp(24px,3vw,40px); }
+.starter-workspace .starter-focus-copy h2 { font-size: clamp(29px,3vw,42px); }
+.starter-workspace .starter-focus-copy > p { font-size: 14px; line-height: 1.72; }
+.starter-workspace .starter-objective,.starter-workspace .starter-field-note { padding: 14px 15px; }
+.starter-workspace .starter-focus-copy footer button { min-width: 116px; }
+@media (max-width:820px) {
+  .starter-workspace-topbar { align-items: stretch; flex-direction: column; gap: 11px; padding: 12px 14px; }
+  .starter-workspace-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .starter-workspace-actions > span { grid-column: 1 / -1; }
+  .starter-workspace-content { padding: 12px; }
+  .starter-workspace .getting-started-hero { align-items: flex-start; gap: 14px; }
+  .starter-workspace .starter-step-rail { grid-template-columns: repeat(6,minmax(58px,1fr)); overflow-x: auto; scrollbar-width: none; }
+  .starter-workspace .starter-step-rail::-webkit-scrollbar { display: none; }
+  .starter-workspace .starter-step-rail button { min-height: 54px; grid-template-columns: 1fr; justify-items: center; }
+  .starter-workspace .starter-step-rail button span { display: none; }
+  .starter-workspace .starter-focus-card { min-height: 0; grid-template-columns: 1fr; }
+  .starter-workspace .starter-focus-media { max-height: none; }
+  .starter-workspace .starter-focus-media img { height: auto; min-height: 0; aspect-ratio: 16 / 9; object-fit: cover; }
+  .starter-workspace .starter-focus-media.gallery { grid-template-columns: 1fr 1fr; }
+  .starter-workspace .starter-focus-copy { padding: 22px; }
+}
+@media (max-width:480px) {
+  .starter-workspace-brand h1 { font-size: 18px; }
+  .starter-workspace .getting-started-hero { min-height: 0; padding: 16px; }
+  .starter-workspace .getting-started-hero p:not(.eyebrow) { font-size: 11px; }
+  .starter-workspace .starter-focus-media.gallery { grid-template-columns: 1fr; }
+  .starter-workspace .starter-focus-media.gallery figure img { aspect-ratio: 16 / 8; }
+  .starter-workspace .starter-focus-copy { padding: 18px 16px; }
+  .starter-workspace .starter-focus-copy h2 { font-size: 28px; }
+  .starter-workspace .starter-focus-copy footer { grid-template-columns: 1fr 1fr; }
+  .starter-workspace .starter-focus-copy footer > div { grid-column: 1 / -1; grid-row: 1; }
+  .starter-workspace .starter-focus-copy footer button { width: 100%; min-width: 0; }
+}
 @media (max-width:480px) {
   .dmv-agency-mark { width: 40px; height: 40px; }
   .dmv-workspace-topbar .dmv-agency-lockup h1 { font-size: 18px; }
