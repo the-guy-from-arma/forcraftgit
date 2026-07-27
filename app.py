@@ -2612,6 +2612,10 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code TEXT")
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by_user_id INTEGER")
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_photo TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS press_pass_status TEXT NOT NULL DEFAULT 'active'")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS press_pass_reason TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS press_pass_action_at TEXT")
+    db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS press_pass_notice_pending INTEGER NOT NULL DEFAULT 0")
     db.execute("ALTER TABLE dmv_vehicles ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'faircroft_dmv'")
     db.execute("ALTER TABLE dmv_vehicles ADD COLUMN IF NOT EXISTS source_record_id TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE dmv_vehicles ADD COLUMN IF NOT EXISTS insurance_policy_number TEXT NOT NULL DEFAULT ''")
@@ -4024,6 +4028,8 @@ def press_required(user: DbRow | None) -> str | None:
         return "Authentication required"
     if not has_any(user, "press", "owner", "dev"):
         return "Press Desk access required"
+    if has_any(user, "press") and not has_any(user, "owner", "dev") and str(user.get("press_pass_status") or "active").lower() == "suspended":
+        return "Press Pass suspended"
     return None
 
 
@@ -4083,7 +4089,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps.append({"id": "dev-tools", "label": "Dev Tools", "icon": "code", "enabled": True, "hidden": False})
     if has_any(user, "beta"):
         apps.append({"id": "beta-tasks", "label": "Beta Tasks", "icon": "target", "enabled": True, "hidden": False})
-    if has_any(user, "press", "owner", "dev"):
+    if has_any(user, "owner", "dev") or (has_any(user, "press") and str(user.get("press_pass_status") or "active").lower() == "active"):
         apps.append({"id": "press", "label": "Press Desk", "icon": "press", "enabled": True, "hidden": False})
     if has_any(user, "owner", "dev"):
         apps.append({"id": "fine-settlement", "label": "Fine Settlement", "icon": "gavel", "enabled": True, "hidden": False})
@@ -4809,7 +4815,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             if form_payload:
                 return {key: values[-1] for key, values in form_payload.items() if values}
             return {"code": text} if text else {}
-        return payload if isinstance(payload, dict) else {}
+        if isinstance(payload, dict):
+            return payload
+        if isinstance(payload, list):
+            return {"Requests": payload}
+        return {}
 
     def cookie_token(self) -> str | None:
         raw = self.headers.get("Cookie")
@@ -5153,8 +5163,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_update_application_intake(db, user)
                 elif path == "/api/dev-tools/fnn-settings" and method == "PATCH":
                     self.api_dev_update_fnn_settings(db, user)
+                elif path.startswith("/api/dev-tools/press-members/") and method == "PATCH":
+                    self.api_dev_update_press_member(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/dev-tools/warnings/") and path.endswith("/resolve") and method == "POST":
                     self.api_dev_resolve_warning(db, user, self.path_int(path, 3))
+                elif path == "/api/press-pass/acknowledge" and method == "POST":
+                    self.api_press_pass_acknowledge(db, user)
                 elif path == "/api/fine-settlement" and method == "GET":
                     self.api_fine_settlement(db, user)
                 elif path == "/api/fine-settlement/batches" and method == "POST":
@@ -5407,6 +5421,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "income": income_snapshot(db, user),
                 "arma_linked": arma_linked,
                 "requires_arma_link": bool(user["verified"]) and not arma_linked,
+                "press_pass_notice": (
+                    {
+                        "status": str(user.get("press_pass_status") or "active"),
+                        "reason": str(user.get("press_pass_reason") or ""),
+                        "action_at": user.get("press_pass_action_at"),
+                    }
+                    if bool(user.get("press_pass_notice_pending"))
+                    else None
+                ),
                 "dmv_compliance": {
                     "required": bool(vehicle_compliance),
                     "vehicles": [dict(row) for row in vehicle_compliance],
@@ -5988,16 +6011,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not str(code_value or "").strip():
             self.error(400, "No link code was sent. Type the in-game code shown by TBS RP LINKING SYSTEM, for example 1-145595.")
             return
-        code = str(code_value).strip().upper()
+        code = self.normalize_arma_link_code(code_value)
         request = one(
             db,
             """
             SELECT * FROM arma_link_codes
-            WHERE UPPER(code) = UPPER(?) AND status = 'pending'
+            WHERE (
+                    UPPER(code) = UPPER(?)
+                    OR REPLACE(REPLACE(UPPER(code), '-', ''), ' ', '') = REPLACE(REPLACE(UPPER(?), '-', ''), ' ', '')
+                  )
+              AND status = 'pending'
             ORDER BY created_at DESC
             LIMIT 1
             """,
-            (code,),
+            (code, code),
         )
         if not request:
             self.error(404, "Link code was not found in Railway yet. Wait for the TBS bridge to sync the in-game code, then try again.")
@@ -6109,8 +6136,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"ok": True})
 
     def bridge_payload_data(self, payload: dict[str, Any]) -> dict[str, Any]:
-        data = payload.get("Data")
-        return data if isinstance(data, dict) else payload
+        for key in ("Data", "data", "Payload", "payload"):
+            data = payload.get(key)
+            if isinstance(data, dict):
+                return data
+            if isinstance(data, list):
+                return {"Requests": data}
+        return payload
 
     def bridge_value(self, source: dict[str, Any], *keys: str, default: Any = "") -> Any:
         for key in keys:
@@ -6119,6 +6151,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 return value
         return default
 
+    def normalize_arma_link_code(self, value: Any) -> str:
+        code = str(value or "").strip().upper()
+        for dash in ("–", "—", "−", "‑"):
+            code = code.replace(dash, "-")
+        return re.sub(r"\s+", "", code)[:80]
+
     def api_arma_link_requests(self, db: Database) -> None:
         err = self.bridge_error()
         if err:
@@ -6126,28 +6164,28 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         payload = self.read_json()
         data = self.bridge_payload_data(payload)
-        requests = data.get("Requests")
+        requests = self.bridge_value(data, "Requests", "requests", "LinkRequests", "linkRequests", default=[])
         if not isinstance(requests, list):
-            requests = [data] if data.get("LinkCode") else []
+            requests = [data] if self.bridge_value(data, "LinkCode", "code", "linkCode", "link_code") else []
         accepted: list[str] = []
         rejected: list[dict[str, str]] = []
         for index, request in enumerate(requests):
             if not isinstance(request, dict):
                 rejected.append({"index": str(index), "reason": "Request was not an object"})
                 continue
-            code = str(self.bridge_value(request, "LinkCode", "code", "linkCode", "link_code")).strip().upper()
-            identity_id = str(self.bridge_value(request, "IdentityId", "Uid", "identityId", "uid")).strip()
-            rpl_identity = str(self.bridge_value(request, "RplIdentityValue", "RplIdentity"))[:160]
-            request_id = str(request.get("RequestId") or "")[:120]
-            player_name = str(request.get("PlayerName") or "")[:120]
+            code = self.normalize_arma_link_code(self.bridge_value(request, "LinkCode", "code", "linkCode", "link_code"))
+            identity_id = str(self.bridge_value(request, "IdentityId", "Uid", "identityId", "identity_id", "uid", "PlayerUid", "playerUid")).strip()
+            rpl_identity = str(self.bridge_value(request, "RplIdentityValue", "RplIdentity", "rplIdentityValue", "rplIdentity"))[:160]
+            request_id = str(self.bridge_value(request, "RequestId", "requestId", "request_id"))[:120]
+            player_name = str(self.bridge_value(request, "PlayerName", "playerName", "player_name"))[:120]
             if not code:
                 rejected.append({"index": str(index), "request_id": request_id, "player_name": player_name, "reason": "Missing LinkCode"})
                 continue
             if not identity_id:
                 rejected.append({"index": str(index), "code": code, "request_id": request_id, "player_name": player_name, "reason": "Missing IdentityId/Uid"})
                 continue
-            request_server_id = str(request.get("ServerId") or "").strip()
-            data_server_id = str(data.get("ServerId") or "").strip()
+            request_server_id = str(self.bridge_value(request, "ServerId", "serverId", "server_id")).strip()
+            data_server_id = str(self.bridge_value(data, "ServerId", "serverId", "server_id")).strip()
             if request_server_id and request_server_id.lower() != "default":
                 server_id = request_server_id
             elif data_server_id:
@@ -6158,7 +6196,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             if existing and existing["status"] == "claimed":
                 accepted.append(code)
                 continue
-            created_at_dt = parse_bridge_datetime(str(request.get("CreatedAtUtc") or ""))
+            created_at_dt = parse_bridge_datetime(str(self.bridge_value(request, "CreatedAtUtc", "createdAtUtc", "created_at_utc", "CreatedAt", "createdAt")))
             created_at = created_at_dt.isoformat()
             expires_at = (created_at_dt + dt.timedelta(minutes=max(5, ARMA_LINK_CODE_TTL_MINUTES))).isoformat()
             raw_payload = json.dumps(request, separators=(",", ":"), default=str)[:4000]
@@ -6173,10 +6211,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     (
                         request_id,
                         identity_id,
-                        str(request.get("Uid") or "")[:160],
+                        str(self.bridge_value(request, "Uid", "uid", "PlayerUid", "playerUid"))[:160],
                         rpl_identity,
-                        str(request.get("Platform") or "")[:60],
-                        str(request.get("PlayerName") or "")[:120],
+                        str(self.bridge_value(request, "Platform", "platform", "PlatformName", "platformName"))[:60],
+                        player_name,
                         created_at,
                         expires_at,
                         raw_payload,
@@ -6195,10 +6233,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                         request_id,
                         server_id,
                         identity_id,
-                        str(request.get("Uid") or "")[:160],
+                        str(self.bridge_value(request, "Uid", "uid", "PlayerUid", "playerUid"))[:160],
                         rpl_identity,
-                        str(request.get("Platform") or "")[:60],
-                        str(request.get("PlayerName") or "")[:120],
+                        str(self.bridge_value(request, "Platform", "platform", "PlatformName", "platformName"))[:60],
+                        player_name,
                         created_at,
                         expires_at,
                         raw_payload,
@@ -6626,7 +6664,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 if press_holders < pass_limit:
                     applicant = one(db, "SELECT * FROM users WHERE id = ?", (user["id"],))
                     updated_roles = sorted(set([*roles_for(applicant), "press"])) if applicant else ["press"]
-                    db.execute("UPDATE users SET verified = 1, roles = ? WHERE id = ?", (json.dumps(updated_roles), user["id"]))
+                    db.execute(
+                        """UPDATE users SET verified = 1, roles = ?, press_pass_status = 'active',
+                           press_pass_reason = '', press_pass_action_at = ?, press_pass_notice_pending = 0
+                           WHERE id = ?""",
+                        (json.dumps(updated_roles), ts, user["id"]),
+                    )
                     db.execute(
                         "UPDATE department_applications SET status = 'approved', reviewer_notes = ?, updated_at = ? WHERE id = ?",
                         ("Automatically certified by the FNN examination system.", ts, created["id"]),
@@ -10593,6 +10636,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             db,
             """
             SELECT u.id, u.civ_number, u.name, u.email, u.verified, u.roles, u.arma_id, u.created_at,
+                   u.press_pass_status, u.press_pass_reason, u.press_pass_action_at,
                    CASE WHEN l.id IS NULL THEN 0 ELSE 1 END AS arma_linked,
                    l.identity_id AS linked_arma_id, l.linked_at
             FROM users u
@@ -10600,6 +10644,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             ORDER BY u.name, u.id LIMIT 500
             """,
         )
+        press_members = [dict(account) for account in users if has_any(account, "press")]
         sanctions = all_rows(
             db,
             """
@@ -10941,7 +10986,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "applications_accepting": system_settings["applications_accepting"],
                 "fnn_settings": {
                     "press_pass_limit": system_settings["fnn_press_pass_limit"],
-                    "active_press_passes": sum(1 for account in all_rows(db, "SELECT roles FROM users") if has_any(account, "press")),
+                    "active_press_passes": sum(1 for member in press_members if str(member.get("press_pass_status") or "active") == "active"),
+                    "issued_press_passes": len(press_members),
+                    "press_members": press_members,
                 },
             },
         )
@@ -11232,7 +11279,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     continue
                 updated_roles = sorted(set([*roles_for(application), "press"]))
                 ts = now_iso()
-                db.execute("UPDATE users SET verified = 1, roles = ? WHERE id = ?", (json.dumps(updated_roles), application["user_id"]))
+                db.execute(
+                    """UPDATE users SET verified = 1, roles = ?, press_pass_status = 'active',
+                       press_pass_reason = '', press_pass_action_at = ?, press_pass_notice_pending = 0
+                       WHERE id = ?""",
+                    (json.dumps(updated_roles), ts, application["user_id"]),
+                )
                 db.execute(
                     "UPDATE department_applications SET status = 'approved', reviewer_notes = ?, updated_at = ? WHERE id = ?",
                     ("Automatically certified after FNN Press Pass capacity became available.", ts, application["id"]),
@@ -11242,6 +11294,68 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 issued_now += 1
         add_admin_audit(db, int(user["id"]), "fnn.press_pass_limit.updated", details={"press_pass_limit": pass_limit, "issued_now": issued_now})
         self.send_json(200, {"ok": True, "press_pass_limit": pass_limit, "issued_now": issued_now})
+
+    def api_dev_update_press_member(self, db: Database, user: DbRow | None, member_id: int) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        target = one(db, "SELECT * FROM users WHERE id = ?", (member_id,))
+        if not target or not has_any(target, "press"):
+            self.error(404, "Press credential holder not found")
+            return
+        payload = self.read_json()
+        action = str(payload.get("action") or "").strip().lower()
+        if action not in ("suspend", "reinstate", "revoke"):
+            self.error(400, "Press Pass action must be suspend, reinstate, or revoke")
+            return
+        reason = str(payload.get("reason") or "").strip()[:500]
+        if action in ("suspend", "revoke") and len(reason) < 5:
+            self.error(400, "Provide a clear reason for this Press Pass action")
+            return
+        ts = now_iso()
+        if action == "revoke":
+            updated_roles = [role for role in roles_for(target) if role != "press"]
+            db.execute(
+                """UPDATE users SET roles = ?, press_pass_status = 'revoked', press_pass_reason = ?,
+                   press_pass_action_at = ?, press_pass_notice_pending = 1 WHERE id = ?""",
+                (json.dumps(updated_roles), reason, ts, member_id),
+            )
+            subject = "FNN Press Pass revoked"
+            body = f"Your Faircroft Press Pass has been revoked. Reason: {reason}"
+        elif action == "suspend":
+            db.execute(
+                """UPDATE users SET press_pass_status = 'suspended', press_pass_reason = ?,
+                   press_pass_action_at = ?, press_pass_notice_pending = 1 WHERE id = ?""",
+                (reason, ts, member_id),
+            )
+            subject = "FNN Press Pass suspended"
+            body = f"Your Faircroft Press Pass has been suspended and Press Desk access is disabled. Reason: {reason}"
+        else:
+            db.execute(
+                """UPDATE users SET press_pass_status = 'active', press_pass_reason = '',
+                   press_pass_action_at = ?, press_pass_notice_pending = 1 WHERE id = ?""",
+                (ts, member_id),
+            )
+            subject = "FNN Press Pass reinstated"
+            body = "Your Faircroft Press Pass has been reinstated. Press Desk access is active again."
+        add_message(db, member_id, subject, body, int(user["id"]))
+        add_admin_audit(
+            db,
+            int(user["id"]),
+            f"fnn.press_pass.{action}",
+            target_user_id=member_id,
+            details={"reason": reason},
+        )
+        self.send_json(200, {"ok": True, "action": action})
+
+    def api_press_pass_acknowledge(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        db.execute("UPDATE users SET press_pass_notice_pending = 0 WHERE id = ?", (user["id"],))
+        self.send_json(200, {"ok": True})
         identity_candidates = [
             str(account.get("identity_id") or "").strip(),
             str(account.get("uid") or "").strip(),

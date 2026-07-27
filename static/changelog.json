@@ -4,6 +4,27 @@
     {
       "date": "2026-07-27",
       "version": "0.1.7",
+      "title": "FNN Press Team Directory",
+      "added": [
+        "Added a Press Team Directory to Developer Tools under FNN Settings.",
+        "Added live Press-role holder details including account identity, CIV number, verification status, and Arma-link status.",
+        "Added direct access from each Press Team row to the existing developer account record.",
+        "Added developer controls to suspend, reinstate, or revoke Press Passes with an official reason.",
+        "Added mandatory account notices and inbox messages so affected Press members are informed at their next login."
+      ],
+      "changed": [
+        "FNN Press Pass usage now includes the underlying role-holder roster instead of displaying only an issued-pass count.",
+        "Suspended Press Passes retain their credential record but cannot open Press Desk until reinstated."
+      ],
+      "fixed": [
+        "Improved Arma bridge link-request compatibility with alternate payload wrappers, field casing, timestamp fields, and identity field names.",
+        "Normalized link-code spacing and dash characters during bridge ingestion and account claiming.",
+        "Fixed newly reissued Press Passes retaining an older revoked or suspended state."
+      ]
+    },
+    {
+      "date": "2026-07-27",
+      "version": "0.1.7",
       "title": "Newcomer Field Guide",
       "added": [
         "Added a six-stage first-day route covering account linking, starter transportation, stick collection, bag storage, the IL mining license, shovel purchasing, mining, smelting, and ore sales.",

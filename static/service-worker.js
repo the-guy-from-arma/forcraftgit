@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v017-starter-workspace";
+const CACHE = "faircroft-rp-v017-bridge-press-controls";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.1.7-starter-workspace",
+  "/static/styles.css?v=0.1.7-bridge-press-controls",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.1.7-starter-workspace",
+  "/static/app.js?v=0.1.7-bridge-press-controls",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
   "/static/brand/platforms/playstation.svg",

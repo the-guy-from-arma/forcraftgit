@@ -728,7 +728,15 @@ function renderCallsignRequiredModal() {
 
 function renderRequiredProfileModals() {
   if (state.session?.sanction?.type === "timeout") return "";
-  return renderSystemSplash() || renderCarEntryRequiredModal() || renderArmaLinkRequiredModal() || renderDmvComplianceModal() || renderBetaInviteModal();
+  return renderSystemSplash() || renderPressPassNoticeModal() || renderCarEntryRequiredModal() || renderArmaLinkRequiredModal() || renderDmvComplianceModal() || renderBetaInviteModal();
+}
+
+function renderPressPassNoticeModal() {
+  const notice = state.session?.press_pass_notice;
+  if (!notice) return "";
+  const status = String(notice.status || "active").toLowerCase();
+  const reinstated = status === "active";
+  return `<div class="modal-backdrop press-pass-notice-backdrop"><section class="mdt-modal press-pass-notice-modal ${status}" role="dialog" aria-modal="true" aria-label="Press Pass status notice"><header><p class="eyebrow">FAIRCROFT NEWS NOW · CREDENTIAL NOTICE</p><h2>Press Pass ${reinstated ? "Reinstated" : status === "revoked" ? "Revoked" : "Suspended"}</h2></header><div><span>FNN</span><p>${reinstated ? "Your Press Pass is active again and Press Desk access has been restored." : status === "revoked" ? "Your Press Pass has been revoked. The Press role and Press Desk access were removed from your account." : "Your Press Pass has been suspended. Press Desk access is disabled until a developer reinstates the credential."}</p>${notice.reason ? `<section><small>OFFICIAL REASON</small><strong>${escapeHtml(notice.reason)}</strong></section>` : ""}</div><button class="primary" type="button" data-acknowledge-press-pass>I understand</button></section></div>`;
 }
 
 function renderDmvComplianceModal() {
@@ -797,6 +805,14 @@ function renderArmaLinkRequiredModal() {
 }
 
 function bindRequiredProfileModals() {
+  $("[data-acknowledge-press-pass]")?.addEventListener("click", async () => {
+    try {
+      await api("/api/press-pass/acknowledge", { method: "POST", body: {} });
+      await loadSession();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
   $("[data-system-splash-dismiss]")?.addEventListener("click", (event) => {
     state.splashDismissedRevision = String(event.currentTarget.dataset.splashRevision || "1");
     render();
@@ -8807,10 +8823,11 @@ function renderDevTools() {
     </div>`;
   }
   if (state.devTab === "fnn-settings") {
-    const fnn = data.fnn_settings || { press_pass_limit: 25, active_press_passes: 0 };
+    const fnn = data.fnn_settings || { press_pass_limit: 25, active_press_passes: 0, press_members: [] };
+    const pressMembers = fnn.press_members || [];
     const remaining = Math.max(0, Number(fnn.press_pass_limit || 0) - Number(fnn.active_press_passes || 0));
     return `<div class="stack dev-fnn-settings-view">
-      <div class="dev-view-intro"><div><span>FAIRCROFT NEWS NOW CONTROL</span><h2>FNN Settings</h2><p>Manage newsroom publishing and automated Press Pass certification.</p></div><strong>${Number(fnn.active_press_passes || 0)} / ${Number(fnn.press_pass_limit || 0)} PASSES</strong></div>
+      <div class="dev-view-intro"><div><span>FAIRCROFT NEWS NOW CONTROL</span><h2>FNN Settings</h2><p>Manage newsroom publishing and automated Press Pass certification.</p></div><strong>${Number(fnn.issued_press_passes ?? fnn.active_press_passes ?? 0)} / ${Number(fnn.press_pass_limit || 0)} ISSUED</strong></div>
       <section class="dev-card dev-fnn-pass-control">
         <div><p class="eyebrow">Automated credentialing</p><h2>Press Pass Capacity</h2><p>Applicants who score at least 8 of 10 are automatically issued a Press Pass while capacity remains. Passing applicants are waitlisted when the limit is full.</p></div>
         <div class="dev-metrics">
@@ -8819,6 +8836,13 @@ function renderDevTools() {
           <div class="dev-metric green-tone"><span>Available</span><strong>${remaining}</strong><small>Automatic passes remaining</small></div>
         </div>
         <form id="devFnnSettingsForm" class="dev-fnn-limit-form"><label>Maximum Press Passes<input name="press_pass_limit" type="number" min="0" max="500" step="1" value="${Number(fnn.press_pass_limit || 0)}" required /><small>Set 0 to pause automatic Press Pass issuance.</small></label><button class="primary" type="submit">Save FNN capacity</button></form>
+      </section>
+      <section class="dev-card fnn-press-directory">
+        <header><div><p class="eyebrow">Newsroom credentials</p><h2>Press Team Directory</h2><p>Accounts currently holding the Press role and authorized to use the FNN Press Desk.</p></div><strong>${pressMembers.length} ACTIVE</strong></header>
+        <div class="fnn-press-table">
+          <div class="fnn-press-table-head"><span>Press member</span><span>Civilian record</span><span>Account status</span><span>Game link</span><span></span></div>
+          ${pressMembers.map((member) => { const suspended = member.press_pass_status === "suspended"; return `<div class="fnn-press-member"><span><strong>${escapeHtml(member.name)}</strong><small>${escapeHtml(member.email)}</small></span><span><strong>CIV ${escapeHtml(member.civ_number || "pending")}</strong><small>${suspended ? escapeHtml(member.press_pass_reason || "Press Pass suspended") : "Press credential holder"}</small></span><span class="${suspended ? "warning" : member.verified ? "valid" : "warning"}">${suspended ? "Suspended" : member.verified ? "Verified" : "Pending verification"}</span><span class="${member.arma_linked ? "valid" : "warning"}">${member.arma_linked ? "Arma linked" : "Not linked"}</span><span class="fnn-press-actions"><button class="secondary" type="button" data-dev-account="${member.id}">Record</button>${suspended ? `<button class="secondary" type="button" data-press-pass-action="reinstate" data-member-id="${member.id}" data-member-name="${escapeHtml(member.name)}">Reinstate</button>` : `<button class="secondary" type="button" data-press-pass-action="suspend" data-member-id="${member.id}" data-member-name="${escapeHtml(member.name)}">Suspend</button>`}<button class="danger" type="button" data-press-pass-action="revoke" data-member-id="${member.id}" data-member-name="${escapeHtml(member.name)}">Revoke</button></span></div>`; }).join("") || `<div class="fnn-press-empty"><strong>No Press roles assigned</strong><span>Press Pass holders will appear here as soon as the role is issued.</span></div>`}
+        </div>
       </section>
       <section class="dev-card dev-fnn-control">
         <div><p class="eyebrow">Newsroom publishing</p><h2>Faircroft News Now Edition</h2><p class="muted">Generate or replace today's public edition from eligible CAD, court, citation, criminal, and Press Desk records.</p></div>
@@ -9536,6 +9560,22 @@ function bindDevTools() {
     toast("FNN Press Pass capacity updated");
     await refreshDevTools();
   });
+  $$("[data-press-pass-action]").forEach((button) => button.addEventListener("click", async () => {
+    const action = button.dataset.pressPassAction;
+    const memberName = button.dataset.memberName || "this Press member";
+    let reason = "";
+    if (action !== "reinstate") {
+      reason = window.prompt(`Reason to ${action} ${memberName}'s Press Pass:`) || "";
+      if (!reason.trim()) return;
+    }
+    try {
+      await api(`/api/dev-tools/press-members/${button.dataset.memberId}`, { method: "PATCH", body: { action, reason } });
+      toast(`Press Pass ${action === "reinstate" ? "reinstated" : action === "revoke" ? "revoked" : "suspended"}`);
+      await refreshDevTools();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
   $("#devRuleSelect")?.addEventListener("change", (event) => {
     const option = event.currentTarget.selectedOptions[0];
     const reason = $("#devPublicReason");
@@ -10270,7 +10310,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-starter-workspace").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-bridge-press-controls").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {
