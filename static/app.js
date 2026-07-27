@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.1.4";
+const OS_VERSION = "0.1.5";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -2479,79 +2479,60 @@ function bindTreasury() {
 function renderBank() {
   const data = state.cache.bank;
   if (!data) return `<div class="empty">Bank loading</div>`;
-  const canManageTreasury = Boolean(data.can_manage_treasury);
+  const credit = data.credit || {};
+  const identitySuffix = data.identity_id ? escapeHtml(String(data.identity_id).slice(-8).toUpperCase()) : "NOT LINKED";
+  const creditScore = credit.score === null || credit.score === undefined ? "—" : credit.score;
+  const creditProgress = Math.max(0, Math.min(100, Number(credit.progress || 0)));
   return `
-    <div class="stack bank-app">
-      <section class="bank-hero">
-        <div>
-          <p class="eyebrow">FCRPMUSSALO Live Bank</p>
-          <h3>${data.balance_synced ? money(data.balance) : "Awaiting game sync"}</h3>
-          <p>Authoritative in-game balance${data.balance_synced_at ? ` · synced ${escapeHtml(data.balance_synced_at)}` : ""}.</p>
+    <div class="faircroft-bank">
+      <header class="faircroft-bank-header">
+        <div class="faircroft-bank-brand">
+          <span class="faircroft-bank-mark">FC</span>
+          <div><strong>Faircroft Financial</strong><small>Resident banking</small></div>
         </div>
-        <span>${iconSvg.bank}</span>
+        <span class="faircroft-bank-profile">${escapeHtml((state.session.user.name || "R").slice(0, 1).toUpperCase())}</span>
+      </header>
+      <section class="faircroft-account-card">
+        <div class="faircroft-account-label">
+          <span>Game checking</span>
+          <em>${data.balance_synced ? "LIVE" : "SYNCING"}</em>
+        </div>
+        <strong class="faircroft-account-balance">${data.balance_synced ? money(data.balance) : "Awaiting sync"}</strong>
+        <div class="faircroft-account-meta"><span>FCRPMUSSALO</span><span>•••• ${identitySuffix}</span></div>
       </section>
-      <div class="metric"><span>Server time</span><strong>${minutes(data.income.presence_seconds_today)}m</strong></div>
-      ${canManageTreasury ? `
-        <section class="treasury-section bank-treasury-admin">
-          <div class="row">
-            <div>
-              <p class="eyebrow">Treasury ledger</p>
-              <h3>Compensation controls</h3>
-            </div>
-            <span class="pill green">${money(data.treasury_stats?.paid_total || 0)} paid</span>
+      <section class="faircroft-credit-card">
+        <div class="faircroft-credit-heading">
+          <div><small>FAIRCROFT CREDIT INDEX</small><h3>Your credit standing</h3></div>
+          <span class="faircroft-credit-status ${credit.synced ? "is-live" : ""}">${credit.synced ? "Updated" : "Pending"}</span>
+        </div>
+        <div class="faircroft-credit-body">
+          <div class="faircroft-credit-ring" style="--score-progress:${creditProgress}">
+            <div><strong>${creditScore}</strong><small>of 850</small></div>
           </div>
-          <div class="grid-2">
-            <div class="metric"><span>Pending requests</span><strong>${data.treasury_stats?.pending_count || 0}</strong></div>
-            <div class="metric"><span>Players paid</span><strong>${data.treasury_stats?.paid_count || 0}</strong></div>
+          <div class="faircroft-credit-copy">
+            <span class="faircroft-credit-rating">${escapeHtml(credit.rating || "Awaiting reputation sync")}</span>
+            <p>${credit.synced
+              ? `Based on ${Number(credit.reputation || 0).toLocaleString()} of ${Number(credit.reputation_max || 2000).toLocaleString()} persistent in-game reputation.`
+              : "Your linked player name has not matched a MedicalHUD reputation record yet."}</p>
+            <div class="faircroft-score-scale"><span>300</span><i><b style="width:${creditProgress}%"></b></i><span>850</span></div>
           </div>
-          <form id="bankTreasuryAdjustForm" class="form-grid treasury-bank-form">
-            <label>Recipient
-              <select name="user_id" required>
-                <option value="">Select player account</option>
-                ${(data.treasury_users || []).map((item) => `<option value="${item.id}">${escapeHtml(item.name)} / CIV ${escapeHtml(item.civ_number || "pending")} / ${money(item.bank_balance)}</option>`).join("")}
-              </select>
-            </label>
-            <label>Amount<input name="amount" type="number" min="1" step="0.01" value="75000" required /></label>
-            <label>Comp reason<textarea name="reason" maxlength="500" required placeholder="Server wipe comp, admin-approved balance restore, event payout"></textarea></label>
-            <button class="primary" type="submit">Add Treasury deposit</button>
-          </form>
-          <div class="treasury-ledger-list">
-            ${(data.treasury_recent || []).map((item) => `
-              <div class="treasury-ledger-row">
-                <div>
-                  <strong>${escapeHtml(item.user_name || "Civilian")}</strong>
-                  <span>${escapeHtml(item.request_number)} / ${treasuryTypeLabel(item.request_type)}</span>
-                </div>
-                <strong>${money(item.approved_amount)}</strong>
-              </div>
-            `).join("") || `<div class="empty">No compensation deposits yet</div>`}
-          </div>
-        </section>
-      ` : ""}
-      <div class="card bank-activity-card">
-        <h3>Activity</h3>
-        <div class="list">${(data.transactions || []).map((tx) => `
-          <div class="row"><span>${escapeHtml(tx.description)}</span><strong>${money(tx.amount)}</strong></div>
-        `).join("") || `<div class="empty">No transactions yet</div>`}</div>
-      </div>
+        </div>
+      </section>
+      <section class="faircroft-bank-details">
+        <h3>Account details</h3>
+        <div>
+          <span><small>Bank source</small><strong>In-game account</strong></span>
+          <span><small>Bank updated</small><strong>${data.balance_synced_at ? escapeHtml(new Date(data.balance_synced_at).toLocaleString()) : "Awaiting sync"}</strong></span>
+          <span><small>Credit source</small><strong>MedicalHUD reputation</strong></span>
+          <span><small>Credit updated</small><strong>${credit.synced_at ? escapeHtml(new Date(credit.synced_at).toLocaleString()) : "Awaiting sync"}</strong></span>
+        </div>
+      </section>
+      <p class="faircroft-credit-disclaimer">The Faircroft Credit Index is an in-roleplay metric derived from server reputation. It is not a real-world credit score.</p>
     </div>
   `;
 }
 
-function bindBank() {
-  $("#bankTreasuryAdjustForm")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try {
-      await api("/api/bank/treasury-adjust", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
-      toast("Treasury deposit added");
-      await loadAppData("bank");
-      await loadSession();
-      render();
-    } catch (error) {
-      toast(error.message);
-    }
-  });
-}
+function bindBank() {}
 
 function renderCash() {
   return `
@@ -9709,7 +9690,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.4-beta-roster").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.5-credit").catch(() => {}));
 }
 
 bootApp();

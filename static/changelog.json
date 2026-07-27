@@ -1,6 +1,20 @@
 {
-  "version": "0.1.4",
+  "version": "0.1.5",
   "entries": [
+    {
+      "date": "2026-07-27",
+      "version": "0.1.5",
+      "title": "Faircroft Financial",
+      "added": [
+        "Added the Faircroft Credit Index, a 300–850 roleplay score derived from persistent MedicalHUD reputation.",
+        "Added separate live sync details for authoritative in-game bank balances and reputation."
+      ],
+      "changed": [
+        "Rebuilt the Bank app as a premium Faircroft consumer-banking experience.",
+        "Removed the retired Railway transaction ledger from the Bank app."
+      ],
+      "fixed": []
+    },
     {
       "date": "2026-07-26",
       "version": "0.1.4",

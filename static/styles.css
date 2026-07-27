@@ -14528,3 +14528,129 @@ textarea:focus {
   .fire-incident-actions { justify-content: start; }
   .fire-personnel-grid { grid-template-columns: 1fr; }
 }
+
+/* Faircroft Financial */
+.faircroft-bank {
+  min-height: 100%;
+  margin: -14px;
+  padding: 16px;
+  color: #edf5ff;
+  background:
+    radial-gradient(circle at 86% 4%, rgba(0, 202, 255, .15), transparent 27%),
+    linear-gradient(180deg, #07172a 0%, #0a1321 52%, #090f1a 100%);
+}
+.faircroft-bank-header, .faircroft-bank-brand, .faircroft-account-label,
+.faircroft-account-meta, .faircroft-credit-heading, .faircroft-credit-body {
+  display: flex;
+  align-items: center;
+}
+.faircroft-bank-header { justify-content: space-between; margin-bottom: 18px; }
+.faircroft-bank-brand { gap: 10px; }
+.faircroft-bank-brand div { display: grid; gap: 1px; }
+.faircroft-bank-brand strong { font-size: 14px; letter-spacing: -.02em; }
+.faircroft-bank-brand small { color: #7790aa; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+.faircroft-bank-mark, .faircroft-bank-profile {
+  display: grid;
+  place-items: center;
+  width: 35px;
+  height: 35px;
+  border-radius: 11px;
+  font-weight: 900;
+}
+.faircroft-bank-mark {
+  color: #fff;
+  background: linear-gradient(145deg, #00c9ff, #7867ff 52%, #ff168f);
+  box-shadow: 0 8px 24px rgba(37, 148, 255, .22);
+  font-style: italic;
+}
+.faircroft-bank-profile { color: #d9e9fb; background: #14243a; border: 1px solid #263b55; }
+.faircroft-account-card {
+  position: relative;
+  overflow: hidden;
+  min-height: 138px;
+  padding: 18px;
+  border: 1px solid rgba(116, 210, 255, .24);
+  border-radius: 19px;
+  background: linear-gradient(135deg, #143e70 0%, #18325b 47%, #391c5b 100%);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, .28);
+}
+.faircroft-account-card::after {
+  content: "";
+  position: absolute;
+  width: 180px;
+  height: 180px;
+  right: -70px;
+  top: -110px;
+  border-radius: 50%;
+  border: 28px solid rgba(255,255,255,.045);
+}
+.faircroft-account-label, .faircroft-account-meta { justify-content: space-between; position: relative; z-index: 1; }
+.faircroft-account-label span { color: #c0d9f2; font-size: 11px; font-weight: 700; }
+.faircroft-account-label em {
+  padding: 4px 7px;
+  color: #8bffd2;
+  background: rgba(4, 26, 41, .42);
+  border: 1px solid rgba(95, 255, 194, .24);
+  border-radius: 99px;
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: .11em;
+}
+.faircroft-account-balance { display: block; margin: 17px 0 20px; font-size: 30px; letter-spacing: -.045em; position: relative; z-index: 1; }
+.faircroft-account-meta { color: #a9c1da; font-size: 9px; font-weight: 800; letter-spacing: .08em; }
+.faircroft-credit-card, .faircroft-bank-details {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid #1d3046;
+  border-radius: 17px;
+  background: rgba(12, 27, 44, .88);
+}
+.faircroft-credit-heading { justify-content: space-between; }
+.faircroft-credit-heading small { color: #5f99c9; font-size: 8px; font-weight: 900; letter-spacing: .13em; }
+.faircroft-credit-heading h3, .faircroft-bank-details h3 { margin: 4px 0 0; font-size: 15px; }
+.faircroft-credit-status { color: #eab64a; font-size: 9px; font-weight: 800; }
+.faircroft-credit-status.is-live { color: #4de5a7; }
+.faircroft-credit-body { gap: 18px; padding-top: 18px; }
+.faircroft-credit-ring {
+  flex: 0 0 112px;
+  width: 112px;
+  height: 112px;
+  padding: 9px;
+  border-radius: 50%;
+  background: conic-gradient(#17d0f2 calc(var(--score-progress) * 1%), #25374a 0);
+  transform: rotate(-90deg);
+  box-shadow: 0 0 30px rgba(23, 208, 242, .09);
+}
+.faircroft-credit-ring > div {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  border-radius: 50%;
+  background: #0b1828;
+  transform: rotate(90deg);
+}
+.faircroft-credit-ring strong { font-size: 28px; line-height: 1; }
+.faircroft-credit-ring small { margin-top: 4px; color: #71879b; font-size: 9px; }
+.faircroft-credit-copy { flex: 1; min-width: 0; }
+.faircroft-credit-rating { color: #8ee8ff; font-size: 18px; font-weight: 850; }
+.faircroft-credit-copy p { margin: 7px 0 13px; color: #8296aa; font-size: 10px; line-height: 1.5; }
+.faircroft-score-scale { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 7px; color: #61758a; font-size: 8px; }
+.faircroft-score-scale i { height: 4px; overflow: hidden; border-radius: 9px; background: #22364a; }
+.faircroft-score-scale b { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #16c7ed, #7f6bff, #ff319b); }
+.faircroft-bank-details h3 { margin-bottom: 12px; }
+.faircroft-bank-details > div { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.faircroft-bank-details span { display: grid; gap: 4px; min-width: 0; }
+.faircroft-bank-details small { color: #657c92; font-size: 8px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+.faircroft-bank-details strong { color: #dce9f5; overflow-wrap: anywhere; font-size: 10px; }
+.faircroft-credit-disclaimer { margin: 13px 8px 2px; color: #5f7184; text-align: center; font-size: 8px; line-height: 1.45; }
+@media (max-width: 430px) {
+  .faircroft-credit-body { align-items: flex-start; }
+  .faircroft-credit-ring { flex-basis: 94px; width: 94px; height: 94px; }
+  .faircroft-bank-details > div { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .faircroft-score-scale b { transition: none; }
+}

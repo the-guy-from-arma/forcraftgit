@@ -50,6 +50,13 @@ SHADOWHAVEN_BANK_FILE = os.environ.get(
     "profile/profile/.db/FCRPMUSSALO/Banks/00bb0001-1e42-6138-7e90-c04752d4fab6.json",
 ).strip()
 SHADOWHAVEN_BANK_SYNC_SECONDS = max(5, int(os.environ.get("SHADOWHAVEN_BANK_SYNC_SECONDS", "15")))
+SHADOWHAVEN_REPUTATION_FILE = os.environ.get(
+    "SHADOWHAVEN_REPUTATION_FILE",
+    "profile/profile/MedicalHud/reputation.json",
+).strip()
+SHADOWHAVEN_REPUTATION_SYNC_SECONDS = max(
+    15, int(os.environ.get("SHADOWHAVEN_REPUTATION_SYNC_SECONDS", "30"))
+)
 SHADOWHAVEN_PERSISTENCE_ROOT = os.environ.get(
     "SHADOWHAVEN_PERSISTENCE_ROOT",
     "profile/profile/.db/FCRPMUSSALO",
@@ -76,8 +83,8 @@ SHADOWHAVEN_ANTICHEAT_SYNC_SECONDS = max(
 )
 ANTICHEAT_LIVE_TTL_SECONDS = max(90, int(os.environ.get("ANTICHEAT_LIVE_TTL_SECONDS", "900")))
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-FNN_GEMINI_MODEL = os.environ.get("FNN_GEMINI_MODEL", "gemini-2.5-flash").strip()
-FNN_GEMINI_FALLBACK_MODEL = os.environ.get("FNN_GEMINI_FALLBACK_MODEL", "gemini-2.5-flash").strip()
+FNN_GEMINI_MODEL = os.environ.get("FNN_GEMINI_MODEL", "gemini-3.6-flash").strip()
+FNN_GEMINI_FALLBACK_MODEL = os.environ.get("FNN_GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite").strip()
 FNN_GENERATION_INTERVAL_SECONDS = max(
     900, int(os.environ.get("FNN_GENERATION_INTERVAL_SECONDS", "3600"))
 )
@@ -451,6 +458,103 @@ def shadowhaven_bank_sync_worker() -> None:
         except Exception as exc:
             print(f"Shadowhaven SFTP bank sync failed: {type(exc).__name__}: {exc}")
         time.sleep(SHADOWHAVEN_BANK_SYNC_SECONDS)
+
+
+def extract_shadowhaven_reputation_data(payload: Any) -> tuple[list[tuple[str, int]], str]:
+    if not isinstance(payload, dict):
+        return [], ""
+    version = str(payload.get("m_iVersion") or "")
+    entries = payload.get("m_aEntries")
+    if not isinstance(entries, list):
+        return [], version
+    records: list[tuple[str, int]] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        player_key = str(entry.get("m_sPlayerKey") or "").strip()[:180]
+        if not player_key or player_key.casefold() in seen:
+            continue
+        try:
+            reputation = max(0, min(2000, int(entry.get("m_iReputation") or 0)))
+        except (TypeError, ValueError):
+            continue
+        seen.add(player_key.casefold())
+        records.append((player_key, reputation))
+    return records, version
+
+
+def sync_shadowhaven_reputation_once() -> int:
+    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+        return 0
+    transport = paramiko.Transport((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_PORT))
+    try:
+        transport.connect(username=SHADOWHAVEN_SFTP_USERNAME, password=SHADOWHAVEN_SFTP_PASSWORD)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+        try:
+            with sftp.open(SHADOWHAVEN_REPUTATION_FILE, "r") as remote_file:
+                payload = json.loads(remote_file.read().decode("utf-8-sig"))
+        finally:
+            sftp.close()
+    finally:
+        transport.close()
+    records, source_version = extract_shadowhaven_reputation_data(payload)
+    synced_at = now_iso()
+    with conn() as db:
+        db.execute("DELETE FROM arma_game_reputation")
+        for player_key, reputation in records:
+            db.execute(
+                """
+                INSERT INTO arma_game_reputation
+                (player_key, reputation, source_file, source_version, synced_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    player_key, reputation, SHADOWHAVEN_REPUTATION_FILE[:255],
+                    source_version[:40], synced_at,
+                ),
+            )
+    return len(records)
+
+
+def shadowhaven_reputation_sync_worker() -> None:
+    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+        print("Shadowhaven reputation sync disabled: credentials are not configured")
+        return
+    while True:
+        try:
+            accepted = sync_shadowhaven_reputation_once()
+            print(f"Shadowhaven MedicalHud reputation sync updated {accepted} record(s)")
+        except Exception as exc:
+            print(f"Shadowhaven MedicalHud reputation sync failed: {type(exc).__name__}: {exc}")
+        time.sleep(SHADOWHAVEN_REPUTATION_SYNC_SECONDS)
+
+
+def faircroft_credit_snapshot(reputation: int | None) -> dict[str, Any]:
+    if reputation is None:
+        return {
+            "score": None, "rating": "Awaiting reputation sync",
+            "reputation": None, "reputation_max": 2000, "progress": 0,
+        }
+    normalized = max(0, min(2000, int(reputation)))
+    score = round(300 + (normalized / 2000) * 550)
+    if score >= 800:
+        rating = "Exceptional"
+    elif score >= 740:
+        rating = "Very good"
+    elif score >= 670:
+        rating = "Good"
+    elif score >= 580:
+        rating = "Fair"
+    else:
+        rating = "Building"
+    return {
+        "score": score,
+        "rating": rating,
+        "reputation": normalized,
+        "reputation_max": 2000,
+        "progress": round((score - 300) / 550 * 100, 1),
+    }
 
 
 def sync_shadowhaven_anticheat_once() -> tuple[int, int]:
@@ -1427,6 +1531,14 @@ def ensure_schema() -> None:
                 source_file TEXT NOT NULL DEFAULT '',
                 source_saved_at TEXT,
                 raw_payload TEXT NOT NULL DEFAULT '{}',
+                synced_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS arma_game_reputation (
+                player_key TEXT PRIMARY KEY,
+                reputation INTEGER NOT NULL DEFAULT 0,
+                source_file TEXT NOT NULL DEFAULT '',
+                source_version TEXT NOT NULL DEFAULT '',
                 synced_at TEXT NOT NULL
             );
 
@@ -2602,6 +2714,7 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS anticheat_live_sessions_heartbeat_idx ON anticheat_live_sessions (last_heartbeat_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS game_persistence_category_idx ON game_persistence_records (category, synced_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS game_persistence_record_idx ON game_persistence_records (record_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS arma_game_reputation_player_key_idx ON arma_game_reputation (LOWER(player_key))")
     db.execute("CREATE INDEX IF NOT EXISTS account_sanctions_user_idx ON account_sanctions (user_id, created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS account_warnings_user_idx ON account_internal_warnings (user_id, created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS admin_audit_logs_created_idx ON admin_audit_logs (created_at DESC)")
@@ -3772,8 +3885,10 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
                     error_detail = ""
                 safe_detail = error_detail[:500] or exc.reason or "request rejected"
                 last_error = RuntimeError(f"Gemini news generation failed on {model_name} (HTTP {exc.code}): {safe_detail}")
-                quota_unavailable = exc.code == 429 and ("limit: 0" in error_detail.lower() or "quota exceeded" in error_detail.lower())
-                if quota_unavailable and model_index < len(model_candidates) - 1:
+                model_unavailable = exc.code == 404 or (
+                    exc.code == 429 and ("limit: 0" in error_detail.lower() or "quota exceeded" in error_detail.lower())
+                )
+                if model_unavailable and model_index < len(model_candidates) - 1:
                     break
                 if exc.code in (429, 500, 502, 503, 504) and attempt < 2:
                     time.sleep(2 ** attempt)
@@ -5751,58 +5866,39 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err)
             return
-        transactions = all_rows(
-            db,
-            "SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 30",
-            (user["id"],),
-        )
         game_bank = one(
             db,
             """
-            SELECT b.* FROM arma_account_links l
-            JOIN arma_game_bank_balances b ON b.identity_id = l.identity_id
+            SELECT l.identity_id, l.player_name, b.balance,
+                   b.synced_at AS bank_synced_at,
+                   r.reputation, r.synced_at AS reputation_synced_at,
+                   r.player_key AS reputation_player_key
+            FROM arma_account_links l
+            LEFT JOIN arma_game_bank_balances b ON b.identity_id = l.identity_id
+            LEFT JOIN arma_game_reputation r ON LOWER(r.player_key) = LOWER(l.player_name)
             WHERE l.user_id = ?
             """,
             (user["id"],),
         )
+        reputation = int(game_bank["reputation"]) if game_bank and game_bank.get("reputation") is not None else None
+        credit = faircroft_credit_snapshot(reputation)
+        balance_synced = bool(game_bank and game_bank.get("balance") is not None)
         payload: dict[str, Any] = {
-            "balance": round(float(game_bank["balance"] or 0), 2) if game_bank else 0,
+            "balance": round(float(game_bank["balance"] or 0), 2) if balance_synced else 0,
             "balance_source": "FCRPMUSSALO",
-            "balance_synced": bool(game_bank),
-            "balance_synced_at": game_bank.get("synced_at") if game_bank else None,
+            "balance_synced": balance_synced,
+            "balance_synced_at": game_bank.get("bank_synced_at") if game_bank else None,
+            "identity_id": game_bank.get("identity_id") if game_bank else None,
             "income": income_snapshot(db, user),
-            "transactions": [dict(row) for row in transactions],
+            "credit": {
+                **credit,
+                "synced": reputation is not None,
+                "synced_at": game_bank.get("reputation_synced_at") if game_bank else None,
+                "player_key": game_bank.get("reputation_player_key") if game_bank else None,
+                "source": "MedicalHud/reputation.json",
+            },
             "can_manage_treasury": False,
         }
-        if payload["can_manage_treasury"]:
-            recent = all_rows(
-                db,
-                """
-                SELECT tr.*, target.name AS user_name, target.civ_number AS user_civ_number, reviewer.name AS reviewer_name
-                FROM treasury_requests tr
-                JOIN users target ON target.id = tr.user_id
-                LEFT JOIN users reviewer ON reviewer.id = tr.reviewer_id
-                WHERE tr.status = 'paid'
-                ORDER BY COALESCE(tr.decided_at, tr.updated_at) DESC
-                LIMIT 40
-                """,
-            )
-            staff_users = all_rows(
-                db,
-                "SELECT id, civ_number, name, email, bank_balance FROM users ORDER BY name LIMIT 500",
-            )
-            stats = {
-                "paid_count": one(db, "SELECT COUNT(*) AS count FROM treasury_requests WHERE status = 'paid'")["count"],
-                "pending_count": one(db, "SELECT COUNT(*) AS count FROM treasury_requests WHERE status = 'submitted'")["count"],
-                "paid_total": round(float((one(db, "SELECT COALESCE(SUM(approved_amount), 0) AS total FROM treasury_requests WHERE status = 'paid'") or {}).get("total") or 0), 2),
-            }
-            payload.update(
-                {
-                    "treasury_recent": [treasury_row_payload(row, include_proofs=False) for row in recent],
-                    "treasury_users": [dict(row) for row in staff_users],
-                    "treasury_stats": stats,
-                }
-            )
         self.send_json(200, payload)
 
     def api_collect_bank(self, db: Database, user: DbRow | None) -> None:
@@ -11129,6 +11225,11 @@ def main() -> None:
     if not schema_ready:
         raise RuntimeError("Database remained unavailable after startup retries")
     threading.Thread(target=shadowhaven_bank_sync_worker, name="shadowhaven-bank-sync", daemon=True).start()
+    threading.Thread(
+        target=shadowhaven_reputation_sync_worker,
+        name="shadowhaven-reputation-sync",
+        daemon=True,
+    ).start()
     threading.Thread(
         target=shadowhaven_anticheat_sync_worker,
         name="shadowhaven-anticheat-sync",
