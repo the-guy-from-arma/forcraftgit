@@ -2174,8 +2174,8 @@ function renderDmv() {
     state.dmvTab = "license";
   }
   return `
-    <div class="dmv-modern">
-      <section class="dmv-modern-hero"><div><p>FAIRCROFT DEPARTMENT OF MOTOR VEHICLES</p><h2>Driver & Vehicle Services</h2><span>Licensing, registration, insurance, and official identity records.</span></div><strong class="${record.license_status === "Valid" ? "valid" : ""}">${escapeHtml(record.license_status)}</strong></section>
+    <div class="dmv-modern dmv-records-desk">
+      <section class="dmv-modern-hero"><div><p>DRIVER AND VEHICLE RECORDS</p><h2>Resident motor vehicle file</h2><span>Credential status, registered assets, insurance compliance, and examinations.</span></div><div class="dmv-file-state"><span>LICENSE STATUS</span><strong class="${record.license_status === "Valid" ? "valid" : ""}"><i></i>${escapeHtml(record.license_status)}</strong></div></section>
       ${lockdown ? `
         <section class="update-lockdown-mini">
           <p class="eyebrow">Software Update</p>
@@ -2184,9 +2184,9 @@ function renderDmv() {
         </section>
       ` : `
         <div class="dmv-modern-tabs">
-          <button class="${state.dmvTab === "overview" ? "active" : ""}" data-dmv-tab="overview">Digital ID</button>
-          <button class="${state.dmvTab === "license" ? "active" : ""}" data-dmv-tab="license">Driver Exam</button>
-          <button class="${state.dmvTab === "vehicles" ? "active" : ""}" data-dmv-tab="vehicles">Vehicle Garage</button>
+          <button class="${state.dmvTab === "overview" ? "active" : ""}" data-dmv-tab="overview"><span>01</span>Identity record</button>
+          <button class="${state.dmvTab === "license" ? "active" : ""}" data-dmv-tab="license"><span>02</span>Examination</button>
+          <button class="${state.dmvTab === "vehicles" ? "active" : ""}" data-dmv-tab="vehicles"><span>03</span>Vehicle registry</button>
         </div>
       `}
       ${state.dmvTab === "license" ? renderDmvLicense(record, driverExam) : state.dmvTab === "vehicles" ? renderDmvVehicles(vehicles, record, gameVehicles) : renderDmvOverview(record, vehicles, applications, activeVehicle)}
@@ -2196,14 +2196,15 @@ function renderDmv() {
 
 function renderDmvOverview(record, vehicles, applications, activeVehicle) {
   const user = state.cache.profile?.user || state.session.user;
+  const roadLegal = vehicles.filter((vehicle) => vehicle.registration_status === "Active" && vehicle.insurance_status === "Active").length;
   return `
-    <div class="dmv-id-layout">
+    <div class="dmv-id-layout dmv-identity-file">
       <article class="dmv-digital-license ${record.license_status === "Valid" ? "valid" : "pending"}">
-        <header><div class="dmv-seal">FC</div><div><span>STATE OF FAIRCROFT</span><strong>DRIVER LICENSE</strong></div><b>${escapeHtml(record.license_class)}</b></header>
-        <div class="dmv-license-body"><div class="dmv-license-photo">${user?.profile_photo ? `<img src="${escapeHtml(user.profile_photo)}" alt="Driver identification" />` : `<span>${escapeHtml((user?.name || "?").slice(0,1))}</span><small>PHOTO REQUIRED</small>`}</div><dl><div><dt>NAME</dt><dd>${escapeHtml(user?.name || "")}</dd></div><div><dt>CIVILIAN ID</dt><dd>${escapeHtml(user?.civ_number || "PENDING")}</dd></div><div><dt>STATUS</dt><dd>${escapeHtml(record.license_status)}</dd></div><div><dt>CLASS</dt><dd>${escapeHtml(record.license_class)}</dd></div></dl></div>
-        <footer><span>FAIRCROFT DMV · OFFICIAL RP IDENTIFICATION</span><strong>${escapeHtml(user?.civ_number || "TEMPORARY")}</strong></footer>
+        <header><div class="dmv-seal">FC</div><div><span>FAIRCROFT MOTOR VEHICLE AUTHORITY</span><strong>DRIVER CREDENTIAL</strong></div><b>${escapeHtml(record.license_class)}</b></header>
+        <div class="dmv-license-body"><div class="dmv-license-photo">${user?.profile_photo ? `<img src="${escapeHtml(user.profile_photo)}" alt="Driver identification" />` : `<span>${escapeHtml((user?.name || "?").slice(0,1))}</span><small>IDENTITY PHOTO REQUIRED</small>`}</div><div class="dmv-credential-copy"><p>AUTHORIZED RESIDENT</p><h3>${escapeHtml(user?.name || "")}</h3><span>CIVILIAN RECORD ${escapeHtml(user?.civ_number || "PENDING")}</span><dl><div><dt>Credential</dt><dd>${escapeHtml(record.license_status)}</dd></div><div><dt>Classification</dt><dd>${escapeHtml(record.license_class)}</dd></div><div><dt>Primary plate</dt><dd>${escapeHtml(activeVehicle.plate || "No vehicle")}</dd></div><div><dt>Issued by</dt><dd>Faircroft DMV</dd></div></dl></div></div>
+        <footer><span>VALID ONLY WITH MATCHING CIVILIAN PROFILE</span><strong>FC-${escapeHtml(user?.civ_number || "TEMPORARY")}</strong></footer>
       </article>
-      <aside class="dmv-record-summary"><div><span>Registered vehicles</span><strong>${vehicles.length}</strong></div><div><span>Primary plate</span><strong>${escapeHtml(activeVehicle.plate || "NONE")}</strong></div><div><span>Registration</span><strong>${escapeHtml(activeVehicle.registration_status || "None")}</strong></div><div><span>Insurance</span><strong class="${activeVehicle.insurance_status === "Active" ? "valid" : "warning"}">${escapeHtml(activeVehicle.insurance_status || "Not Insured")}</strong></div>${record.license_status !== "Valid" ? `<button class="primary" type="button" data-dmv-tab="license">Take driver exam</button>` : ""}</aside>
+      <aside class="dmv-record-summary"><header><span>COMPLIANCE LEDGER</span><strong>${vehicles.length ? `${roadLegal}/${vehicles.length} road legal` : "No vehicles filed"}</strong></header><dl><div><dt>Driver credential</dt><dd class="${record.license_status === "Valid" ? "valid" : "warning"}">${escapeHtml(record.license_status)}</dd></div><div><dt>Vehicle records</dt><dd>${vehicles.length}</dd></div><div><dt>Primary registration</dt><dd class="${activeVehicle.registration_status === "Active" ? "valid" : "warning"}">${escapeHtml(activeVehicle.registration_status || "Not filed")}</dd></div><div><dt>Insurance coverage</dt><dd class="${activeVehicle.insurance_status === "Active" ? "valid" : "warning"}">${escapeHtml(activeVehicle.insurance_status || "Not insured")}</dd></div></dl><div class="dmv-ledger-actions">${record.license_status !== "Valid" ? `<button class="primary" type="button" data-dmv-tab="license">Begin driver examination</button>` : ""}<button class="secondary" type="button" data-dmv-tab="vehicles">${vehicles.length ? "Review vehicle registry" : "Open vehicle registry"}</button></div></aside>
     </div>
   `;
 }
@@ -2519,7 +2520,7 @@ function renderJobs() {
 }
 
 function renderDmvWorkspace() {
-  return `<section class="dmv-workspace"><header class="dmv-workspace-topbar"><div><p>STATE OF FAIRCROFT · MOTOR VEHICLE SERVICES</p><h1>Department of Motor Vehicles</h1><span>Secure civilian licensing and vehicle records</span></div><div><span class="dmv-system-online"><i></i>DMV records online</span><button class="secondary" type="button" data-refresh-dmv>Refresh records</button><button class="primary" type="button" data-close-dmv>Exit DMV</button></div></header><main class="dmv-workspace-content">${renderDmv()}</main></section>`;
+  return `<section class="dmv-workspace"><header class="dmv-workspace-topbar"><div class="dmv-agency-lockup"><div class="dmv-agency-mark"><span>FC</span></div><div><p>STATE OF FAIRCROFT</p><h1>Motor Vehicle Authority</h1><span>Resident Services · Official Records Division</span></div></div><div class="dmv-workspace-tools"><span class="dmv-system-online"><i></i>Records network online</span><button class="secondary" type="button" data-refresh-dmv>Refresh</button><button class="primary" type="button" data-close-dmv>Close workspace</button></div></header><main class="dmv-workspace-content">${renderDmv()}</main></section>`;
 }
 
 function bindDmvWorkspace() {
@@ -10240,7 +10241,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-dmv-profile-sync").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-dmv-records-desk").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {

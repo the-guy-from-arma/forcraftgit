@@ -14815,6 +14815,107 @@ textarea:focus {
 .dmv-compliance-modal > header { padding: 22px 22px 16px; border-bottom: 1px solid #2b3e46; }.dmv-compliance-modal h2 { margin: 5px 0 0; font-size: 28px; }.dmv-compliance-modal > p { padding: 0 22px; line-height: 1.55; }.dmv-compliance-modal > .row { padding: 8px 22px 22px; }
 .dmv-compliance-list { display: grid; gap: 1px; margin: 16px 22px; border: 1px solid #2d4048; background: #2d4048; }.dmv-compliance-list article { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 12px 14px; background: #0c161a; }.dmv-compliance-list article div { display: grid; gap: 3px; }.dmv-compliance-list article span { color: #58bdd7; font-size: 8px; font-weight: 900; letter-spacing: .12em; }.dmv-compliance-list article small { color: #df737a; text-align: right; }
 .resident-vehicle-summary { margin-top: 14px; overflow: hidden; border: 1px solid #2b414a; background: #0e191e; }.resident-vehicle-summary > header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 15px; border-bottom: 1px solid #293b43; }.resident-vehicle-summary header span { color: #55bad5; font-size: 8px; font-weight: 950; letter-spacing: .12em; text-transform: uppercase; }.resident-vehicle-summary h3 { margin: 4px 0 0; }.resident-vehicle-summary > div { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1px; background: #293b43; }.resident-vehicle-summary article { display: grid; gap: 4px; padding: 13px 15px; background: #0b1418; }.resident-vehicle-summary article > span { color: #59bad4; font-size: 8px; font-weight: 900; }.resident-vehicle-summary article small.valid { color: #55d0a6; }.resident-vehicle-summary article small.warning { color: #df7078; }.resident-vehicle-summary > div > p { padding: 14px; }
+
+/* DMV records desk — restrained government operations interface */
+.dmv-workspace { background: #080d10; }
+.dmv-workspace-topbar { position: sticky; top: 0; z-index: 20; min-height: 82px; padding: 13px clamp(18px,3vw,44px); border-bottom: 1px solid #243138; background: rgba(8,13,16,.97); backdrop-filter: blur(16px); }
+.dmv-agency-lockup,.dmv-workspace-tools { display: flex; align-items: center; gap: 13px; }
+.dmv-agency-mark { width: 47px; height: 47px; display: grid; place-items: center; border: 1px solid #bd9c3b; border-radius: 50%; color: #e3c75f; background: #10191c; box-shadow: inset 0 0 0 4px #080d10; }
+.dmv-agency-mark span { color: inherit !important; font-size: 13px !important; font-weight: 950; letter-spacing: .04em; }
+.dmv-workspace-topbar .dmv-agency-lockup p { color: #d2b653; font-size: 8px; }
+.dmv-workspace-topbar .dmv-agency-lockup h1 { margin: 2px 0; font-size: 22px; letter-spacing: -.025em; }
+.dmv-workspace-topbar .dmv-agency-lockup > div > span { color: #64757b; font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
+.dmv-workspace-tools button { min-height: 39px; border-radius: 4px; }
+.dmv-workspace-tools .primary { color: #071013; background: #d4b84f; border-color: #d4b84f; }
+.dmv-workspace-content { width: min(1260px,100%); padding: clamp(18px,2.6vw,36px); }
+.dmv-records-desk { gap: 0; }
+.dmv-records-desk .dmv-modern-hero { min-height: 118px; padding: 22px 25px; border: 1px solid #29363c; background: #0d1519; }
+.dmv-records-desk .dmv-modern-hero::before { content: ""; width: 3px; align-self: stretch; margin-right: 15px; background: #d2b34c; }
+.dmv-records-desk .dmv-modern-hero > div:first-child { margin-right: auto; }
+.dmv-records-desk .dmv-modern-hero p { color: #d1b34f; font-size: 8px; }
+.dmv-records-desk .dmv-modern-hero h2 { margin: 5px 0 3px; font-size: clamp(25px,2.5vw,36px); font-weight: 760; letter-spacing: -.035em; }
+.dmv-records-desk .dmv-modern-hero span { font-size: 11px; }
+.dmv-file-state { min-width: 145px; display: grid; justify-items: end; gap: 7px; padding-left: 24px; border-left: 1px solid #2b383e; }
+.dmv-file-state > span { color: #697a80 !important; font-size: 7px !important; font-weight: 900; letter-spacing: .13em; }
+.dmv-file-state strong { display: flex; align-items: center; gap: 8px; color: #db7278; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+.dmv-file-state strong i { width: 7px; height: 7px; display: block; border-radius: 50%; background: currentColor; box-shadow: 0 0 10px currentColor; }
+.dmv-file-state strong.valid { color: #53cfaa; }
+.dmv-records-desk .dmv-modern-tabs { margin-top: -1px; border-color: #29363c; background: #0a1114; }
+.dmv-records-desk .dmv-modern-tabs button { min-height: 57px; display: flex; align-items: center; justify-content: center; gap: 10px; color: #77878c; border-color: #253238; font-size: 11px; font-weight: 720; letter-spacing: .01em; }
+.dmv-records-desk .dmv-modern-tabs button span { color: #46565b; font-size: 7px; font-weight: 900; letter-spacing: .12em; }
+.dmv-records-desk .dmv-modern-tabs button.active { color: #f0f4f3; background: #111c20; box-shadow: inset 0 -2px #d0b34d; }
+.dmv-records-desk .dmv-modern-tabs button.active span { color: #d0b34d; }
+.dmv-identity-file { grid-template-columns: minmax(0,1.55fr) minmax(300px,.75fr); gap: 0; margin-top: 18px; border: 1px solid #2b393f; background: #2b393f; }
+.dmv-identity-file .dmv-digital-license { border: 0; border-radius: 0; background: #101b20; box-shadow: none; }
+.dmv-identity-file .dmv-digital-license > header { min-height: 72px; padding: 14px 19px; border-bottom-color: #304047; background: #14252c; }
+.dmv-identity-file .dmv-digital-license > header > div:nth-child(2) span { color: #84a0a8; font-size: 7px; letter-spacing: .17em; }
+.dmv-identity-file .dmv-digital-license > header > div:nth-child(2) strong { margin-top: 3px; font-size: 16px; letter-spacing: .025em; }
+.dmv-identity-file .dmv-digital-license > header > b { color: #e4e9e7; font-size: 20px; font-weight: 760; }
+.dmv-identity-file .dmv-seal { width: 38px; height: 38px; border-width: 1px; color: #d8ba50; font-size: 11px; }
+.dmv-identity-file .dmv-license-body { min-height: 290px; grid-template-columns: 160px 1fr; align-items: stretch; gap: 0; padding: 0; }
+.dmv-identity-file .dmv-license-photo { min-height: 290px; border: 0; border-right: 1px solid #2c3b41; border-radius: 0; background: #0a1114; }
+.dmv-identity-file .dmv-license-photo span { color: #d7dedd; font-size: 52px; font-weight: 500; }
+.dmv-identity-file .dmv-license-photo small { color: #dc7076; font-size: 6px; letter-spacing: .08em; }
+.dmv-credential-copy { min-width: 0; padding: 27px 28px; }
+.dmv-credential-copy > p { margin: 0; color: #d2b54e; font-size: 7px; font-weight: 950; letter-spacing: .16em; }
+.dmv-credential-copy h3 { margin: 7px 0 3px; font-size: clamp(25px,3vw,38px); font-weight: 720; letter-spacing: -.045em; }
+.dmv-credential-copy > span { color: #72858b; font-size: 9px; letter-spacing: .08em; }
+.dmv-credential-copy dl { display: grid; grid-template-columns: 1fr 1fr; gap: 24px 30px; margin: 38px 0 0; }
+.dmv-credential-copy dl div { min-width: 0; padding-top: 9px; border-top: 1px solid #34434a; }
+.dmv-credential-copy dt { color: #687a80; font-size: 7px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; }
+.dmv-credential-copy dd { margin: 6px 0 0; overflow: hidden; color: #e8edeb; font-size: 14px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }
+.dmv-identity-file .dmv-digital-license footer { min-height: 38px; align-items: center; padding: 10px 18px; color: #687c82; border-top-color: #2b3b41; background: #0d171b; font-size: 7px; }
+.dmv-identity-file .dmv-digital-license footer strong { color: #a9b8b9; letter-spacing: .08em; }
+.dmv-identity-file .dmv-record-summary { display: flex; flex-direction: column; border: 0; border-left: 1px solid #2b393f; background: #0d161a; }
+.dmv-record-summary > header { display: grid; gap: 4px; padding: 18px; border-bottom: 1px solid #2b393f; }
+.dmv-record-summary > header span { color: #d0b34d; font-size: 7px; font-weight: 950; letter-spacing: .14em; }
+.dmv-record-summary > header strong { font-size: 16px; }
+.dmv-record-summary dl { margin: 0; }
+.dmv-record-summary dl div { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 18px; padding: 15px 18px; border-bottom: 1px solid #253239; }
+.dmv-record-summary dt { color: #718288; font-size: 9px; }
+.dmv-record-summary dd { margin: 0; color: #e3e9e7; font-size: 11px; font-weight: 800; text-align: right; }
+.dmv-record-summary dd.valid { color: #56cba8; }.dmv-record-summary dd.warning { color: #df7077; }
+.dmv-ledger-actions { display: grid; gap: 8px; margin-top: auto; padding: 16px; }
+.dmv-ledger-actions button { width: 100%; min-height: 42px; border-radius: 3px; }
+.dmv-records-desk .dmv-exam-center,.dmv-records-desk .dmv-garage { gap: 0; margin-top: 18px; border: 1px solid #2a383e; background: #0c1417; }
+.dmv-records-desk .dmv-exam-intro { padding: 20px 22px; border: 0; border-bottom: 1px solid #2a383e; border-left: 3px solid #d0b34d; background: #101a1e; }
+.dmv-records-desk .dmv-exam-intro p,.dmv-records-desk .dmv-fleet-command p,.dmv-records-desk .dmv-game-vehicles p,.dmv-records-desk .dmv-registration-form p { color: #d0b34d; }
+.dmv-records-desk .dmv-driver-exam { gap: 1px; padding: 1px; background: #26343a; }
+.dmv-records-desk .dmv-driver-exam fieldset { border: 0; border-radius: 0; background: #0e171b; }
+.dmv-records-desk .dmv-driver-exam label { border-color: #27353a; border-radius: 2px; background: #0a1114; }
+.dmv-records-desk .dmv-driver-exam label:has(input:checked) { border-color: #b69b43; background: rgba(208,179,77,.07); }
+.dmv-records-desk .dmv-driver-exam label b,.dmv-records-desk .dmv-driver-exam legend span { color: #d0b34d; }
+.dmv-records-desk .dmv-attempt-ledger { border: 0; border-top: 1px solid #2a383e; border-radius: 0; }
+.dmv-records-desk .dmv-fleet-command { border: 0; border-bottom: 1px solid #2a383e; background: #101a1e; }
+.dmv-records-desk .dmv-game-vehicles,.dmv-records-desk .dmv-manual-intake { border: 0; border-bottom: 1px solid #2a383e; border-radius: 0; }
+.dmv-records-desk .dmv-vehicle-grid { gap: 1px; padding: 1px; background: #29373d; }
+.dmv-records-desk .dmv-vehicle-file { border: 0; border-radius: 0; background: #0e171b; }
+.dmv-records-desk .dmv-vehicle-file.action-required { box-shadow: inset 3px 0 #d9636b; }.dmv-records-desk .dmv-vehicle-file.compliant { box-shadow: inset 3px 0 #4ac29e; }
+@media (max-width:760px) {
+  .dmv-workspace-topbar { position: relative; align-items: stretch; flex-direction: column; gap: 12px; padding: 12px 14px; }
+  .dmv-workspace-tools { display: grid; grid-template-columns: 1fr 1fr; }
+  .dmv-workspace-tools .dmv-system-online { grid-column: 1 / -1; }
+  .dmv-records-desk .dmv-modern-hero { align-items: flex-start; flex-direction: column; padding: 18px; }
+  .dmv-records-desk .dmv-modern-hero::before { width: 52px; height: 3px; margin: 0 0 5px; }
+  .dmv-file-state { width: 100%; min-width: 0; grid-template-columns: 1fr auto; align-items: center; justify-items: start; padding: 13px 0 0; border-top: 1px solid #2b383e; border-left: 0; }
+  .dmv-records-desk .dmv-modern-tabs button { min-width: 0; gap: 5px; padding: 7px 4px; font-size: 9px; }
+  .dmv-records-desk .dmv-modern-tabs button span { display: none; }
+  .dmv-identity-file { grid-template-columns: 1fr; }
+  .dmv-identity-file .dmv-record-summary { border-top: 1px solid #2b393f; border-left: 0; }
+}
+@media (max-width:480px) {
+  .dmv-agency-mark { width: 40px; height: 40px; }
+  .dmv-workspace-topbar .dmv-agency-lockup h1 { font-size: 18px; }
+  .dmv-workspace-topbar .dmv-agency-lockup > div > span { display: none; }
+  .dmv-identity-file .dmv-license-body { min-height: 0; grid-template-columns: 104px 1fr; }
+  .dmv-identity-file .dmv-license-photo { min-height: 245px; }
+  .dmv-credential-copy { padding: 20px 15px; }
+  .dmv-credential-copy h3 { font-size: 23px; }
+  .dmv-credential-copy dl { grid-template-columns: 1fr; gap: 12px; margin-top: 24px; }
+  .dmv-credential-copy dl div:nth-child(n+3) { display: none; }
+  .dmv-identity-file .dmv-digital-license > header > div:nth-child(2) span { display: none; }
+  .dmv-identity-file .dmv-digital-license > header > b { font-size: 15px; }
+}
 .resident-photo-button { padding: 0; overflow: hidden; border: 0; }.resident-photo-button img { width: 100%; height: 100%; object-fit: cover; }
 .profile-photo-modal { width: min(560px,100%); overflow: hidden; border: 1px solid #33464e; border-radius: 14px; background: #111c22; box-shadow: 0 30px 90px rgba(0,0,0,.65); }
 .profile-photo-modal > header { display: flex; justify-content: space-between; padding: 18px; border-bottom: 1px solid #2a3b42; }.profile-photo-modal h3 { margin: 3px 0; }.profile-photo-modal > header button { width: 36px; height: 36px; padding: 0; border-radius: 50%; font-size: 22px; }
