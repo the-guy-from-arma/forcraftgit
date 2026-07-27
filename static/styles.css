@@ -14978,6 +14978,51 @@ textarea:focus {
 .dev-fnn-control h2 { margin: 3px 0 5px; }
 .dev-fnn-control p { margin-bottom: 0; }
 .dev-fnn-control button { flex: 0 0 auto; }
+.dev-campaigns-view { gap: 16px; }
+.dev-campaign-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.dev-campaign-card {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding: 20px;
+  overflow: hidden;
+}
+.dev-campaign-card.banner { border-top: 3px solid #46cfe2; background: linear-gradient(155deg, rgba(45,158,189,.1), rgba(15,24,30,.92) 35%); }
+.dev-campaign-card.splash { border-top: 3px solid #a77aff; background: linear-gradient(155deg, rgba(138,91,215,.12), rgba(15,24,30,.92) 35%); }
+.dev-campaign-card .dev-card-header { align-items: flex-start; margin-bottom: 0; padding-bottom: 15px; }
+.dev-campaign-card .dev-card-header p { margin: 5px 0 0; color: var(--dev-muted); font-size: .72rem; }
+.dev-campaign-card label { display: grid; gap: 6px; color: #82969f; font-size: .7rem; font-weight: 800; }
+.dev-campaign-card input,
+.dev-campaign-card select,
+.dev-campaign-card textarea { width: 100%; min-width: 0; background: #091217; }
+.dev-campaign-card textarea { min-height: 92px; }
+.dev-campaign-card .dev-experience-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-direction: row;
+  gap: 16px;
+}
+.dev-campaign-card .dev-experience-section > span { display: grid; gap: 3px; }
+.dev-campaign-card .dev-experience-section b { color: #55cbdc; font-size: 8px; letter-spacing: .12em; }
+.dev-campaign-card .dev-experience-section strong { color: #e1ecef; font-size: 12px; }
+.dev-campaign-card .dev-experience-section input { width: 20px; height: 20px; flex: 0 0 auto; }
+.dev-campaign-schedule { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding-top: 3px; }
+.dev-campaign-schedule small { color: #60757e; font-size: .6rem; font-weight: 650; }
+.dev-campaign-publish {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 18px;
+  border: 1px solid var(--dev-line);
+  border-radius: 11px;
+  background: #0d171d;
+}
+.dev-campaign-publish > div { display: grid; gap: 4px; }
+.dev-campaign-publish strong { font-size: .78rem; }
+.dev-campaign-publish span { color: var(--dev-muted); font-size: .68rem; }
 @media (max-width: 650px) {
   .system-splash-media { min-height: 180px; }
   .system-splash-copy { padding: 19px; }
@@ -14986,6 +15031,10 @@ textarea:focus {
   .dev-experience-section { align-items: flex-start; flex-direction: column; }
   .dev-fnn-control { align-items: stretch; flex-direction: column; gap: 15px; }
   .dev-fnn-control button { width: 100%; }
+  .dev-campaign-grid { grid-template-columns: 1fr; }
+  .dev-campaign-schedule { grid-template-columns: 1fr; }
+  .dev-campaign-publish { grid-column: auto; align-items: stretch; flex-direction: column; }
+  .dev-campaign-publish button { width: 100%; }
 }
 
 /* Phone-native layouts for Staff Operations and FNN */

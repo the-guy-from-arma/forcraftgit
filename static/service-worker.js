@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v017-device-fit";
+const CACHE = "faircroft-rp-v017-campaigns";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.1.7-device-fit",
+  "/static/styles.css?v=0.1.7-campaigns",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.1.7-device-fit",
+  "/static/app.js?v=0.1.7-campaigns",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
   "/static/brand/platforms/playstation.svg",

@@ -1255,10 +1255,14 @@ SYSTEM_SETTING_DEFAULTS = {
     "system_banner_enabled": "0",
     "system_banner_message": "",
     "system_banner_tone": "info",
+    "system_banner_start_at": "",
+    "system_banner_end_at": "",
     "splash_enabled": "0",
     "splash_title": "Welcome to Faircroft",
     "splash_message": "",
     "splash_media_url": "",
+    "splash_start_at": "",
+    "splash_end_at": "",
     "splash_revision": "1",
     "app_visibility": "{}",
 }
@@ -2854,6 +2858,26 @@ def get_system_settings(db: Database) -> dict[str, Any]:
     banner_tone = str(raw.get("system_banner_tone") or "info").strip().lower()
     if banner_tone not in ("info", "success", "warning", "critical"):
         banner_tone = "info"
+    banner_configured = str(raw.get("system_banner_enabled") or "0") in ("1", "true", "True", "yes", "on")
+    splash_configured = str(raw.get("splash_enabled") or "0") in ("1", "true", "True", "yes", "on")
+    banner_start_at = str(raw.get("system_banner_start_at") or "").strip()
+    banner_end_at = str(raw.get("system_banner_end_at") or "").strip()
+    splash_start_at = str(raw.get("splash_start_at") or "").strip()
+    splash_end_at = str(raw.get("splash_end_at") or "").strip()
+
+    def campaign_is_active(enabled: bool, start_at: str, end_at: str) -> bool:
+        if not enabled:
+            return False
+        current = utcnow()
+        try:
+            if start_at and parse_iso(start_at) > current:
+                return False
+            if end_at and parse_iso(end_at) <= current:
+                return False
+        except ValueError:
+            return False
+        return True
+
     return {
         "autopilot_verify_enabled": str(raw.get("autopilot_verify_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "autopilot_verify_minutes": minutes,
@@ -2864,13 +2888,19 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "beta_recruiting_enabled": str(raw.get("beta_recruiting_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "beta_recruiting_message": str(raw.get("beta_recruiting_message") or SYSTEM_SETTING_DEFAULTS["beta_recruiting_message"]).strip()[:600],
         "beta_campaign_id": beta_campaign_id,
-        "system_banner_enabled": str(raw.get("system_banner_enabled") or "0") in ("1", "true", "True", "yes", "on"),
+        "system_banner_enabled": campaign_is_active(banner_configured, banner_start_at, banner_end_at),
+        "system_banner_configured": banner_configured,
         "system_banner_message": str(raw.get("system_banner_message") or "").strip()[:240],
         "system_banner_tone": banner_tone,
-        "splash_enabled": str(raw.get("splash_enabled") or "0") in ("1", "true", "True", "yes", "on"),
+        "system_banner_start_at": banner_start_at,
+        "system_banner_end_at": banner_end_at,
+        "splash_enabled": campaign_is_active(splash_configured, splash_start_at, splash_end_at),
+        "splash_configured": splash_configured,
         "splash_title": str(raw.get("splash_title") or SYSTEM_SETTING_DEFAULTS["splash_title"]).strip()[:100],
         "splash_message": str(raw.get("splash_message") or "").strip()[:800],
         "splash_media_url": str(raw.get("splash_media_url") or "").strip()[:500],
+        "splash_start_at": splash_start_at,
+        "splash_end_at": splash_end_at,
         "splash_revision": splash_revision,
         "app_visibility": app_visibility,
     }
@@ -9937,12 +9967,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 },
                 "experience": {
                     "system_banner_enabled": system_settings["system_banner_enabled"],
+                    "system_banner_configured": system_settings["system_banner_configured"],
                     "system_banner_message": system_settings["system_banner_message"],
                     "system_banner_tone": system_settings["system_banner_tone"],
+                    "system_banner_start_at": system_settings["system_banner_start_at"],
+                    "system_banner_end_at": system_settings["system_banner_end_at"],
                     "splash_enabled": system_settings["splash_enabled"],
+                    "splash_configured": system_settings["splash_configured"],
                     "splash_title": system_settings["splash_title"],
                     "splash_message": system_settings["splash_message"],
                     "splash_media_url": system_settings["splash_media_url"],
+                    "splash_start_at": system_settings["splash_start_at"],
+                    "splash_end_at": system_settings["splash_end_at"],
                     "splash_revision": system_settings["splash_revision"],
                 },
                 "anti_cheat": {
@@ -10011,6 +10047,25 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         splash_title = str(payload.get("splash_title") or "Welcome to Faircroft").strip()[:100]
         splash_message = str(payload.get("splash_message") or "").strip()[:800]
         splash_media_url = str(payload.get("splash_media_url") or "").strip()[:500]
+        banner_start_at = str(payload.get("system_banner_start_at") or "").strip()
+        banner_end_at = str(payload.get("system_banner_end_at") or "").strip()
+        splash_start_at = str(payload.get("splash_start_at") or "").strip()
+        splash_end_at = str(payload.get("splash_end_at") or "").strip()
+        for label, start_at, end_at in (
+            ("System banner", banner_start_at, banner_end_at),
+            ("Splash screen", splash_start_at, splash_end_at),
+        ):
+            try:
+                if start_at:
+                    parse_iso(start_at)
+                if end_at:
+                    parse_iso(end_at)
+                if start_at and end_at and parse_iso(end_at) <= parse_iso(start_at):
+                    self.error(400, f"{label} end time must be after its start time")
+                    return
+            except ValueError:
+                self.error(400, f"{label} schedule is invalid")
+                return
         if splash_media_url and not (
             splash_media_url.startswith("https://")
             or splash_media_url.startswith("/static/")
@@ -10028,10 +10083,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "system_banner_enabled": "1" if banner_enabled else "0",
             "system_banner_message": banner_message,
             "system_banner_tone": banner_tone,
+            "system_banner_start_at": banner_start_at,
+            "system_banner_end_at": banner_end_at,
             "splash_enabled": "1" if splash_enabled else "0",
             "splash_title": splash_title,
             "splash_message": splash_message,
             "splash_media_url": splash_media_url,
+            "splash_start_at": splash_start_at,
+            "splash_end_at": splash_end_at,
             "splash_revision": str(revision),
         }
         for key, value in updates.items():

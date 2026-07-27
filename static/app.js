@@ -22,6 +22,7 @@ const state = {
   profileTab: "overview",
   pwaInstallHelpOpen: false,
   systemBannerDismissed: false,
+  splashDismissedRevision: null,
   armaUnlinkOpen: false,
   armaLinkPromptDismissed: false,
   generatedDevCode: null,
@@ -689,7 +690,7 @@ function renderArmaLinkRequiredModal() {
 
 function bindRequiredProfileModals() {
   $("[data-system-splash-dismiss]")?.addEventListener("click", (event) => {
-    localStorage.setItem(`faircroft.splash.seen.${event.currentTarget.dataset.splashRevision || "1"}`, "1");
+    state.splashDismissedRevision = String(event.currentTarget.dataset.splashRevision || "1");
     render();
   });
   bindCarEntryRequiredModal();
@@ -784,7 +785,7 @@ function renderSystemSplash() {
   const system = state.session?.system;
   if (!system?.splash_enabled || !system.splash_message) return "";
   const revision = String(system.splash_revision || "1");
-  if (localStorage.getItem(`faircroft.splash.seen.${revision}`) === "1") return "";
+  if (state.splashDismissedRevision === revision) return "";
   const mediaUrl = String(system.splash_media_url || "");
   const media = mediaUrl
     ? (/\.(mp4|webm)(\?|$)/i.test(mediaUrl)
@@ -8277,6 +8278,7 @@ function renderDevWorkspace() {
     linking: ["Account Linking", "Linked identities, recent claims, and unlink authorization"],
     intelligence: ["Game Intelligence", "Read-only FCRPMUSSALO assets, records, and identity matches"],
     anticheat: ["Anti-Cheat Intelligence", "Live presence, detection history, and linked identity analysis"],
+    campaigns: ["Active Campaigns", "Schedule banners, events, promotions, and entrance bulletins"],
     audit: ["Activity Log", "Chronological record of staff actions"],
     settings: ["App Visibility", "Control which application icons appear for users"],
   }[state.devTab] || ["Staff Operations", "Faircroft administrative console"];
@@ -8284,7 +8286,7 @@ function renderDevWorkspace() {
     <aside class="dev-sidebar">
       <div class="dev-brand"><img class="dev-emblem" src="/static/brand/faircroft-emblem.webp" alt="" /><div><strong>Faircroft RP</strong><small>Staff Operations</small></div></div>
       <p class="dev-nav-label">Operations index</p>
-      <nav>${[["dashboard","Command Center"],["intelligence","Game Intelligence"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["audit","Activity Log"],["settings","Settings"]].map(([id,label], index) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><small>${String(index + 1).padStart(2, "0")}</small><span>${label}</span><i></i></button>`).join("")}</nav>
+      <nav>${[["dashboard","Command Center"],["intelligence","Game Intelligence"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["campaigns","Active Campaigns"],["audit","Activity Log"],["settings","Settings"]].map(([id,label], index) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><small>${String(index + 1).padStart(2, "0")}</small><span>${label}</span><i></i></button>`).join("")}</nav>
       <div class="dev-sidebar-footer"><span class="dev-access-dot"></span><div><strong>Authorized Staff</strong><small>${escapeHtml(state.session?.user?.name || "Staff member")}</small></div></div>
     </aside>
     <main class="dev-main">
@@ -8389,35 +8391,34 @@ function renderDevTools() {
     </form></section><section class="dev-card dev-record-panel"><div class="dev-card-header"><div><span>CASE LEDGER</span><h2>Enforcement records</h2></div><strong>${sanctions.length}</strong></div><div class="dev-record-list">${sanctions.map(devSanctionRow).join("") || `<div class="empty">No reports</div>`}</div></section></div></div>`;
   if (state.devTab === "warnings") return `<div class="dev-ops-view dev-notes-view"><div class="dev-view-intro"><div><span>INTERNAL INTELLIGENCE</span><h2>Staff observation ledger</h2><p>Restricted operational context. Notes are never shown on the player-facing account.</p></div><strong>${warnings.filter((x) => !x.resolved_at).length} OPEN</strong></div><div class="dev-grid-2"><section class="dev-card dev-editor-panel"><div class="row"><div><p class="eyebrow">New observation</p><h2>Record internal note</h2></div><span class="pill amber">staff only</span></div><form id="devWarningForm" class="form-grid"><label>Account<select name="user_id" required><option value="">Select account</option>${devUserOptions(users)}</select></label><label>Severity<select name="severity"><option>low</option><option selected>standard</option><option>high</option><option>critical</option></select></label><label>Subject<input name="subject" maxlength="160" required /></label><label>Internal note<textarea name="body" maxlength="3000" required></textarea></label><button class="primary">Commit note</button></form></section><section class="dev-card dev-record-panel"><div class="dev-card-header"><div><span>HISTORICAL RECORD</span><h2>Note history</h2></div><strong>${warnings.length}</strong></div><div class="dev-record-list">${warnings.map((x) => `<article class="dev-note-record"><span class="dev-note-severity ${escapeHtml(x.severity || "standard")}"></span><div><small>${escapeHtml(x.target_name)} · ${escapeHtml(x.severity || "standard")}</small><strong>${escapeHtml(x.subject)}</strong><p>${escapeHtml(x.body)}</p><time>${escapeHtml(x.created_by_name)} · ${escapeHtml(x.created_at)}</time></div>${x.resolved_at ? `<span class="dev-record-status closed">Resolved</span>` : `<button class="secondary" data-resolve-warning="${x.id}">Resolve</button>`}</article>`).join("") || `<div class="empty">No internal notes</div>`}</div></section></div></div>`;
   if (state.devTab === "linking") return `<div class="stack dev-ops-view dev-linking-view"><div class="dev-view-intro"><div><span>IDENTITY CONTROL</span><h2>Account-link registry</h2><p>Review verified identity claims and issue tightly scoped unlink authorization.</p></div><strong>${users.filter((x) => x.arma_linked).length} LINKED</strong></div>${metrics}<div class="dev-grid-2"><section class="dev-card dev-access-panel"><p class="eyebrow">Secure unlink authorization</p><h2>One-time developer code</h2><p class="muted">Single-purpose credentials for supervised identity maintenance.</p><form id="devCodeForm" class="form-grid"><label>Validity window<input name="expiry_minutes" type="number" min="5" max="1440" value="30" required /><small>Minutes until automatic expiration</small></label><button class="primary">Generate authorization</button></form>${state.generatedDevCode ? `<div class="dev-generated-code"><span>Shown once</span><strong>${escapeHtml(state.generatedDevCode.code)}</strong><small>Expires ${escapeHtml(state.generatedDevCode.expires_at)}</small></div>` : ""}<div class="dev-code-ledger">${codes.slice(0,12).map((x) => `<div><code>••••-${escapeHtml(x.code_hint)}</code><span>${escapeHtml(x.created_by_name)}</span><strong class="${x.uses_remaining ? "available" : ""}">${x.uses_remaining ? "Available" : "Consumed"}</strong></div>`).join("") || `<div class="empty">No authorization codes issued</div>`}</div></section><section class="dev-card dev-record-panel"><div class="dev-card-header"><div><span>RECENT CLAIMS</span><h2>Identity activity</h2></div></div>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card dev-linked-registry"><div class="dev-card-header"><div><span>VERIFIED DIRECTORY</span><h2>Linked accounts</h2></div><strong>${users.filter((x) => x.arma_linked).length}</strong></div>${devLinkedAccounts(users)}</section></div>`;
+  if (state.devTab === "campaigns") {
+    const experience = data.experience || {};
+    return `<div class="stack dev-campaigns-view">
+      <div class="dev-view-intro"><div><span>COMMUNITY BROADCAST CONTROL</span><h2>Active campaigns</h2><p>Promote communities, gangs, events, operational notices, and rule changes for a controlled period.</p></div><strong>${Number(Boolean(experience.system_banner_enabled)) + Number(Boolean(experience.splash_enabled))} LIVE</strong></div>
+      <form id="devExperienceForm" class="dev-campaign-grid">
+        <section class="dev-card dev-campaign-card banner">
+          <div class="dev-card-header"><div><span>PERSISTENT MESSAGE</span><h2>System banner</h2><p>Compact announcement displayed across the RP OS.</p></div><span class="pill ${experience.system_banner_enabled ? "green" : experience.system_banner_configured ? "amber" : ""}">${experience.system_banner_enabled ? "live" : experience.system_banner_configured ? "scheduled" : "off"}</span></div>
+          <label class="dev-experience-section"><span><b>CAMPAIGN STATUS</b><strong>Allow this banner to run</strong></span><input type="checkbox" name="system_banner_enabled" ${experience.system_banner_configured ? "checked" : ""} /></label>
+          <label>Banner tone<select name="system_banner_tone">${["info","success","warning","critical"].map((tone) => `<option value="${tone}" ${experience.system_banner_tone === tone ? "selected" : ""}>${humanLabel(tone)}</option>`).join("")}</select></label>
+          <label>Banner message<textarea name="system_banner_message" maxlength="240" placeholder="Community promotion, event, rule change, or operational notice.">${escapeHtml(experience.system_banner_message || "")}</textarea></label>
+          <div class="dev-campaign-schedule"><label>Starts<input name="system_banner_start_at" type="datetime-local" value="${escapeHtml(String(experience.system_banner_start_at || "").slice(0,16))}" /><small>Leave blank to start immediately</small></label><label>Ends<input name="system_banner_end_at" type="datetime-local" value="${escapeHtml(String(experience.system_banner_end_at || "").slice(0,16))}" /><small>Leave blank to remain active</small></label></div>
+        </section>
+        <section class="dev-card dev-campaign-card splash">
+          <div class="dev-card-header"><div><span>ENTRANCE TAKEOVER</span><h2>Splash campaign</h2><p>Full-screen campaign presented when a player enters RP OS.</p></div><span class="pill ${experience.splash_enabled ? "green" : experience.splash_configured ? "amber" : ""}">${experience.splash_enabled ? "live" : experience.splash_configured ? "scheduled" : "off"}</span></div>
+          <label class="dev-experience-section"><span><b>CAMPAIGN STATUS</b><strong>Allow this splash to run</strong></span><input type="checkbox" name="splash_enabled" ${experience.splash_configured ? "checked" : ""} /></label>
+          <label>Campaign title<input name="splash_title" maxlength="100" value="${escapeHtml(experience.splash_title || "Welcome to Faircroft")}" /></label>
+          <label>Campaign message<textarea name="splash_message" maxlength="800" placeholder="Introduce the event, group, rule update, or community feature.">${escapeHtml(experience.splash_message || "")}</textarea></label>
+          <label>Photo or video URL<input name="splash_media_url" maxlength="500" value="${escapeHtml(experience.splash_media_url || "")}" placeholder="https://.../campaign.mp4 or /static/brand/..." /></label>
+          <div class="dev-campaign-schedule"><label>Starts<input name="splash_start_at" type="datetime-local" value="${escapeHtml(String(experience.splash_start_at || "").slice(0,16))}" /><small>Leave blank to start immediately</small></label><label>Ends<input name="splash_end_at" type="datetime-local" value="${escapeHtml(String(experience.splash_end_at || "").slice(0,16))}" /><small>Leave blank to remain active</small></label></div>
+        </section>
+        <div class="dev-campaign-publish"><div><strong>Campaign changes affect all eligible users</strong><span>The publishing developer will preview the splash on their next fresh entrance, not immediately.</span></div><button class="primary" type="submit">Publish campaign schedule</button></div>
+      </form>
+    </div>`;
+  }
   if (state.devTab === "settings") {
     const visibilityApps = data.app_visibility?.apps || [];
     const beta = data.beta_program || { recruiting_enabled: false, recruiting_message: "", members: 0, member_roster: [], tasks: [], reports: [] };
-    const experience = data.experience || {};
     return `<div class="stack beta-operations">
-      <section class="dev-card dev-experience-control">
-        <div class="dev-card-header">
-          <div><span>USER EXPERIENCE CONTROL</span><h2>System communications</h2><p>Publish a persistent top banner or a one-time cinematic splash screen across Faircroft.</p></div>
-          <strong>${experience.system_banner_enabled || experience.splash_enabled ? "LIVE" : "OFF"}</strong>
-        </div>
-        <form id="devExperienceForm" class="form-grid">
-          <div class="dev-experience-section">
-            <div><span>SYSTEM BANNER</span><strong>Top-of-screen announcement</strong></div>
-            <label class="check-row"><input type="checkbox" name="system_banner_enabled" ${experience.system_banner_enabled ? "checked" : ""} /> Enable system banner</label>
-          </div>
-          <label>Banner tone<select name="system_banner_tone">
-            ${["info","success","warning","critical"].map((tone) => `<option value="${tone}" ${experience.system_banner_tone === tone ? "selected" : ""}>${humanLabel(tone)}</option>`).join("")}
-          </select></label>
-          <label class="wide">Banner message<textarea name="system_banner_message" maxlength="240" placeholder="Short operational announcement shown at the top of every screen.">${escapeHtml(experience.system_banner_message || "")}</textarea></label>
-          <div class="dev-experience-section wide">
-            <div><span>SPLASH SCREEN</span><strong>Login bulletin or event takeover</strong></div>
-            <label class="check-row"><input type="checkbox" name="splash_enabled" ${experience.splash_enabled ? "checked" : ""} /> Enable splash screen</label>
-          </div>
-          <label>Splash title<input name="splash_title" maxlength="100" value="${escapeHtml(experience.splash_title || "Welcome to Faircroft")}" /></label>
-          <label class="wide">Splash message<textarea name="splash_message" maxlength="800" placeholder="Event, update, or community announcement.">${escapeHtml(experience.splash_message || "")}</textarea></label>
-          <label class="wide">Photo or video URL<input name="splash_media_url" maxlength="500" value="${escapeHtml(experience.splash_media_url || "")}" placeholder="https://.../event.mp4 or /static/brand/..." /><small>HTTPS images, MP4/WebM videos, or approved Faircroft static assets.</small></label>
-          <button class="primary wide" type="submit">Publish experience settings</button>
-        </form>
-      </section>
       <section class="dev-card beta-command-hero">
         <div class="beta-command-copy"><p class="eyebrow">Release planning</p><h2>Beta Operations</h2><p>Coordinate recruitment, assignments, the testing team, and incoming findings from one focused workspace.</p></div>
         <div class="beta-command-status"><i></i><span>PROGRAM STATUS</span><strong>${beta.recruiting_enabled ? "Recruiting" : "Closed"}</strong></div>
@@ -9025,7 +9026,7 @@ function bindDevTools() {
     event.preventDefault();
     const form = event.currentTarget;
     const values = Object.fromEntries(new FormData(form).entries());
-    await api("/api/dev-tools/experience", {
+    const result = await api("/api/dev-tools/experience", {
       method: "PATCH",
       body: {
         ...values,
@@ -9033,7 +9034,8 @@ function bindDevTools() {
         splash_enabled: form.splash_enabled.checked,
       },
     });
-    toast("System communications published");
+    state.splashDismissedRevision = String(result.experience?.splash_revision || "");
+    toast("Campaign schedule published");
     await loadSession();
     await refreshDevTools();
   });
@@ -9809,7 +9811,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-device-fit").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-campaigns").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {
