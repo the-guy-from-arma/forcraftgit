@@ -9832,7 +9832,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-banner-dismiss").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-mobile-layouts").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {
