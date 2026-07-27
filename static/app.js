@@ -822,23 +822,30 @@ function renderFnnWorkspace() {
         ${data.can_generate ? `<button type="button" data-generate-fnn>${edition ? "Regenerate today" : "Publish today"}</button>` : ""}
       </div>
     </header>
-    <nav class="fnn-sections" aria-label="News sections"><strong>TOP STORIES</strong><span>PUBLIC SAFETY</span><span>FAIRCROFT</span><span>JUSTICE</span><span>COMMUNITY</span><time>${escapeHtml(dateLabel)}</time></nav>
+    <nav class="fnn-sections" aria-label="News sections">
+      <button class="active" type="button" data-fnn-section="fnn-top">TOP STORIES</button>
+      <button type="button" data-fnn-section="fnn-safety">PUBLIC SAFETY</button>
+      <button type="button" data-fnn-section="fnn-stories">FAIRCROFT</button>
+      <button type="button" data-fnn-section="fnn-stories">JUSTICE</button>
+      <button type="button" data-fnn-section="fnn-stories">COMMUNITY</button>
+      <time>${escapeHtml(dateLabel)}</time>
+    </nav>
     ${edition ? `
       <div class="fnn-breaking"><strong>FNN DAILY</strong><span>${escapeHtml(edition.headline)}</span></div>
-      <div class="fnn-page">
+      <div class="fnn-page" id="fnn-top">
         <section class="fnn-lead">
           <p class="fnn-kicker">FAIRCROFT LEAD STORY</p>
           <h1>${escapeHtml(edition.headline)}</h1>
           <p class="fnn-deck">${escapeHtml(edition.deck || "")}</p>
           <div class="fnn-byline"><span>FNN NEWSROOM</span><time>Published ${escapeHtml(dateLabel)}</time></div>
           <div class="fnn-lead-copy">${fnnStoryText(edition.lead_story)}</div>
-          <p class="fnn-source-note">Monthly newsroom review compiled from ${Number(edition.source_report_count || 0)} official in-server after-action report${Number(edition.source_report_count || 0) === 1 ? "" : "s"}.</p>
+          <p class="fnn-source-note">Newsroom review compiled from ${Number(edition.source_report_count || 0)} official CAD, citation, and criminal-court source record${Number(edition.source_report_count || 0) === 1 ? "" : "s"} across the complete Faircroft archive.</p>
         </section>
-        <aside class="fnn-brief">
+        <aside class="fnn-brief" id="fnn-safety">
           <div class="fnn-brief-title"><span>PUBLIC SAFETY DESK</span><strong>Daily Brief</strong></div>
           ${safety.map((item) => `<article><span>${escapeHtml(item.label || "Update")}</span><p>${escapeHtml(item.detail || "")}</p></article>`).join("") || `<div class="empty">No additional public-safety briefs today.</div>`}
         </aside>
-        <section class="fnn-story-grid fnn-longform-grid">
+        <section class="fnn-story-grid fnn-longform-grid" id="fnn-stories">
           ${stories.map((story, index) => `<article class="${index === 0 ? "fnn-feature-story" : ""}">
             <span>${escapeHtml(story.category || "FAIRCROFT")}</span>
             <h2>${escapeHtml(story.headline || "Developing story")}</h2>
@@ -853,7 +860,7 @@ function renderFnnWorkspace() {
         <div class="fnn-empty-mark"><b>F</b><b>N</b><b>N</b></div>
         <p class="fnn-kicker">FAIRCROFT NEWS NOW</p>
         <h1>The newsroom is preparing today’s edition.</h1>
-        <p>${data.generation_configured ? "The newsroom will build an extensive edition from eligible reports filed during the current month." : "A developer must configure the Gemini newsroom connection before editions can publish."}</p>
+        <p>${data.generation_configured ? "The newsroom will build an extensive edition from the complete archive of CAD reports, citations, and criminal matters." : "A developer must configure the Gemini newsroom connection before editions can publish."}</p>
         ${data.can_generate && data.generation_configured ? `<button class="primary" type="button" data-generate-fnn>Generate today’s edition</button>` : ""}
       </section>
     `}
@@ -866,26 +873,45 @@ function bindFnnWorkspace() {
     state.activeApp = null;
     await loadSession();
   });
-  $("[data-generate-fnn]")?.addEventListener("click", async (event) => {
-    const button = event.currentTarget;
-    button.disabled = true;
-    button.textContent = "Publishing…";
-    try {
-      const result = await api("/api/fnn/generate", { method: "POST" });
-      if (result.status === "no_reports") {
-        toast("No after-action reports are available for today");
-      } else if (result.status === "configuration_required") {
-        toast("GEMINI_API_KEY is not configured");
-      } else {
-        toast("Today’s FNN edition is published");
+  $$("[data-fnn-section]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const target = document.getElementById(button.dataset.fnnSection);
+      if (!target) {
+        toast("Publish an edition to open newsroom sections");
+        return;
       }
-      await loadAppData("fnn");
-      render();
-    } catch (error) {
-      toast(error.message);
-      button.disabled = false;
-      button.textContent = "Try again";
-    }
+      $$(".fnn-sections button").forEach((item) => item.classList.toggle("active", item === button));
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
+  $$("[data-generate-fnn]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const buttons = $$("[data-generate-fnn]");
+      buttons.forEach((item) => {
+        item.disabled = true;
+        item.classList.add("publishing");
+        item.textContent = "Building edition…";
+      });
+      try {
+        const result = await api("/api/fnn/generate", { method: "POST" });
+        if (result.status === "no_reports") {
+          toast("No CAD reports, citations, or criminal records are available");
+        } else if (result.status === "configuration_required") {
+          toast("GEMINI_API_KEY is not configured");
+        } else {
+          toast("Today’s FNN edition is published");
+        }
+        await loadAppData("fnn");
+        render();
+      } catch (error) {
+        toast(error.message);
+        buttons.forEach((item) => {
+          item.disabled = false;
+          item.classList.remove("publishing");
+          item.textContent = "Try again";
+        });
+      }
+    });
   });
 }
 
@@ -8273,6 +8299,39 @@ function devAudit(logs) {
   </article>`).join("") || `<div class="empty">No audited actions yet</div>`}</div>`;
 }
 
+function renderDevBetaModal(beta) {
+  const modal = state.betaDevModal;
+  if (!modal) return "";
+  const content = {
+    recruitment: `<form id="devBetaProgramForm" class="form-grid beta-modal-form">
+      <label class="check-row"><input type="checkbox" name="enabled" ${beta.recruiting_enabled ? "checked" : ""} /> Seek new beta testers on login</label>
+      <label>Invitation message<textarea name="message" minlength="20" maxlength="600" required>${escapeHtml(beta.recruiting_message || "")}</textarea></label>
+      <button class="primary" type="submit">Save recruitment settings</button>
+    </form>`,
+    task: `<form id="devBetaTaskForm" class="form-grid beta-modal-form">
+      <label>Task title<input name="title" minlength="3" maxlength="140" required /></label>
+      <label>Test area<input name="test_area" maxlength="80" placeholder="Banking, MDT, mobile UI..." /></label>
+      <label>Priority<select name="priority"><option>low</option><option selected>standard</option><option>high</option><option>critical</option></select></label>
+      <label>Testing instructions<textarea name="instructions" minlength="10" maxlength="5000" required></textarea></label>
+      <button class="primary" type="submit">Publish beta task</button>
+    </form>`,
+    tasks: `<div class="beta-modal-ledger">${(beta.tasks || []).map((task) => `<article><div><span>${escapeHtml(task.test_area || "General testing")} · ${escapeHtml(task.priority)}</span><strong>${escapeHtml(task.title)}</strong><small>${task.active ? "Currently available to testers" : "Assignment closed"}</small></div><button class="secondary" type="button" data-beta-task-toggle="${task.id}" data-active="${task.active ? "false" : "true"}">${task.active ? "Close task" : "Reopen"}</button></article>`).join("") || `<div class="empty">No beta tasks published</div>`}</div>`,
+    team: `<div class="beta-modal-ledger beta-team-directory">${(beta.member_roster || []).map((member) => `<article>
+      <div class="beta-roster-avatar">${escapeHtml((member.name || "B").slice(0, 1).toUpperCase())}</div>
+      <div><span>CIV ${escapeHtml(member.civ_number || "pending")}</span><strong>${escapeHtml(member.name || "Beta Tester")}</strong><small>${escapeHtml(member.email || "")}</small></div>
+      <div class="beta-roster-status"><span class="pill ${member.verified ? "green" : "amber"}">${member.verified ? "verified" : "unverified"}</span><span class="pill ${member.arma_linked ? "green" : ""}">${member.arma_linked ? "Arma linked" : "not linked"}</span></div>
+    </article>`).join("") || `<div class="empty">No users have joined the Beta Testing Team yet.</div>`}</div>`,
+    reports: `<div class="beta-modal-ledger">${(beta.reports || []).map((report) => `<article><div><span>${escapeHtml(report.reporter_name)} · ${escapeHtml(report.severity)}</span><strong>${escapeHtml(report.summary)}</strong><small>${escapeHtml(report.task_title || "General report")} — ${escapeHtml(report.actual_result)}</small></div><span class="pill">${escapeHtml(report.status)}</span></article>`).join("") || `<div class="empty">No beta bug reports</div>`}</div>`
+  }[modal] || "";
+  const titles = { recruitment: "Recruitment campaign", task: "Publish assignment", tasks: "Assignment library", team: "Beta testing team", reports: "Tester findings" };
+  return `<div class="modal-backdrop beta-control-backdrop" data-beta-modal-close>
+    <section class="dev-card beta-control-modal" role="dialog" aria-modal="true" aria-label="${escapeHtml(titles[modal] || "Beta Program")}">
+      <header><div><p class="eyebrow">Beta operations</p><h2>${escapeHtml(titles[modal] || "Beta Program")}</h2></div><button type="button" class="beta-modal-close" data-beta-modal-close aria-label="Close">×</button></header>
+      <div class="beta-control-modal-body">${content}</div>
+    </section>
+  </div>`;
+}
+
 function renderDevTools() {
   const data = state.cache["dev-tools"] || {};
   const users = data.users || [], sanctions = data.sanctions || [], warnings = data.warnings || [], logs = data.audit_logs || [], codes = data.unlink_codes || [];
@@ -8304,59 +8363,27 @@ function renderDevTools() {
   if (state.devTab === "settings") {
     const visibilityApps = data.app_visibility?.apps || [];
     const beta = data.beta_program || { recruiting_enabled: false, recruiting_message: "", members: 0, member_roster: [], tasks: [], reports: [] };
-    return `<div class="stack">
-      <section class="dev-card beta-dev-console">
-        <div class="dev-card-header"><div><p class="eyebrow">Release planning</p><h2>Beta Program</h2><p class="muted">Recruit testers, publish test assignments, and review incoming bug reports.</p></div><span class="pill ${beta.recruiting_enabled ? "green" : "amber"}">${beta.recruiting_enabled ? "seeking testers" : "recruitment off"}</span></div>
+    return `<div class="stack beta-operations">
+      <section class="dev-card beta-command-hero">
+        <div class="beta-command-copy"><p class="eyebrow">Release planning</p><h2>Beta Operations</h2><p>Coordinate recruitment, assignments, the testing team, and incoming findings from one focused workspace.</p></div>
+        <div class="beta-command-status"><i></i><span>PROGRAM STATUS</span><strong>${beta.recruiting_enabled ? "Recruiting" : "Closed"}</strong></div>
         <div class="dev-metrics beta-dev-metrics">
           <div class="dev-metric"><span>Beta members</span><strong>${Number(beta.members || 0)}</strong><small>Opted-in testers</small></div>
           <div class="dev-metric"><span>Active tasks</span><strong>${(beta.tasks || []).filter((task) => task.active).length}</strong><small>Published briefs</small></div>
           <div class="dev-metric"><span>Bug reports</span><strong>${(beta.reports || []).length}</strong><small>Submitted findings</small></div>
         </div>
-        <form id="devBetaProgramForm" class="form-grid">
-          <label class="check-row"><input type="checkbox" name="enabled" ${beta.recruiting_enabled ? "checked" : ""} /> Seek new beta testers on login</label>
-          <label>Invitation message<textarea name="message" minlength="20" maxlength="600" required>${escapeHtml(beta.recruiting_message || "")}</textarea></label>
-          <button class="primary" type="submit">Save Beta Recruitment</button>
-        </form>
-      </section>
-      <div class="dev-grid-2">
-        <section class="dev-card">
-          <div><p class="eyebrow">New assignment</p><h2>Publish Beta Task</h2></div>
-          <form id="devBetaTaskForm" class="form-grid">
-            <label>Task title<input name="title" minlength="3" maxlength="140" required /></label>
-            <label>Test area<input name="test_area" maxlength="80" placeholder="Banking, MDT, mobile UI..." /></label>
-            <label>Priority<select name="priority"><option>low</option><option selected>standard</option><option>high</option><option>critical</option></select></label>
-            <label>Testing instructions<textarea name="instructions" minlength="10" maxlength="5000" required></textarea></label>
-            <button class="primary" type="submit">Publish Task</button>
-          </form>
-        </section>
-        <section class="dev-card"><div class="row"><h2>Published Tasks</h2><span class="pill">${(beta.tasks || []).length}</span></div>
-          <div class="dev-record-list">${(beta.tasks || []).map((task) => `<article class="dev-case"><div><strong>${escapeHtml(task.title)}</strong><p>${escapeHtml(task.test_area)} · ${escapeHtml(task.priority)}</p></div><button class="secondary" type="button" data-beta-task-toggle="${task.id}" data-active="${task.active ? "false" : "true"}">${task.active ? "Close" : "Reopen"}</button></article>`).join("") || `<div class="empty">No beta tasks published</div>`}</div>
-        </section>
-      </div>
-      <section class="dev-card beta-team-roster">
-        <div class="dev-card-header">
-          <div><p class="eyebrow">Current membership</p><h2>Beta Testing Team</h2><p class="muted">Everyone currently holding the Beta Tester role.</p></div>
-          <span class="pill green">${(beta.member_roster || []).length} testers</span>
-        </div>
-        <div class="beta-roster-list">
-          ${(beta.member_roster || []).map((member) => `
-            <article class="beta-roster-member">
-              <div class="beta-roster-avatar">${escapeHtml((member.name || "B").slice(0, 1).toUpperCase())}</div>
-              <div class="beta-roster-identity">
-                <strong>${escapeHtml(member.name || "Beta Tester")}</strong>
-                <small>CIV ${escapeHtml(member.civ_number || "pending")} · ${escapeHtml(member.email || "")}</small>
-              </div>
-              <div class="beta-roster-status">
-                <span class="pill ${member.verified ? "green" : "amber"}">${member.verified ? "verified" : "unverified"}</span>
-                <span class="pill ${member.arma_linked ? "green" : ""}">${member.arma_linked ? "Arma linked" : "not linked"}</span>
-              </div>
-              <small class="beta-roster-joined">Joined ${member.beta_joined_at ? new Date(member.beta_joined_at).toLocaleString() : "before campaign tracking"}</small>
-            </article>`).join("") || `<div class="empty">No users have joined the Beta Testing Team yet.</div>`}
+        <div class="beta-command-actions">
+          <button type="button" class="primary" data-beta-modal="task"><span>NEW ASSIGNMENT</span><strong>Publish test brief</strong></button>
+          <button type="button" data-beta-modal="recruitment"><span>CAMPAIGN</span><strong>Manage recruitment</strong></button>
+          <button type="button" data-beta-modal="team"><span>DIRECTORY</span><strong>View testing team</strong></button>
+          <button type="button" data-beta-modal="reports"><span>INTAKE</span><strong>Review findings</strong></button>
         </div>
       </section>
-      <section class="dev-card"><div class="row"><div><p class="eyebrow">Tester findings</p><h2>Beta Bug Reports</h2></div><span class="pill red">${(beta.reports || []).length}</span></div>
-        <div class="dev-record-list">${(beta.reports || []).map((report) => `<article class="dev-case"><div><strong>${escapeHtml(report.summary)}</strong><p>${escapeHtml(report.reporter_name)} · ${escapeHtml(report.task_title || "General")} · ${escapeHtml(report.severity)}</p><small>${escapeHtml(report.actual_result)}</small></div><span class="pill">${escapeHtml(report.status)}</span></article>`).join("") || `<div class="empty">No beta bug reports</div>`}</div>
+      <section class="dev-card beta-assignment-strip">
+        <div><p class="eyebrow">Assignment pulse</p><h2>${(beta.tasks || []).filter((task) => task.active).length ? "Testing currently in progress" : "No active test cycle"}</h2><p>${(beta.tasks || []).filter((task) => task.active)[0] ? escapeHtml((beta.tasks || []).filter((task) => task.active)[0].title) : "Publish a focused assignment when the next feature is ready for validation."}</p></div>
+        <button class="secondary" type="button" data-beta-modal="tasks">Open assignment library <span>${(beta.tasks || []).length}</span></button>
       </section>
+      ${renderDevBetaModal(beta)}
       <section class="dev-card dev-visibility-intro">
         <div><p class="eyebrow">Global user interface controls</p><h2>Application Icon Visibility</h2><p class="muted">Checked applications appear for users who have permission. Unchecked applications vanish from every user home screen.</p></div>
         <span class="pill amber">global setting</span>
@@ -8911,17 +8938,28 @@ function bindFineSettlement() {
 }
 
 function bindDevTools() {
+  $$("[data-beta-modal]").forEach((button) => button.addEventListener("click", () => {
+    state.betaDevModal = button.dataset.betaModal;
+    render();
+  }));
+  $$("[data-beta-modal-close]").forEach((control) => control.addEventListener("click", (event) => {
+    if (event.currentTarget.classList.contains("beta-control-backdrop") && event.target !== event.currentTarget) return;
+    state.betaDevModal = null;
+    render();
+  }));
   $("#devBetaProgramForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     await api("/api/dev-tools/beta-program", { method: "PATCH", body: { enabled: form.enabled.checked, message: form.message.value } });
     toast(form.enabled.checked ? "Beta recruitment is active" : "Beta recruitment is closed");
+    state.betaDevModal = null;
     await refreshDevTools();
   });
   $("#devBetaTaskForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     await api("/api/dev-tools/beta-tasks", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
     toast("Beta task published");
+    state.betaDevModal = null;
     await refreshDevTools();
   });
   $$("[data-beta-task-toggle]").forEach((button) => button.addEventListener("click", async () => {
@@ -9672,7 +9710,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.4-fnn-monthly").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.4-beta-ui").catch(() => {}));
 }
 
 bootApp();

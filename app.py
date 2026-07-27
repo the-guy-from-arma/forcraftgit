@@ -3604,7 +3604,6 @@ def public_fnn_edition(row: DbRow | None) -> dict[str, Any] | None:
 def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
     generation_time = dt.datetime.now(dt.timezone.utc)
     edition_date = generation_time.date().isoformat()
-    month_start = generation_time.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
     with conn() as db:
         existing = one(db, "SELECT * FROM fnn_editions WHERE edition_date = ?", (edition_date,))
         if existing and not force:
@@ -3617,13 +3616,26 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
                    officer.name AS officer_name, officer.primary_agency AS officer_agency
             FROM cad_after_call_reports r
             JOIN users officer ON officer.id = r.officer_id
-            WHERE r.created_at >= ? AND r.created_at <= ?
-            ORDER BY r.created_at
-            LIMIT 250
+            ORDER BY r.created_at DESC
             """,
-            (month_start, generation_time.isoformat()),
         )
-    if not reports:
+        court_records = all_rows(
+            db,
+            """
+            SELECT c.id, c.charge_code, c.charge_title, c.status, c.severity,
+                   catalog.kind, c.location, c.narrative, c.fine_amount, c.court_date,
+                   c.disposition, c.final_result, c.created_at, c.decided_at,
+                   civ.name AS civilian_name, officer.name AS officer_name,
+                   officer.primary_agency AS officer_agency
+            FROM citations c
+            JOIN charge_catalog catalog ON catalog.id = c.charge_id
+            JOIN users civ ON civ.id = c.civ_id
+            JOIN users officer ON officer.id = c.officer_id
+            WHERE c.record_expunged_at IS NULL
+            ORDER BY c.created_at DESC
+            """,
+        )
+    if not reports and not court_records:
         return {"status": "no_reports", "edition": None}
     if not GEMINI_API_KEY:
         return {"status": "configuration_required", "edition": None}
@@ -3641,6 +3653,28 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
             "created_at": row["created_at"],
         }
         for row in reports
+    ]
+    source_court_records = [
+        {
+            "record_id": int(row["id"]),
+            "record_type": str(row.get("kind") or "citation")[:40],
+            "charge_code": str(row["charge_code"] or "")[:80],
+            "charge_title": str(row["charge_title"] or "")[:180],
+            "status": str(row["status"] or "")[:60],
+            "severity": str(row["severity"] or "")[:80],
+            "location": str(row["location"] or "")[:180],
+            "narrative": str(row["narrative"] or "")[:4000],
+            "fine_amount": float(row["fine_amount"] or 0),
+            "court_date": str(row["court_date"] or "")[:80],
+            "disposition": str(row["disposition"] or "")[:80],
+            "final_result": str(row["final_result"] or "")[:2000],
+            "civilian_name": str(row["civilian_name"] or "")[:140],
+            "officer_name": str(row["officer_name"] or "")[:140],
+            "officer_agency": str(row["officer_agency"] or "")[:120],
+            "filed_at": row["created_at"],
+            "decided_at": row["decided_at"],
+        }
+        for row in court_records
     ]
     response_schema = {
         "type": "OBJECT",
@@ -3676,9 +3710,10 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
         },
     }
     prompt = (
-        "Create today's extensive Faircroft News Now monthly edition from every eligible "
-        "fictional Arma Reforger roleplay after-action report filed since the first day of "
-        "the current month. Produce a substantial local newspaper edition suitable for a "
+        "Create today's extensive Faircroft News Now edition from the complete supplied "
+        "archive of fictional Arma Reforger roleplay CAD after-action reports, citations, "
+        "and criminal court records, regardless of when each record was filed. Produce a "
+        "substantial local newspaper edition suitable for a "
         "long player reading session. Write a detailed lead story of approximately 900 to "
         "1,400 words and up to eight supporting stories. Each supporting story must include "
         "a concise summary and a complete body of approximately 300 to 700 words. Organize "
@@ -3688,7 +3723,12 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
         "events and officer actions. Do not mention evidence links, database identifiers, "
         "CIV numbers, private staff notes, or the AI generation process. Avoid sensational "
         "claims and treat allegations as allegations. Return only the requested JSON.\n\n"
-        f"REPORTS:\n{json.dumps(source_reports, separators=(',', ':'), ensure_ascii=False)}"
+        "For citations and criminal charges that do not have a final disposition, state "
+        "that they are allegations or pending matters and never present the accused as "
+        "guilty. Do not report expunged records. Prioritize significant and recent events "
+        "while using older records for historical context.\n\n"
+        f"CAD_AFTER_ACTION_REPORTS:\n{json.dumps(source_reports, separators=(',', ':'), ensure_ascii=False)}\n\n"
+        f"COURT_CITATIONS_AND_CRIMINAL_CHARGES:\n{json.dumps(source_court_records, separators=(',', ':'), ensure_ascii=False)}"
     )
     request_body = {
         "systemInstruction": {
@@ -3728,7 +3768,10 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
     if not headline or not lead_story:
         raise RuntimeError("Gemini returned an incomplete news edition")
     generated_at = now_iso()
-    source_ids = [int(row["id"]) for row in reports]
+    source_ids = {
+        "cad_after_action_reports": [int(row["id"]) for row in reports],
+        "court_records": [int(row["id"]) for row in court_records],
+    }
     with conn() as db:
         if force:
             db.execute("DELETE FROM fnn_editions WHERE edition_date = ?", (edition_date,))
@@ -3747,7 +3790,7 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
                 json.dumps(stories[:8], separators=(",", ":")),
                 json.dumps(public_safety[:10], separators=(",", ":")),
                 json.dumps(source_ids, separators=(",", ":")),
-                len(source_ids), FNN_GEMINI_MODEL, generated_at, generated_at,
+                len(reports) + len(court_records), FNN_GEMINI_MODEL, generated_at, generated_at,
             ),
         ).fetchone()
         if not created:
