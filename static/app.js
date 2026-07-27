@@ -21,7 +21,6 @@ const state = {
   pendingArmaCode: new URL(window.location.href).searchParams.get("code") || "",
   profileTab: "overview",
   pwaInstallHelpOpen: false,
-  systemBannerDismissed: false,
   armaUnlinkOpen: false,
   armaLinkPromptDismissed: false,
   generatedDevCode: null,
@@ -771,12 +770,11 @@ function renderHome() {
 
 function renderSystemBanner() {
   const system = state.session?.system;
-  if (!system?.system_banner_enabled || !system.system_banner_message || state.systemBannerDismissed) return "";
+  if (!system?.system_banner_enabled || !system.system_banner_message) return "";
   return `
     <aside class="system-message-banner ${escapeHtml(system.system_banner_tone || "info")}">
       <span></span>
       <strong>${escapeHtml(system.system_banner_message)}</strong>
-      <button type="button" data-system-banner-dismiss aria-label="Dismiss announcement">×</button>
     </aside>`;
 }
 
@@ -9057,7 +9055,6 @@ function bindDevTools() {
       },
     });
     toast("System communications published");
-    state.systemBannerDismissed = false;
     await loadSession();
     await refreshDevTools();
   });
@@ -9833,7 +9830,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-experience").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-banner").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {
@@ -9843,11 +9840,6 @@ window.addEventListener("beforeinstallprompt", (event) => {
 });
 
 app.addEventListener("click", async (event) => {
-  if (event.target.closest("[data-system-banner-dismiss]")) {
-    state.systemBannerDismissed = true;
-    render();
-    return;
-  }
   if (event.target.closest("[data-desktop-download]")) {
     let access;
     try {
