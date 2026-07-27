@@ -832,17 +832,18 @@ function renderFnnWorkspace() {
           <p class="fnn-deck">${escapeHtml(edition.deck || "")}</p>
           <div class="fnn-byline"><span>FNN NEWSROOM</span><time>Published ${escapeHtml(dateLabel)}</time></div>
           <div class="fnn-lead-copy">${fnnStoryText(edition.lead_story)}</div>
-          <p class="fnn-source-note">Compiled from ${Number(edition.source_report_count || 0)} official in-server after-action report${Number(edition.source_report_count || 0) === 1 ? "" : "s"}.</p>
+          <p class="fnn-source-note">Monthly newsroom review compiled from ${Number(edition.source_report_count || 0)} official in-server after-action report${Number(edition.source_report_count || 0) === 1 ? "" : "s"}.</p>
         </section>
         <aside class="fnn-brief">
           <div class="fnn-brief-title"><span>PUBLIC SAFETY DESK</span><strong>Daily Brief</strong></div>
           ${safety.map((item) => `<article><span>${escapeHtml(item.label || "Update")}</span><p>${escapeHtml(item.detail || "")}</p></article>`).join("") || `<div class="empty">No additional public-safety briefs today.</div>`}
         </aside>
-        <section class="fnn-story-grid">
+        <section class="fnn-story-grid fnn-longform-grid">
           ${stories.map((story, index) => `<article class="${index === 0 ? "fnn-feature-story" : ""}">
             <span>${escapeHtml(story.category || "FAIRCROFT")}</span>
             <h2>${escapeHtml(story.headline || "Developing story")}</h2>
-            <p>${escapeHtml(story.summary || "")}</p>
+            <p class="fnn-story-deck">${escapeHtml(story.summary || "")}</p>
+            ${story.body ? `<div class="fnn-story-body">${fnnStoryText(story.body)}</div>` : ""}
           </article>`).join("")}
         </section>
         ${(data.archive || []).length ? `<section class="fnn-archive"><div><span>FNN ARCHIVE</span><h2>Earlier editions</h2></div>${data.archive.map((item) => `<article><time>${escapeHtml(item.edition_date || "")}</time><strong>${escapeHtml(item.headline || "")}</strong><p>${escapeHtml(item.deck || "")}</p></article>`).join("")}</section>` : ""}
@@ -852,7 +853,7 @@ function renderFnnWorkspace() {
         <div class="fnn-empty-mark"><b>F</b><b>N</b><b>N</b></div>
         <p class="fnn-kicker">FAIRCROFT NEWS NOW</p>
         <h1>The newsroom is preparing today’s edition.</h1>
-        <p>${data.generation_configured ? "A daily edition will publish after eligible after-action reports are available." : "A developer must configure the Gemini newsroom connection before editions can publish."}</p>
+        <p>${data.generation_configured ? "The newsroom will build an extensive edition from eligible reports filed during the current month." : "A developer must configure the Gemini newsroom connection before editions can publish."}</p>
         ${data.can_generate && data.generation_configured ? `<button class="primary" type="button" data-generate-fnn>Generate today’s edition</button>` : ""}
       </section>
     `}
@@ -9671,7 +9672,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.4-presence").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.4-fnn-monthly").catch(() => {}));
 }
 
 bootApp();

@@ -13697,6 +13697,15 @@ textarea:focus {
 .fnn-story-grid article > span { color: #d91f2a; font-size: 10px; font-weight: 950; letter-spacing: .13em; }
 .fnn-story-grid h2 { margin: 10px 0; font: 800 clamp(23px, 2.2vw, 34px)/1.06 Georgia, serif; letter-spacing: -.02em; }
 .fnn-story-grid p { color: #53565d; line-height: 1.55; }
+.fnn-longform-grid { grid-template-columns: 1fr; }
+.fnn-longform-grid article,
+.fnn-longform-grid article:nth-child(3n) { min-height: 0; padding: clamp(26px, 4vw, 52px) clamp(22px, 5vw, 70px); border-right: 0; }
+.fnn-longform-grid article:nth-child(even) { background: #f3f3f0; }
+.fnn-longform-grid h2 { max-width: 950px; font-size: clamp(30px, 4vw, 52px); }
+.fnn-story-deck { max-width: 920px; margin: 0 0 24px; color: #55585f !important; font: 500 clamp(17px, 2vw, 21px)/1.5 Georgia, serif; }
+.fnn-story-body { max-width: 980px; columns: 2 340px; column-gap: 46px; color: #292c32; font: 400 16px/1.72 Georgia, serif; }
+.fnn-story-body p { margin: 0 0 1em; color: inherit; }
+.fnn-story-body p:first-child::first-letter { float: left; margin: 6px 8px 0 0; color: #d91f2a; font: 800 52px/.78 Georgia, serif; }
 
 .fnn-archive { grid-column: 1 / -1; padding-top: 28px; border-top: 1px solid #bfc0c3; }
 .fnn-archive > div span { color: #d91f2a; font-size: 10px; font-weight: 950; letter-spacing: .13em; }

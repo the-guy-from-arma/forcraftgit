@@ -3602,7 +3602,9 @@ def public_fnn_edition(row: DbRow | None) -> dict[str, Any] | None:
 
 
 def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
-    edition_date = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    generation_time = dt.datetime.now(dt.timezone.utc)
+    edition_date = generation_time.date().isoformat()
+    month_start = generation_time.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
     with conn() as db:
         existing = one(db, "SELECT * FROM fnn_editions WHERE edition_date = ?", (edition_date,))
         if existing and not force:
@@ -3615,11 +3617,11 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
                    officer.name AS officer_name, officer.primary_agency AS officer_agency
             FROM cad_after_call_reports r
             JOIN users officer ON officer.id = r.officer_id
-            WHERE r.created_at >= ?
+            WHERE r.created_at >= ? AND r.created_at <= ?
             ORDER BY r.created_at
-            LIMIT 80
+            LIMIT 250
             """,
-            (f"{edition_date}T00:00:00",),
+            (month_start, generation_time.isoformat()),
         )
     if not reports:
         return {"status": "no_reports", "edition": None}
@@ -3651,10 +3653,11 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
                 "type": "ARRAY",
                 "items": {
                     "type": "OBJECT",
-                    "required": ["headline", "summary", "category"],
+                    "required": ["headline", "summary", "body", "category"],
                     "properties": {
                         "headline": {"type": "STRING"},
                         "summary": {"type": "STRING"},
+                        "body": {"type": "STRING"},
                         "category": {"type": "STRING"},
                     },
                 },
@@ -3673,8 +3676,13 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
         },
     }
     prompt = (
-        "Create today's Faircroft News Now edition from these fictional Arma Reforger "
-        "roleplay after-action reports. Produce detailed, polished local journalism. "
+        "Create today's extensive Faircroft News Now monthly edition from every eligible "
+        "fictional Arma Reforger roleplay after-action report filed since the first day of "
+        "the current month. Produce a substantial local newspaper edition suitable for a "
+        "long player reading session. Write a detailed lead story of approximately 900 to "
+        "1,400 words and up to eight supporting stories. Each supporting story must include "
+        "a concise summary and a complete body of approximately 300 to 700 words. Organize "
+        "related reports into coherent developing stories instead of repeating incidents. "
         "Never invent facts, quotes, charges, injuries, motives, or outcomes. Clearly "
         "attribute uncertain information to the official report. Focus on public-interest "
         "events and officer actions. Do not mention evidence links, database identifiers, "
@@ -3689,6 +3697,7 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.35,
+            "maxOutputTokens": 16384,
             "responseMimeType": "application/json",
             "responseSchema": response_schema,
         },
