@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.1.2";
+const OS_VERSION = "0.1.4";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -41,6 +41,7 @@ const state = {
   mdtSelectedChargeId: "",
   mdtBookingDraft: null,
   mdtReportAlertId: "",
+  fireTab: "incidents",
   mdtNotice: null,
   mdtProtocolAssistantEnabled: localStorage.getItem("rp.mdt.protocolAssistant") !== "0",
   mdtTrafficStopActive: false,
@@ -144,6 +145,7 @@ const iconSvg = {
   scroll: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 21h9a3 3 0 0 0 3-3V5a2 2 0 0 0-2-2H7a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3h1Z"/><path d="M8 21a3 3 0 0 1-3-3V7h13"/><path d="M9 11h6M9 15h5"/></svg>',
   settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V22a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 18l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1A2 2 0 1 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>',
   code: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M14 5l-4 14"/><circle cx="19" cy="5" r="2"/></svg>',
+  news: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h6v5H7zM15 8h2M15 11h2M7 16h10"/></svg>',
   route: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M8.5 19h3a3 3 0 0 0 3-3v-1a3 3 0 0 0-3-3h-1a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3h5"/></svg>',
   link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.2 1.2"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.2-1.2"/></svg>',
   rocket: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 5c3-3 6-3 7-2 1 1 1 4-2 7l-6 6-5-5 6-6Z"/><path d="m9 10-4 1-2 3 5 1M14 15l-1 4-3 2-1-5M15 6l3 3"/><path d="M5 18c-1 0-2 1-2 3 2 0 3-1 3-2"/></svg>',
@@ -162,6 +164,7 @@ const tileColors = {
   jobs: "linear-gradient(145deg, #f7b733, #704811)",
   court: "linear-gradient(145deg, #b78cff, #4f3175)",
   "my-faircroft": "linear-gradient(145deg, #78e4d0, #2e628e 55%, #d5ab4e)",
+  fnn: "linear-gradient(145deg, #f44747, #9c1019 58%, #18191d)",
   properties: "linear-gradient(145deg, #28d17c, #17623d)",
   cash: "linear-gradient(145deg, #f15f79, #7a1e31)",
   bank: "linear-gradient(145deg, #5c9cff, #21497e)",
@@ -466,13 +469,13 @@ function render() {
     bindRequiredProfileModals();
     return;
   }
-  if (state.activeApp === "mdt" || state.activeApp === "fire") {
+  if (state.activeApp === "mdt" || state.activeApp === "fire" || state.activeApp === "fire-settings") {
     app.innerHTML = (
-      state.activeApp === "fire"
+      state.activeApp === "fire" || state.activeApp === "fire-settings"
         ? renderFireWorkspace()
         : renderMdtWorkspace()
     ) + renderRequiredProfileModals();
-    state.activeApp === "fire" ? bindFireWorkspace() : bindMdtWorkspace();
+    state.activeApp === "fire" || state.activeApp === "fire-settings" ? bindFireWorkspace() : bindMdtWorkspace();
     bindRequiredProfileModals();
     return;
   }
@@ -491,6 +494,12 @@ function render() {
   if (state.activeApp === "court") {
     app.innerHTML = renderCourtWorkspace() + renderRequiredProfileModals();
     bindCourtWorkspace();
+    bindRequiredProfileModals();
+    return;
+  }
+  if (state.activeApp === "fnn") {
+    app.innerHTML = renderFnnWorkspace() + renderRequiredProfileModals();
+    bindFnnWorkspace();
     bindRequiredProfileModals();
     return;
   }
@@ -787,10 +796,103 @@ function renderUpdateLockdownHome(apps) {
   `;
 }
 
+function fnnStoryText(value) {
+  return String(value || "")
+    .split(/\n{2,}/)
+    .filter(Boolean)
+    .map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`)
+    .join("");
+}
+
+function renderFnnWorkspace() {
+  const data = state.cache.fnn || {};
+  const edition = data.edition;
+  const stories = edition?.stories || [];
+  const safety = edition?.public_safety || [];
+  const published = edition?.published_at ? new Date(edition.published_at) : null;
+  const dateLabel = published && !Number.isNaN(published.getTime())
+    ? published.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: "numeric" })
+    : "Daily edition pending";
+  return `<main class="fnn-workspace">
+    <header class="fnn-network-header">
+      <button class="fnn-exit" type="button" data-close-fnn aria-label="Return to RP OS">${iconSvg.back}<span>RP OS</span></button>
+      <a class="fnn-brand" href="#" aria-label="Faircroft News Now home"><b>F</b><b>N</b><b>N</b><span>Faircroft News Now</span></a>
+      <div class="fnn-header-actions">
+        <span class="fnn-live-dot"><i></i>RP NEWSROOM</span>
+        ${data.can_generate ? `<button type="button" data-generate-fnn>${edition ? "Regenerate today" : "Publish today"}</button>` : ""}
+      </div>
+    </header>
+    <nav class="fnn-sections" aria-label="News sections"><strong>TOP STORIES</strong><span>PUBLIC SAFETY</span><span>FAIRCROFT</span><span>JUSTICE</span><span>COMMUNITY</span><time>${escapeHtml(dateLabel)}</time></nav>
+    ${edition ? `
+      <div class="fnn-breaking"><strong>FNN DAILY</strong><span>${escapeHtml(edition.headline)}</span></div>
+      <div class="fnn-page">
+        <section class="fnn-lead">
+          <p class="fnn-kicker">FAIRCROFT LEAD STORY</p>
+          <h1>${escapeHtml(edition.headline)}</h1>
+          <p class="fnn-deck">${escapeHtml(edition.deck || "")}</p>
+          <div class="fnn-byline"><span>FNN NEWSROOM</span><time>Published ${escapeHtml(dateLabel)}</time></div>
+          <div class="fnn-lead-copy">${fnnStoryText(edition.lead_story)}</div>
+          <p class="fnn-source-note">Compiled from ${Number(edition.source_report_count || 0)} official in-server after-action report${Number(edition.source_report_count || 0) === 1 ? "" : "s"}.</p>
+        </section>
+        <aside class="fnn-brief">
+          <div class="fnn-brief-title"><span>PUBLIC SAFETY DESK</span><strong>Daily Brief</strong></div>
+          ${safety.map((item) => `<article><span>${escapeHtml(item.label || "Update")}</span><p>${escapeHtml(item.detail || "")}</p></article>`).join("") || `<div class="empty">No additional public-safety briefs today.</div>`}
+        </aside>
+        <section class="fnn-story-grid">
+          ${stories.map((story, index) => `<article class="${index === 0 ? "fnn-feature-story" : ""}">
+            <span>${escapeHtml(story.category || "FAIRCROFT")}</span>
+            <h2>${escapeHtml(story.headline || "Developing story")}</h2>
+            <p>${escapeHtml(story.summary || "")}</p>
+          </article>`).join("")}
+        </section>
+        ${(data.archive || []).length ? `<section class="fnn-archive"><div><span>FNN ARCHIVE</span><h2>Earlier editions</h2></div>${data.archive.map((item) => `<article><time>${escapeHtml(item.edition_date || "")}</time><strong>${escapeHtml(item.headline || "")}</strong><p>${escapeHtml(item.deck || "")}</p></article>`).join("")}</section>` : ""}
+      </div>
+    ` : `
+      <section class="fnn-empty-newsroom">
+        <div class="fnn-empty-mark"><b>F</b><b>N</b><b>N</b></div>
+        <p class="fnn-kicker">FAIRCROFT NEWS NOW</p>
+        <h1>The newsroom is preparing today’s edition.</h1>
+        <p>${data.generation_configured ? "A daily edition will publish after eligible after-action reports are available." : "A developer must configure the Gemini newsroom connection before editions can publish."}</p>
+        ${data.can_generate && data.generation_configured ? `<button class="primary" type="button" data-generate-fnn>Generate today’s edition</button>` : ""}
+      </section>
+    `}
+    <footer class="fnn-footer"><strong>FNN</strong><span>${escapeHtml(data.disclaimer || "Fictional roleplay news.")}</span><small>Stories summarize officer-authored RP reports and may be updated as reports develop.</small></footer>
+  </main>`;
+}
+
+function bindFnnWorkspace() {
+  $("[data-close-fnn]")?.addEventListener("click", async () => {
+    state.activeApp = null;
+    await loadSession();
+  });
+  $("[data-generate-fnn]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = "Publishing…";
+    try {
+      const result = await api("/api/fnn/generate", { method: "POST" });
+      if (result.status === "no_reports") {
+        toast("No after-action reports are available for today");
+      } else if (result.status === "configuration_required") {
+        toast("GEMINI_API_KEY is not configured");
+      } else {
+        toast("Today’s FNN edition is published");
+      }
+      await loadAppData("fnn");
+      render();
+    } catch (error) {
+      toast(error.message);
+      button.disabled = false;
+      button.textContent = "Try again";
+    }
+  });
+}
+
 function bindHome() {
   $$("[data-open-app]").forEach((button) => {
     button.addEventListener("click", async () => {
       state.activeApp = button.dataset.openApp;
+      if (state.activeApp === "fire-settings") state.fireTab = "apparatus";
       if (isUpdateLockdown() && state.activeApp === "dmv") {
         state.dmvTab = "license";
       }
@@ -878,6 +980,7 @@ async function loadAppData(id) {
     dmv: () => api("/api/dmv/me"),
     jobs: () => api("/api/jobs"),
     "my-faircroft": () => api("/api/my-faircroft"),
+    fnn: () => api("/api/fnn"),
     court: () => api("/api/court/cases"),
     properties: () => api("/api/properties"),
     bank: () => api("/api/bank"),
@@ -2983,27 +3086,24 @@ function renderBusiness() {
   if (!tabs.some(([id]) => id === state.businessTab)) state.businessTab = "apply";
   const stats = staff ? data.stats || {} : {};
   return `
-    <div class="stack business-app">
-      <div class="business-hero">
-        <div>
-          <p class="eyebrow">${staff ? "City Hall registry" : "Civilian filing"}</p>
-          <h3>Business Registry</h3>
-          <p>${staff ? "Review, license, inspect, and enforce RP business operations." : "Apply for a legal RP business license and track your approvals."}</p>
-        </div>
-        <span class="pill ${staff ? "green" : "amber"}">${staff ? "staff access" : `${data.max_active_per_owner || 2} max`}</span>
+    <div class="business-app commerce-console">
+      <div class="commerce-command-strip">
+        ${staff ? `
+          <article><span>Review queue</span><strong>${stats.pending || 0}</strong><i class="amber"></i></article>
+          <article><span>Active licenses</span><strong>${stats.active || 0}</strong><i class="green"></i></article>
+          <article><span>Suspended</span><strong>${stats.suspended || 0}</strong><i class="red"></i></article>
+          <article><span>Restricted class</span><strong>${stats.restricted || 0}</strong><i class="violet"></i></article>
+        ` : `
+          <article><span>Applications</span><strong>${(data.applications || []).length}</strong><i class="amber"></i></article>
+          <article><span>Active licenses</span><strong>${(data.businesses || []).filter((x) => x.status === "active").length}</strong><i class="green"></i></article>
+          <article><span>Open violations</span><strong>${(data.violations || []).filter((x) => x.status !== "resolved").length}</strong><i class="red"></i></article>
+          <article><span>License limit</span><strong>${data.max_active_per_owner || 2}</strong><i class="violet"></i></article>
+        `}
       </div>
-      ${staff ? `
-        <div class="grid-2">
-          <div class="metric"><span>Pending</span><strong>${stats.pending || 0}</strong></div>
-          <div class="metric"><span>Active</span><strong>${stats.active || 0}</strong></div>
-          <div class="metric"><span>Suspended</span><strong>${stats.suspended || 0}</strong></div>
-          <div class="metric"><span>Restricted</span><strong>${stats.restricted || 0}</strong></div>
-        </div>
-      ` : ""}
       <div class="court-tabs">
         ${tabs.map(([id, label]) => `<button class="${state.businessTab === id ? "active" : ""}" data-business-tab="${id}">${label}</button>`).join("")}
       </div>
-      ${state.businessTab === "review" ? renderBusinessReview(data) : state.businessTab === "market" ? renderBusinessRegistry(data) : state.businessTab === "licenses" ? renderBusinessLicenses(data) : renderBusinessApply(data)}
+      <section class="commerce-view">${state.businessTab === "review" ? renderBusinessReview(data) : state.businessTab === "market" ? renderBusinessRegistry(data) : state.businessTab === "licenses" ? renderBusinessLicenses(data) : renderBusinessApply(data)}</section>
     </div>
   `;
 }
@@ -3018,25 +3118,26 @@ function renderBusinessWorkspace() {
   ];
   if (!tabs.some(([id]) => id === state.businessTab)) state.businessTab = "apply";
   const active = tabs.find(([id]) => id === state.businessTab) || tabs[0];
+  const sectionCodes = { apply: "FILE", licenses: "PORTFOLIO", review: "INTAKE", market: "REGISTRY" };
   return `
     <section class="business-workspace">
       <aside class="business-workspace-sidebar">
-        <div class="dev-brand"><img class="dev-emblem" src="/static/brand/faircroft-emblem.webp" alt="" /><div><strong>Faircroft RP</strong><small>Business Registry</small></div></div>
-        <p class="dev-nav-label">Registry workspace</p>
+        <div class="commerce-brand"><img src="/static/brand/faircroft-emblem.webp" alt="" /><div><span>STATE OF FAIRCROFT</span><strong>Commerce</strong><small>Licensing Authority</small></div></div>
+        <p class="dev-nav-label">Commerce systems</p>
         <nav>
-          ${tabs.map(([id, label]) => `<button type="button" class="${state.businessTab === id ? "active" : ""}" data-business-tab="${id}">${escapeHtml(label)}</button>`).join("")}
+          ${tabs.map(([id, label], index) => `<button type="button" class="${state.businessTab === id ? "active" : ""}" data-business-tab="${id}"><b>${String(index + 1).padStart(2, "0")}</b><span>${escapeHtml(label)}</span><small>${sectionCodes[id]}</small></button>`).join("")}
         </nav>
         <div class="business-workspace-sidebar-note">
           <span class="dev-access-dot"></span>
-          <div><strong>${staff ? "Registry Staff" : "Business Owner"}</strong><small>${escapeHtml(state.session?.user?.name || "")}</small></div>
+          <div><strong>${staff ? "Commerce Officer" : "Registered Resident"}</strong><small>${escapeHtml(state.session?.user?.name || "")}</small></div>
         </div>
       </aside>
       <main class="business-workspace-main">
         <header class="business-workspace-topbar">
-          <div><p class="eyebrow">${staff ? "City Hall Commerce Division" : "Faircroft Commerce Portal"}</p><h1>${escapeHtml(active[1])}</h1></div>
+          <div><p class="eyebrow">COMMERCE / ${sectionCodes[active[0]]}</p><h1>${escapeHtml(active[1])}</h1><span>${staff ? "Administrative authority" : "Resident business services"}</span></div>
           <div class="business-workspace-actions">
-            <button type="button" class="secondary" data-refresh-business-workspace>Refresh registry</button>
-            <button type="button" class="primary" data-close-business-workspace>Return to phone</button>
+            <button type="button" class="secondary" data-refresh-business-workspace aria-label="Refresh registry">↻ <span>Sync</span></button>
+            <button type="button" class="primary" data-close-business-workspace>Close workspace</button>
           </div>
         </header>
         <div class="business-workspace-content">${renderBusiness()}</div>
@@ -3059,10 +3160,10 @@ function bindBusinessWorkspace() {
 function renderBusinessApply(data) {
   const activeApplications = (data.applications || []).filter((item) => !["approved", "denied"].includes(item.status)).slice(0, 2);
   return `
-    <div class="stack">
+    <div class="commerce-filing-layout">
       ${activeApplications.length ? `
-        <div class="business-section">
-          <div class="row"><h3>Current Filing Progress</h3><span class="pill amber">${activeApplications.length} active</span></div>
+        <aside class="commerce-active-filings">
+          <div class="commerce-section-title"><span>ACTIVE FILES</span><strong>${activeApplications.length}</strong></div>
           ${activeApplications.map((item) => `
             <div class="business-current">
               <div class="row tight">
@@ -3072,38 +3173,40 @@ function renderBusinessApply(data) {
               ${renderBusinessApplicationTracker(item)}
             </div>
           `).join("")}
-        </div>
+        </aside>
       ` : ""}
-      <form id="businessApplicationForm" class="business-form form-grid">
-        <div>
-          <p class="eyebrow">New filing</p>
-          <h3>Business Application</h3>
-          <p class="muted small">Applications are reviewed for realism, funding, roleplay intent, rule compliance, and economy balance before a license is issued.</p>
+      <form id="businessApplicationForm" class="business-form commerce-filing">
+        <header>
+          <div><span>FC-COM 01</span><h2>Business license application</h2></div>
+          <strong>DRAFT</strong>
+        </header>
+        <div class="commerce-form-section">
+          <div class="commerce-form-index"><b>01</b><span>Entity</span></div>
+          <div class="commerce-form-fields">
+            <label class="wide">Registered business name<input name="business_name" maxlength="120" required /></label>
+            <label>Business classification<select name="business_type" required>
+              <option>Retail Shop</option><option>Service Company</option><option>Logistics</option><option>Security Firm</option><option>Restaurant / Bar</option><option>Banking / Finance</option><option>Armored Transport</option><option>Government Contractor</option><option>Other</option>
+            </select></label>
+            <label>License class<select name="license_category" required>${businessCategoryOptions(data.categories, "basic")}</select></label>
+          </div>
         </div>
-        <label>Business name<input name="business_name" maxlength="120" required /></label>
-        <div class="grid-2">
-          <label>Business type<select name="business_type" required>
-            <option>Retail Shop</option>
-            <option>Service Company</option>
-            <option>Logistics</option>
-            <option>Security Firm</option>
-            <option>Restaurant / Bar</option>
-            <option>Banking / Finance</option>
-            <option>Armored Transport</option>
-            <option>Government Contractor</option>
-            <option>Other</option>
-          </select></label>
-          <label>License category<select name="license_category" required>${businessCategoryOptions(data.categories, "basic")}</select></label>
+        <div class="commerce-form-section">
+          <div class="commerce-form-index"><b>02</b><span>Ownership</span></div>
+          <div class="commerce-form-fields">
+            <label>Responsible owner<input name="owner_name" value="${escapeHtml(state.session.user.name)}" maxlength="120" required /></label>
+            <label>Operating location<input name="location" maxlength="160" placeholder="Street, district, or property" required /></label>
+            <label>Declared startup capital<input name="startup_budget" type="number" min="0" step="0.01" required /></label>
+            <label>Planned workforce<input name="planned_employees" type="number" min="1" max="250" value="1" required /></label>
+          </div>
         </div>
-        <label>Owner information<input name="owner_name" value="${escapeHtml(state.session.user.name)}" maxlength="120" required /></label>
-        <label>Business location<input name="location" maxlength="160" placeholder="Street, postal, district, or property" required /></label>
-        <div class="grid-2">
-          <label>Startup budget<input name="startup_budget" type="number" min="0" step="0.01" required /></label>
-          <label>Planned employees<input name="planned_employees" type="number" min="1" max="250" value="1" required /></label>
+        <div class="commerce-form-section">
+          <div class="commerce-form-index"><b>03</b><span>Operations</span></div>
+          <div class="commerce-form-fields">
+            <label class="wide">Capital source<textarea name="funding_source" maxlength="700" placeholder="RP source of startup capital" required></textarea></label>
+            <label class="wide">Operating plan<textarea name="description" maxlength="1200" placeholder="Services, customers, staffing, restricted activity, and roleplay purpose" required></textarea></label>
+          </div>
         </div>
-        <label>Funding source<textarea name="funding_source" maxlength="700" placeholder="Explain where the startup money comes from in RP." required></textarea></label>
-        <label>Detailed business description<textarea name="description" maxlength="1200" placeholder="Services, operating plan, RP purpose, expected customers, and any restricted activity." required></textarea></label>
-        <button class="primary" type="submit">Submit to registry</button>
+        <footer><span>Submission creates an immutable registry file.</span><button class="primary" type="submit">File application →</button></footer>
       </form>
     </div>
   `;
@@ -5169,11 +5272,11 @@ function renderFireRigAssignments(data) {
     <section class="fire-rig-panel fire-command-board">
       <div class="fire-rig-command-head">
         <div>
-          <p class="eyebrow">Fire command board</p>
-          <h2>Apparatus Assignments</h2>
-          <p>${rigs.length} units indexed / ${personnel.length} fire personnel available</p>
+          <p class="eyebrow">APPARATUS CONTROL</p>
+          <h2>Fleet board</h2>
+          <p>${rigs.length} apparatus · ${personnel.length} personnel</p>
         </div>
-        <span class="pill ${canManage ? "green" : "amber"}">${canManage ? "Chief controls" : "Read only"}</span>
+        <span class="pill ${canManage ? "green" : "amber"}">${canManage ? "COMMAND" : "VIEW"}</span>
       </div>
       <div class="fire-board-table">
         <div class="fire-board-header" aria-hidden="true">
@@ -5254,66 +5357,92 @@ function renderFireSettings() {
 }
 
 function renderFireWorkspace() {
-  const data = state.cache.fire || {};
+  const data = state.cache[state.activeApp] || state.cache.fire || {};
   const alerts = data.alerts || [];
+  const rigs = data.rigs || [];
+  const personnel = data.personnel || [];
   const stats = data.stats || { active: 0, responding: 0, cleared: 0 };
   const commandEnabled = Boolean(data.can_manage_rigs || hasFireCommandAccess());
+  const tabs = [
+    ["incidents", "Incident Board", "ALERTS"],
+    ["apparatus", "Apparatus", "FLEET"],
+    ["personnel", "Personnel", "ROSTER"],
+  ];
+  if (!tabs.some(([id]) => id === state.fireTab)) state.fireTab = "incidents";
+  const assignedRigs = rigs.filter((rig) => rig.status === "assigned").length;
+  const availableRigs = rigs.filter((rig) => rig.status === "available").length;
+  const outOfService = rigs.filter((rig) => rig.status === "out_of_service").length;
   return `
-    <section class="mdt-workspace fire-workspace">
-      <header class="mdt-topbar">
-        <div>
-          <p class="eyebrow">${escapeHtml(state.session.user.primary_agency || "Fire Department")}</p>
-          <h1>Fire Department MDT</h1>
-          <p class="mdt-subtitle">${commandEnabled ? "Command controls active" : "Incident response mode"}</p>
-        </div>
-        <div class="mdt-top-actions">
-          <span class="pill ${commandEnabled ? "green" : "amber"}">${commandEnabled ? "Chief controls" : "Read only"}</span>
-          <button class="ghost" data-refresh-fire>Refresh</button>
-          <button class="secondary" data-close-fire>Exit MDT</button>
-        </div>
-      </header>
-      <div class="mdt-stat-strip">
-        <div class="metric"><span>Active Calls</span><strong>${stats.active || 0}</strong></div>
-        <div class="metric"><span>Responding</span><strong>${stats.responding || 0}</strong></div>
-        <div class="metric"><span>Cleared</span><strong>${stats.cleared || 0}</strong></div>
-      </div>
-      <main class="mdt-main fire-main">
-        ${renderFireRigAssignments(data)}
-        <div class="mdt-section-head">
-          <div><p class="eyebrow">911 Queue</p><h2>Fire / EMS Incidents</h2></div>
-          <span class="pill">${alerts.length} calls</span>
-        </div>
-        <div class="mdt-code-grid">
-          ${alerts.map((alert) => `
-            <article class="mdt-return fire-call-card">
-              <div class="row">
-                <div>
-                  <p class="eyebrow">${escapeHtml(alert.department || "fire")}</p>
-                  <h3>${escapeHtml(alert.location)}</h3>
-                </div>
-                <span class="pill ${panicStatusClass(alert.status)}">${escapeHtml(alert.status)}</span>
-              </div>
-              <p>${escapeHtml(alert.note || "No notes supplied")}</p>
-              <p class="muted small">Reported by ${escapeHtml(alert.officer_name || "Unknown")} - ${new Date(alert.created_at).toLocaleString()}</p>
-              <div class="row">
-                ${alert.status !== "responding" && alert.status !== "cleared" ? `<button class="secondary" data-fire-alert="${alert.id}" data-fire-status="responding">Responding</button>` : ""}
-                ${alert.status !== "cleared" ? `<button class="primary" data-fire-alert="${alert.id}" data-fire-status="cleared">Clear</button>` : ""}
-              </div>
-            </article>
-          `).join("") || `<div class="empty">No fire or EMS incidents</div>`}
+    <section class="fire-command-workspace">
+      <aside class="fire-command-sidebar">
+        <div class="fire-command-brand"><span class="fire-command-shield">FC</span><div><small>FAIRCROFT</small><strong>Fire & EMS</strong><b>Emergency Services</b></div></div>
+        <nav>${tabs.map(([id, label, code], index) => `<button class="${state.fireTab === id ? "active" : ""}" data-fire-tab="${id}"><b>${String(index + 1).padStart(2, "0")}</b><span>${label}</span><small>${code}</small></button>`).join("")}</nav>
+        <div class="fire-command-user"><i></i><div><strong>${escapeHtml(state.session.user.name)}</strong><small>${escapeHtml(state.session.user.primary_agency || "Fire Department")}</small></div></div>
+      </aside>
+      <main class="fire-command-main">
+        <header class="fire-command-topbar">
+          <div><span>FCES / ${escapeHtml(state.fireTab.toUpperCase())}</span><h1>${escapeHtml(tabs.find(([id]) => id === state.fireTab)?.[1] || "Incident Board")}</h1></div>
+          <div><em><i></i>${commandEnabled ? "COMMAND AUTHORITY" : "RESPONSE ACCESS"}</em><button data-refresh-fire>↻ Sync</button><button data-close-fire>Exit</button></div>
+        </header>
+        <section class="fire-command-metrics">
+          <article class="critical"><span>Active incidents</span><strong>${stats.active || 0}</strong><small>Awaiting response</small></article>
+          <article class="responding"><span>Responding</span><strong>${stats.responding || 0}</strong><small>Units committed</small></article>
+          <article class="available"><span>Available apparatus</span><strong>${availableRigs}</strong><small>${assignedRigs} assigned</small></article>
+          <article class="service"><span>Out of service</span><strong>${outOfService}</strong><small>${personnel.length} personnel</small></article>
+        </section>
+        <div class="fire-command-content">
+          ${state.fireTab === "apparatus" ? renderFireRigAssignments(data) : state.fireTab === "personnel" ? renderFirePersonnel(data) : renderFireIncidents(data)}
         </div>
       </main>
     </section>
   `;
 }
 
+function renderFireIncidents(data) {
+  const alerts = data.alerts || [];
+  const active = alerts.filter((alert) => alert.status !== "cleared");
+  const cleared = alerts.filter((alert) => alert.status === "cleared");
+  return `<section class="fire-incident-board">
+    <header><div><span>LIVE RESPONSE QUEUE</span><h2>Fire / EMS incidents</h2></div><strong>${active.length} OPEN</strong></header>
+    <div class="fire-incident-list">${active.map((alert, index) => `
+      <article class="fire-incident-row dept-${escapeHtml(alert.department || "fire")}">
+        <b>${String(index + 1).padStart(2, "0")}</b>
+        <div class="fire-incident-type"><span>${escapeHtml(alert.department || "fire")}</span><strong>${escapeHtml(alert.location)}</strong></div>
+        <div class="fire-incident-report"><p>${escapeHtml(alert.note || "No incident narrative")}</p><small>${escapeHtml(alert.officer_name || "Unknown caller")} · ${new Date(alert.created_at).toLocaleString()}</small></div>
+        <div class="fire-incident-units"><span>UNITS</span><strong>${Number(alert.assigned_unit_count || 0)}</strong></div>
+        <span class="fire-incident-status ${panicStatusClass(alert.status)}">${escapeHtml(alert.status)}</span>
+        <div class="fire-incident-actions">
+          ${alert.status !== "responding" ? `<button data-fire-alert="${alert.id}" data-fire-status="responding">Respond</button>` : ""}
+          <button class="clear" data-fire-alert="${alert.id}" data-fire-status="cleared">Clear</button>
+        </div>
+      </article>`).join("") || `<div class="fire-all-clear"><i>✓</i><strong>All clear</strong><span>No active Fire or EMS incidents.</span></div>`}</div>
+    ${cleared.length ? `<details class="fire-cleared-log"><summary>Cleared incidents <strong>${cleared.length}</strong></summary>${cleared.slice(0, 20).map((alert) => `<div><span>${escapeHtml(alert.department || "fire")}</span><strong>${escapeHtml(alert.location)}</strong><time>${new Date(alert.created_at).toLocaleString()}</time></div>`).join("")}</details>` : ""}
+  </section>`;
+}
+
+function renderFirePersonnel(data) {
+  const personnel = data.personnel || [];
+  const rigs = data.rigs || [];
+  return `<section class="fire-personnel-board">
+    <header><div><span>DEPARTMENT ROSTER</span><h2>Response personnel</h2></div><strong>${personnel.length}</strong></header>
+    <div class="fire-personnel-grid">${personnel.map((person) => {
+      const assignments = rigs.filter((rig) => Number(rig.user_id) === Number(person.id));
+      return `<article><span class="fire-personnel-avatar">${escapeHtml((person.name || "?").slice(0, 2).toUpperCase())}</span><div><strong>${escapeHtml(person.name)}</strong><small>CIV ${escapeHtml(person.civ_number || "pending")} · ${escapeHtml(person.primary_agency || "Fire & EMS")}</small></div><span class="${assignments.length ? "assigned" : ""}">${assignments.length ? escapeHtml(assignments.map((rig) => fireRigCode(rig.rig_name)).join(", ")) : "UNASSIGNED"}</span></article>`;
+    }).join("") || `<div class="empty">No Fire or EMS personnel found.</div>`}</div>
+  </section>`;
+}
+
 function bindFireWorkspace() {
+  $$("[data-fire-tab]").forEach((button) => button.addEventListener("click", () => {
+    state.fireTab = button.dataset.fireTab;
+    render();
+  }));
   $("[data-close-fire]")?.addEventListener("click", async () => {
     state.activeApp = null;
     await loadSession();
   });
   $("[data-refresh-fire]")?.addEventListener("click", async () => {
-    await loadAppData("fire");
+    await loadAppData(state.activeApp || "fire");
     render();
   });
   bindFireMdt();
@@ -8272,7 +8401,8 @@ function renderDevGameIntelligence(data) {
   const intel = data.game_intelligence || {};
   const sync = intel.sync || {};
   const economy = intel.economy || {};
-  const topAccounts = economy.top_accounts || [];
+  const topLinked = economy.top_linked_accounts || [];
+  const topUnlinked = economy.top_unlinked_accounts || [];
   const categories = intel.categories || [];
   const linkedUsers = (data.users || []).filter((user) => user.arma_linked);
   const totalRecords = Number(sync.records || categories.reduce((sum, item) => sum + Number(item.records || 0), 0));
@@ -8280,36 +8410,37 @@ function renderDevGameIntelligence(data) {
     <section class="game-intel-hero">
       <div class="game-intel-hero-copy">
         <span class="dev-topbar-kicker">FCRPMUSSALO / READ-ONLY MIRROR</span>
-        <h2>Persistent world intelligence</h2>
-        <p>Operational records indexed from Shadowhaven and correlated to verified Bohemia identities. This workspace never changes game persistence.</p>
-        <div class="game-intel-pulse"><i></i><span>${sync.status === "synced" ? "Persistence mirror online" : "Awaiting first successful sync"}</span><small>${escapeHtml(sync.last_success_at || "No completed import")}</small></div>
+        <h2>Game intelligence</h2>
+        <div class="game-intel-pulse"><i></i><span>${sync.status === "synced" ? "Mirror online" : "Sync pending"}</span><small>${escapeHtml(sync.last_success_at || "No completed import")}</small></div>
       </div>
-      <div class="game-intel-score"><span>INDEXED RECORDS</span><strong>${totalRecords.toLocaleString()}</strong><small>${categories.length} active collections</small></div>
+      <div class="game-intel-score"><span>INDEXED</span><strong>${totalRecords.toLocaleString()}</strong><small>${categories.length} collections</small></div>
     </section>
     <div class="game-intel-statline">
-      <article><span>Currency in circulation</span><strong>${money(economy.currency_in_circulation || 0)}</strong><small>Across all synchronized game bank accounts</small></article>
-      <article><span>Bank accounts</span><strong>${Number(economy.bank_accounts || 0).toLocaleString()}</strong><small>${Number(economy.funded_accounts || 0).toLocaleString()} funded</small></article>
-      <article><span>Average balance</span><strong>${money(economy.average_balance || 0)}</strong><small>Per indexed game account</small></article>
-      <article><span>Largest balance</span><strong>${money(economy.largest_balance || 0)}</strong><small>Highest synchronized balance</small></article>
+      <article><span>Circulation</span><strong>${money(economy.currency_in_circulation || 0)}</strong><small>All game banks</small></article>
+      <article><span>Accounts</span><strong>${Number(economy.bank_accounts || 0).toLocaleString()}</strong><small>${Number(economy.funded_accounts || 0).toLocaleString()} funded</small></article>
+      <article><span>Average</span><strong>${money(economy.average_balance || 0)}</strong><small>Per account</small></article>
+      <article><span>Largest</span><strong>${money(economy.largest_balance || 0)}</strong><small>Single balance</small></article>
     </div>
     <div class="game-intel-statline">
-      <article><span>Linked identities</span><strong>${linkedUsers.length}</strong><small>${Number(economy.linked_accounts || 0).toLocaleString()} matched to bank records</small></article>
+      <article><span>Linked identities</span><strong>${linkedUsers.length}</strong><small>${Number(economy.linked_accounts || 0).toLocaleString()} bank matches</small></article>
       <article><span>Source</span><strong>FCRPMUSSALO</strong><small>Shadowhaven SFTP</small></article>
-      <article><span>Access mode</span><strong>Read only</strong><small>No game mutations</small></article>
-      <article><span>Economy sync</span><strong>Live snapshot</strong><small>${escapeHtml(economy.last_synced_at || "Awaiting bank sync")}</small></article>
+      <article><span>Access</span><strong>Read only</strong><small>Protected source</small></article>
+      <article><span>Snapshot</span><strong>Live</strong><small>${escapeHtml(economy.last_synced_at || "Pending")}</small></article>
     </div>
-    <section class="dev-card game-intel-directory">
-      <div class="dev-card-header"><div><span>ECONOMY RANKING</span><h2>Top ten bank accounts</h2><p class="muted">Highest balances in the current FCRPMUSSALO bank snapshot.</p></div><strong>${topAccounts.length}</strong></div>
-      <div class="game-intel-accounts">${topAccounts.map((account, index) => {
-        const label = account.account_name || account.player_name || "Unlinked game account";
-        const identity = account.identity_id || "";
-        return `<${account.account_id ? "button" : "article"} ${account.account_id ? `data-dev-account="${account.account_id}"` : ""}>
-          <span class="game-intel-avatar">${String(index + 1).padStart(2, "0")}</span>
-          <div><strong>${escapeHtml(label)}</strong><small>${account.civ_number ? `CIV ${escapeHtml(account.civ_number)} · ` : ""}${escapeHtml(identity)}</small></div>
-          <i>${money(account.balance || 0)}</i>
-        </${account.account_id ? "button" : "article"}>`;
-      }).join("") || `<div class="empty">Bank rankings will appear after the next FCRPMUSSALO bank sync.</div>`}</div>
-    </section>
+    <div class="game-intel-rankings">
+      <section class="dev-card game-intel-rank-card linked">
+        <div class="dev-card-header"><div><span>VERIFIED ECONOMY</span><h2>Top 10 linked</h2></div><strong>${topLinked.length}</strong></div>
+        <div class="game-intel-rank-list">${topLinked.map((account, index) => `<button data-dev-account="${account.account_id}">
+          <b>${index + 1}</b><div><strong>${escapeHtml(account.account_name || account.player_name || "Linked account")}</strong><small>CIV ${escapeHtml(account.civ_number || "pending")}</small></div><i>${money(account.balance || 0)}</i>
+        </button>`).join("") || `<div class="empty">No linked bank accounts.</div>`}</div>
+      </section>
+      <section class="dev-card game-intel-rank-card unlinked">
+        <div class="dev-card-header"><div><span>UNCLAIMED IDENTITIES</span><h2>Top 10 unlinked</h2></div><strong>${topUnlinked.length}</strong></div>
+        <div class="game-intel-rank-list">${topUnlinked.map((account, index) => `<article>
+          <b>${index + 1}</b><div><strong>Unlinked Bohemia account</strong><small>${escapeHtml(account.identity_id || "")}</small></div><i>${money(account.balance || 0)}</i>
+        </article>`).join("") || `<div class="empty">No unlinked bank accounts.</div>`}</div>
+      </section>
+    </div>
     <div class="game-intel-layout">
       <section class="dev-card game-intel-collections">
         <div class="dev-card-header"><div><span>DATABASE COVERAGE</span><h2>Persistence collections</h2></div><strong>${categories.length}</strong></div>
@@ -8320,7 +8451,6 @@ function renderDevGameIntelligence(data) {
       </section>
       <section class="dev-card game-intel-directory">
         <div class="dev-card-header"><div><span>IDENTITY DIRECTORY</span><h2>Investigate linked account</h2></div><strong>${linkedUsers.length}</strong></div>
-        <p class="muted">Open an intelligence file to review the matching bank, characters, vehicles, criminal records, reports, inventories, and component evidence.</p>
         <div class="game-intel-accounts">${linkedUsers.map((user) => `<button data-dev-account="${user.id}">
           <span class="game-intel-avatar">${escapeHtml((user.name || "?").slice(0, 1).toUpperCase())}</span>
           <div><strong>${escapeHtml(user.name)}</strong><small>CIV ${escapeHtml(user.civ_number || "pending")} · ${escapeHtml(user.linked_arma_id || "")}</small></div>
@@ -8328,7 +8458,6 @@ function renderDevGameIntelligence(data) {
         </button>`).join("") || `<div class="empty">No linked accounts are available.</div>`}</div>
       </section>
     </div>
-    <section class="game-intel-disclosure"><strong>Evidence boundary</strong><p>Matches are labeled by confidence. Direct matches use a record ID, owner field, or explicit identity field. Payload matches mean the linked identity appeared elsewhere in the persisted record and require staff review.</p></section>
   </div>`;
 }
 
@@ -9542,7 +9671,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.2").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.4").catch(() => {}));
 }
 
 bootApp();

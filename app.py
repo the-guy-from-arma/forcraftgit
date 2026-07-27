@@ -13,6 +13,8 @@ import stat
 import struct
 import threading
 import time
+import urllib.error
+import urllib.request
 import zlib
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -73,6 +75,11 @@ SHADOWHAVEN_ANTICHEAT_SYNC_SECONDS = max(
     15, int(os.environ.get("SHADOWHAVEN_ANTICHEAT_SYNC_SECONDS", "30"))
 )
 ANTICHEAT_LIVE_TTL_SECONDS = max(90, int(os.environ.get("ANTICHEAT_LIVE_TTL_SECONDS", "900")))
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+FNN_GEMINI_MODEL = os.environ.get("FNN_GEMINI_MODEL", "gemini-2.5-pro").strip()
+FNN_GENERATION_INTERVAL_SECONDS = max(
+    900, int(os.environ.get("FNN_GENERATION_INTERVAL_SECONDS", "3600"))
+)
 ARMA_RCON_HOST = os.environ.get("ARMA_RCON_HOST", os.environ.get("RCON_HOST", "")).strip()
 ARMA_RCON_PORT = int(os.environ.get("ARMA_RCON_PORT", os.environ.get("RCON_PORT", "19999")))
 ARMA_RCON_PASSWORD = os.environ.get("ARMA_RCON_PASSWORD", os.environ.get("RCON_PASSWORD", ""))
@@ -1139,6 +1146,7 @@ APP_VISIBILITY_OPTIONS = (
     ("dmv", "DMV"),
     ("jobs", "Jobs"),
     ("my-faircroft", "MyFaircroft"),
+    ("fnn", "Faircroft News Now"),
     ("court", "Court"),
     ("business", "Business"),
     ("properties", "Properties"),
@@ -1992,6 +2000,21 @@ def ensure_schema() -> None:
                 FOREIGN KEY (involved_civ_id) REFERENCES users(id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS fnn_editions (
+                id SERIAL PRIMARY KEY,
+                edition_date TEXT NOT NULL UNIQUE,
+                headline TEXT NOT NULL,
+                deck TEXT NOT NULL DEFAULT '',
+                lead_story TEXT NOT NULL,
+                stories_json TEXT NOT NULL DEFAULT '[]',
+                public_safety_json TEXT NOT NULL DEFAULT '[]',
+                source_report_ids TEXT NOT NULL DEFAULT '[]',
+                source_report_count INTEGER NOT NULL DEFAULT 0,
+                model_name TEXT NOT NULL DEFAULT '',
+                generated_at TEXT NOT NULL,
+                published_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS mdt_bolos (
                 id SERIAL PRIMARY KEY,
                 bolo_number TEXT NOT NULL UNIQUE,
@@ -2581,6 +2604,7 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS cad_after_call_reports_officer_idx ON cad_after_call_reports (officer_id, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS cad_after_call_reports_alert_idx ON cad_after_call_reports (related_alert_id)")
     db.execute("CREATE INDEX IF NOT EXISTS cad_after_call_reports_disposition_idx ON cad_after_call_reports (disposition)")
+    db.execute("CREATE INDEX IF NOT EXISTS fnn_editions_published_idx ON fnn_editions (published_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS mdt_bolos_status_idx ON mdt_bolos (status, updated_at)")
     db.execute("CREATE INDEX IF NOT EXISTS mdt_bolos_created_by_idx ON mdt_bolos (created_by, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS mdt_bookings_status_idx ON mdt_bookings (status, updated_at)")
@@ -3511,6 +3535,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         ("dmv", "DMV", "id-card", verified, False),
         ("jobs", "JOB", "briefcase", True, False),
         ("my-faircroft", "MyFaircroft", "civic", True, False),
+        ("fnn", "FNN", "news", verified, False),
         ("business", "Business", "store", business_enabled, False),
         ("properties", "PROPERTIES", "home", False, True),
         ("bank", "BANK", "bank", verified, False),
@@ -3552,6 +3577,178 @@ def add_message(db: Database, recipient_id: int, subject: str, body: str, sender
         "INSERT INTO messages (sender_id, recipient_id, subject, body, created_at) VALUES (?, ?, ?, ?, ?)",
         (sender_id, recipient_id, subject, body, now_iso()),
     )
+
+
+def public_fnn_edition(row: DbRow | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    edition = dict(row)
+    for key in ("stories_json", "public_safety_json"):
+        try:
+            edition[key.removesuffix("_json")] = json.loads(edition.pop(key) or "[]")
+        except json.JSONDecodeError:
+            edition[key.removesuffix("_json")] = []
+    edition.pop("source_report_ids", None)
+    edition.pop("model_name", None)
+    return edition
+
+
+def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
+    edition_date = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    with conn() as db:
+        existing = one(db, "SELECT * FROM fnn_editions WHERE edition_date = ?", (edition_date,))
+        if existing and not force:
+            return {"status": "already_published", "edition": public_fnn_edition(existing)}
+        reports = all_rows(
+            db,
+            """
+            SELECT r.id, r.report_number, r.call_type, r.disposition, r.location,
+                   r.narrative, r.actions_taken, r.created_at,
+                   officer.name AS officer_name, officer.primary_agency AS officer_agency
+            FROM cad_after_call_reports r
+            JOIN users officer ON officer.id = r.officer_id
+            WHERE r.created_at >= ?
+            ORDER BY r.created_at
+            LIMIT 80
+            """,
+            (f"{edition_date}T00:00:00",),
+        )
+    if not reports:
+        return {"status": "no_reports", "edition": None}
+    if not GEMINI_API_KEY:
+        return {"status": "configuration_required", "edition": None}
+
+    source_reports = [
+        {
+            "report_number": row["report_number"],
+            "call_type": str(row["call_type"])[:80],
+            "disposition": str(row["disposition"])[:60],
+            "location": str(row["location"])[:180],
+            "narrative": str(row["narrative"])[:4000],
+            "actions_taken": str(row["actions_taken"] or "")[:2000],
+            "officer_name": str(row["officer_name"])[:140],
+            "officer_agency": str(row["officer_agency"] or "")[:120],
+            "created_at": row["created_at"],
+        }
+        for row in reports
+    ]
+    response_schema = {
+        "type": "OBJECT",
+        "required": ["headline", "deck", "lead_story", "stories", "public_safety"],
+        "properties": {
+            "headline": {"type": "STRING"},
+            "deck": {"type": "STRING"},
+            "lead_story": {"type": "STRING"},
+            "stories": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "required": ["headline", "summary", "category"],
+                    "properties": {
+                        "headline": {"type": "STRING"},
+                        "summary": {"type": "STRING"},
+                        "category": {"type": "STRING"},
+                    },
+                },
+            },
+            "public_safety": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "required": ["label", "detail"],
+                    "properties": {
+                        "label": {"type": "STRING"},
+                        "detail": {"type": "STRING"},
+                    },
+                },
+            },
+        },
+    }
+    prompt = (
+        "Create today's Faircroft News Now edition from these fictional Arma Reforger "
+        "roleplay after-action reports. Produce detailed, polished local journalism. "
+        "Never invent facts, quotes, charges, injuries, motives, or outcomes. Clearly "
+        "attribute uncertain information to the official report. Focus on public-interest "
+        "events and officer actions. Do not mention evidence links, database identifiers, "
+        "CIV numbers, private staff notes, or the AI generation process. Avoid sensational "
+        "claims and treat allegations as allegations. Return only the requested JSON.\n\n"
+        f"REPORTS:\n{json.dumps(source_reports, separators=(',', ':'), ensure_ascii=False)}"
+    )
+    request_body = {
+        "systemInstruction": {
+            "parts": [{"text": "You are the newsroom editor for FNN, a fictional in-world roleplay news service."}]
+        },
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.35,
+            "responseMimeType": "application/json",
+            "responseSchema": response_schema,
+        },
+    }
+    endpoint = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{FNN_GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    )
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(request_body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=90) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        generated_text = result["candidates"][0]["content"]["parts"][0]["text"]
+        generated = json.loads(generated_text)
+    except (urllib.error.URLError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Gemini news generation failed: {type(exc).__name__}") from exc
+
+    headline = str(generated.get("headline") or "").strip()[:220]
+    deck = str(generated.get("deck") or "").strip()[:500]
+    lead_story = str(generated.get("lead_story") or "").strip()[:12000]
+    stories = generated.get("stories") if isinstance(generated.get("stories"), list) else []
+    public_safety = generated.get("public_safety") if isinstance(generated.get("public_safety"), list) else []
+    if not headline or not lead_story:
+        raise RuntimeError("Gemini returned an incomplete news edition")
+    generated_at = now_iso()
+    source_ids = [int(row["id"]) for row in reports]
+    with conn() as db:
+        if force:
+            db.execute("DELETE FROM fnn_editions WHERE edition_date = ?", (edition_date,))
+        created = db.execute(
+            """
+            INSERT INTO fnn_editions
+            (edition_date, headline, deck, lead_story, stories_json,
+             public_safety_json, source_report_ids, source_report_count,
+             model_name, generated_at, published_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (edition_date) DO NOTHING
+            RETURNING *
+            """,
+            (
+                edition_date, headline, deck, lead_story,
+                json.dumps(stories[:8], separators=(",", ":")),
+                json.dumps(public_safety[:10], separators=(",", ":")),
+                json.dumps(source_ids, separators=(",", ":")),
+                len(source_ids), FNN_GEMINI_MODEL, generated_at, generated_at,
+            ),
+        ).fetchone()
+        if not created:
+            created = one(db, "SELECT * FROM fnn_editions WHERE edition_date = ?", (edition_date,))
+    return {"status": "published", "edition": public_fnn_edition(created)}
+
+
+def fnn_generation_worker() -> None:
+    if not GEMINI_API_KEY:
+        print("FNN daily generation disabled: GEMINI_API_KEY is not configured")
+        return
+    while True:
+        try:
+            result = generate_fnn_daily_edition()
+            print(f"FNN daily generation status: {result['status']}")
+        except Exception as exc:
+            print(f"FNN daily generation failed: {type(exc).__name__}: {exc}")
+        time.sleep(FNN_GENERATION_INTERVAL_SECONDS)
 
 
 def add_transaction(
@@ -3934,6 +4131,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_session(db, user)
                 elif path == "/api/changelog" and method == "GET":
                     self.api_changelog(user)
+                elif path == "/api/fnn" and method == "GET":
+                    self.api_fnn(db, user)
+                elif path == "/api/fnn/generate" and method == "POST":
+                    self.api_generate_fnn(user)
                 elif path == "/api/roadmap" and method == "GET":
                     self.api_roadmap(db, user)
                 elif path == "/api/roadmap/items" and method == "POST":
@@ -4404,6 +4605,36 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         except (OSError, json.JSONDecodeError):
             payload = {"version": "unavailable", "entries": []}
         self.send_json(200, payload)
+
+    def api_fnn(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        editions = all_rows(
+            db,
+            "SELECT * FROM fnn_editions ORDER BY published_at DESC LIMIT 14",
+        )
+        self.send_json(
+            200,
+            {
+                "edition": public_fnn_edition(editions[0]) if editions else None,
+                "archive": [
+                    public_fnn_edition(row)
+                    for row in editions[1:]
+                ],
+                "generation_configured": bool(GEMINI_API_KEY),
+                "can_generate": has_any(user, "owner", "dev"),
+                "disclaimer": "FNN reports fictional events from the Faircroft Arma Reforger roleplay server.",
+            },
+        )
+
+    def api_generate_fnn(self, user: DbRow | None) -> None:
+        if not user or not has_any(user, "owner", "dev"):
+            self.error(403 if user else 401, "Developer access required")
+            return
+        result = generate_fnn_daily_edition(force=True)
+        status = 201 if result["status"] == "published" else 200
+        self.send_json(status, result)
 
     def api_roadmap(self, db: Database, user: DbRow | None) -> None:
         if not user:
@@ -9410,15 +9641,28 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             JOIN arma_account_links l ON l.identity_id = b.identity_id
             """,
         )
-        wealthiest_accounts = all_rows(
+        wealthiest_linked_accounts = all_rows(
             db,
             """
             SELECT b.identity_id, b.balance, b.synced_at,
                    u.id AS account_id, u.name AS account_name, u.civ_number,
                    l.player_name
             FROM arma_game_bank_balances b
-            LEFT JOIN arma_account_links l ON l.identity_id = b.identity_id
-            LEFT JOIN users u ON u.id = l.user_id
+            JOIN arma_account_links l ON l.identity_id = b.identity_id
+            JOIN users u ON u.id = l.user_id
+            ORDER BY b.balance DESC, b.identity_id
+            LIMIT 10
+            """,
+        )
+        wealthiest_unlinked_accounts = all_rows(
+            db,
+            """
+            SELECT b.identity_id, b.balance, b.synced_at
+            FROM arma_game_bank_balances b
+            WHERE NOT EXISTS (
+                SELECT 1 FROM arma_account_links l
+                WHERE l.identity_id = b.identity_id
+            )
             ORDER BY b.balance DESC, b.identity_id
             LIMIT 10
             """,
@@ -9488,7 +9732,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                         "linked_accounts": int(linked_bank_accounts.get("linked_accounts") or 0),
                         "last_synced_at": bank_economy.get("last_synced_at"),
                         "source": "FCRPMUSSALO/Banks",
-                        "top_accounts": [dict(row) for row in wealthiest_accounts],
+                        "top_linked_accounts": [dict(row) for row in wealthiest_linked_accounts],
+                        "top_unlinked_accounts": [dict(row) for row in wealthiest_unlinked_accounts],
                     },
                     "read_only": True,
                     "transaction_history_available": False,
@@ -10802,6 +11047,11 @@ def main() -> None:
     threading.Thread(
         target=shadowhaven_persistence_sync_worker,
         name="shadowhaven-persistence-sync",
+        daemon=True,
+    ).start()
+    threading.Thread(
+        target=fnn_generation_worker,
+        name="fnn-daily-generation",
         daemon=True,
     ).start()
     port = int(os.environ.get("PORT", "8080"))

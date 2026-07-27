@@ -1,6 +1,34 @@
 {
-  "version": "0.1.2",
+  "version": "0.1.4",
   "entries": [
+    {
+      "date": "2026-07-26",
+      "version": "0.1.4",
+      "title": "Fire & EMS Command System",
+      "added": [
+        "Introduced dedicated Incident Board, Apparatus, and Personnel workspaces for Fire and EMS.",
+        "Added live response metrics, active and cleared incident separation, apparatus availability, and crew assignments.",
+        "Added an adaptive emergency-services command interface for desktop, tablet, and phone."
+      ],
+      "changed": [
+        "Rebuilt Fire MDT and Fire Settings into one consistent professional command environment."
+      ],
+      "fixed": []
+    },
+    {
+      "date": "2026-07-26",
+      "version": "0.1.3",
+      "title": "Faircroft News Now",
+      "added": [
+        "Introduced FNN, a full-screen daily roleplay newsroom generated from eligible police after-action reports.",
+        "Added lead stories, public-safety briefs, secondary coverage, daily archives, and developer-controlled publishing.",
+        "Added an original Faircroft broadcast identity and responsive newspaper-style presentation."
+      ],
+      "changed": [
+        "Daily reporting excludes evidence links, internal identifiers, and confidential staff material from newsroom generation."
+      ],
+      "fixed": []
+    },
     {
       "date": "2026-07-26",
       "version": "0.1.2",
