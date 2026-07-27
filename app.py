@@ -76,7 +76,8 @@ SHADOWHAVEN_ANTICHEAT_SYNC_SECONDS = max(
 )
 ANTICHEAT_LIVE_TTL_SECONDS = max(90, int(os.environ.get("ANTICHEAT_LIVE_TTL_SECONDS", "900")))
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-FNN_GEMINI_MODEL = os.environ.get("FNN_GEMINI_MODEL", "gemini-2.5-pro").strip()
+FNN_GEMINI_MODEL = os.environ.get("FNN_GEMINI_MODEL", "gemini-2.5-flash").strip()
+FNN_GEMINI_FALLBACK_MODEL = os.environ.get("FNN_GEMINI_FALLBACK_MODEL", "gemini-2.5-flash").strip()
 FNN_GENERATION_INTERVAL_SECONDS = max(
     900, int(os.environ.get("FNN_GENERATION_INTERVAL_SECONDS", "3600"))
 )
@@ -3742,38 +3743,52 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
             "responseSchema": response_schema,
         },
     }
-    endpoint = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{FNN_GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    )
-    request = urllib.request.Request(
-        endpoint,
-        data=json.dumps(request_body).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     result = None
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(request, timeout=120) as response:
-                result = json.loads(response.read().decode("utf-8"))
-            break
-        except urllib.error.HTTPError as exc:
+    generation_model = FNN_GEMINI_MODEL
+    model_candidates = list(dict.fromkeys(filter(None, (FNN_GEMINI_MODEL, FNN_GEMINI_FALLBACK_MODEL))))
+    last_error: RuntimeError | None = None
+    for model_index, model_name in enumerate(model_candidates):
+        endpoint = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model_name}:generateContent?key={GEMINI_API_KEY}"
+        )
+        request = urllib.request.Request(
+            endpoint,
+            data=json.dumps(request_body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        for attempt in range(3):
             try:
-                error_payload = json.loads(exc.read().decode("utf-8", errors="replace"))
-                error_detail = str(error_payload.get("error", {}).get("message") or "").strip()
-            except (json.JSONDecodeError, AttributeError):
-                error_detail = ""
-            if exc.code in (429, 500, 502, 503, 504) and attempt < 2:
-                time.sleep(2 ** attempt)
-                continue
-            safe_detail = error_detail[:500] or exc.reason or "request rejected"
-            raise RuntimeError(f"Gemini news generation failed (HTTP {exc.code}): {safe_detail}") from exc
-        except urllib.error.URLError as exc:
-            if attempt < 2:
-                time.sleep(2 ** attempt)
-                continue
-            raise RuntimeError(f"Gemini news generation connection failed: {str(exc.reason)[:300]}") from exc
+                with urllib.request.urlopen(request, timeout=120) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+                generation_model = model_name
+                break
+            except urllib.error.HTTPError as exc:
+                try:
+                    error_payload = json.loads(exc.read().decode("utf-8", errors="replace"))
+                    error_detail = str(error_payload.get("error", {}).get("message") or "").strip()
+                except (json.JSONDecodeError, AttributeError):
+                    error_detail = ""
+                safe_detail = error_detail[:500] or exc.reason or "request rejected"
+                last_error = RuntimeError(f"Gemini news generation failed on {model_name} (HTTP {exc.code}): {safe_detail}")
+                quota_unavailable = exc.code == 429 and ("limit: 0" in error_detail.lower() or "quota exceeded" in error_detail.lower())
+                if quota_unavailable and model_index < len(model_candidates) - 1:
+                    break
+                if exc.code in (429, 500, 502, 503, 504) and attempt < 2:
+                    time.sleep(2 ** attempt)
+                    continue
+                break
+            except urllib.error.URLError as exc:
+                last_error = RuntimeError(f"Gemini news generation connection failed: {str(exc.reason)[:300]}")
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+                    continue
+                break
+        if result is not None:
+            break
+    if result is None:
+        raise last_error or RuntimeError("Gemini news generation failed without a response")
     try:
         generated_text = result["candidates"][0]["content"]["parts"][0]["text"]
         generated = json.loads(generated_text)
@@ -3814,7 +3829,7 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
                 json.dumps(stories[:8], separators=(",", ":")),
                 json.dumps(public_safety[:10], separators=(",", ":")),
                 json.dumps(source_ids, separators=(",", ":")),
-                len(reports) + len(court_records), FNN_GEMINI_MODEL, generated_at, generated_at,
+                len(reports) + len(court_records), generation_model, generated_at, generated_at,
             ),
         ).fetchone()
         if not created:
