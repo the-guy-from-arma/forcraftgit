@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.1.5";
+const OS_VERSION = "0.1.6";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -18,6 +18,7 @@ const state = {
   activeApp: null,
   returnToMdtOnClose: false,
   pendingArmaCode: new URL(window.location.href).searchParams.get("code") || "",
+  profileTab: "overview",
   armaUnlinkOpen: false,
   armaLinkPromptDismissed: false,
   generatedDevCode: null,
@@ -1261,26 +1262,48 @@ function renderProfile() {
   const referrals = data.referrals || { code: user.referral_code || "", bonus_amount: 50000, count: 0, total_bonus: 0, pending_count: 0, pending_total: 0, recent: [] };
   const canSetCallsign = canAny("owner", "admin", "leo", "cid", "iu", "iu_director", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "fireman", "ems", "dispatcher", "fire_chief", "deputy_chief", "fire_marshal");
   return `
-    <div class="stack profile-app">
-      <div class="profile-hero">
-        <div>
-          <p class="eyebrow">Player profile</p>
-          <h3>${escapeHtml(user.name)}</h3>
-          <p>CIV ${escapeHtml(user.civ_number || "pending")} - ${escapeHtml(user.verified ? "verified" : "pending verification")}</p>
+    <div class="resident-profile" data-profile-view="${escapeHtml(state.profileTab)}">
+      <header class="resident-profile-hero">
+        <span class="resident-profile-avatar">${escapeHtml((user.name || "?").trim().charAt(0).toUpperCase())}</span>
+        <div class="resident-profile-person">
+          <p>FAIRCROFT RESIDENT IDENTITY</p>
+          <h2>${escapeHtml(user.name)}</h2>
+          <span>CIV ${escapeHtml(user.civ_number || "pending")} <i></i> ${escapeHtml(activeCharacter.character_name || "No active character")}</span>
         </div>
-        <span class="pill ${user.verified ? "green" : "amber"}">${user.verified ? "verified" : "pending"}</span>
-      </div>
-      <div class="profile-grid">
-        <div><span>Email</span><strong>${escapeHtml(user.email || state.session.user.email || "")}</strong></div>
-        <div><span>Roles</span><strong>${escapeHtml((user.roles || state.session.user.roles || []).join(", "))}</strong></div>
-        <div><span>Agency</span><strong>${escapeHtml(user.primary_agency || "Civilian")}</strong></div>
-        <div><span>Status</span><strong>${escapeHtml(user.verified ? "Verified civilian" : "Awaiting verification")}</strong></div>
-        <div><span>Car Entry Code</span><strong>${escapeHtml(user.car_entry_code || "Required")}</strong></div>
-        ${canSetCallsign ? `<div><span>Callsign</span><strong>${escapeHtml(user.callsign || "Not set")}</strong></div>` : ""}
-        <div><span>Referral Code</span><strong>${escapeHtml(referrals.code || "Generating")}</strong></div>
-        <div><span>Live Link</span><strong>${escapeHtml(link ? "Attached" : "Not attached")}</strong></div>
-      </div>
-      <section class="profile-link-card referral-card">
+        <div class="resident-profile-status">
+          <span class="${user.verified ? "verified" : "pending"}">${user.verified ? "Identity verified" : "Verification pending"}</span>
+          <small>${link ? "Game account connected" : "Game link required"}</small>
+        </div>
+      </header>
+      <nav class="resident-profile-nav" aria-label="Profile sections">
+        <button class="${state.profileTab === "overview" ? "active" : ""}" type="button" data-profile-tab="overview">${iconSvg.user}<span>Overview</span></button>
+        <button class="${state.profileTab === "characters" ? "active" : ""}" type="button" data-profile-tab="characters">${iconSvg["id-card"]}<span>Characters</span><em>${characters.length}</em></button>
+        <button class="${state.profileTab === "connections" ? "active" : ""}" type="button" data-profile-tab="connections">${iconSvg.link}<span>Game Link</span><i class="${link ? "online" : ""}"></i></button>
+        <button class="${state.profileTab === "account" ? "active" : ""}" type="button" data-profile-tab="account">${iconSvg.settings}<span>Account</span></button>
+      </nav>
+      <main class="resident-profile-content">
+        <section class="resident-profile-panel resident-overview" data-profile-panel="overview">
+          <div class="resident-overview-lead">
+            <div><span>Active identity</span><strong>${escapeHtml(activeCharacter.character_name || user.name)}</strong><small>${escapeHtml(user.primary_agency || "Civilian")} · ${escapeHtml(user.callsign || "No callsign")}</small></div>
+            <span class="resident-overview-seal">${iconSvg.shield}</span>
+          </div>
+          <div class="profile-grid resident-identity-grid">
+            <div><span>Email</span><strong>${escapeHtml(user.email || state.session.user.email || "")}</strong></div>
+            <div><span>Roles</span><strong>${escapeHtml((user.roles || state.session.user.roles || []).join(", "))}</strong></div>
+            <div><span>Agency</span><strong>${escapeHtml(user.primary_agency || "Civilian")}</strong></div>
+            <div><span>Status</span><strong>${escapeHtml(user.verified ? "Verified civilian" : "Awaiting verification")}</strong></div>
+            <div><span>Car Entry Code</span><strong>${escapeHtml(user.car_entry_code || "Required")}</strong></div>
+            ${canSetCallsign ? `<div><span>Callsign</span><strong>${escapeHtml(user.callsign || "Not set")}</strong></div>` : ""}
+            <div><span>Referral Code</span><strong>${escapeHtml(referrals.code || "Generating")}</strong></div>
+            <div><span>Live Link</span><strong>${escapeHtml(link ? "Attached" : "Not attached")}</strong></div>
+          </div>
+          <div class="resident-overview-actions">
+            <button type="button" data-profile-tab="characters"><span>Active character</span><strong>${escapeHtml(activeCharacter.character_name || user.name)}</strong><em>Manage ›</em></button>
+            <button type="button" data-profile-tab="connections"><span>Arma connection</span><strong>${link ? "Connected" : "Action required"}</strong><em>Review ›</em></button>
+            <button type="button" data-profile-tab="account"><span>Account controls</span><strong>${user.car_entry_code ? "Up to date" : "Needs attention"}</strong><em>Open ›</em></button>
+          </div>
+        </section>
+      <section class="profile-link-card referral-card resident-profile-panel" data-profile-panel="account">
         <div class="row">
           <div>
             <p class="eyebrow">Referral program</p>
@@ -1313,7 +1336,7 @@ function renderProfile() {
           </div>
         ` : ""}
       </section>
-      <section class="profile-link-card">
+      <section class="profile-link-card resident-profile-panel" data-profile-panel="account">
         <div class="row">
           <div>
             <p class="eyebrow">In-game vehicle access</p>
@@ -1328,7 +1351,7 @@ function renderProfile() {
         </form>
       </section>
       ${canSetCallsign ? `
-        <section class="profile-link-card">
+        <section class="profile-link-card resident-profile-panel" data-profile-panel="account">
           <div class="row">
             <div>
               <p class="eyebrow">Radio identity</p>
@@ -1343,7 +1366,7 @@ function renderProfile() {
           </form>
         </section>
       ` : ""}
-      <section class="profile-link-card character-manager">
+      <section class="profile-link-card character-manager resident-profile-panel" data-profile-panel="characters">
         <div class="row">
           <div>
             <p class="eyebrow">Character roster</p>
@@ -1378,7 +1401,7 @@ function renderProfile() {
           <button class="primary" type="submit">Create and use</button>
         </form>
       </section>
-      <section class="profile-link-card">
+      <section class="profile-link-card resident-profile-panel" data-profile-panel="connections">
         <div class="row">
           <div>
             <p class="eyebrow">Arma attachment</p>
@@ -1428,7 +1451,7 @@ function renderProfile() {
         `}
       </section>
       ${claimedCodes.length ? `
-        <section class="profile-activity">
+        <section class="profile-activity resident-profile-panel" data-profile-panel="connections">
           <div class="row"><h3>Recent link claims</h3><span class="pill green">${claimedCodes.length}</span></div>
           <div class="profile-grid compact">
             ${claimedCodes.map((item) => `
@@ -1438,7 +1461,7 @@ function renderProfile() {
         </section>
       ` : ""}
       ${activity.length ? `
-        <section class="profile-activity">
+        <section class="profile-activity resident-profile-panel" data-profile-panel="connections">
           <div class="row"><h3>Arma activity</h3><span class="pill">${activity.length}</span></div>
           <div class="list">
             ${activity.slice(0, 5).map((item) => `
@@ -1450,6 +1473,7 @@ function renderProfile() {
           </div>
         </section>
       ` : ""}
+      </main>
     </div>
   `;
 }
@@ -1475,6 +1499,10 @@ async function saveCallsignFromForm(form) {
 }
 
 function bindProfile() {
+  $$("[data-profile-tab]").forEach((button) => button.addEventListener("click", () => {
+    state.profileTab = button.dataset.profileTab;
+    render();
+  }));
   $$("[data-copy-referral]").forEach((button) => button.addEventListener("click", async () => {
     try {
       await copyToClipboard(button.dataset.copyReferral);
@@ -9690,7 +9718,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.5-credit2").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.6-profile").catch(() => {}));
 }
 
 bootApp();

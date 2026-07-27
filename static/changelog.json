@@ -1,6 +1,19 @@
 {
-  "version": "0.1.5",
+  "version": "0.1.6",
   "entries": [
+    {
+      "date": "2026-07-27",
+      "version": "0.1.6",
+      "title": "Resident Identity",
+      "added": [
+        "Added dedicated Overview, Characters, Game Link, and Account workspaces to the resident profile.",
+        "Added a persistent resident credential header with live verification and game-link status."
+      ],
+      "changed": [
+        "Rebuilt the Profile experience to eliminate the long single-page widget stack while preserving every existing account control."
+      ],
+      "fixed": []
+    },
     {
       "date": "2026-07-27",
       "version": "0.1.5",

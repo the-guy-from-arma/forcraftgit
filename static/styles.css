@@ -14655,3 +14655,172 @@ textarea:focus {
 @media (prefers-reduced-motion: reduce) {
   .faircroft-score-scale b { transition: none; }
 }
+
+/* Resident identity workspace */
+.resident-profile {
+  min-height: 100%;
+  margin: -14px;
+  padding: 14px;
+  color: #e9f1f7;
+  background:
+    radial-gradient(circle at 8% -5%, rgba(34, 204, 225, .13), transparent 29%),
+    radial-gradient(circle at 100% 4%, rgba(220, 35, 142, .10), transparent 25%),
+    #080e15;
+}
+.resident-profile-hero {
+  position: relative;
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  min-height: 92px;
+  padding: 14px 16px;
+  overflow: hidden;
+  border: 1px solid #223548;
+  border-radius: 18px;
+  background: linear-gradient(115deg, rgba(19, 47, 70, .96), rgba(17, 27, 43, .97) 58%, rgba(38, 20, 49, .96));
+  box-shadow: 0 18px 42px rgba(0,0,0,.28);
+}
+.resident-profile-hero::after {
+  content: "";
+  position: absolute;
+  right: -38px;
+  top: -90px;
+  width: 190px;
+  height: 190px;
+  border: 24px solid rgba(255,255,255,.025);
+  border-radius: 50%;
+}
+.resident-profile-avatar {
+  position: relative;
+  z-index: 1;
+  width: 54px;
+  height: 54px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(66, 225, 234, .38);
+  border-radius: 17px;
+  color: #fff;
+  background: linear-gradient(145deg, #0f7184, #17495f 60%, #54284e);
+  box-shadow: inset 0 1px rgba(255,255,255,.15), 0 8px 24px rgba(0,0,0,.25);
+  font-size: 22px;
+  font-weight: 900;
+}
+.resident-profile-person { min-width: 0; position: relative; z-index: 1; }
+.resident-profile-person p { margin: 0 0 3px; color: #66cfdd; font-size: 8px; font-weight: 900; letter-spacing: .14em; }
+.resident-profile-person h2 { margin: 0; overflow: hidden; text-overflow: ellipsis; font-size: 22px; letter-spacing: -.035em; white-space: nowrap; }
+.resident-profile-person > span { display: flex; align-items: center; gap: 6px; margin-top: 4px; color: #91a5b7; font-size: 10px; }
+.resident-profile-person i { width: 3px; height: 3px; border-radius: 50%; background: #42e0ba; }
+.resident-profile-status { position: relative; z-index: 1; display: grid; justify-items: end; gap: 6px; text-align: right; }
+.resident-profile-status > span { padding: 5px 8px; border-radius: 99px; font-size: 8px; font-weight: 900; letter-spacing: .07em; text-transform: uppercase; }
+.resident-profile-status > span.verified { color: #6df1c1; border: 1px solid rgba(80,231,174,.26); background: rgba(25,125,90,.16); }
+.resident-profile-status > span.pending { color: #ffd27a; border: 1px solid rgba(255,199,85,.25); background: rgba(160,106,20,.16); }
+.resident-profile-status small { color: #7d91a3; font-size: 9px; }
+.resident-profile-nav {
+  position: sticky;
+  z-index: 8;
+  top: -14px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  margin: 11px 0;
+  padding: 5px;
+  border: 1px solid #1d2b39;
+  border-radius: 15px;
+  background: rgba(8, 15, 23, .94);
+  backdrop-filter: blur(18px);
+}
+.resident-profile-nav button {
+  position: relative;
+  min-width: 0;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 7px;
+  color: #72889b;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  font-size: 10px;
+  font-weight: 800;
+}
+.resident-profile-nav button:hover { color: #c7d8e4; background: rgba(255,255,255,.035); }
+.resident-profile-nav button.active { color: #effbff; background: linear-gradient(135deg, #15394d, #252642); box-shadow: inset 0 0 0 1px rgba(78,210,231,.18); }
+.resident-profile-nav svg { width: 16px; height: 16px; stroke-width: 1.8; }
+.resident-profile-nav em {
+  min-width: 16px;
+  padding: 2px 4px;
+  color: #8be9f4;
+  border-radius: 9px;
+  background: #183542;
+  font-size: 8px;
+  font-style: normal;
+}
+.resident-profile-nav i { width: 6px; height: 6px; border-radius: 50%; background: #d6a950; box-shadow: 0 0 0 3px rgba(214,169,80,.08); }
+.resident-profile-nav i.online { background: #43dda6; box-shadow: 0 0 0 3px rgba(67,221,166,.09); }
+.resident-profile-content { min-height: 380px; }
+.resident-profile .resident-profile-panel { display: none; animation: resident-panel-in .24s ease both; }
+.resident-profile[data-profile-view="overview"] [data-profile-panel="overview"],
+.resident-profile[data-profile-view="characters"] [data-profile-panel="characters"],
+.resident-profile[data-profile-view="connections"] [data-profile-panel="connections"],
+.resident-profile[data-profile-view="account"] [data-profile-panel="account"] { display: grid; }
+.resident-profile-content > .resident-profile-panel + .resident-profile-panel { margin-top: 10px; }
+.resident-overview { gap: 10px; }
+.resident-overview-lead {
+  min-height: 88px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  border: 1px solid #1f3545;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #102330, #101a27);
+}
+.resident-overview-lead div { display: grid; gap: 3px; }
+.resident-overview-lead div span { color: #6e879a; font-size: 8px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; }
+.resident-overview-lead div strong { font-size: 19px; letter-spacing: -.025em; }
+.resident-overview-lead div small { color: #8da1b1; font-size: 10px; }
+.resident-overview-seal { width: 44px; height: 44px; display: grid; place-items: center; color: #49d7dd; border: 1px solid #244d5b; border-radius: 50%; background: #102a37; }
+.resident-overview-seal svg { width: 22px; }
+.resident-identity-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.resident-identity-grid div { min-height: 58px; padding: 11px; border-color: #1d2d3b; background: #0d1822; }
+.resident-overview-actions { display: grid; gap: 7px; }
+.resident-overview-actions button {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+  padding: 12px 13px;
+  text-align: left;
+  color: #dce8f0;
+  border: 1px solid #1e2f3d;
+  border-radius: 12px;
+  background: #0d1720;
+}
+.resident-overview-actions button:hover { border-color: #315063; background: #10202c; }
+.resident-overview-actions span { color: #6e8495; font-size: 8px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
+.resident-overview-actions strong { font-size: 12px; }
+.resident-overview-actions em { grid-column: 2; grid-row: 1 / 3; align-self: center; color: #54ccda; font-size: 9px; font-style: normal; font-weight: 800; }
+.resident-profile .profile-link-card, .resident-profile .profile-activity {
+  border-color: #203342;
+  border-radius: 16px;
+  padding: 15px;
+  background: #0d171f;
+  box-shadow: none;
+}
+@keyframes resident-panel-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (max-width: 500px) {
+  .resident-profile-hero { grid-template-columns: 50px minmax(0, 1fr); padding: 12px; }
+  .resident-profile-avatar { width: 46px; height: 46px; border-radius: 14px; }
+  .resident-profile-person h2 { font-size: 18px; }
+  .resident-profile-status { grid-column: 1 / -1; display: flex; justify-content: space-between; justify-items: initial; width: 100%; }
+  .resident-profile-nav button { flex-direction: column; gap: 3px; min-height: 49px; font-size: 8px; }
+  .resident-profile-nav em, .resident-profile-nav i { position: absolute; right: 10px; top: 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .resident-profile .resident-profile-panel { animation: none; }
+}
