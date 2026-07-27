@@ -8272,6 +8272,7 @@ function renderDevGameIntelligence(data) {
   const intel = data.game_intelligence || {};
   const sync = intel.sync || {};
   const economy = intel.economy || {};
+  const topAccounts = economy.top_accounts || [];
   const categories = intel.categories || [];
   const linkedUsers = (data.users || []).filter((user) => user.arma_linked);
   const totalRecords = Number(sync.records || categories.reduce((sum, item) => sum + Number(item.records || 0), 0));
@@ -8297,6 +8298,18 @@ function renderDevGameIntelligence(data) {
       <article><span>Access mode</span><strong>Read only</strong><small>No game mutations</small></article>
       <article><span>Economy sync</span><strong>Live snapshot</strong><small>${escapeHtml(economy.last_synced_at || "Awaiting bank sync")}</small></article>
     </div>
+    <section class="dev-card game-intel-directory">
+      <div class="dev-card-header"><div><span>ECONOMY RANKING</span><h2>Top ten bank accounts</h2><p class="muted">Highest balances in the current FCRPMUSSALO bank snapshot.</p></div><strong>${topAccounts.length}</strong></div>
+      <div class="game-intel-accounts">${topAccounts.map((account, index) => {
+        const label = account.account_name || account.player_name || "Unlinked game account";
+        const identity = account.identity_id || "";
+        return `<${account.account_id ? "button" : "article"} ${account.account_id ? `data-dev-account="${account.account_id}"` : ""}>
+          <span class="game-intel-avatar">${String(index + 1).padStart(2, "0")}</span>
+          <div><strong>${escapeHtml(label)}</strong><small>${account.civ_number ? `CIV ${escapeHtml(account.civ_number)} · ` : ""}${escapeHtml(identity)}</small></div>
+          <i>${money(account.balance || 0)}</i>
+        </${account.account_id ? "button" : "article"}>`;
+      }).join("") || `<div class="empty">Bank rankings will appear after the next FCRPMUSSALO bank sync.</div>`}</div>
+    </section>
     <div class="game-intel-layout">
       <section class="dev-card game-intel-collections">
         <div class="dev-card-header"><div><span>DATABASE COVERAGE</span><h2>Persistence collections</h2></div><strong>${categories.length}</strong></div>
@@ -8508,7 +8521,7 @@ function renderDevAccountModal(data) {
               const summary = record.summary_payload || {};
               const components = record.component_types || [];
               return `<article>
-                <div class="dev-persistence-record-head"><span class="dev-record-status ${record.match_confidence === "direct" ? "verified" : ""}">${escapeHtml(record.match_confidence)} match</span><code>${escapeHtml(record.record_id)}</code></div>
+                <div class="dev-persistence-record-head"><span class="dev-record-status verified">${escapeHtml(record.match_confidence || "verified identifier")}</span><code>${escapeHtml(record.record_id)}</code></div>
                 <h3>${escapeHtml(record.title || `${category} record`)}</h3>
                 <p>${summary.prefab ? escapeHtml(summary.prefab) : "No prefab label recorded"}${summary.status ? ` · ${escapeHtml(summary.status)}` : ""}</p>
                 <div>${components.slice(0, 8).map((component) => `<span>${escapeHtml(component)}</span>`).join("") || `<span>Generic persisted entity</span>`}</div>

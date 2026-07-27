@@ -9410,6 +9410,19 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             JOIN arma_account_links l ON l.identity_id = b.identity_id
             """,
         )
+        wealthiest_accounts = all_rows(
+            db,
+            """
+            SELECT b.identity_id, b.balance, b.synced_at,
+                   u.id AS account_id, u.name AS account_name, u.civ_number,
+                   l.player_name
+            FROM arma_game_bank_balances b
+            LEFT JOIN arma_account_links l ON l.identity_id = b.identity_id
+            LEFT JOIN users u ON u.id = l.user_id
+            ORDER BY b.balance DESC, b.identity_id
+            LIMIT 10
+            """,
+        )
         if bank_category and int(bank_category.get("records") or 0):
             persistence_categories.insert(0, {
                 "category": "Banks",
@@ -9475,6 +9488,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                         "linked_accounts": int(linked_bank_accounts.get("linked_accounts") or 0),
                         "last_synced_at": bank_economy.get("last_synced_at"),
                         "source": "FCRPMUSSALO/Banks",
+                        "top_accounts": [dict(row) for row in wealthiest_accounts],
                     },
                     "read_only": True,
                     "transaction_history_available": False,
@@ -9645,7 +9659,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             str(account.get("uid") or "").strip(),
             str(account.get("rpl_identity") or "").strip(),
         ]
-        identity_candidates = [value for value in dict.fromkeys(identity_candidates) if value]
+        # Short numeric RPL values and generic component IDs occur throughout EPF
+        # payloads. Only stable, sufficiently specific identifiers may correlate
+        # a persistence record to a player.
+        identity_candidates = [
+            value for value in dict.fromkeys(identity_candidates)
+            if len(value) >= 8
+        ]
         persistence_records: list[DbRow] = []
         if identity_candidates:
             clauses: list[str] = []
@@ -9655,9 +9675,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "record_id = ?",
                     "owner_identity = ?",
                     "identity_values LIKE ?",
-                    "raw_payload LIKE ?",
                 ])
-                params.extend([identity, identity, f"%{identity}%", f"%{identity}%"])
+                params.extend([identity, identity, f'%"{identity}"%'])
             persistence_records = all_rows(
                 db,
                 f"""
@@ -9679,14 +9698,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     record[key] = json.loads(record.get(key) or json.dumps(fallback))
                 except json.JSONDecodeError:
                     record[key] = fallback
-            direct_values = set(record.get("identity_values") or [])
-            record["match_confidence"] = (
-                "direct"
-                if record.get("record_id") in identity_candidates
-                or record.get("owner_identity") in identity_candidates
-                or direct_values.intersection(identity_candidates)
-                else "payload"
-            )
+            record["match_confidence"] = "verified identifier"
             normalized_persistence.append(record)
         persistence_sync = one(
             db,
