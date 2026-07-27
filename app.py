@@ -617,17 +617,17 @@ PERSISTENCE_CATEGORIES = {
 }
 
 
-def persistence_scalar_fields(payload: Any, limit: int = 400) -> list[tuple[str, str]]:
+def persistence_scalar_fields(payload: Any, limit: int = 2000) -> list[tuple[str, str]]:
     fields: list[tuple[str, str]] = []
 
     def walk(value: Any, path: str, depth: int) -> None:
-        if len(fields) >= limit or depth > 12:
+        if len(fields) >= limit or depth > 16:
             return
         if isinstance(value, dict):
             for key, child in value.items():
                 walk(child, f"{path}.{key}" if path else str(key), depth + 1)
         elif isinstance(value, list):
-            for index, child in enumerate(value[:200]):
+            for index, child in enumerate(value[:500]):
                 walk(child, f"{path}[{index}]", depth + 1)
         elif value is not None and not isinstance(value, bool):
             text = str(value).strip()
@@ -653,7 +653,8 @@ def summarize_persistence_record(category: str, record_id: str, payload: Any) ->
     for path, value in lowered:
         leaf = path.rsplit(".", 1)[-1]
         if any(key in leaf for key in (
-            "identity", "playeruid", "player_uid", "ownerid", "owner_id",
+            "identity", "playeruid", "player_uid", "playerid", "player_id",
+            "owneruid", "owner_uid", "ownerid", "owner_id", "bohemia",
             "characterid", "character_id", "persistentid", "persistent_id", "pid",
         )):
             if value not in identity_values:
@@ -666,7 +667,11 @@ def summarize_persistence_record(category: str, record_id: str, payload: Any) ->
 
     prefab = first_value("prefab", "resourcename", "template")
     display_name = first_value("displayname", "itemname", "vehiclename", "charactername", "name", "title")
-    owner_id = first_value("ownerid", "owner_id", "playeruid", "identityid", "identity_id", "pid")
+    owner_id = first_value(
+        "owneruid", "owner_uid", "ownerid", "owner_id", "playeruid",
+        "player_uid", "playerid", "player_id", "identityid", "identity_id",
+        "bohemia", "persistentid", "persistent_id", "pid",
+    )
     status = first_value("status", "state")
     amount = first_value("balance", "amount", "value", "price")
     title = display_name or (prefab.rsplit("/", 1)[-1].replace(".et", "") if prefab else "") or f"{category} record"
@@ -682,6 +687,31 @@ def summarize_persistence_record(category: str, record_id: str, payload: Any) ->
     }
 
 
+def upsert_persistence_record_batch(records: list[tuple[Any, ...]]) -> None:
+    if not records:
+        return
+    with conn() as db:
+        for record in records:
+            db.execute(
+                """
+                INSERT INTO game_persistence_records
+                (source_path, category, record_id, title, owner_identity, identity_values,
+                 component_types, prefab, record_status, amount_text, summary_payload,
+                 raw_payload, source_modified_at, synced_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (source_path) DO UPDATE SET
+                    category = EXCLUDED.category, record_id = EXCLUDED.record_id,
+                    title = EXCLUDED.title, owner_identity = EXCLUDED.owner_identity,
+                    identity_values = EXCLUDED.identity_values,
+                    component_types = EXCLUDED.component_types, prefab = EXCLUDED.prefab,
+                    record_status = EXCLUDED.record_status, amount_text = EXCLUDED.amount_text,
+                    summary_payload = EXCLUDED.summary_payload, raw_payload = EXCLUDED.raw_payload,
+                    source_modified_at = EXCLUDED.source_modified_at, synced_at = EXCLUDED.synced_at
+                """,
+                record,
+            )
+
+
 def sync_shadowhaven_persistence_once() -> tuple[int, dict[str, int]]:
     if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
         return 0, {}
@@ -693,9 +723,16 @@ def sync_shadowhaven_persistence_once() -> tuple[int, dict[str, int]]:
         transport.connect(username=SHADOWHAVEN_SFTP_USERNAME, password=SHADOWHAVEN_SFTP_PASSWORD)
         sftp = paramiko.SFTPClient.from_transport(transport)
         try:
+            # The list is reversed because this scanner consumes it with pop().
+            # Player-facing collections are deliberately processed before large
+            # world/item collections so linked-account data appears immediately.
+            category_priority = [
+                "Characters", "Vehicles", "Criminals", "PoliceReports",
+                "CopChats", "Turrets", "RootEntityCollections", "Items",
+            ]
             pending = [
                 (f"{SHADOWHAVEN_PERSISTENCE_ROOT}/{category}", category)
-                for category in sorted(PERSISTENCE_CATEGORIES)
+                for category in reversed(category_priority)
             ]
             records: list[tuple[Any, ...]] = []
             while pending and processed < SHADOWHAVEN_PERSISTENCE_MAX_FILES:
@@ -734,31 +771,20 @@ def sync_shadowhaven_persistence_once() -> tuple[int, dict[str, int]]:
                     ))
                     processed += 1
                     category_counts[category] = category_counts.get(category, 0) + 1
+                    if len(records) >= 100:
+                        upsert_persistence_record_batch(records)
+                        records.clear()
+                        print(
+                            f"Shadowhaven FCRPMUSSALO sync progress: "
+                            f"{processed} record(s), current category {category}"
+                        )
         finally:
             sftp.close()
     finally:
         transport.close()
 
+    upsert_persistence_record_batch(records)
     with conn() as db:
-        for record in records:
-            db.execute(
-                """
-                INSERT INTO game_persistence_records
-                (source_path, category, record_id, title, owner_identity, identity_values,
-                 component_types, prefab, record_status, amount_text, summary_payload,
-                 raw_payload, source_modified_at, synced_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (source_path) DO UPDATE SET
-                    category = EXCLUDED.category, record_id = EXCLUDED.record_id,
-                    title = EXCLUDED.title, owner_identity = EXCLUDED.owner_identity,
-                    identity_values = EXCLUDED.identity_values,
-                    component_types = EXCLUDED.component_types, prefab = EXCLUDED.prefab,
-                    record_status = EXCLUDED.record_status, amount_text = EXCLUDED.amount_text,
-                    summary_payload = EXCLUDED.summary_payload, raw_payload = EXCLUDED.raw_payload,
-                    source_modified_at = EXCLUDED.source_modified_at, synced_at = EXCLUDED.synced_at
-                """,
-                record,
-            )
         db.execute(
             """
             INSERT INTO game_persistence_sync_status
@@ -783,6 +809,10 @@ def shadowhaven_persistence_sync_worker() -> None:
     if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
         print("Shadowhaven FCRPMUSSALO sync disabled: credentials are not configured")
         return
+    print(
+        f"Shadowhaven FCRPMUSSALO sync starting from "
+        f"{SHADOWHAVEN_PERSISTENCE_ROOT}"
+    )
     while True:
         try:
             records, categories = sync_shadowhaven_persistence_once()
@@ -9359,6 +9389,27 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             db,
             "SELECT COUNT(*) AS records, MAX(synced_at) AS last_synced_at FROM arma_game_bank_balances",
         )
+        bank_economy = one(
+            db,
+            """
+            SELECT COUNT(*) AS bank_accounts,
+                   COALESCE(SUM(balance), 0) AS currency_in_circulation,
+                   COALESCE(AVG(balance), 0) AS average_balance,
+                   COALESCE(MAX(balance), 0) AS largest_balance,
+                   SUM(CASE WHEN balance > 0 THEN 1 ELSE 0 END) AS funded_accounts,
+                   SUM(CASE WHEN balance <= 0 THEN 1 ELSE 0 END) AS empty_accounts,
+                   MAX(synced_at) AS last_synced_at
+            FROM arma_game_bank_balances
+            """,
+        )
+        linked_bank_accounts = one(
+            db,
+            """
+            SELECT COUNT(DISTINCT b.identity_id) AS linked_accounts
+            FROM arma_game_bank_balances b
+            JOIN arma_account_links l ON l.identity_id = b.identity_id
+            """,
+        )
         if bank_category and int(bank_category.get("records") or 0):
             persistence_categories.insert(0, {
                 "category": "Banks",
@@ -9414,6 +9465,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                         "source_root": SHADOWHAVEN_PERSISTENCE_ROOT,
                     },
                     "categories": [dict(row) for row in persistence_categories],
+                    "economy": {
+                        "currency_in_circulation": float(bank_economy.get("currency_in_circulation") or 0),
+                        "average_balance": float(bank_economy.get("average_balance") or 0),
+                        "largest_balance": float(bank_economy.get("largest_balance") or 0),
+                        "bank_accounts": int(bank_economy.get("bank_accounts") or 0),
+                        "funded_accounts": int(bank_economy.get("funded_accounts") or 0),
+                        "empty_accounts": int(bank_economy.get("empty_accounts") or 0),
+                        "linked_accounts": int(linked_bank_accounts.get("linked_accounts") or 0),
+                        "last_synced_at": bank_economy.get("last_synced_at"),
+                        "source": "FCRPMUSSALO/Banks",
+                    },
                     "read_only": True,
                     "transaction_history_available": False,
                 },
@@ -9530,16 +9592,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             JOIN users creator ON creator.id = w.created_by
             LEFT JOIN users resolver ON resolver.id = w.resolved_by
             WHERE w.user_id = ? ORDER BY w.created_at DESC LIMIT 100
-            """,
-            (target_id,),
-        )
-        transactions = all_rows(
-            db,
-            """
-            SELECT t.*, counterparty.name AS counterparty_name
-            FROM transactions t
-            LEFT JOIN users counterparty ON counterparty.id = t.counterparty_id
-            WHERE t.user_id = ? ORDER BY t.created_at DESC LIMIT 150
             """,
             (target_id,),
         )
@@ -9677,7 +9729,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "active_block": dict(active_block) if active_block else None,
                 "sanctions": [dict(row) for row in sanctions],
                 "warnings": [dict(row) for row in warnings],
-                "transactions": [dict(row) for row in transactions],
                 "arma_activity": [dict(row) for row in arma_activity],
                 "characters": [dict(row) for row in characters],
                 "jobs": [dict(row) for row in jobs],

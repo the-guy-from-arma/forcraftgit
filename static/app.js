@@ -8271,6 +8271,7 @@ function devRecentLinks(links) {
 function renderDevGameIntelligence(data) {
   const intel = data.game_intelligence || {};
   const sync = intel.sync || {};
+  const economy = intel.economy || {};
   const categories = intel.categories || [];
   const linkedUsers = (data.users || []).filter((user) => user.arma_linked);
   const totalRecords = Number(sync.records || categories.reduce((sum, item) => sum + Number(item.records || 0), 0));
@@ -8285,10 +8286,16 @@ function renderDevGameIntelligence(data) {
       <div class="game-intel-score"><span>INDEXED RECORDS</span><strong>${totalRecords.toLocaleString()}</strong><small>${categories.length} active collections</small></div>
     </section>
     <div class="game-intel-statline">
-      <article><span>Linked identities</span><strong>${linkedUsers.length}</strong><small>Eligible for correlation</small></article>
+      <article><span>Currency in circulation</span><strong>${money(economy.currency_in_circulation || 0)}</strong><small>Across all synchronized game bank accounts</small></article>
+      <article><span>Bank accounts</span><strong>${Number(economy.bank_accounts || 0).toLocaleString()}</strong><small>${Number(economy.funded_accounts || 0).toLocaleString()} funded</small></article>
+      <article><span>Average balance</span><strong>${money(economy.average_balance || 0)}</strong><small>Per indexed game account</small></article>
+      <article><span>Largest balance</span><strong>${money(economy.largest_balance || 0)}</strong><small>Highest synchronized balance</small></article>
+    </div>
+    <div class="game-intel-statline">
+      <article><span>Linked identities</span><strong>${linkedUsers.length}</strong><small>${Number(economy.linked_accounts || 0).toLocaleString()} matched to bank records</small></article>
       <article><span>Source</span><strong>FCRPMUSSALO</strong><small>Shadowhaven SFTP</small></article>
       <article><span>Access mode</span><strong>Read only</strong><small>No game mutations</small></article>
-      <article><span>History</span><strong>State records</strong><small>No native transaction ledger found</small></article>
+      <article><span>Economy sync</span><strong>Live snapshot</strong><small>${escapeHtml(economy.last_synced_at || "Awaiting bank sync")}</small></article>
     </div>
     <div class="game-intel-layout">
       <section class="dev-card game-intel-collections">
@@ -8434,7 +8441,7 @@ function devPlatformIdentity(...values) {
 
 function renderDevAccountModal(data) {
   const a = data.account || {};
-  const sanctions = data.sanctions || [], warnings = data.warnings || [], tx = data.transactions || [];
+  const sanctions = data.sanctions || [], warnings = data.warnings || [];
   const activity = data.arma_activity || [], characters = data.characters || [], jobs = data.jobs || [], citations = data.citations || [], properties = data.properties || [];
   const gameBank = data.game_database?.bank;
   const gameRecords = data.game_database?.records || [];
@@ -8510,9 +8517,8 @@ function renderDevAccountModal(data) {
             }).join("")}</div>
           </details>`).join("") || `<div class="empty">No FCRPMUSSALO records currently match this linked identity. The next SFTP index may add records.</div>`}</div>
         </section>
-        <section class="dev-card"><div class="row"><div><p class="eyebrow">Railway ledger</p><h3>Money Transactions</h3></div><span class="pill">${tx.length}</span></div>${devDetailList(tx, (x) => [`${x.type || "transaction"} · ${money(x.amount || 0)}`, `${x.description || ""} · ${x.created_at || ""}`])}</section>
         <section class="dev-card"><div class="row"><div><p class="eyebrow">In-game bridge events</p><h3>Arma Activity</h3></div><span class="pill">${activity.length}</span></div>${devDetailList(activity, (x) => [`${x.event_type || "event"} · ${x.action || ""}`, `${x.reason || ""} · ${x.received_at || ""}`])}</section>
-        <section class="dev-card dev-game-db-status"><div><p class="eyebrow">Persistence boundary</p><h3>Native Game Database</h3><p class="muted">This profile mirrors persisted state from ${escapeHtml(data.game_database?.source || "FCRPMUSSALO")}. Railway does not edit these records. A native historical transaction ledger was not found, so the transaction panel above contains Railway-recorded activity only.</p></div><span class="pill ${gameRecords.length || gameBank ? "green" : "amber"}">${gameRecords.length || gameBank ? "records indexed" : "awaiting sync"}</span></section>
+        <section class="dev-card dev-game-db-status"><div><p class="eyebrow">Persistence boundary</p><h3>Native Game Database</h3><p class="muted">This profile mirrors persisted state from ${escapeHtml(data.game_database?.source || "FCRPMUSSALO")}. Railway does not maintain a separate player-money ledger. Fine and tax settlements remain queued for the controlled server-restart deduction process.</p></div><span class="pill ${gameRecords.length || gameBank ? "green" : "amber"}">${gameRecords.length || gameBank ? "records indexed" : "awaiting sync"}</span></section>
       </div>
     </section>
   </div>`;
