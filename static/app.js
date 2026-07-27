@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.1.1";
+const OS_VERSION = "0.1.2";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
@@ -8089,6 +8089,7 @@ function renderDevWorkspace() {
     enforcement: ["Enforcement Cases", "File, review, and revoke player sanctions"],
     warnings: ["Internal Notes", "Staff-only account history and observations"],
     linking: ["Account Linking", "Linked identities, recent claims, and unlink authorization"],
+    intelligence: ["Game Intelligence", "Read-only FCRPMUSSALO assets, records, and identity matches"],
     anticheat: ["Anti-Cheat Intelligence", "Live presence, detection history, and linked identity analysis"],
     audit: ["Activity Log", "Chronological record of staff actions"],
     settings: ["App Visibility", "Control which application icons appear for users"],
@@ -8097,7 +8098,7 @@ function renderDevWorkspace() {
     <aside class="dev-sidebar">
       <div class="dev-brand"><img class="dev-emblem" src="/static/brand/faircroft-emblem.webp" alt="" /><div><strong>Faircroft RP</strong><small>Staff Operations</small></div></div>
       <p class="dev-nav-label">Operations index</p>
-      <nav>${[["dashboard","Overview"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["audit","Activity Log"],["settings","Settings"]].map(([id,label], index) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><small>${String(index + 1).padStart(2, "0")}</small><span>${label}</span><i></i></button>`).join("")}</nav>
+      <nav>${[["dashboard","Command Center"],["intelligence","Game Intelligence"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["audit","Activity Log"],["settings","Settings"]].map(([id,label], index) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><small>${String(index + 1).padStart(2, "0")}</small><span>${label}</span><i></i></button>`).join("")}</nav>
       <div class="dev-sidebar-footer"><span class="dev-access-dot"></span><div><strong>Authorized Staff</strong><small>${escapeHtml(state.session?.user?.name || "Staff member")}</small></div></div>
     </aside>
     <main class="dev-main">
@@ -8147,6 +8148,7 @@ function renderDevTools() {
   const users = data.users || [], sanctions = data.sanctions || [], warnings = data.warnings || [], logs = data.audit_logs || [], codes = data.unlink_codes || [];
   const metrics = devMetrics(data, warnings);
   if (state.devTab === "anticheat") return renderDevAntiCheat(data.anti_cheat || {});
+  if (state.devTab === "intelligence") return renderDevGameIntelligence(data);
   if (state.devTab === "dashboard") return `<div class="stack dev-overview">${metrics}<div class="dev-section-heading"><div><h2>Work queue</h2><p>Items requiring staff attention and recent review.</p></div></div><div class="dev-overview-queue"><section class="dev-card dev-queue-card enforcement"><div class="dev-card-header"><div><span>ENFORCEMENT</span><h2>Active cases</h2></div><button class="secondary" data-dev-go="enforcement">View cases</button></div>${sanctions.filter((x) => !x.revoked_at).slice(0,8).map(devSanctionRow).join("") || `<div class="dev-queue-clear"><i></i><div><strong>Queue clear</strong><span>No active enforcement cases require review.</span></div></div>`}</section><section class="dev-card dev-queue-card identity"><div class="dev-card-header"><div><span>IDENTITY</span><h2>Recent Arma links</h2></div><button class="secondary" data-dev-go="linking">View accounts</button></div>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card dev-activity-panel"><div class="dev-card-header"><div><span>STAFF RECORD</span><h2>Latest activity</h2></div><button class="secondary" data-dev-go="audit">View complete log</button></div>${devAudit(logs.slice(0,10))}</section></div>`;
   if (state.devTab === "enforcement") return `<div class="dev-ops-view dev-cases-view"><div class="dev-view-intro"><div><span>ENFORCEMENT CONTROL</span><h2>Case administration</h2><p>Document an incident, apply a proportionate action, and preserve the complete decision record.</p></div><strong>${sanctions.filter((x) => !x.revoked_at).length} ACTIVE</strong></div><div class="dev-grid-enforcement"><section class="dev-card dev-editor-panel"><div class="row"><div><p class="eyebrow">Required incident documentation</p><h2>Open enforcement report</h2><p class="muted">A ban or timeout cannot be issued until this report is complete.</p></div><span class="pill red">required</span></div>
     <form id="devSanctionForm" class="dev-report-form">
@@ -8263,6 +8265,50 @@ function devRecentLinks(links) {
         <i aria-hidden="true">›</i>
       </button>`;
     }).join("") || `<div class="dev-queue-clear"><i></i><div><strong>No completed links</strong><span>New identity claims will appear here.</span></div></div>`}
+  </div>`;
+}
+
+function renderDevGameIntelligence(data) {
+  const intel = data.game_intelligence || {};
+  const sync = intel.sync || {};
+  const categories = intel.categories || [];
+  const linkedUsers = (data.users || []).filter((user) => user.arma_linked);
+  const totalRecords = Number(sync.records || categories.reduce((sum, item) => sum + Number(item.records || 0), 0));
+  return `<div class="stack game-intel-console">
+    <section class="game-intel-hero">
+      <div class="game-intel-hero-copy">
+        <span class="dev-topbar-kicker">FCRPMUSSALO / READ-ONLY MIRROR</span>
+        <h2>Persistent world intelligence</h2>
+        <p>Operational records indexed from Shadowhaven and correlated to verified Bohemia identities. This workspace never changes game persistence.</p>
+        <div class="game-intel-pulse"><i></i><span>${sync.status === "synced" ? "Persistence mirror online" : "Awaiting first successful sync"}</span><small>${escapeHtml(sync.last_success_at || "No completed import")}</small></div>
+      </div>
+      <div class="game-intel-score"><span>INDEXED RECORDS</span><strong>${totalRecords.toLocaleString()}</strong><small>${categories.length} active collections</small></div>
+    </section>
+    <div class="game-intel-statline">
+      <article><span>Linked identities</span><strong>${linkedUsers.length}</strong><small>Eligible for correlation</small></article>
+      <article><span>Source</span><strong>FCRPMUSSALO</strong><small>Shadowhaven SFTP</small></article>
+      <article><span>Access mode</span><strong>Read only</strong><small>No game mutations</small></article>
+      <article><span>History</span><strong>State records</strong><small>No native transaction ledger found</small></article>
+    </div>
+    <div class="game-intel-layout">
+      <section class="dev-card game-intel-collections">
+        <div class="dev-card-header"><div><span>DATABASE COVERAGE</span><h2>Persistence collections</h2></div><strong>${categories.length}</strong></div>
+        <div class="game-intel-collection-grid">${categories.map((item) => `<article>
+          <div><span>${escapeHtml(item.category)}</span><small>Last indexed ${escapeHtml(item.last_synced_at || "pending")}</small></div>
+          <strong>${Number(item.records || 0).toLocaleString()}</strong>
+        </article>`).join("") || `<div class="empty">Collections will appear after Railway completes its first SFTP index.</div>`}</div>
+      </section>
+      <section class="dev-card game-intel-directory">
+        <div class="dev-card-header"><div><span>IDENTITY DIRECTORY</span><h2>Investigate linked account</h2></div><strong>${linkedUsers.length}</strong></div>
+        <p class="muted">Open an intelligence file to review the matching bank, characters, vehicles, criminal records, reports, inventories, and component evidence.</p>
+        <div class="game-intel-accounts">${linkedUsers.map((user) => `<button data-dev-account="${user.id}">
+          <span class="game-intel-avatar">${escapeHtml((user.name || "?").slice(0, 1).toUpperCase())}</span>
+          <div><strong>${escapeHtml(user.name)}</strong><small>CIV ${escapeHtml(user.civ_number || "pending")} · ${escapeHtml(user.linked_arma_id || "")}</small></div>
+          <i>OPEN FILE</i>
+        </button>`).join("") || `<div class="empty">No linked accounts are available.</div>`}</div>
+      </section>
+    </div>
+    <section class="game-intel-disclosure"><strong>Evidence boundary</strong><p>Matches are labeled by confidence. Direct matches use a record ID, owner field, or explicit identity field. Payload matches mean the linked identity appeared elsewhere in the persisted record and require staff review.</p></section>
   </div>`;
 }
 
@@ -8391,6 +8437,11 @@ function renderDevAccountModal(data) {
   const sanctions = data.sanctions || [], warnings = data.warnings || [], tx = data.transactions || [];
   const activity = data.arma_activity || [], characters = data.characters || [], jobs = data.jobs || [], citations = data.citations || [], properties = data.properties || [];
   const gameBank = data.game_database?.bank;
+  const gameRecords = data.game_database?.records || [];
+  const gameGroups = gameRecords.reduce((groups, record) => {
+    (groups[record.category] ||= []).push(record);
+    return groups;
+  }, {});
   const antiCheat = data.anti_cheat || {};
   const platform = devPlatformIdentity(antiCheat.reported_system, antiCheat.detected_system, a.platform);
   const platformSource = antiCheat.reported_system ? "Anti-cheat telemetry" : a.platform ? "Verified account link" : "No device report";
@@ -8437,9 +8488,31 @@ function renderDevAccountModal(data) {
           <section class="dev-card"><div class="row"><h3>Citations / Cases</h3><span class="pill">${citations.length}</span></div>${devDetailList(citations, (x) => [`${x.charge_code || ""} · ${x.charge_title || "Case"}`, `${x.status || ""} · ${money(x.fine_amount || 0)} · ${x.location || ""}`])}</section>
           <section class="dev-card"><div class="row"><h3>Properties</h3><span class="pill">${properties.length}</span></div>${devDetailList(properties, (x) => [x.name || "Property", `${x.address || ""} · ${money(x.price || 0)}`])}</section>
         </div>
+        <section class="dev-card dev-persistence-file">
+          <div class="dev-card-header"><div><span>FCRPMUSSALO / LINKED EVIDENCE</span><h2>Persistent game records</h2><p class="muted">Read-only records correlated to this Bohemia identity.</p></div><strong>${gameRecords.length}</strong></div>
+          <div class="dev-persistence-summary">
+            <article><span>Bank balance</span><strong>${gameBank ? money(gameBank.balance || 0) : "Not matched"}</strong><small>${escapeHtml(gameBank?.synced_at || "Awaiting bank sync")}</small></article>
+            <article><span>Matched collections</span><strong>${Object.keys(gameGroups).length}</strong><small>${Object.keys(gameGroups).map(escapeHtml).join(", ") || "No matches yet"}</small></article>
+            <article><span>Source access</span><strong>Read only</strong><small>No writes to game persistence</small></article>
+          </div>
+          <div class="dev-persistence-groups">${Object.entries(gameGroups).map(([category, records]) => `<details ${category === "Vehicles" || category === "Characters" ? "open" : ""}>
+            <summary><span>${escapeHtml(category)}</span><strong>${records.length}</strong></summary>
+            <div class="dev-persistence-records">${records.map((record) => {
+              const summary = record.summary_payload || {};
+              const components = record.component_types || [];
+              return `<article>
+                <div class="dev-persistence-record-head"><span class="dev-record-status ${record.match_confidence === "direct" ? "verified" : ""}">${escapeHtml(record.match_confidence)} match</span><code>${escapeHtml(record.record_id)}</code></div>
+                <h3>${escapeHtml(record.title || `${category} record`)}</h3>
+                <p>${summary.prefab ? escapeHtml(summary.prefab) : "No prefab label recorded"}${summary.status ? ` · ${escapeHtml(summary.status)}` : ""}</p>
+                <div>${components.slice(0, 8).map((component) => `<span>${escapeHtml(component)}</span>`).join("") || `<span>Generic persisted entity</span>`}</div>
+                <small>Source modified ${escapeHtml(record.source_modified_at || "unknown")} · indexed ${escapeHtml(record.synced_at || "")}</small>
+              </article>`;
+            }).join("")}</div>
+          </details>`).join("") || `<div class="empty">No FCRPMUSSALO records currently match this linked identity. The next SFTP index may add records.</div>`}</div>
+        </section>
         <section class="dev-card"><div class="row"><div><p class="eyebrow">Railway ledger</p><h3>Money Transactions</h3></div><span class="pill">${tx.length}</span></div>${devDetailList(tx, (x) => [`${x.type || "transaction"} · ${money(x.amount || 0)}`, `${x.description || ""} · ${x.created_at || ""}`])}</section>
         <section class="dev-card"><div class="row"><div><p class="eyebrow">In-game bridge events</p><h3>Arma Activity</h3></div><span class="pill">${activity.length}</span></div>${devDetailList(activity, (x) => [`${x.event_type || "event"} · ${x.action || ""}`, `${x.reason || ""} · ${x.received_at || ""}`])}</section>
-        <section class="dev-card dev-game-db-status"><div><p class="eyebrow">FCRPMUSSALO source</p><h3>Native Game Database</h3><p class="muted">${gameBank ? `Live bank record synced from ${escapeHtml(gameBank.source_file || "BankManagerComponent")}. Last sync: ${escapeHtml(gameBank.synced_at || "")}.` : "The bank parser is ready; this linked identity will populate after the bridge posts the live BankManager JSON."} Inventory, criminal, police report, character, and vehicle parsers can use the same pipeline once their JSON shapes are inspected.</p></div><span class="pill ${gameBank ? "green" : "amber"}">${gameBank ? "bank synced" : "awaiting sync"}</span></section>
+        <section class="dev-card dev-game-db-status"><div><p class="eyebrow">Persistence boundary</p><h3>Native Game Database</h3><p class="muted">This profile mirrors persisted state from ${escapeHtml(data.game_database?.source || "FCRPMUSSALO")}. Railway does not edit these records. A native historical transaction ledger was not found, so the transaction panel above contains Railway-recorded activity only.</p></div><span class="pill ${gameRecords.length || gameBank ? "green" : "amber"}">${gameRecords.length || gameBank ? "records indexed" : "awaiting sync"}</span></section>
       </div>
     </section>
   </div>`;
@@ -9450,7 +9523,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.1-ops4").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.2").catch(() => {}));
 }
 
 bootApp();

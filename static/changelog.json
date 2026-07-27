@@ -1,6 +1,21 @@
 {
-  "version": "0.1.1",
+  "version": "0.1.2",
   "entries": [
+    {
+      "date": "2026-07-26",
+      "version": "0.1.2",
+      "title": "Persistent Game Intelligence",
+      "added": [
+        "Added a read-only FCRPMUSSALO intelligence index for characters, vehicles, criminal records, items, police reports, root collections, turrets, and cop chats.",
+        "Added account-level persistent record matching with explicit direct and payload confidence labels.",
+        "Added a dedicated Game Intelligence command dashboard and detailed linked-account evidence views."
+      ],
+      "changed": [
+        "Reworked Dev Tools navigation and linked-account profiles around professional game-data investigation workflows.",
+        "Clarified that native persistence supplies current state while historical transactions remain limited to Railway-recorded events."
+      ],
+      "fixed": []
+    },
     {
       "date": "2026-07-26",
       "version": "0.1.1",

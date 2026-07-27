@@ -9,6 +9,7 @@ import mimetypes
 import os
 import secrets
 import socket
+import stat
 import struct
 import threading
 import time
@@ -47,6 +48,19 @@ SHADOWHAVEN_BANK_FILE = os.environ.get(
     "profile/profile/.db/FCRPMUSSALO/Banks/00bb0001-1e42-6138-7e90-c04752d4fab6.json",
 ).strip()
 SHADOWHAVEN_BANK_SYNC_SECONDS = max(5, int(os.environ.get("SHADOWHAVEN_BANK_SYNC_SECONDS", "15")))
+SHADOWHAVEN_PERSISTENCE_ROOT = os.environ.get(
+    "SHADOWHAVEN_PERSISTENCE_ROOT",
+    "profile/profile/.db/FCRPMUSSALO",
+).strip().rstrip("/")
+SHADOWHAVEN_PERSISTENCE_SYNC_SECONDS = max(
+    60, int(os.environ.get("SHADOWHAVEN_PERSISTENCE_SYNC_SECONDS", "120"))
+)
+SHADOWHAVEN_PERSISTENCE_MAX_FILES = max(
+    100, int(os.environ.get("SHADOWHAVEN_PERSISTENCE_MAX_FILES", "5000"))
+)
+SHADOWHAVEN_PERSISTENCE_MAX_FILE_BYTES = max(
+    65536, int(os.environ.get("SHADOWHAVEN_PERSISTENCE_MAX_FILE_BYTES", "524288"))
+)
 SHADOWHAVEN_ANTICHEAT_DATABASE_FILE = os.environ.get(
     "SHADOWHAVEN_ANTICHEAT_DATABASE_FILE",
     "profile/profile/TB/tb_player_database.json",
@@ -595,6 +609,187 @@ def shadowhaven_anticheat_sync_worker() -> None:
         except Exception as exc:
             print(f"Shadowhaven SFTP anti-cheat sync failed: {type(exc).__name__}: {exc}")
         time.sleep(SHADOWHAVEN_ANTICHEAT_SYNC_SECONDS)
+
+
+PERSISTENCE_CATEGORIES = {
+    "Characters", "CopChats", "Criminals", "Items", "PoliceReports",
+    "RootEntityCollections", "Turrets", "Vehicles",
+}
+
+
+def persistence_scalar_fields(payload: Any, limit: int = 400) -> list[tuple[str, str]]:
+    fields: list[tuple[str, str]] = []
+
+    def walk(value: Any, path: str, depth: int) -> None:
+        if len(fields) >= limit or depth > 12:
+            return
+        if isinstance(value, dict):
+            for key, child in value.items():
+                walk(child, f"{path}.{key}" if path else str(key), depth + 1)
+        elif isinstance(value, list):
+            for index, child in enumerate(value[:200]):
+                walk(child, f"{path}[{index}]", depth + 1)
+        elif value is not None and not isinstance(value, bool):
+            text = str(value).strip()
+            if text:
+                fields.append((path, text[:1000]))
+
+    walk(payload, "", 0)
+    return fields
+
+
+def summarize_persistence_record(category: str, record_id: str, payload: Any) -> dict[str, Any]:
+    fields = persistence_scalar_fields(payload)
+    lowered = [(path.lower(), value) for path, value in fields]
+
+    def first_value(*needles: str) -> str:
+        for path, value in lowered:
+            leaf = path.rsplit(".", 1)[-1]
+            if any(needle in leaf for needle in needles):
+                return value
+        return ""
+
+    identity_values: list[str] = []
+    for path, value in lowered:
+        leaf = path.rsplit(".", 1)[-1]
+        if any(key in leaf for key in (
+            "identity", "playeruid", "player_uid", "ownerid", "owner_id",
+            "characterid", "character_id", "persistentid", "persistent_id", "pid",
+        )):
+            if value not in identity_values:
+                identity_values.append(value[:180])
+
+    component_types: list[str] = []
+    for path, value in fields:
+        if path.lower().endswith("._type") and value not in component_types:
+            component_types.append(value[:120])
+
+    prefab = first_value("prefab", "resourcename", "template")
+    display_name = first_value("displayname", "itemname", "vehiclename", "charactername", "name", "title")
+    owner_id = first_value("ownerid", "owner_id", "playeruid", "identityid", "identity_id", "pid")
+    status = first_value("status", "state")
+    amount = first_value("balance", "amount", "value", "price")
+    title = display_name or (prefab.rsplit("/", 1)[-1].replace(".et", "") if prefab else "") or f"{category} record"
+    return {
+        "title": title[:180],
+        "prefab": prefab[:500],
+        "owner_id": owner_id[:180],
+        "status": status[:100],
+        "amount": amount[:100],
+        "identity_values": identity_values[:40],
+        "component_types": component_types[:80],
+        "field_count": len(fields),
+    }
+
+
+def sync_shadowhaven_persistence_once() -> tuple[int, dict[str, int]]:
+    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+        return 0, {}
+    transport = paramiko.Transport((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_PORT))
+    processed = 0
+    category_counts: dict[str, int] = {}
+    synced_at = now_iso()
+    try:
+        transport.connect(username=SHADOWHAVEN_SFTP_USERNAME, password=SHADOWHAVEN_SFTP_PASSWORD)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+        try:
+            pending = [
+                (f"{SHADOWHAVEN_PERSISTENCE_ROOT}/{category}", category)
+                for category in sorted(PERSISTENCE_CATEGORIES)
+            ]
+            records: list[tuple[Any, ...]] = []
+            while pending and processed < SHADOWHAVEN_PERSISTENCE_MAX_FILES:
+                remote_path, category = pending.pop()
+                try:
+                    entries = sftp.listdir_attr(remote_path)
+                except OSError:
+                    continue
+                for entry in entries:
+                    if processed >= SHADOWHAVEN_PERSISTENCE_MAX_FILES:
+                        break
+                    child_path = f"{remote_path}/{entry.filename}"
+                    if stat.S_ISDIR(entry.st_mode):
+                        pending.append((child_path, category))
+                        continue
+                    if not entry.filename.lower().endswith(".json"):
+                        continue
+                    if entry.st_size > SHADOWHAVEN_PERSISTENCE_MAX_FILE_BYTES:
+                        continue
+                    try:
+                        with sftp.open(child_path, "r") as remote_file:
+                            payload = json.loads(remote_file.read().decode("utf-8-sig"))
+                    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                        continue
+                    record_id = entry.filename[:-5][:180]
+                    summary = summarize_persistence_record(category, record_id, payload)
+                    raw_payload = json.dumps(payload, separators=(",", ":"), default=str)
+                    records.append((
+                        child_path[:500], category[:80], record_id,
+                        summary["title"], summary["owner_id"],
+                        json.dumps(summary["identity_values"], separators=(",", ":")),
+                        json.dumps(summary["component_types"], separators=(",", ":")),
+                        summary["prefab"], summary["status"], summary["amount"],
+                        json.dumps(summary, separators=(",", ":")),
+                        raw_payload[:250000], str(int(entry.st_mtime or 0)), synced_at,
+                    ))
+                    processed += 1
+                    category_counts[category] = category_counts.get(category, 0) + 1
+        finally:
+            sftp.close()
+    finally:
+        transport.close()
+
+    with conn() as db:
+        for record in records:
+            db.execute(
+                """
+                INSERT INTO game_persistence_records
+                (source_path, category, record_id, title, owner_identity, identity_values,
+                 component_types, prefab, record_status, amount_text, summary_payload,
+                 raw_payload, source_modified_at, synced_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (source_path) DO UPDATE SET
+                    category = EXCLUDED.category, record_id = EXCLUDED.record_id,
+                    title = EXCLUDED.title, owner_identity = EXCLUDED.owner_identity,
+                    identity_values = EXCLUDED.identity_values,
+                    component_types = EXCLUDED.component_types, prefab = EXCLUDED.prefab,
+                    record_status = EXCLUDED.record_status, amount_text = EXCLUDED.amount_text,
+                    summary_payload = EXCLUDED.summary_payload, raw_payload = EXCLUDED.raw_payload,
+                    source_modified_at = EXCLUDED.source_modified_at, synced_at = EXCLUDED.synced_at
+                """,
+                record,
+            )
+        db.execute(
+            """
+            INSERT INTO game_persistence_sync_status
+            (source_root, status, records, category_counts, last_success_at, last_error, updated_at)
+            VALUES (?, 'synced', ?, ?, ?, '', ?)
+            ON CONFLICT (source_root) DO UPDATE SET
+                status = 'synced', records = EXCLUDED.records,
+                category_counts = EXCLUDED.category_counts,
+                last_success_at = EXCLUDED.last_success_at, last_error = '',
+                updated_at = EXCLUDED.updated_at
+            """,
+            (
+                SHADOWHAVEN_PERSISTENCE_ROOT[:500], processed,
+                json.dumps(category_counts, separators=(",", ":"), sort_keys=True),
+                synced_at, synced_at,
+            ),
+        )
+    return processed, category_counts
+
+
+def shadowhaven_persistence_sync_worker() -> None:
+    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+        print("Shadowhaven FCRPMUSSALO sync disabled: credentials are not configured")
+        return
+    while True:
+        try:
+            records, categories = sync_shadowhaven_persistence_once()
+            print(f"Shadowhaven FCRPMUSSALO sync updated {records} record(s): {categories}")
+        except Exception as exc:
+            print(f"Shadowhaven FCRPMUSSALO sync failed: {type(exc).__name__}: {exc}")
+        time.sleep(SHADOWHAVEN_PERSISTENCE_SYNC_SECONDS)
 
 
 def roles_for(user: DbRow) -> list[str]:
@@ -1249,6 +1444,33 @@ def ensure_schema() -> None:
                 source_path TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'pending',
                 records INTEGER NOT NULL DEFAULT 0,
+                last_success_at TEXT,
+                last_error TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS game_persistence_records (
+                source_path TEXT PRIMARY KEY,
+                category TEXT NOT NULL,
+                record_id TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                owner_identity TEXT NOT NULL DEFAULT '',
+                identity_values TEXT NOT NULL DEFAULT '[]',
+                component_types TEXT NOT NULL DEFAULT '[]',
+                prefab TEXT NOT NULL DEFAULT '',
+                record_status TEXT NOT NULL DEFAULT '',
+                amount_text TEXT NOT NULL DEFAULT '',
+                summary_payload TEXT NOT NULL DEFAULT '{}',
+                raw_payload TEXT NOT NULL DEFAULT '{}',
+                source_modified_at TEXT NOT NULL DEFAULT '',
+                synced_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS game_persistence_sync_status (
+                source_root TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'pending',
+                records INTEGER NOT NULL DEFAULT 0,
+                category_counts TEXT NOT NULL DEFAULT '{}',
                 last_success_at TEXT,
                 last_error TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL
@@ -2316,6 +2538,8 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS anticheat_events_player_idx ON anticheat_events (player_uid, event_time DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS anticheat_alt_members_uid_idx ON anticheat_alt_members (uid)")
     db.execute("CREATE INDEX IF NOT EXISTS anticheat_live_sessions_heartbeat_idx ON anticheat_live_sessions (last_heartbeat_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS game_persistence_category_idx ON game_persistence_records (category, synced_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS game_persistence_record_idx ON game_persistence_records (record_id)")
     db.execute("CREATE INDEX IF NOT EXISTS account_sanctions_user_idx ON account_sanctions (user_id, created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS account_warnings_user_idx ON account_internal_warnings (user_id, created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS admin_audit_logs_created_idx ON admin_audit_logs (created_at DESC)")
@@ -9119,6 +9343,28 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             1 for row in anticheat_players
             if int(row.get("teleport_flags") or 0) + int(row.get("aim_flags") or 0) > 0
         )
+        persistence_sync = one(
+            db,
+            "SELECT * FROM game_persistence_sync_status ORDER BY updated_at DESC LIMIT 1",
+        )
+        persistence_categories = all_rows(
+            db,
+            """
+            SELECT category, COUNT(*) AS records, MAX(synced_at) AS last_synced_at
+            FROM game_persistence_records
+            GROUP BY category ORDER BY category
+            """,
+        )
+        bank_category = one(
+            db,
+            "SELECT COUNT(*) AS records, MAX(synced_at) AS last_synced_at FROM arma_game_bank_balances",
+        )
+        if bank_category and int(bank_category.get("records") or 0):
+            persistence_categories.insert(0, {
+                "category": "Banks",
+                "records": int(bank_category["records"] or 0),
+                "last_synced_at": bank_category.get("last_synced_at"),
+            })
         self.send_json(
             200,
             {
@@ -9160,6 +9406,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                         "alt_groups": len(anticheat_alt_groups),
                         "events": len(anticheat_events),
                     },
+                },
+                "game_intelligence": {
+                    "sync": dict(persistence_sync) if persistence_sync else {
+                        "status": "awaiting_first_sync",
+                        "records": 0,
+                        "source_root": SHADOWHAVEN_PERSISTENCE_ROOT,
+                    },
+                    "categories": [dict(row) for row in persistence_categories],
+                    "read_only": True,
+                    "transaction_history_available": False,
                 },
                 "app_visibility": {
                     "apps": [
@@ -9332,6 +9588,58 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "SELECT * FROM arma_game_bank_balances WHERE identity_id = ?",
             (account.get("identity_id") or "",),
         )
+        identity_candidates = [
+            str(account.get("identity_id") or "").strip(),
+            str(account.get("uid") or "").strip(),
+            str(account.get("rpl_identity") or "").strip(),
+        ]
+        identity_candidates = [value for value in dict.fromkeys(identity_candidates) if value]
+        persistence_records: list[DbRow] = []
+        if identity_candidates:
+            clauses: list[str] = []
+            params: list[str] = []
+            for identity in identity_candidates:
+                clauses.extend([
+                    "record_id = ?",
+                    "owner_identity = ?",
+                    "identity_values LIKE ?",
+                    "raw_payload LIKE ?",
+                ])
+                params.extend([identity, identity, f"%{identity}%", f"%{identity}%"])
+            persistence_records = all_rows(
+                db,
+                f"""
+                SELECT source_path, category, record_id, title, owner_identity,
+                       identity_values, component_types, prefab, record_status,
+                       amount_text, summary_payload, source_modified_at, synced_at
+                FROM game_persistence_records
+                WHERE {" OR ".join(clauses)}
+                ORDER BY category, source_modified_at DESC, record_id
+                LIMIT 500
+                """,
+                tuple(params),
+            )
+        normalized_persistence: list[dict[str, Any]] = []
+        for row in persistence_records:
+            record = dict(row)
+            for key, fallback in (("identity_values", []), ("component_types", []), ("summary_payload", {})):
+                try:
+                    record[key] = json.loads(record.get(key) or json.dumps(fallback))
+                except json.JSONDecodeError:
+                    record[key] = fallback
+            direct_values = set(record.get("identity_values") or [])
+            record["match_confidence"] = (
+                "direct"
+                if record.get("record_id") in identity_candidates
+                or record.get("owner_identity") in identity_candidates
+                or direct_values.intersection(identity_candidates)
+                else "payload"
+            )
+            normalized_persistence.append(record)
+        persistence_sync = one(
+            db,
+            "SELECT * FROM game_persistence_sync_status ORDER BY updated_at DESC LIMIT 1",
+        )
         anticheat_record = one(
             db,
             """
@@ -9381,10 +9689,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "status": "awaiting_anti_cheat_match",
                 },
                 "game_database": {
-                    "status": "synced" if game_bank else "awaiting_bank_sync",
+                    "status": "synced" if game_bank or persistence_records else "awaiting_sync",
                     "source": "FCRPMUSSALO",
-                    "collections": ["Banks", "Characters", "Criminals", "Items", "PoliceReports", "Vehicles"],
+                    "collections": [
+                        "Banks", "Characters", "CopChats", "Criminals", "Items",
+                        "PoliceReports", "RootEntityCollections", "Turrets", "Vehicles",
+                    ],
                     "bank": dict(game_bank) if game_bank else None,
+                    "records": normalized_persistence,
+                    "sync": dict(persistence_sync) if persistence_sync else None,
+                    "read_only": True,
+                    "transaction_history_available": False,
                 },
             },
         )
@@ -10419,6 +10734,11 @@ def main() -> None:
     threading.Thread(
         target=shadowhaven_anticheat_sync_worker,
         name="shadowhaven-anticheat-sync",
+        daemon=True,
+    ).start()
+    threading.Thread(
+        target=shadowhaven_persistence_sync_worker,
+        name="shadowhaven-persistence-sync",
         daemon=True,
     ).start()
     port = int(os.environ.get("PORT", "8080"))
