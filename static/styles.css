@@ -2083,6 +2083,19 @@ textarea:focus {
 }
 
 .lawyer-ad .job-ad-icon { border-color: rgba(247, 183, 51, 0.4); color: #ffe4a8; background: linear-gradient(145deg, rgba(247, 183, 51, 0.27), rgba(141, 101, 255, 0.13)); }
+.fnn-job-ad { border-color: rgba(230, 43, 55, .34); background: linear-gradient(145deg, rgba(230,43,55,.09), rgba(10,15,19,.9) 42%); }
+.fnn-job-ad .job-ad-icon {
+  width: 58px;
+  border-color: rgba(244,71,71,.42);
+  color: #fff;
+  background: linear-gradient(145deg, #e42635, #8d111b);
+  font: 950 15px/1 Arial, sans-serif;
+  letter-spacing: -.05em;
+}
+.press-pass-form { border-color: rgba(230,43,55,.28); background: rgba(230,43,55,.045); }
+.press-pass-form .bar-question { border-color: rgba(230,43,55,.17); }
+.press-pass-form .bar-question legend span { color: #ff6670; }
+.press-pass-form .bar-options label:has(input:checked) { border-color: rgba(230,43,55,.48); background: rgba(230,43,55,.1); }
 .job-ad-action { display: grid; justify-items: end; gap: 12px; text-align: right; }
 .job-ad-action strong { color: #a9d8ff; font-size: 12px; text-transform: uppercase; }
 .job-ad-action i { display: inline-block; font-size: 20px; font-style: normal; transition: transform 180ms ease; }

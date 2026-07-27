@@ -1228,9 +1228,22 @@ DEFENSE_ATTORNEY_EXAM_QUESTIONS = (
     ("A defense attorney should treat all courtroom participants professionally.", ("True", "False"), "A"),
     ("A defense attorney must protect the client's legal rights even when the case is difficult.", ("True", "False"), "A"),
 )
+PRESS_PASS_EXAM_QUESTIONS = (
+    ("You arrive after a major RP incident. What should you do before reporting a cause?", ("Publish the first rumor you hear", "Confirm facts through witnesses, records, or responsible officials", "Guess based on the scene", "Wait for another reporter to invent a cause"), "B"),
+    ("How should an unproven criminal accusation be described?", ("As a confirmed conviction", "As an allegation or pending charge", "As a joke", "Without identifying that it is unproven"), "B"),
+    ("A source gives you a dramatic quote. What is the best practice?", ("Rewrite it to sound stronger", "Attribute it accurately and preserve its meaning", "Remove the speaker's identity in every case", "Present it as your own observation"), "B"),
+    ("Which detail is most useful in an FNN press brief?", ("A vague claim that something happened", "A clear timeline with location, people, verified actions, and sourcing", "Only the reporter's opinion", "Unrelated server gossip"), "B"),
+    ("You personally did not witness an event. You should:", ("Claim that you did", "Explain who supplied the information and what remains unverified", "Publish every detail as fact", "Create missing details"), "B"),
+    ("What should a reporter do when a correction is necessary?", ("Hide the error", "Correct it clearly and promptly", "Blame the reader", "Delete all source notes"), "B"),
+    ("A press role allows a player to interfere with an active police or emergency scene.", ("True", "False"), "B"),
+    ("Quotes, names, dates, and locations should be checked for accuracy before submission.", ("True", "False"), "A"),
+    ("A reporter may invent facts because Gemini will improve the story later.", ("True", "False"), "B"),
+    ("Press RP should inform the community while respecting scene safety, court status, and server rules.", ("True", "False"), "A"),
+)
 BAR_EXAM_BANKS = {
     "judicial": JUDICIAL_CERTIFICATION_QUESTIONS,
     "defense": DEFENSE_ATTORNEY_EXAM_QUESTIONS,
+    "press": PRESS_PASS_EXAM_QUESTIONS,
 }
 DEPARTMENT_POSTINGS = (
     {
@@ -1294,6 +1307,19 @@ DEPARTMENT_POSTINGS = (
         "badge": "Public Defender Candidate",
         "schedule": "Represent defendants, protect client rights, challenge unsupported evidence, and provide ethical courtroom advocacy.",
         "requirements": "Complete the Defense Attorney Certification Examination. Results and appointment are reviewed by the judiciary and Indeed staff.",
+    },
+    {
+        "key": "press",
+        "label": "Join Faircroft News Now",
+        "division": "Faircroft News Now",
+        "role_key": "press",
+        "role_label": "Credentialed Press",
+        "form_type": "press_exam",
+        "exam_key": "press",
+        "command_roles": ("owner", "admin", "dev"),
+        "badge": "Earn Your FNN Press Pass",
+        "schedule": "Investigate community stories, interview participants, document events, and submit detailed source briefs for future FNN editions.",
+        "requirements": "Complete the 10-question Press RP examination and demonstrate accurate sourcing, ethical reporting, and scene awareness.",
     },
 )
 SYSTEM_SETTING_DEFAULTS = {
@@ -1431,7 +1457,7 @@ def clean_bar_exam_application(payload: dict[str, Any], posting: dict[str, Any],
         })
     score_percent = round(correct * 100 / len(questions))
     record = {
-        "type": "bar_exam_application",
+        "type": "press_exam_application" if posting.get("form_type") == "press_exam" else "bar_exam_application",
         "version": 1,
         "posting_key": posting["key"],
         "posting_label": posting["label"],
@@ -1447,7 +1473,7 @@ def clean_bar_exam_application(payload: dict[str, Any], posting: dict[str, Any],
     message = (
         f"Applicant: {applicant_name} / CIV {user.get('civ_number') or 'pending'}\n"
         f"Discord: {discord_name}\n"
-        f"Bar Exam score: {correct}/{len(questions)} ({score_percent}%)"
+        f"{'Press Pass Exam' if posting.get('form_type') == 'press_exam' else 'Bar Exam'} score: {correct}/{len(questions)} ({score_percent}%)"
     )
     return json.dumps(record, ensure_ascii=False), message
 
@@ -6098,7 +6124,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 self.error(400, str(exc))
                 return
-        elif posting.get("form_type") == "bar_exam":
+        elif posting.get("form_type") in ("bar_exam", "press_exam"):
             try:
                 statement, message_body = clean_bar_exam_application(payload, posting, user)
             except ValueError as exc:
@@ -11425,6 +11451,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         posting = next((item for item in DEPARTMENT_POSTINGS if item["key"] == application["department_key"]), {})
         is_bar_exam = posting.get("form_type") == "bar_exam"
+        is_press_exam = posting.get("form_type") == "press_exam"
         is_legal_application = application["department_key"] in ("lawyer", "prosecutor", "public_defender")
         if has_any(user, "judge") and not has_any(user, "owner", "admin", INDEED_ADMIN_ROLE) and not is_legal_application:
             self.error(403, "Judges may only review legal office and certification applications")
@@ -11441,6 +11468,19 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 return
             if exam_score < 14:
                 self.error(409, "This Bar Exam is not eligible for judicial certification")
+                return
+        if is_press_exam and status == "approved":
+            if not has_any(user, "owner", "admin", "dev", INDEED_ADMIN_ROLE):
+                self.error(403, "Authorized FNN or Indeed staff must approve a Press Pass")
+                return
+            try:
+                exam_record = json.loads(application["statement"])
+                exam_score = int(exam_record.get("score", 0))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                self.error(409, "This application does not contain a valid Press Pass Exam result")
+                return
+            if exam_score < 8:
+                self.error(409, "This exam is not eligible for a Press Pass")
                 return
         reviewer_notes = str(payload.get("reviewer_notes") or application.get("reviewer_notes") or "").strip()[:1500]
         ts = now_iso()
@@ -11471,6 +11511,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             subject = f"{application['department_name']} certification signed"
             note = f"{reviewer_notes}\n\n" if reviewer_notes else ""
             note += f"Judge {user['name']} signed your legal certification. Approved legal-office access has been added to your account."
+        elif is_press_exam and status == "approved":
+            subject = "FNN Press Pass approved"
+            note = f"{reviewer_notes}\n\n" if reviewer_notes else ""
+            note += "Your FNN Press Pass has been approved. Press Desk access has been added to your account."
         elif status == "approved":
             note = f"{note}\n\nDepartment access has been added to your account."
         add_message(db, application["user_id"], subject, note, user["id"])

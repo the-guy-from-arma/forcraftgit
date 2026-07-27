@@ -2112,7 +2112,7 @@ function parseDepartmentApplicationStatement(statement) {
   if (!statement || typeof statement !== "string" || !statement.trim().startsWith("{")) return null;
   try {
     const parsed = JSON.parse(statement);
-    return ["law_enforcement_application", "bar_exam_application"].includes(parsed?.type) ? parsed : null;
+    return ["law_enforcement_application", "bar_exam_application", "press_exam_application"].includes(parsed?.type) ? parsed : null;
   } catch {
     return null;
   }
@@ -2182,13 +2182,14 @@ function renderDepartmentApplicationField(field, posting) {
 }
 
 function renderDepartmentApplicationForm(posting) {
-  if (posting.form_type === "bar_exam") {
+  if (["bar_exam", "press_exam"].includes(posting.form_type)) {
+    const isPressExam = posting.form_type === "press_exam";
     const examQuestions = state.cache.jobs?.exam_questions?.[posting.exam_key || "judicial"] || [];
     return `
-      <form class="department-application-form bar-exam-form" data-department-key="${escapeHtml(posting.key)}">
+      <form class="department-application-form bar-exam-form ${isPressExam ? "press-pass-form" : ""}" data-department-key="${escapeHtml(posting.key)}">
         <div class="application-form-head">
-          <div><p class="eyebrow">Faircroft Bar Association</p><h3>Bar Exam</h3><p class="muted small">Answer all 20 questions. Your score is delivered privately to the review team.</p></div>
-          <span class="pill amber">20 Questions</span>
+          <div><p class="eyebrow">${isPressExam ? "Faircroft News Now" : "Faircroft Bar Association"}</p><h3>${isPressExam ? "Press Pass Examination" : "Bar Exam"}</h3><p class="muted small">Answer all ${examQuestions.length} questions. ${isPressExam ? "Eight correct answers are required for Press Pass eligibility." : "Your score is delivered privately to the review team."}</p></div>
+          <span class="pill ${isPressExam ? "red" : "amber"}">${examQuestions.length} Questions</span>
         </div>
         <div class="bar-applicant-grid">
           <label>In-game name<input name="in_game_name" value="${escapeHtml(state.session?.user?.name || "")}" minlength="2" maxlength="120" required /></label>
@@ -2207,7 +2208,7 @@ function renderDepartmentApplicationForm(posting) {
             </fieldset>
           `).join("")}
         </div>
-        <button class="primary" type="submit">Submit Bar Exam for review</button>
+        <button class="primary" type="submit">${isPressExam ? "Submit Press Pass Exam" : "Submit Bar Exam for review"}</button>
       </form>
     `;
   }
@@ -2274,10 +2275,11 @@ function renderJobAdvertisement(posting, applications, index) {
   const latestApplication = applications.find((item) => item.department_key === posting.key);
   const hasActiveApplication = latestApplication && !["denied", "withdrawn", "closed"].includes(latestApplication.status);
   const isLegal = ["lawyer", "prosecutor", "public_defender"].includes(posting.key);
+  const isPress = posting.key === "press";
   return `
-    <details class="job-advertisement ${isLegal ? "lawyer-ad" : ""}" ${index === 0 ? "open" : ""}>
+    <details class="job-advertisement ${isLegal ? "lawyer-ad" : ""} ${isPress ? "fnn-job-ad" : ""}" ${index === 0 ? "open" : ""}>
       <summary>
-        <div class="job-ad-icon">${isLegal ? "§" : posting.key === "fire_ems" ? "✚" : "★"}</div>
+        <div class="job-ad-icon">${isPress ? "FNN" : isLegal ? "§" : posting.key === "fire_ems" ? "✚" : "★"}</div>
         <div><p class="eyebrow">${escapeHtml(posting.division)}</p><h3>${escapeHtml(posting.label)}</h3><p>${escapeHtml(posting.schedule)}</p></div>
         <div class="job-ad-action">
           <span class="pill ${hasActiveApplication ? "amber" : latestApplication?.status === "approved" ? "green" : ""}">${latestApplication ? humanLabel(latestApplication.status) : "Now hiring"}</span>
@@ -2288,7 +2290,7 @@ function renderJobAdvertisement(posting, applications, index) {
         <div class="department-meta">
           <div><span>Position</span><strong>${escapeHtml(posting.badge)}</strong></div>
           <div><span>Role track</span><strong>${escapeHtml(posting.role_label || humanLabel(posting.role_key))}</strong></div>
-          <div><span>Review</span><strong>${isLegal ? "Judiciary and Indeed staff" : "Command staff"}</strong></div>
+          <div><span>Review</span><strong>${isLegal ? "Judiciary and Indeed staff" : isPress ? "FNN and Indeed staff" : "Command staff"}</strong></div>
         </div>
         <div class="department-requirements"><span>What you need</span><p>${escapeHtml(posting.requirements)}</p></div>
         ${latestApplication ? `<div class="department-application-status"><div><p class="eyebrow">${escapeHtml(latestApplication.application_number)}</p><h3>Your application</h3><p class="muted small">Submitted ${new Date(latestApplication.created_at).toLocaleString()}${latestApplication.reviewer_name ? ` / Reviewer ${escapeHtml(latestApplication.reviewer_name)}` : ""}</p></div><span class="pill ${businessStatusClass(latestApplication.status)}">${humanLabel(latestApplication.status)}</span></div>` : ""}
@@ -9311,7 +9313,7 @@ function renderDepartmentApplicationPacket(item) {
   }
   return `
     <details class="admin-application-packet">
-      <summary>${packet.type === "bar_exam_application" ? `Bar Exam · Internal score ${escapeHtml(packet.score)}/${escapeHtml(packet.total)}` : "Application packet"}</summary>
+      <summary>${packet.type === "bar_exam_application" ? `Bar Exam · Internal score ${escapeHtml(packet.score)}/${escapeHtml(packet.total)}` : packet.type === "press_exam_application" ? `Press Pass Exam · Internal score ${escapeHtml(packet.score)}/${escapeHtml(packet.total)}` : "Application packet"}</summary>
       <div class="admin-packet-answers">
         ${packet.answers.map((answer) => `
           <div>
@@ -9389,6 +9391,7 @@ function renderAdminDepartmentApplications(data, mode = "admin") {
 function renderAdminDepartmentApplicationCard(item, mode = "admin") {
   const isClosed = ["approved", "denied", "withdrawn", "closed"].includes(item.status);
   const isBarExam = ["lawyer", "public_defender"].includes(item.department_key);
+  const isPressExam = item.department_key === "press";
   const isIndeed = mode === "indeed";
   const statusAttr = isIndeed ? "data-indeed-application-status" : "data-admin-application-status";
   const formClass = isIndeed ? "indeed-application-review-form admin-application-review-form" : "admin-application-review-form";
@@ -9426,7 +9429,7 @@ function renderAdminDepartmentApplicationCard(item, mode = "admin") {
             <label>Review notes<textarea name="reviewer_notes" maxlength="1500" placeholder="Optional notes sent to the applicant">${escapeHtml(item.reviewer_notes || "")}</textarea></label>
             <div class="admin-application-actions">
               <button class="secondary" type="button" ${statusAttr}="under_review" ${item.status === "under_review" ? "disabled" : ""}>Mark Review</button>
-              <button class="primary" type="button" ${statusAttr}="approved" ${item.status === "approved" ? "disabled" : ""}>${isBarExam ? "Judge: Sign Certificate" : "Approve"}</button>
+              <button class="primary" type="button" ${statusAttr}="approved" ${item.status === "approved" ? "disabled" : ""}>${isBarExam ? "Judge: Sign Certificate" : isPressExam ? "Approve Press Pass" : "Approve"}</button>
               <button class="danger" type="button" ${statusAttr}="denied" ${item.status === "denied" ? "disabled" : ""}>Deny</button>
               <button class="secondary" type="button" ${statusAttr}="closed" ${isClosed ? "disabled" : ""}>Close</button>
             </div>
@@ -9850,7 +9853,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-press-desk").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.1.7-press-pass").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {
