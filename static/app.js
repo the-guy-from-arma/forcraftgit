@@ -173,6 +173,7 @@ const iconSvg = {
   rocket: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 5c3-3 6-3 7-2 1 1 1 4-2 7l-6 6-5-5 6-6Z"/><path d="m9 10-4 1-2 3 5 1M14 15l-1 4-3 2-1-5M15 6l3 3"/><path d="M5 18c-1 0-2 1-2 3 2 0 3-1 3-2"/></svg>',
   "thumb-up": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M7 10v11H3V10h4ZM7 19h10a3 3 0 0 0 2.9-2.3l1-4A3 3 0 0 0 18 9h-4l1-4c.3-1.3-.7-2-1.5-2L7 10"/></svg>',
   "thumb-down": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M7 14V3H3v11h4ZM7 5h10a3 3 0 0 1 2.9 2.3l1 4A3 3 0 0 1 18 15h-4l1 4c.3 1.3-.7 2-1.5 2L7 14"/></svg>',
+  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 17v3h16v-3"/></svg>',
   plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14M5 12h14"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m15 18-6-6 6-6"/></svg>',
@@ -207,6 +208,7 @@ const tileColors = {
   admin: "linear-gradient(145deg, #ffcf5a, #6c5010)",
   "dev-tools": "linear-gradient(145deg, #8bffcf, #3156d8)",
   "beta-tasks": "linear-gradient(145deg, #b78cff, #3156d8)",
+  downloads: "linear-gradient(145deg, #59e6c0, #2775cf 58%, #17203d)",
 };
 
 function money(value) {
@@ -1046,6 +1048,11 @@ function isPwaStandalone() {
 }
 
 function renderPwaInstallBar() {
+  return "";
+  /*
+  The former global install banner is intentionally retired. Beta members use
+  the Download Our App center so PWA, Windows, and Android releases stay together.
+  */
   if (!state.session?.user || isPwaStandalone() || localStorage.getItem("faircroft.pwa.install.dismissed") === "1") return "";
   const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
   const isWindows = /windows/i.test(navigator.userAgent);
@@ -1290,19 +1297,49 @@ function bindPressDesk() {
   $("#pressReportForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
+    if (!form.reportValidity()) {
+      form.querySelector(":invalid")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
     const button = form.querySelector('button[type="submit"]');
+    const originalLabel = button.textContent;
     button.disabled = true;
-    button.textContent = "Filing report…";
+    button.textContent = "Filing with newsroom…";
     try {
-      const result = await api("/api/press/reports", { method: "POST", body: Object.fromEntries(new FormData(form).entries()) });
-      toast(`Press report ${result.report_number} submitted`);
+      const payload = Object.fromEntries(new FormData(form).entries());
+      const result = await api("/api/press/reports", {
+        method: "POST",
+        body: payload,
+        confirm: false,
+        timeoutMs: 20000,
+      });
+      const currentReports = state.cache.press?.reports || [];
+      const savedReport = result.report || {
+        ...payload,
+        id: result.id,
+        report_number: result.report_number,
+        status: "submitted",
+        created_at: new Date().toISOString(),
+      };
+      state.cache.press = {
+        ...(state.cache.press || {}),
+        reports: [savedReport, ...currentReports.filter((report) => String(report.id) !== String(savedReport.id))],
+      };
       state.pressComposeOpen = false;
-      await loadAppData("press");
       render();
+      toast(`Press report ${result.report_number} filed and ready for FNN`);
+      try {
+        state.cache.press = await api("/api/press/reports", { timeoutMs: 12000 });
+        render();
+      } catch (refreshError) {
+        console.warn("Press Desk refresh deferred:", refreshError);
+      }
     } catch (error) {
       toast(error.message);
-      button.disabled = false;
-      button.textContent = "Submit report to FNN sources";
+      if (button?.isConnected) {
+        button.disabled = false;
+        button.textContent = originalLabel;
+      }
     }
   });
 }
@@ -1353,6 +1390,7 @@ function renderPanel(id) {
     admin: "Admin",
     "dev-tools": "Dev Tools",
     "beta-tasks": "Beta Tasks",
+    downloads: "Download Our App",
     press: "Press Desk",
   };
   const body = {
@@ -1379,6 +1417,7 @@ function renderPanel(id) {
     admin: renderAdmin,
     "dev-tools": renderDevTools,
     "beta-tasks": renderBetaTasks,
+    downloads: renderDownloads,
     press: renderPressDesk,
   }[id]?.() || `<div class="empty">Module unavailable</div>`;
 
@@ -1431,6 +1470,7 @@ async function loadAppData(id) {
     "indeed-admin": () => api("/api/indeed-admin/applications"),
     "dev-tools": () => api("/api/dev-tools"),
     "beta-tasks": () => api("/api/beta/tasks"),
+    downloads: () => api("/api/downloads/access"),
     press: () => api("/api/press/reports"),
     admin: async () => ({
       overview: await api("/api/admin/overview"),
@@ -1516,6 +1556,7 @@ function bindPanel() {
     admin: bindAdmin,
     "dev-tools": bindDevTools,
     "beta-tasks": bindBetaTasks,
+    downloads: bindDownloads,
     press: bindPressDesk,
   };
   binders[state.activeApp]?.();
@@ -8487,6 +8528,62 @@ function devUserOptions(users) {
   return (users || []).map((user) => (
     `<option value="${user.id}">${escapeHtml(user.name)} / CIV ${escapeHtml(user.civ_number || "pending")} / ${escapeHtml(user.email)}</option>`
   )).join("");
+}
+
+function renderDownloads() {
+  const data = state.cache.downloads || {};
+  const standalone = isPwaStandalone();
+  const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  return `<div class="download-center">
+    <section class="download-command">
+      <div class="download-command-mark">${iconSvg.download}</div>
+      <div><p class="eyebrow">FAIRCROFT BETA DISTRIBUTION</p><h2>Download Our App</h2><span>Official Faircroft releases for every supported device, kept together in one secure location.</span></div>
+      <strong><i></i>Beta access verified</strong>
+    </section>
+    <div class="download-release-ledger">
+      <article class="download-release pwa">
+        <div class="download-platform"><span>${iconSvg.download}</span><div><small>WEB APPLICATION</small><h3>${escapeHtml(data.pwa?.label || "Faircroft RP OS PWA")}</h3><p>${escapeHtml(data.pwa?.location || "This device · browser installation")}</p></div></div>
+        <div class="download-release-copy"><strong>${standalone ? "Installed on this device" : "Install directly from your browser"}</strong><span>${isIos ? "Safari: Share → Add to Home Screen." : "Creates a full-screen RP OS app with automatic web updates."}</span></div>
+        <button class="primary" type="button" data-download-pwa ${standalone ? "disabled" : ""}>${standalone ? "PWA installed" : deferredPwaInstallPrompt ? "Install PWA" : "Show install steps"}</button>
+      </article>
+      <article class="download-release windows">
+        <div class="download-platform"><span class="windows-mark">⊞</span><div><small>WINDOWS DESKTOP</small><h3>${escapeHtml(data.windows?.label || "Faircroft for Windows")}</h3><p>${escapeHtml(data.windows?.location || "Windows desktop")}</p></div></div>
+        <div class="download-release-copy"><strong>Desktop client with automatic updates</strong><span>Official Windows installer from the Faircroft release channel.</span></div>
+        <button class="primary" type="button" data-download-package="windows" ${data.windows?.available ? "" : "disabled"}>${data.windows?.available ? "Download Windows EXE" : "Windows build unavailable"}</button>
+      </article>
+      <article class="download-release android">
+        <div class="download-platform"><span class="android-mark">A</span><div><small>ANDROID PACKAGE</small><h3>${escapeHtml(data.android?.label || "Faircroft for Android")}</h3><p>${escapeHtml(data.android?.location || "Android device · APK package")}</p></div></div>
+        <div class="download-release-copy"><strong>Direct Android installation package</strong><span>Download the official APK, then approve installation from this source if Android requests it.</span></div>
+        <button class="primary" type="button" data-download-package="android" ${data.android?.available ? "" : "disabled"}>${data.android?.available ? "Download Android APK" : "APK unavailable"}</button>
+      </article>
+    </div>
+    <section class="download-security-note"><strong>Official beta distribution</strong><p>Downloads are restricted to active Faircroft Beta Program members. Do not redistribute installer files or install modified copies.</p></section>
+  </div>`;
+}
+
+function bindDownloads() {
+  $("[data-download-pwa]")?.addEventListener("click", async () => {
+    if (deferredPwaInstallPrompt) {
+      deferredPwaInstallPrompt.prompt();
+      const choice = await deferredPwaInstallPrompt.userChoice;
+      deferredPwaInstallPrompt = null;
+      toast(choice.outcome === "accepted" ? "Faircroft PWA installation started" : "PWA installation cancelled");
+      render();
+      return;
+    }
+    const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    window.alert(isIos
+      ? "Install Faircroft RP OS:\n\n1. Open this page in Safari.\n2. Tap the Share button.\n3. Choose Add to Home Screen.\n4. Confirm Add."
+      : "Open your browser menu and choose Install app or Add to Home screen. If the option is unavailable, refresh this page and try again.");
+  });
+  $$("[data-download-package]").forEach((button) => button.addEventListener("click", () => {
+    const platform = button.dataset.downloadPackage;
+    const item = state.cache.downloads?.[platform];
+    if (!item?.download_url) return toast(`${humanLabel(platform)} package is unavailable`);
+    const label = platform === "windows" ? "Windows desktop installer" : "Android APK";
+    if (!window.confirm(`Download the official Faircroft ${label}?\n\nOnly install the unmodified package supplied through this Beta download center.`)) return;
+    window.location.href = item.download_url;
+  }));
 }
 
 function renderBetaTasks() {

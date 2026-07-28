@@ -44,6 +44,10 @@ DESKTOP_INSTALLER_URL = os.environ.get(
     "DESKTOP_INSTALLER_URL",
     "https://github.com/the-guy-from-arma/forcraftgit/releases/latest/download/Faircroft-RP-Desktop-Setup.exe",
 ).strip()
+ANDROID_APK_URL = os.environ.get(
+    "ANDROID_APK_URL",
+    "https://github.com/the-guy-from-arma/forcraftgit/releases/latest/download/Faircroft-RP.apk",
+).strip()
 ARMA_BRIDGE_API_KEY = os.environ.get("ARMA_BRIDGE_API_KEY", "").strip()
 ARMA_LINK_CODE_TTL_MINUTES = int(os.environ.get("ARMA_LINK_CODE_TTL_MINUTES", "30"))
 SHADOWHAVEN_SFTP_HOST = os.environ.get("SHADOWHAVEN_SFTP_HOST", "").strip()
@@ -1534,6 +1538,7 @@ APP_VISIBILITY_OPTIONS = (
     ("indeed-admin", "Indeed Admin"),
     ("admin", "Admin"),
     ("beta-tasks", "Beta Tasks"),
+    ("downloads", "Download Our App"),
 )
 PROTECTED_APP_IDS = frozenset(("profile", "jobs", "dev-tools", "restriction"))
 
@@ -4177,6 +4182,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps.append({"id": "dev-tools", "label": "Dev Tools", "icon": "code", "enabled": True, "hidden": False})
     if has_any(user, "beta"):
         apps.append({"id": "beta-tasks", "label": "Beta Tasks", "icon": "target", "enabled": True, "hidden": False})
+        apps.append({"id": "downloads", "label": "Download Our App", "icon": "download", "enabled": True, "hidden": False})
     if has_any(user, "owner", "dev") or (has_any(user, "press") and str(user.get("press_pass_status") or "active").lower() == "active"):
         apps.append({"id": "press", "label": "Press Desk", "icon": "press", "enabled": True, "hidden": False})
     visibility = settings.get("app_visibility") or {}
@@ -4991,6 +4997,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def send_redirect(self, location: str) -> None:
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.end_headers()
+
     def error(self, status: int, message: str) -> None:
         self.send_json(status, {"error": message})
 
@@ -5353,6 +5366,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_beta_report(db, user)
                 elif path == "/api/desktop/access" and method == "GET":
                     self.api_desktop_access(user)
+                elif path == "/api/downloads/access" and method == "GET":
+                    self.api_download_access(user)
+                elif path == "/api/downloads/windows" and method == "GET":
+                    self.api_download_package(user, "windows")
+                elif path == "/api/downloads/android" and method == "GET":
+                    self.api_download_package(user, "android")
                 elif path == "/api/dev-tools" and method == "GET":
                     self.api_dev_tools(db, user)
                 elif path == "/api/dev-tools/experience" and method == "PATCH":
@@ -5779,7 +5798,32 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             int(user["id"]),
             {"report_number": str(created["report_number"]), "headline": headline, "category": category},
         )
-        self.send_json(201, {"ok": True, "id": int(created["id"]), "report_number": created["report_number"]})
+        saved = one(
+            db,
+            """
+            SELECT r.*, u.name AS author_name
+            FROM press_reports r
+            JOIN users u ON u.id = r.author_id
+            WHERE r.id = ?
+            """,
+            (created["id"],),
+        )
+        add_message(
+            db,
+            int(user["id"]),
+            "FNN story brief received",
+            f"{created['report_number']} has been filed with the FNN newsroom and is available to the edition generator.",
+        )
+        self.send_json(
+            201,
+            {
+                "ok": True,
+                "id": int(created["id"]),
+                "report_number": created["report_number"],
+                "newsroom_eligible": True,
+                "report": dict(saved) if saved else None,
+            },
+        )
 
     def api_roadmap(self, db: Database, user: DbRow | None) -> None:
         if not user:
@@ -10717,7 +10761,52 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not has_any(user, "beta"):
             self.error(403, "You must be in the Faircroft Beta Program to download the desktop app. We are sad you cannot join us yet.")
             return
-        self.send_json(200, {"allowed": True, "download_url": DESKTOP_INSTALLER_URL})
+        self.send_json(200, {"allowed": True, "download_url": "/api/downloads/windows"})
+
+    def api_download_package(self, user: DbRow | None, platform: str) -> None:
+        if not user:
+            self.error(401, "Sign in before downloading a Faircroft application.")
+            return
+        if not has_any(user, "beta"):
+            self.error(403, "Faircroft application downloads are available only to Beta Program members.")
+            return
+        package_url = DESKTOP_INSTALLER_URL if platform == "windows" else ANDROID_APK_URL
+        if not package_url:
+            self.error(503, f"The Faircroft {platform} package is not currently available.")
+            return
+        self.send_redirect(package_url)
+
+    def api_download_access(self, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Sign in before opening the Faircroft download center.")
+            return
+        if not has_any(user, "beta"):
+            self.error(403, "The Faircroft download center is available only to Beta Program members.")
+            return
+        self.send_json(
+            200,
+            {
+                "allowed": True,
+                "beta_only": True,
+                "pwa": {
+                    "available": True,
+                    "label": "Faircroft RP OS PWA",
+                    "location": "This device · browser installation",
+                },
+                "windows": {
+                    "available": bool(DESKTOP_INSTALLER_URL),
+                    "label": "Faircroft for Windows",
+                    "location": "Windows desktop · official Faircroft release",
+                    "download_url": "/api/downloads/windows",
+                },
+                "android": {
+                    "available": bool(ANDROID_APK_URL),
+                    "label": "Faircroft for Android",
+                    "location": "Android device · APK package",
+                    "download_url": "/api/downloads/android",
+                },
+            },
+        )
 
     def api_beta_respond(self, db: Database, user: DbRow | None) -> None:
         if not user:

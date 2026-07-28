@@ -27,6 +27,7 @@
         ,"Added a dedicated Developer Tools Admin 2FA workspace with expiring single-use authorization codes and an audited usage ledger."
         ,"Added an Admin Chat-only resident experience while RP OS/CAD access is restricted."
         ,"Added live linked-account search in Developer Tools across resident name, email, CIV number, in-game name, and Bohemia identity."
+        ,"Added a Beta-only Download Our App icon with dedicated PWA, Windows desktop, and Android APK release locations."
       ],
       "changed": [
         "Consolidated the current platform work into the RP OS 0.2.1 release.",
@@ -47,6 +48,8 @@
         ,"Separated website/CAD restrictions from Arma enforcement so CAD actions never alter a linked game account."
         ,"Limited Admin 2FA requirements to permanent CAD bans and both temporary and permanent Arma bans."
         ,"Reworked linked-account popup records into a continuous intelligence dossier with expandable record ledgers instead of stacked widget cards."
+        ,"Consolidated installation controls into one Faircroft Beta download center and retired the unrelated global install banner.",
+        "Routed Windows and Android package buttons through Beta-protected Faircroft download endpoints so installer clicks begin directly without exposing storage links in the interface."
       ],
       "fixed": [
         "Fixed the mobile Arma unlink dialog being constrained by the animated profile panel and overlapping Recent Link Claims.",
@@ -64,6 +67,8 @@
         ,"Fixed Command Overview and Account Linking records presenting inconsistent account-detail interfaces."
         ,"Fixed the DMV vehicle-compliance notice exceeding mobile viewports and trapping users before its action controls."
         ,"Fixed DMV compliance actions being hidden behind mobile browser navigation and device safe areas."
+        ,"Fixed Press Desk story submission remaining frozen while waiting for a secondary archive refresh."
+        ,"Fixed successfully filed press briefs not appearing immediately in the reporter archive even though the newsroom had accepted them."
       ]
     },
     {
