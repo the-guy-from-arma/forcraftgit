@@ -13210,6 +13210,16 @@ textarea:focus {
 .dev-linked-registry { padding: 0; overflow: hidden; }
 .dev-linked-registry > .dev-card-header { margin: 0; padding: 15px 18px; }
 .dev-account-directory { display: block; }
+.dev-linked-searchbar { display: flex; align-items: end; gap: 12px; padding: 14px 18px; border-block: 1px solid var(--dev-line); background: #0c151a; }
+.dev-linked-searchbar label { min-width: 0; flex: 1; display: grid; gap: 6px; }
+.dev-linked-searchbar label span { color: #607780; font-size: .6rem; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; }
+.dev-linked-searchbar input { min-height: 42px; border: 1px solid rgba(139,169,180,.2); border-radius: 8px; background: #071015; }
+.dev-linked-searchbar input:focus { border-color: rgba(83,225,189,.55); box-shadow: 0 0 0 3px rgba(83,225,189,.06); }
+.dev-linked-searchbar > strong { min-width: 68px; padding-bottom: 13px; color: #718991; font: 800 .67rem/1 ui-monospace, monospace; text-align: center; }
+.dev-linked-searchbar button { min-height: 42px; }
+.dev-linked-empty { display: grid; place-items: center; gap: 7px; min-height: 150px; padding: 24px; color: #72868e; text-align: center; }
+.dev-linked-empty strong { color: #a7b6bb; font-size: .82rem; }
+.dev-linked-empty span { font-size: .7rem; }
 .dev-account-directory-head {
   display: grid;
   grid-template-columns: minmax(190px,1fr) minmax(150px,.75fr) minmax(220px,1.1fr) 80px;
@@ -13953,6 +13963,29 @@ textarea:focus {
   background: #10181e;
   box-shadow: none;
 }
+
+.dev-dossier-ledger { overflow: hidden; border: 1px solid rgba(117,151,164,.18); border-radius: 14px; background: #0d161b; }
+.dev-dossier-ledger-head { min-height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 20px; border-bottom: 1px solid rgba(117,151,164,.18); background: linear-gradient(90deg, rgba(50,164,143,.07), transparent 50%); }
+.dev-dossier-ledger-head h3 { margin: 3px 0 0; }
+.dev-dossier-ledger-head > span { color: #6f858d; font: 800 .64rem/1 ui-monospace, monospace; letter-spacing: .07em; text-transform: uppercase; }
+.dev-dossier-section { border-bottom: 1px solid rgba(117,151,164,.15); background: transparent; }
+.dev-dossier-section:last-child { border-bottom: 0; }
+.dev-dossier-section summary { min-height: 54px; display: grid; grid-template-columns: minmax(0,1fr) 34px 14px; align-items: center; gap: 12px; padding: 10px 18px; color: #cbd7da; cursor: pointer; list-style: none; }
+.dev-dossier-section summary::-webkit-details-marker { display: none; }
+.dev-dossier-section summary:hover { background: rgba(255,255,255,.018); }
+.dev-dossier-section summary span { font-size: .78rem; font-weight: 850; }
+.dev-dossier-section summary strong { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 50%; color: #7e939b; background: rgba(126,147,155,.1); font: 850 .62rem/1 ui-monospace, monospace; }
+.dev-dossier-section summary i { color: #60757d; font-size: 1rem; font-style: normal; transition: transform .18s ease; }
+.dev-dossier-section[open] summary i { transform: rotate(90deg); }
+.dev-dossier-section.alert summary { box-shadow: inset 3px 0 0 rgba(239,99,117,.62); }
+.dev-dossier-section.warning summary { box-shadow: inset 3px 0 0 rgba(240,162,76,.52); }
+.dev-dossier-section[data-empty] summary { opacity: .68; }
+.dev-dossier-records { border-top: 1px solid rgba(117,151,164,.12); background: #091216; }
+.dev-dossier-records article { display: grid; grid-template-columns: minmax(180px,.65fr) minmax(0,1.35fr); gap: 18px; padding: 12px 20px; border-bottom: 1px solid rgba(117,151,164,.11); }
+.dev-dossier-records article:last-child { border-bottom: 0; }
+.dev-dossier-records article strong { font-size: .72rem; }
+.dev-dossier-records article small { color: #71868e; font-size: .67rem; line-height: 1.45; }
+.dev-dossier-none { padding: 17px 20px; color: #61767e; font-size: .68rem; }
 
 @media (max-width: 820px) {
   .dev-account-profile-head,
@@ -15249,8 +15282,13 @@ textarea:focus {
 .dmv-game-vehicles article.imported { border-color: rgba(83,205,169,.35); }.dmv-game-vehicles article.imported span { color: #58d1a7; }
 .dmv-manual-intake { border: 1px solid #293b42; background: #0e181d; }.dmv-manual-intake > summary { padding: 14px 18px; color: #83979e; cursor: pointer; font-weight: 850; }.dmv-manual-intake .dmv-registration-form { border: 0; border-top: 1px solid #293b42; }
 .dmv-vehicle-file.action-required { border-color: rgba(225,91,101,.45); box-shadow: inset 0 3px #d95c66; }.dmv-vehicle-file.compliant { box-shadow: inset 0 3px #47bd99; }
-.dmv-compliance-modal { width: min(680px,calc(100vw - 24px)); overflow: hidden; border: 1px solid #36525d; background: radial-gradient(circle at 95% 0,rgba(62,184,212,.18),transparent 36%),#101b20; box-shadow: 0 32px 90px rgba(0,0,0,.65); }
-.dmv-compliance-modal > header { padding: 22px 22px 16px; border-bottom: 1px solid #2b3e46; }.dmv-compliance-modal h2 { margin: 5px 0 0; font-size: 28px; }.dmv-compliance-modal > p { padding: 0 22px; line-height: 1.55; }.dmv-compliance-modal > .row { padding: 8px 22px 22px; }
+.dmv-compliance-backdrop { padding: max(12px,env(safe-area-inset-top)) 12px max(12px,env(safe-area-inset-bottom)); }
+.dmv-compliance-modal { width: min(680px,calc(100vw - 24px)); max-height: min(760px,calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom))); display: grid; grid-template-rows: auto minmax(0,1fr) auto; gap: 0; padding: 0; overflow: hidden; border: 1px solid #36525d; background: radial-gradient(circle at 95% 0,rgba(62,184,212,.18),transparent 36%),#101b20; box-shadow: 0 32px 90px rgba(0,0,0,.65); }
+.dmv-compliance-modal > header { position: relative; z-index: 2; padding: 22px 22px 16px; border-bottom: 1px solid #2b3e46; background: rgba(16,27,32,.96); }.dmv-compliance-modal h2 { margin: 5px 0 0; font-size: 28px; }
+.dmv-compliance-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #47616b transparent; }
+.dmv-compliance-body > p { margin: 0; padding: 0 22px 18px; line-height: 1.55; }
+.dmv-compliance-actions { position: relative; z-index: 3; display: grid; grid-template-columns: minmax(0,1.4fr) minmax(0,1fr); gap: 10px; padding: 14px 22px calc(16px + env(safe-area-inset-bottom)); border-top: 1px solid #2b3e46; background: rgba(10,18,22,.98); box-shadow: 0 -12px 28px rgba(0,0,0,.28); }
+.dmv-compliance-actions button { min-height: 48px; }
 .dmv-compliance-list { display: grid; gap: 1px; margin: 16px 22px; border: 1px solid #2d4048; background: #2d4048; }.dmv-compliance-list article { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 12px 14px; background: #0c161a; }.dmv-compliance-list article div { display: grid; gap: 3px; }.dmv-compliance-list article span { color: #58bdd7; font-size: 8px; font-weight: 900; letter-spacing: .12em; }.dmv-compliance-list article small { color: #df737a; text-align: right; }
 .resident-vehicle-summary { margin-top: 14px; overflow: hidden; border: 1px solid #2b414a; background: #0e191e; }.resident-vehicle-summary > header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 15px; border-bottom: 1px solid #293b43; }.resident-vehicle-summary header span { color: #55bad5; font-size: 8px; font-weight: 950; letter-spacing: .12em; text-transform: uppercase; }.resident-vehicle-summary h3 { margin: 4px 0 0; }.resident-vehicle-summary > div { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1px; background: #293b43; }.resident-vehicle-summary article { display: grid; gap: 4px; padding: 13px 15px; background: #0b1418; }.resident-vehicle-summary article > span { color: #59bad4; font-size: 8px; font-weight: 900; }.resident-vehicle-summary article small.valid { color: #55d0a6; }.resident-vehicle-summary article small.warning { color: #df7078; }.resident-vehicle-summary > div > p { padding: 14px; }
 
@@ -15516,7 +15554,11 @@ textarea:focus {
   .dmv-digital-license > header { padding: 12px; }.dmv-digital-license > header strong { font-size: 14px; }.dmv-digital-license > header > b { font-size: 18px; }.dmv-digital-license footer span { display: none; }
   .dmv-game-vehicles > div { grid-template-columns: 1fr; }.dmv-exam-intro { align-items: start; flex-direction: column; }.dmv-attempt-ledger > div { grid-template-columns: 1fr auto; }.dmv-attempt-ledger > div span { grid-column: 1/-1; }
   .dmv-fleet-command { grid-template-columns: 1fr; padding: 16px; }.dmv-fleet-command dl { width: 100%; grid-template-columns: 1fr 1fr; }.dmv-fleet-command dl div { min-width: 0; }
-  .dmv-compliance-modal > .row { display: grid; grid-template-columns: 1fr; }.dmv-compliance-list article { align-items: flex-start; flex-direction: column; gap: 6px; }.dmv-compliance-list article small { text-align: left; }
+  .dmv-compliance-modal { width: calc(100vw - 14px); max-height: calc(100dvh - 14px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); border-radius: 18px; }
+  .dmv-compliance-modal > header { padding: 17px 17px 13px; }.dmv-compliance-modal h2 { font-size: clamp(24px,8vw,34px); line-height: 1.04; }
+  .dmv-compliance-list { margin: 12px 14px; }.dmv-compliance-list article { align-items: flex-start; flex-direction: column; gap: 6px; padding: 11px 12px; }.dmv-compliance-list article small { text-align: left; }
+  .dmv-compliance-body > p { padding: 0 15px 15px; }
+  .dmv-compliance-actions { grid-template-columns: 1fr; gap: 8px; padding: 10px 14px calc(12px + env(safe-area-inset-bottom)); }
   .resident-vehicle-summary > header { align-items: stretch; flex-direction: column; }.resident-vehicle-summary > div { grid-template-columns: 1fr; }
 }
 
@@ -16748,4 +16790,7 @@ textarea:focus {
 @media (max-width: 700px) {
   .admin-current-restriction { flex-direction: column; }
   .admin-enforcement-group button { width: 100%; }
+  .dev-linked-searchbar { align-items: stretch; flex-direction: column; }
+  .dev-linked-searchbar > strong { padding: 0; text-align: left; }
+  .dev-dossier-records article { grid-template-columns: 1fr; gap: 5px; }
 }

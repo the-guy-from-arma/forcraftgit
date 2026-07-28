@@ -42,6 +42,7 @@ const state = {
   fineSettlementPrompt: "",
   devTab: "dashboard",
   devAccount: null,
+  devLinkedSearch: "",
   devAntiCheatUid: null,
   devAntiCheatSearch: "",
   devAntiCheatPage: 1,
@@ -771,18 +772,20 @@ function renderDmvComplianceModal() {
     <div class="modal-backdrop dmv-compliance-backdrop">
       <section class="mdt-modal dmv-compliance-modal" role="dialog" aria-modal="true" aria-label="DMV vehicle compliance required">
         <header><p class="eyebrow">Vehicle detected from linked profile</p><h2>Complete your DMV file</h2></header>
-        <div class="dmv-compliance-list">
-          ${vehicles.slice(0, 4).map((vehicle) => `
-            <article>
-              <div><span>${escapeHtml(vehicle.plate)}</span><strong>${escapeHtml(vehicle.vehicle_year)} ${escapeHtml(vehicle.vehicle_make)} ${escapeHtml(vehicle.vehicle_model)}</strong></div>
-              <small>${vehicle.registration_status === "Active" ? "Registration confirmed" : "Registration details required"} · ${vehicle.insurance_status === "Active" ? "Insured" : "Insurance required"}</small>
-            </article>`).join("")}
+        <div class="dmv-compliance-body">
+          <div class="dmv-compliance-list">
+            ${vehicles.slice(0, 4).map((vehicle) => `
+              <article>
+                <div><span>${escapeHtml(vehicle.plate)}</span><strong>${escapeHtml(vehicle.vehicle_year)} ${escapeHtml(vehicle.vehicle_make)} ${escapeHtml(vehicle.vehicle_model)}</strong></div>
+                <small>${vehicle.registration_status === "Active" ? "Registration confirmed" : "Registration details required"} · ${vehicle.insurance_status === "Active" ? "Insured" : "Insurance required"}</small>
+              </article>`).join("")}
+          </div>
+          <p class="muted small">Faircroft detected ${vehicles.length} vehicle${vehicles.length === 1 ? "" : "s"} on your Arma profile. Confirm the imported make, model, year, and color, then activate insurance before driving.</p>
         </div>
-        <p class="muted small">Faircroft detected ${vehicles.length} vehicle${vehicles.length === 1 ? "" : "s"} on your Arma profile. Confirm the imported make, model, year, and color, then activate insurance before driving.</p>
-        <div class="row">
+        <footer class="dmv-compliance-actions">
           <button class="primary" type="button" data-open-dmv-compliance>Open DMV vehicle dashboard</button>
           <button class="secondary" type="button" data-dismiss-dmv-compliance>Remind me next login</button>
-        </div>
+        </footer>
       </section>
     </div>`;
 }
@@ -9313,7 +9316,18 @@ function renderAntiCheatModalLegacy(data, uid) {
 
 function devLinkedAccounts(users) {
   const linked = users.filter((x) => x.arma_linked);
-  return `<div class="dev-account-directory"><div class="dev-account-directory-head"><span>Account</span><span>Civilian record</span><span>Bohemia identity</span><span>Status</span></div>${linked.map((x) => `<button class="dev-account-tile" data-dev-account="${x.id}"><span class="dev-link-avatar">${escapeHtml((x.name || "??").slice(0, 2).toUpperCase())}</span><div><strong>${escapeHtml(x.name)}</strong><small>${escapeHtml(x.email || "Verified web account")}</small></div><span><strong>CIV ${escapeHtml(x.civ_number || "pending")}</strong><small>${escapeHtml(x.player_name || "Player name pending")}</small></span><code>${escapeHtml(x.linked_arma_id || "Identity unavailable")}</code><span class="dev-record-status verified">Linked</span><i>›</i></button>`).join("") || `<div class="empty">No linked accounts</div>`}</div>`;
+  const query = String(state.devLinkedSearch || "").trim().toLowerCase();
+  const matches = linked.filter((x) => !query || [x.name, x.email, x.civ_number, x.player_name, x.linked_arma_id, x.arma_id]
+    .some((value) => String(value || "").toLowerCase().includes(query)));
+  return `<div class="dev-account-directory">
+    <div class="dev-linked-searchbar">
+      <label><span>Search linked identities</span><input id="devLinkedSearch" value="${escapeHtml(state.devLinkedSearch || "")}" placeholder="Name, email, CIV, player name, or Bohemia ID" autocomplete="off" /></label>
+      <strong>${matches.length} / ${linked.length}</strong>
+      ${query ? `<button class="secondary" type="button" data-clear-linked-search>Clear</button>` : ""}
+    </div>
+    <div class="dev-account-directory-head"><span>Account</span><span>Civilian record</span><span>Bohemia identity</span><span>Status</span></div>
+    ${matches.map((x) => `<button class="dev-account-tile" data-dev-account="${x.id}"><span class="dev-link-avatar">${escapeHtml((x.name || "??").slice(0, 2).toUpperCase())}</span><div><strong>${escapeHtml(x.name)}</strong><small>${escapeHtml(x.email || "Verified web account")}</small></div><span><strong>CIV ${escapeHtml(x.civ_number || "pending")}</strong><small>${escapeHtml(x.player_name || "Player name pending")}</small></span><code>${escapeHtml(x.linked_arma_id || "Identity unavailable")}</code><span class="dev-record-status verified">Linked</span><i>›</i></button>`).join("") || `<div class="dev-linked-empty"><strong>${query ? "No linked account matches this search" : "No linked accounts"}</strong><span>${query ? "Try a name, CIV number, email, player name, or full Bohemia identity." : "Verified identity links will appear here."}</span></div>`}
+  </div>`;
 }
 
 function devPlatformIdentity(...values) {
@@ -9397,14 +9411,15 @@ function renderDevAccountModal(data) {
           </dl>
         </section>
         ${data.active_block ? `<div class="dev-alert red-tone"><strong>Active ${escapeHtml(data.active_block.sanction_type)}</strong><span>${escapeHtml(data.active_block.reason || "")}</span></div>` : ""}
-        <div class="dev-profile-grid">
-          <section class="dev-card"><div class="row"><h3>Characters</h3><span class="pill">${characters.length}</span></div>${devDetailList(characters, (x) => [x.character_name || x.name || "Character", `${x.is_active ? "Active" : "Inactive"} · updated ${x.updated_at || ""}`])}</section>
-          <section class="dev-card"><div class="row"><h3>Jobs</h3><span class="pill">${jobs.length}</span></div>${devDetailList(jobs, (x) => [x.title || "Job", `${x.market || ""} · ${x.status || ""} · started ${x.started_at || ""}`])}</section>
-          <section class="dev-card"><div class="row"><h3>Enforcement History</h3><span class="pill red">${sanctions.length}</span></div>${devDetailList(sanctions, (x) => [`${x.report_number || "Legacy"} · ${x.sanction_type}`, `${x.rule_code || ""} ${x.reason || ""}`])}</section>
-          <section class="dev-card"><div class="row"><h3>Internal Notes</h3><span class="pill amber">${warnings.length}</span></div>${devDetailList(warnings, (x) => [`${x.severity || ""} · ${x.subject || ""}`, `${x.body || ""}`])}</section>
-          <section class="dev-card"><div class="row"><h3>Citations / Cases</h3><span class="pill">${citations.length}</span></div>${devDetailList(citations, (x) => [`${x.charge_code || ""} · ${x.charge_title || "Case"}`, `${x.status || ""} · ${money(x.fine_amount || 0)} · ${x.location || ""}`])}</section>
-          <section class="dev-card"><div class="row"><h3>Properties</h3><span class="pill">${properties.length}</span></div>${devDetailList(properties, (x) => [x.name || "Property", `${x.address || ""} · ${money(x.price || 0)}`])}</section>
-        </div>
+        <section class="dev-dossier-ledger">
+          <div class="dev-dossier-ledger-head"><div><p class="eyebrow">Account intelligence</p><h3>Connected records</h3></div><span>${characters.length + jobs.length + sanctions.length + warnings.length + citations.length + properties.length} indexed</span></div>
+          ${devDossierSection("Characters", characters, (x) => [x.character_name || x.name || "Character", `${x.is_active ? "Active" : "Inactive"} · updated ${x.updated_at || ""}`], "identity")}
+          ${devDossierSection("Jobs", jobs, (x) => [x.title || "Job", `${x.market || ""} · ${x.status || ""} · started ${x.started_at || ""}`], "employment")}
+          ${devDossierSection("Enforcement history", sanctions, (x) => [`${x.report_number || "Legacy"} · ${x.sanction_type}`, `${x.rule_code || ""} ${x.reason || ""}`], "alert")}
+          ${devDossierSection("Internal notes", warnings, (x) => [`${x.severity || ""} · ${x.subject || ""}`, `${x.body || ""}`], "warning")}
+          ${devDossierSection("Citations & cases", citations, (x) => [`${x.charge_code || ""} · ${x.charge_title || "Case"}`, `${x.status || ""} · ${money(x.fine_amount || 0)} · ${x.location || ""}`], "court")}
+          ${devDossierSection("Properties", properties, (x) => [x.name || "Property", `${x.address || ""} · ${money(x.price || 0)}`], "asset")}
+        </section>
         <section class="dev-card dev-persistence-file">
           <div class="dev-card-header"><div><span>FCRPMUSSALO / LINKED EVIDENCE</span><h2>Persistent game records</h2><p class="muted">Read-only records correlated to this Bohemia identity.</p></div><strong>${gameRecords.length}</strong></div>
           <div class="dev-persistence-summary">
@@ -9432,6 +9447,16 @@ function renderDevAccountModal(data) {
       </div>
     </section>
   </div>`;
+}
+
+function devDossierSection(title, items, mapper, tone = "") {
+  return `<details class="dev-dossier-section ${tone}" ${items.length ? "" : "data-empty"}>
+    <summary><span>${escapeHtml(title)}</span><strong>${items.length}</strong><i>›</i></summary>
+    <div class="dev-dossier-records">${items.map((item) => {
+      const [recordTitle, detail] = mapper(item);
+      return `<article><strong>${escapeHtml(recordTitle)}</strong><small>${escapeHtml(detail)}</small></article>`;
+    }).join("") || `<div class="dev-dossier-none">No records</div>`}</div>
+  </details>`;
 }
 
 function devDetailList(items, mapper) {
@@ -9799,6 +9824,20 @@ function bindFineSettlement() {
     }
     render();
   }));
+  $("#devLinkedSearch")?.addEventListener("input", (event) => {
+    state.devLinkedSearch = event.currentTarget.value;
+    render();
+    const input = $("#devLinkedSearch");
+    if (input) {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+  });
+  $("[data-clear-linked-search]")?.addEventListener("click", () => {
+    state.devLinkedSearch = "";
+    render();
+    $("#devLinkedSearch")?.focus();
+  });
   $$("[data-fine-code]").forEach((button) => button.addEventListener("click", async () => {
     const batchId = Number(button.dataset.fineCode);
     pushOperationsLog("settlement", `Generating a time-limited authorization for batch ${batchId}.`, "running");

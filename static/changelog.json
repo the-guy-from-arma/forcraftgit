@@ -26,6 +26,7 @@
         ,"Added Admin account enforcement controls for CAD timeouts, suspensions, temporary bans, permanent bans, and separate Arma server bans."
         ,"Added a dedicated Developer Tools Admin 2FA workspace with expiring single-use authorization codes and an audited usage ledger."
         ,"Added an Admin Chat-only resident experience while RP OS/CAD access is restricted."
+        ,"Added live linked-account search in Developer Tools across resident name, email, CIV number, in-game name, and Bohemia identity."
       ],
       "changed": [
         "Consolidated the current platform work into the RP OS 0.2.1 release.",
@@ -45,6 +46,7 @@
         "Driver-license administrative controls now live under Developer Tools > DMV Settings rather than the resident DMV application."
         ,"Separated website/CAD restrictions from Arma enforcement so CAD actions never alter a linked game account."
         ,"Limited Admin 2FA requirements to permanent CAD bans and both temporary and permanent Arma bans."
+        ,"Reworked linked-account popup records into a continuous intelligence dossier with expandable record ledgers instead of stacked widget cards."
       ],
       "fixed": [
         "Fixed the mobile Arma unlink dialog being constrained by the animated profile panel and overlapping Recent Link Claims.",
@@ -59,6 +61,9 @@
         "Fixed final Guilty, Not Guilty, and Dismissal orders requesting or retaining a future court date instead of moving immediately to the Completed docket.",
         "Fixed DMV status changes lacking a controlled restoration-fee route into the existing Settlement desk."
         ,"Fixed administrative timeouts and suspensions sharing the developer game-ban path instead of using a website-only CAD restriction."
+        ,"Fixed Command Overview and Account Linking records presenting inconsistent account-detail interfaces."
+        ,"Fixed the DMV vehicle-compliance notice exceeding mobile viewports and trapping users before its action controls."
+        ,"Fixed DMV compliance actions being hidden behind mobile browser navigation and device safe areas."
       ]
     },
     {
