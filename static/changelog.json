@@ -1,24 +1,64 @@
 {
-  "version": "0.2.0",
+  "version": "0.2.1",
   "entries": [
     {
-      "date": "2026-07-27",
-      "version": "0.2.0",
-      "title": "RP OS 0.2.0",
+      "date": "2026-07-28",
+      "version": "0.2.1",
+      "title": "RP OS 0.2.1",
       "added": [
         "Added focused anti-cheat popup interfaces for online players, known identities, flagged players, grey-screened profiles, active locks, and recent evidence.",
-        "Added search and direct player-intelligence drill-down inside every anti-cheat summary popup."
+        "Added search and direct player-intelligence drill-down inside every anti-cheat summary popup.",
+        "Added a dedicated Settlement Operations tab to Developer Tools with a live animated execution console.",
+        "Added batch driver-license suspension for unpaid fines with automatic player notifications.",
+        "Added an animated FNN generation console showing source scanning, model generation, validation, completion, and errors."
+        ,"Added independent Dev Tools intake controls for every government, legal, emergency-services, and FNN application.",
+        "Rebuilt the anti-cheat player popup as a continuous intelligence dossier with platform identity, telemetry assessment, evidence, and alternate-account records."
+        ,"Added dedicated Auto Pilot and System Update workspaces inside Developer Tools.",
+        "Added a Faircroft-branded limited-service update experience that preserves essential resident and authorized public-safety access.",
+        "Added a full-width Faircroft Administration workspace with an operational overview, identity-readiness ledger, searchable resident directory, and direct account-file controls.",
+        "Expanded the FNN newsroom source archive to include court petitions, license suspensions, criminal warrants, wanted-person BOLOs, and reporter-submitted Press Desk stories.",
+        "Added an official Faircroft Judiciary order treatment and digital court seal to the findings workflow.",
+        "Added a restricted DMV Settings workspace in Developer Tools for suspending, revoking, expiring, restoring, classifying, and endorsing driver credentials.",
+        "Added configurable primary license classes and endorsements with resident credential display.",
+        "Added statewide Mark All Expired and Mark All Revoked controls with typed confirmation, audit history, and resident notifications.",
+        "Added optional driver-license restoration fees that enter Settlement Operations as DMV administrative charges for the manual midnight deduction process.",
+        "Added mandatory Faircroft DMV entrance notices for license suspension, revocation, and expiration that appear immediately on login or refresh and require resident acknowledgement."
+        ,"Added Admin account enforcement controls for CAD timeouts, suspensions, temporary bans, permanent bans, and separate Arma server bans."
+        ,"Added a dedicated Developer Tools Admin 2FA workspace with expiring single-use authorization codes and an audited usage ledger."
+        ,"Added an Admin Chat-only resident experience while RP OS/CAD access is restricted."
       ],
       "changed": [
-        "Advanced the visible RP OS release designation and PWA installation cache to version 0.2.0.",
-        "Converted the Anti-Cheat dashboard metrics from passive counters into interactive operational controls."
+        "Consolidated the current platform work into the RP OS 0.2.1 release.",
+        "Converted the Anti-Cheat dashboard metrics from passive counters into interactive operational controls.",
+        "Moved Fine Settlement out of the phone application grid and into the restricted Developer Tools workspace.",
+        "Forced fine-removal authorization now requires all affected driver licenses to be suspended first."
+        ,"Closed job applications now keep their advertisement visible while disabling only that posting's application form.",
+        "Replaced the anti-cheat popup's oversized widget grid with a compact professional ledger layout."
+        ,"Removed driver-license auto approval so every license requires the scored DMV examination.",
+        "Removed System Settings from the phone application grid and separated automation from release controls.",
+        "Moved Admin out of the simulated phone and aligned its navigation, records layout, and responsive behavior with the Developer Tools staff workspace.",
+        "Removed Job Applications from Admin; recruitment review remains in the dedicated Indeed Admin workflow.",
+        "Retired Referral Tickets from Admin, resident profiles, and new-account registration while preserving historical database records.",
+        "Advanced the visible RP OS release designation and PWA installation cache to version 0.2.1.",
+        "Press Desk stories are now marked Included after a successful Gemini edition so reporters can confirm newsroom collection.",
+        "Standardized citation and criminal findings as Guilty or Not Guilty instead of the retired Liable or Not Liable language.",
+        "Driver-license administrative controls now live under Developer Tools > DMV Settings rather than the resident DMV application."
+        ,"Separated website/CAD restrictions from Arma enforcement so CAD actions never alter a linked game account."
+        ,"Limited Admin 2FA requirements to permanent CAD bans and both temporary and permanent Arma bans."
       ],
       "fixed": [
         "Fixed the mobile Arma unlink dialog being constrained by the animated profile panel and overlapping Recent Link Claims.",
         "Contained the unlink guidance, authorization field, acknowledgment, and confirmation action within a responsive single-column mobile dialog.",
         "Restored the missing Developer Tools linked-account API response that caused Recent Arma Link records to display Request failed.",
         "Expanded Arma event ingestion compatibility for alternate event wrappers, casing, identity fields, timestamps, and numeric payload values.",
-        "Made /link/arma a dedicated PWA deep link that opens Profile directly on Game Link, with optional link-code prefilling through the code query parameter."
+        "Made /link/arma a dedicated PWA deep link that opens Profile directly on Game Link, with optional link-code prefilling through the code query parameter.",
+        "Fixed the Court Lawyer Licenses tab failing to open because its examination packet renderer referenced the wrong parser.",
+        "Fixed Admin being constrained to a narrow phone frame with oversized stacked account cards.",
+        "Fixed retired referral rewards continuing to create staff tickets and player notifications during account registration.",
+        "Fixed submitted FNN Press Desk stories appearing uncollected even after they were supplied to Gemini.",
+        "Fixed final Guilty, Not Guilty, and Dismissal orders requesting or retaining a future court date instead of moving immediately to the Completed docket.",
+        "Fixed DMV status changes lacking a controlled restoration-fee route into the existing Settlement desk."
+        ,"Fixed administrative timeouts and suspensions sharing the developer game-ban path instead of using a website-only CAD restriction."
       ]
     },
     {

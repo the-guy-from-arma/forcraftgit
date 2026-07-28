@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.2.0";
+const OS_VERSION = "0.2.1";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const SESSION_REFRESH_MS = 15000;
 const pendingMutations = new Map();
@@ -33,9 +33,12 @@ const state = {
   armaLinkPromptDismissed: false,
   dmvComplianceDismissed: false,
   generatedDevCode: null,
+  generatedAdmin2faCode: null,
   fineSettlementCode: null,
   taxSettlementCode: null,
   settlementTab: "fines",
+  settlementConsole: [],
+  fnnConsole: [],
   fineSettlementPrompt: "",
   devTab: "dashboard",
   devAccount: null,
@@ -91,11 +94,12 @@ const state = {
   businessLicensePage: 1,
   businessRegistryPage: 1,
   treasuryProofs: [],
-  adminTab: "users",
+  adminTab: "overview",
   adminApplicationFilter: "active",
   indeedApplicationFilter: "active",
   adminSearch: "",
   adminAccountId: null,
+  adminAccountSection: "account",
   dmvCountdownTimer: null,
   dmvCountdownRefreshing: false,
   cache: {},
@@ -523,7 +527,7 @@ function render() {
     bindAuth();
     return;
   }
-  if (state.session?.anti_cheat_lock && state.activeApp && state.activeApp !== "messages") {
+  if ((state.session?.anti_cheat_lock || state.session?.admin_restriction) && state.activeApp && !["messages", "restriction"].includes(state.activeApp)) {
     state.activeApp = null;
   }
   if (state.activeApp === "mdt" && !appAvailable("mdt")) {
@@ -565,6 +569,12 @@ function render() {
   if (state.activeApp === "dev-tools") {
     app.innerHTML = renderSystemBanner() + renderDevWorkspace() + renderRequiredProfileModals();
     bindDevWorkspace();
+    bindRequiredProfileModals();
+    return;
+  }
+  if (state.activeApp === "admin") {
+    app.innerHTML = renderSystemBanner() + renderAdminWorkspace() + renderRequiredProfileModals();
+    bindAdminWorkspace();
     bindRequiredProfileModals();
     return;
   }
@@ -628,7 +638,6 @@ function renderAuth() {
       <form id="authForm" class="form-grid">
         ${register ? `<label>Name<input name="name" autocomplete="name" required /></label>` : ""}
         ${register ? `<label>Car entry code<input name="car_entry_code" autocomplete="off" maxlength="32" pattern="[A-Za-z0-9_-]{2,32}" placeholder="In-game vehicle access code" required /></label>` : ""}
-        ${register ? `<label>Referral code <span class="muted small">optional</span><input name="referral_code" autocomplete="off" maxlength="16" placeholder="Friend's referral code" /></label>` : ""}
         <label>Email<input name="email" type="email" autocomplete="email" required /></label>
         <label>Password<input name="password" type="password" autocomplete="${register ? "new-password" : "current-password"}" minlength="6" required /></label>
         <button class="primary" type="submit">${register ? "Create civilian" : "Unlock phone"}</button>
@@ -732,7 +741,18 @@ function renderCallsignRequiredModal() {
 
 function renderRequiredProfileModals() {
   if (state.session?.sanction?.type === "timeout") return "";
-  return renderSystemSplash() || renderPressPassNoticeModal() || renderCarEntryRequiredModal() || renderArmaLinkRequiredModal() || renderDmvComplianceModal() || renderBetaInviteModal();
+  return renderDmvActionNoticeModal() || renderSystemSplash() || renderPressPassNoticeModal() || renderCarEntryRequiredModal() || renderArmaLinkRequiredModal() || renderDmvComplianceModal() || renderBetaInviteModal();
+}
+
+function renderDmvActionNoticeModal() {
+  const notice = state.session?.dmv_action_notice;
+  if (!notice) return "";
+  const status = String(notice.license_status || "Suspended");
+  return `<div class="modal-backdrop dmv-action-notice-backdrop"><section class="mdt-modal dmv-action-notice-modal ${status.toLowerCase()}" role="dialog" aria-modal="true" aria-label="Driver license status notice">
+    <header><div class="dmv-action-seal">FC</div><div><p class="eyebrow">FAIRCROFT MOTOR VEHICLE AUTHORITY · OFFICIAL NOTICE</p><h2>Driver License ${escapeHtml(status)}</h2></div></header>
+    <div class="dmv-action-notice-body"><p>Your Faircroft driving credential is now <strong>${escapeHtml(status.toLowerCase())}</strong>. This status is effective immediately and is visible to officers through NCIC.</p><dl><div><dt>Credential class</dt><dd>${escapeHtml(notice.license_class || "Class D")}</dd></div><div><dt>Effective</dt><dd>${notice.action_notice_at ? new Date(notice.action_notice_at).toLocaleString() : "Immediately"}</dd></div></dl>${notice.action_notice_reason ? `<section><small>OFFICIAL REASON</small><strong>${escapeHtml(notice.action_notice_reason)}</strong></section>` : ""}</div>
+    <button class="primary" type="button" data-acknowledge-dmv-action>I acknowledge this DMV notice</button>
+  </section></div>`;
 }
 
 function renderPressPassNoticeModal() {
@@ -809,6 +829,14 @@ function renderArmaLinkRequiredModal() {
 }
 
 function bindRequiredProfileModals() {
+  $("[data-acknowledge-dmv-action]")?.addEventListener("click", async () => {
+    try {
+      await api("/api/dmv/action-notice/acknowledge", { method: "POST", body: {} });
+      await loadSession();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
   $("[data-acknowledge-press-pass]")?.addEventListener("click", async () => {
     try {
       await api("/api/press-pass/acknowledge", { method: "POST", body: {} });
@@ -868,6 +896,7 @@ function bindRequiredProfileModals() {
 function renderHome() {
   const { user, apps, unread_messages: unread } = state.session;
   if (state.session?.anti_cheat_lock) return renderAntiCheatLockedHome(apps);
+  if (state.session?.admin_restriction) return renderAdminRestrictedHome(apps);
   if (isUpdateLockdown()) return renderUpdateLockdownHome(apps);
   const locked = !user.verified && !user.roles.includes("owner") && !user.roles.includes("admin");
   return `
@@ -908,6 +937,34 @@ function renderHome() {
       </div>
     </section>
   `;
+}
+
+function renderAdminRestrictedHome(apps) {
+  const restriction = state.session?.admin_restriction || {};
+  const unread = Number(state.session?.unread_messages || 0);
+  const type = humanLabel(String(restriction.type || "account restriction").replace("cad_", ""));
+  return `
+    <section class="home-stack admin-restriction-home">
+      <header class="home-header">
+        <div class="home-identity">
+          <img class="home-emblem" src="/static/brand/faircroft-emblem.webp" alt="" />
+          <div><p class="eyebrow">Faircroft Administration</p><h1>CAD Access Locked</h1></div>
+        </div>
+        <button class="icon-action" data-logout aria-label="Sign out">${iconSvg.logout}</button>
+      </header>
+      <div class="home-alert restriction-alert">${iconSvg.lock}<div><strong>${escapeHtml(type)}</strong><p>${escapeHtml(restriction.reason || "An administrator has restricted this RP OS account.")}</p></div></div>
+      <section class="profile-link-card">
+        <p>Game access and your linked Arma account are unchanged. Faircroft CAD applications remain locked while this action is active.</p>
+        <p class="muted small">Admin Chat remains available for direct communication with staff.</p>
+      </section>
+      <div class="app-grid anticheat-lock-apps">
+        ${(apps || []).map((item, index) => `
+          <button class="app-icon" style="--i:${index}" data-open-app="${item.id}">
+            <span class="icon-tile" style="--tile:${tileColors[item.id] || tileColors.messages}">${iconSvg[item.icon] || iconSvg.message}${item.id === "messages" && unread ? `<span class="soon-badge">${unread}</span>` : ""}</span>
+            <span>${escapeHtml(item.label)}</span>
+          </button>`).join("")}
+      </div>
+    </section>`;
 }
 
 function renderAntiCheatLockedHome(apps) {
@@ -1011,34 +1068,21 @@ function renderPwaInstallBar() {
 
 function renderUpdateLockdownHome(apps) {
   const allowed = (apps || []).filter((item) => item.enabled);
-  const hasDmv = allowed.some((item) => item.id === "dmv");
-  const hasMdt = allowed.some((item) => item.id === "mdt");
+  const title = state.session?.system?.update_lockdown_title || "Faircroft systems update";
+  const eta = state.session?.system?.update_lockdown_eta || "Engineering team actively monitoring";
   return `
-    <section class="update-lockdown-screen">
-      <div class="ios-update-nav">
-        <span>General</span>
-        <strong>Software Update</strong>
-        <span></span>
-      </div>
-      <div class="ios-setting-row">
-        <span>Automatic Updates</span>
-        <strong>On</strong>
-      </div>
-      <article class="ios-update-card">
-        <div class="update-app-icon">RP</div>
-        <div>
-          <h2>RP Command Update</h2>
-          <p class="muted small">Server maintenance mode</p>
-        </div>
-        <p>${escapeHtml(updateLockdownMessage())}</p>
-        <div class="update-progress"><span></span></div>
-        <p class="muted small">Available during update: ${hasDmv ? "Driver License" : ""}${hasDmv && hasMdt ? " and " : ""}${hasMdt ? "LEO MDT" : ""}${!allowed.length ? "No actions available for this account" : ""}.</p>
+    <section class="update-lockdown-screen faircroft-update-mode">
+      <header><img src="/static/brand/faircroft-emblem.webp" alt="" /><div><span>FAIRCROFT RELEASE OPERATIONS</span><strong>Limited-service mode</strong></div><i></i></header>
+      <article class="faircroft-update-brief">
+        <div class="faircroft-update-sequence"><span>RP OS</span><strong>0.2.1</strong></div>
+        <div><p class="eyebrow">Platform maintenance</p><h2>${escapeHtml(title)}</h2><p>${escapeHtml(updateLockdownMessage())}</p></div>
+        <div class="faircroft-update-progress"><span></span></div>
+        <footer><span><i></i> Essential network online</span><strong>${escapeHtml(eta)}</strong></footer>
       </article>
-      <div class="update-action-list">
+      <div class="faircroft-update-services"><header><span>AVAILABLE SERVICES</span><strong>${allowed.length}</strong></header>
         ${allowed.map((item) => `
-          <button class="ios-update-action" data-open-app="${item.id}">
-            <span>${escapeHtml(item.label)}</span>
-            <strong>${item.id === "dmv" ? "Open Driver License" : item.id === "mdt" ? "Open MDT" : "Open"}</strong>
+          <button data-open-app="${item.id}">
+            <span>${escapeHtml(item.label)}</span><strong>Available</strong><i>›</i>
           </button>
         `).join("") || `<div class="empty">No available update-mode actions</div>`}
       </div>
@@ -1088,7 +1132,7 @@ function renderFnnWorkspace() {
           <p class="fnn-deck">${escapeHtml(edition.deck || "")}</p>
           <div class="fnn-byline"><span>FNN NEWSROOM</span><time>Published ${escapeHtml(dateLabel)}</time></div>
           <div class="fnn-lead-copy">${fnnStoryText(edition.lead_story)}</div>
-          <p class="fnn-source-note">Newsroom review compiled from ${Number(edition.source_report_count || 0)} CAD, citation, criminal-court, and press source record${Number(edition.source_report_count || 0) === 1 ? "" : "s"} across the complete Faircroft archive.</p>
+          <p class="fnn-source-note">Newsroom review compiled from ${Number(edition.source_report_count || 0)} CAD, court, citation, suspension, warrant, wanted-person, and FNN Press Desk source record${Number(edition.source_report_count || 0) === 1 ? "" : "s"} across the complete Faircroft archive.</p>
         </section>
         <aside class="fnn-brief" id="fnn-safety">
           <div class="fnn-brief-title"><span>PUBLIC SAFETY DESK</span><strong>Daily Brief</strong></div>
@@ -1305,7 +1349,6 @@ function renderPanel(id) {
     "indeed-admin": "Indeed Admin",
     admin: "Admin",
     "dev-tools": "Dev Tools",
-    "fine-settlement": "Fine Settlement",
     "beta-tasks": "Beta Tasks",
     press: "Press Desk",
   };
@@ -1332,7 +1375,6 @@ function renderPanel(id) {
     "indeed-admin": renderIndeedAdmin,
     admin: renderAdmin,
     "dev-tools": renderDevTools,
-    "fine-settlement": renderFineSettlement,
     "beta-tasks": renderBetaTasks,
     press: renderPressDesk,
   }[id]?.() || `<div class="empty">Module unavailable</div>`;
@@ -1385,15 +1427,11 @@ async function loadAppData(id) {
     system: () => api("/api/system/settings"),
     "indeed-admin": () => api("/api/indeed-admin/applications"),
     "dev-tools": () => api("/api/dev-tools"),
-    "fine-settlement": () => api("/api/fine-settlement"),
     "beta-tasks": () => api("/api/beta/tasks"),
     press: () => api("/api/press/reports"),
     admin: async () => ({
       overview: await api("/api/admin/overview"),
       users: await api("/api/admin/users"),
-      referrals: await api("/api/admin/referrals"),
-      applications: await api("/api/admin/department-applications"),
-      jobs: await api("/api/admin/jobs"),
     }),
   };
   if (loaders[id]) {
@@ -1406,7 +1444,8 @@ async function loadAppData(id) {
 }
 
 function renderRestrictionNotice() {
-  const sanction = state.session?.sanction || {};
+  const sanction = state.session?.admin_restriction || state.session?.sanction || {};
+  const isAdminRestriction = Boolean(state.session?.admin_restriction);
   const expires = sanction.expires_at ? new Date(sanction.expires_at) : null;
   const expiryText = expires && !Number.isNaN(expires.getTime()) ? expires.toLocaleString() : "Pending staff review";
   const bail = Number(sanction.bail_amount || 0);
@@ -1414,22 +1453,22 @@ function renderRestrictionNotice() {
     <div class="stack restriction-notice">
       <section class="profile-hero restriction-hero">
         <div>
-          <p class="eyebrow">Temporary account restriction</p>
-          <h3>Limited Access Active</h3>
-          <p>Your account remains available for Profile, Bank, and this notice.</p>
+          <p class="eyebrow">${isAdminRestriction ? "Faircroft administrative action" : "Temporary account restriction"}</p>
+          <h3>${isAdminRestriction ? "CAD Access Locked" : "Limited Access Active"}</h3>
+          <p>${isAdminRestriction ? "Your linked Arma account is unchanged. Admin Chat and this notice remain available." : "Your account remains available for Profile, Bank, and this notice."}</p>
         </div>
-        <span class="pill amber">TIMEOUT</span>
+        <span class="pill amber">${escapeHtml(humanLabel(String(sanction.type || "timeout").replace("cad_", "")))}</span>
       </section>
       <section class="profile-link-card">
         <div class="restriction-detail"><span>Reason</span><strong>${escapeHtml(sanction.reason || "No public reason supplied")}</strong></div>
         <div class="restriction-detail"><span>Report</span><strong>${escapeHtml(sanction.report_number || "Not available")}</strong></div>
         <div class="restriction-detail"><span>Restriction ends</span><strong>${escapeHtml(expiryText)}</strong></div>
-        <div class="restriction-detail"><span>Bail amount</span><strong>${bail > 0 ? money(bail) : "No bail set"}</strong></div>
+        ${isAdminRestriction ? "" : `<div class="restriction-detail"><span>Bail amount</span><strong>${bail > 0 ? money(bail) : "No bail set"}</strong></div>`}
       </section>
       <section class="profile-link-card">
-        <h3>How access is restored</h3>
-        <p>${bail > 0 ? `A friend may arrange payment of ${money(bail)} with Faircroft staff on your behalf. Staff must confirm payment and release the restriction.` : "No bail amount was assigned. You must serve the timeout or contact staff if you believe it was issued incorrectly."}</p>
-        <p class="muted small">Otherwise, serve the full timeout. Access returns automatically after the listed expiration time.</p>
+        <h3>${isAdminRestriction ? "Contact administration" : "How access is restored"}</h3>
+        <p>${isAdminRestriction ? "Open Admin Chat to speak directly with Faircroft staff about this action." : (bail > 0 ? `A friend may arrange payment of ${money(bail)} with Faircroft staff on your behalf. Staff must confirm payment and release the restriction.` : "No bail amount was assigned. You must serve the timeout or contact staff if you believe it was issued incorrectly.")}</p>
+        <p class="muted small">${isAdminRestriction ? "Timed actions expire automatically. Permanent actions require administrative review." : "Otherwise, serve the full timeout. Access returns automatically after the listed expiration time."}</p>
       </section>
     </div>`;
 }
@@ -1473,7 +1512,6 @@ function bindPanel() {
     "indeed-admin": bindIndeedAdmin,
     admin: bindAdmin,
     "dev-tools": bindDevTools,
-    "fine-settlement": bindFineSettlement,
     "beta-tasks": bindBetaTasks,
     press: bindPressDesk,
   };
@@ -1609,7 +1647,6 @@ function renderProfile() {
   const nameChange = data.name_change || { locked: false, used: 0, limit: 3, remaining: 3, window_days: 3 };
   const nameChangeBlocked = nameChange.locked || Number(nameChange.remaining || 0) <= 0;
   const nameChangeLabel = nameChange.locked ? "locked" : `${nameChange.remaining}/${nameChange.limit} left`;
-  const referrals = data.referrals || { code: user.referral_code || "", bonus_amount: 50000, count: 0, total_bonus: 0, pending_count: 0, pending_total: 0, recent: [] };
   const profileVehicles = data.dmv_vehicles || [];
   const canSetCallsign = canAny("owner", "admin", "leo", "cid", "iu", "iu_director", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "fireman", "ems", "dispatcher", "fire_chief", "deputy_chief", "fire_marshal");
   return `
@@ -1646,7 +1683,6 @@ function renderProfile() {
             <div><span>Status</span><strong>${escapeHtml(user.verified ? "Verified civilian" : "Awaiting verification")}</strong></div>
             <div><span>Car Entry Code</span><strong>${escapeHtml(user.car_entry_code || "Required")}</strong></div>
             ${canSetCallsign ? `<div><span>Callsign</span><strong>${escapeHtml(user.callsign || "Not set")}</strong></div>` : ""}
-            <div><span>Referral Code</span><strong>${escapeHtml(referrals.code || "Generating")}</strong></div>
             <div><span>Live Link</span><strong>${escapeHtml(link ? "Attached" : "Not attached")}</strong></div>
           </div>
           <div class="resident-overview-actions">
@@ -1659,39 +1695,6 @@ function renderProfile() {
             <div>${profileVehicles.slice(0, 4).map((vehicle) => `<article><span>${escapeHtml(vehicle.plate)}</span><strong>${escapeHtml(vehicle.vehicle_year)} ${escapeHtml(vehicle.vehicle_make)} ${escapeHtml(vehicle.vehicle_model)}</strong><small class="${vehicle.registration_status === "Active" && vehicle.insurance_status === "Active" ? "valid" : "warning"}">${escapeHtml(vehicle.registration_status)} · ${escapeHtml(vehicle.insurance_status)}</small></article>`).join("") || `<p class="muted small">Vehicles from your linked Arma profile will appear here automatically.</p>`}</div>
           </section>
         </section>
-      <section class="profile-link-card referral-card resident-profile-panel" data-profile-panel="account">
-        <div class="row">
-          <div>
-            <p class="eyebrow">Referral program</p>
-            <h3>In-game referral reward</h3>
-            <p class="muted small">Share your code with a new player. Staff may review the referral and apply any approved reward through the in-game economy.</p>
-          </div>
-          <span class="pill ${Number(referrals.pending_count || 0) ? "amber" : "green"}">${Number(referrals.pending_count || 0)} pending</span>
-        </div>
-        <div class="referral-copy-grid">
-          <div class="referral-code-box">
-            <span>Your code</span>
-            <strong>${escapeHtml(referrals.code || "Generating")}</strong>
-          </div>
-          <button class="secondary" type="button" data-copy-referral="${escapeHtml(referrals.code || "")}" ${referrals.code ? "" : "disabled"}>Copy code</button>
-        </div>
-        <div class="profile-grid compact">
-          <div><span>Deposited</span><strong>${money(referrals.total_bonus || 0)}</strong></div>
-          <div><span>Pending tickets</span><strong>${money(referrals.pending_total || 0)}</strong></div>
-          <div><span>Referral count</span><strong>${Number(referrals.count || 0)}</strong></div>
-          ${referrals.referred_by ? `<div><span>You were referred by</span><strong>${escapeHtml(referrals.referred_by.name || "Another player")}</strong></div>` : ""}
-        </div>
-        ${(referrals.recent || []).length ? `
-          <div class="referral-recent">
-            ${(referrals.recent || []).map((item) => `
-              <div class="row">
-                <span>${escapeHtml(item.referred_name || "New civilian")} / ${escapeHtml(item.status || "pending")}</span>
-                <strong>${money(item.bonus_amount)}</strong>
-              </div>
-            `).join("")}
-          </div>
-        ` : ""}
-      </section>
       <section class="profile-link-card resident-profile-panel" data-profile-panel="account">
         <div class="row">
           <div>
@@ -2247,11 +2250,12 @@ function renderDmv() {
 function renderDmvOverview(record, vehicles, applications, activeVehicle) {
   const user = state.cache.profile?.user || state.session.user;
   const roadLegal = vehicles.filter((vehicle) => vehicle.registration_status === "Active" && vehicle.insurance_status === "Active").length;
+  const endorsements = dmvEndorsements(record.endorsements);
   return `
     <div class="dmv-id-layout dmv-identity-file">
       <article class="dmv-digital-license ${record.license_status === "Valid" ? "valid" : "pending"}">
         <header><div class="dmv-seal">FC</div><div><span>FAIRCROFT MOTOR VEHICLE AUTHORITY</span><strong>DRIVER CREDENTIAL</strong></div><b>${escapeHtml(record.license_class)}</b></header>
-        <div class="dmv-license-body"><div class="dmv-license-photo">${user?.profile_photo ? `<img src="${escapeHtml(user.profile_photo)}" alt="Driver identification" />` : `<span>${escapeHtml((user?.name || "?").slice(0,1))}</span><small>IDENTITY PHOTO REQUIRED</small>`}</div><div class="dmv-credential-copy"><p>AUTHORIZED RESIDENT</p><h3>${escapeHtml(user?.name || "")}</h3><span>CIVILIAN RECORD ${escapeHtml(user?.civ_number || "PENDING")}</span><dl><div><dt>Credential</dt><dd>${escapeHtml(record.license_status)}</dd></div><div><dt>Classification</dt><dd>${escapeHtml(record.license_class)}</dd></div><div><dt>Primary plate</dt><dd>${escapeHtml(activeVehicle.plate || "No vehicle")}</dd></div><div><dt>Issued by</dt><dd>Faircroft DMV</dd></div></dl></div></div>
+        <div class="dmv-license-body"><div class="dmv-license-photo">${user?.profile_photo ? `<img src="${escapeHtml(user.profile_photo)}" alt="Driver identification" />` : `<span>${escapeHtml((user?.name || "?").slice(0,1))}</span><small>IDENTITY PHOTO REQUIRED</small>`}</div><div class="dmv-credential-copy"><p>AUTHORIZED RESIDENT</p><h3>${escapeHtml(user?.name || "")}</h3><span>CIVILIAN RECORD ${escapeHtml(user?.civ_number || "PENDING")}</span><dl><div><dt>Credential</dt><dd>${escapeHtml(record.license_status)}</dd></div><div><dt>Classification</dt><dd>${escapeHtml(record.license_class)}</dd></div><div><dt>Endorsements</dt><dd>${escapeHtml(endorsements.join(", ") || "None")}</dd></div><div><dt>Primary plate</dt><dd>${escapeHtml(activeVehicle.plate || "No vehicle")}</dd></div><div><dt>Issued by</dt><dd>Faircroft DMV</dd></div></dl></div></div>
         <footer><span>VALID ONLY WITH MATCHING CIVILIAN PROFILE</span><strong>FC-${escapeHtml(user?.civ_number || "TEMPORARY")}</strong></footer>
       </article>
       <aside class="dmv-record-summary"><header><span>COMPLIANCE LEDGER</span><strong>${vehicles.length ? `${roadLegal}/${vehicles.length} road legal` : "No vehicles filed"}</strong></header><dl><div><dt>Driver credential</dt><dd class="${record.license_status === "Valid" ? "valid" : "warning"}">${escapeHtml(record.license_status)}</dd></div><div><dt>Vehicle records</dt><dd>${vehicles.length}</dd></div><div><dt>Primary registration</dt><dd class="${activeVehicle.registration_status === "Active" ? "valid" : "warning"}">${escapeHtml(activeVehicle.registration_status || "Not filed")}</dd></div><div><dt>Insurance coverage</dt><dd class="${activeVehicle.insurance_status === "Active" ? "valid" : "warning"}">${escapeHtml(activeVehicle.insurance_status || "Not insured")}</dd></div></dl><div class="dmv-ledger-actions">${record.license_status !== "Valid" ? `<button class="primary" type="button" data-dmv-tab="license">Begin driver examination</button>` : ""}<button class="secondary" type="button" data-dmv-tab="vehicles">${vehicles.length ? "Review vehicle registry" : "Open vehicle registry"}</button></div></aside>
@@ -2537,7 +2541,7 @@ function renderJobs() {
   if (!data) return `<div class="empty">Jobs loading</div>`;
   const postings = data.department_postings || [];
   const applications = data.department_applications || [];
-  const acceptingApplications = data.applications_accepting !== false;
+  const acceptingApplications = postings.some((posting) => posting.accepting_applications !== false);
   const activeApplications = applications.filter((item) => !["approved", "denied", "withdrawn", "closed"].includes(item.status));
   return `
     <div class="stack jobs-portal">
@@ -2557,7 +2561,7 @@ function renderJobs() {
         <div><h3>Applications are not being accepted at this time.</h3><p>Please try again later.</p><strong>Sincerely, Faircroft Government</strong></div>
       </section>`}
       <div class="job-ad-board">
-        ${postings.map((posting, index) => renderJobAdvertisement(posting, applications, index, acceptingApplications)).join("") || `<div class="empty">No job advertisements are open</div>`}
+        ${postings.map((posting, index) => renderJobAdvertisement(posting, applications, index, posting.accepting_applications !== false)).join("") || `<div class="empty">No job advertisements are open</div>`}
       </div>
       <details class="jobs-history" ${applications.length ? "" : ""}>
         <summary><span>My application files</span><strong>${applications.length}</strong></summary>
@@ -4638,7 +4642,7 @@ function renderCourtLicenses(applications) {
   return `<section class="court-license-docket">
     <header><div><p class="eyebrow">Judicial certification authority</p><h3>Lawyer License Review</h3><p>Bar examinations are reviewed and licenses are issued exclusively by the Court.</p></div><span>${applications.filter((item) => ["submitted","under_review"].includes(item.status)).length} pending</span></header>
     <div class="court-license-grid">${applications.map((item) => {
-      const packet = departmentApplicationPacket(item);
+      const packet = parseDepartmentApplicationPacket(item.statement);
       const passed = Number(packet?.score || 0) >= 14;
       return `<article class="court-license-file">
         <header><div><span>${escapeHtml(item.application_number)}</span><h4>${escapeHtml(item.applicant_name || "Applicant")}</h4><small>CIV ${escapeHtml(item.applicant_civ_number || "pending")} · ${escapeHtml(item.department_name)}</small></div><span class="pill ${businessStatusClass(item.status)}">${humanLabel(item.status)}</span></header>
@@ -4733,7 +4737,9 @@ function renderCourtCaseFile(item) {
   const criminal = item.kind === "criminal";
   const dispositions = criminal
     ? [["under_review", "Place under review"], ["continued", "Continue hearing"], ["guilty", "Guilty"], ["plea_agreement", "Accept plea agreement"], ["not_guilty", "Not guilty"], ["dismissed", "Dismiss case"]]
-    : [["under_review", "Place under review"], ["continued", "Continue hearing"], ["liable", "Liable"], ["not_guilty", "Not liable"], ["dismissed", "Dismiss citation"]];
+    : [["under_review", "Place under review"], ["continued", "Continue hearing"], ["guilty", "Guilty"], ["not_guilty", "Not guilty"], ["dismissed", "Dismiss citation"]];
+  const selectedDisposition = item.disposition === "liable" ? "guilty" : (item.disposition || "under_review");
+  const continuing = selectedDisposition === "continued";
   return `
     <article class="court-file">
       <header>
@@ -4755,14 +4761,14 @@ function renderCourtCaseFile(item) {
           <p>These are gameplay minutes for Faircroft RP. They are not real-world years or real legal sentencing.</p>
         </section>
       ` : ""}
-      ${item.conflict_of_interest ? "" : `<form class="court-decision-form" data-case-id="${item.id}">
-        <header><div><p class="eyebrow">Judicial action</p><h4>Findings & disposition</h4></div><span>Digitally filed to both parties</span></header>
+      ${item.conflict_of_interest ? "" : `<form class="court-decision-form faircroft-judicial-order" data-case-id="${item.id}">
+        <header><div><p class="eyebrow">State of Faircroft · Judicial order</p><h4>Findings & disposition</h4></div><span class="court-order-mark">SFJ</span></header>
         <p class="court-disposition-guidance">Final dispositions move this matter to the Completed docket. Only “Place under review” and “Continue hearing” keep it active.</p>
         <div class="grid-2">
-          <label>Disposition<select name="disposition">${dispositions.map(([value, label]) => `<option value="${value}"${selectedAttr(value, item.disposition || "under_review")}>${label}</option>`).join("")}</select></label>
+          <label>Faircroft finding<select name="disposition" data-court-disposition>${dispositions.map(([value, label]) => `<option value="${value}"${selectedAttr(value, selectedDisposition)}>${label}</option>`).join("")}</select></label>
           <label>Fine amount<input name="fine_amount" type="number" min="0" step="0.01" value="${escapeHtml(item.fine_amount)}" required /></label>
         </div>
-        <label class="court-continuance-date">Next court date<input name="court_date" type="date" min="${new Date().toISOString().slice(0, 10)}" value="${escapeHtml(item.court_date || "")}" /><small>Required when continuing the hearing. The new date is published immediately to the civilian's Court dates tab.</small></label>
+        <label class="court-continuance-date" data-court-continuance ${continuing ? "" : "hidden"}>Next Faircroft court date<input name="court_date" type="date" min="${new Date().toISOString().slice(0, 10)}" value="${escapeHtml(item.court_date || "")}" ${continuing ? "required" : "disabled"} /><small>Required only when continuing the hearing. The new date is published immediately to the civilian's Court dates tab.</small></label>
         ${criminal ? `<label>RP sentence in minutes<input name="sentence_minutes" type="number" min="0" max="${Number(item.maximum_sentence_minutes || 999)}" value="${Number(item.sentence_minutes || item.minimum_sentence_minutes || 0)}" required /><small>Convictions cannot be filed below ${Number(item.minimum_sentence_minutes || 0)} minutes or above ${Number(item.maximum_sentence_minutes || 0)} minutes.</small></label>` : `<input name="sentence_minutes" type="hidden" value="0" />`}
         <label>Written findings<textarea name="judgment_notes" rows="5" maxlength="2000" placeholder="State the finding, evidence considered, and reason for the disposition.">${escapeHtml(item.judgment_notes || "")}</textarea></label>
         ${criminal ? `<label>Sentence conditions<textarea name="sentence_notes" rows="3" maxlength="1200" placeholder="Time served, release conditions, probation RP, or other court direction.">${escapeHtml(item.sentence_notes || "")}</textarea></label>` : ""}
@@ -4779,7 +4785,7 @@ function renderCourtDecisions(cases) {
       ${cases.map((item) => `
         <article class="${item.conflict_of_interest ? "conflict" : ""}">
           <div><strong>FC-${item.id}</strong><small>${escapeHtml(item.decided_at ? new Date(item.decided_at).toLocaleDateString() : item.updated_at ? new Date(item.updated_at).toLocaleDateString() : "")}</small></div>
-          <div><h4>${escapeHtml(item.charge_code)} / ${escapeHtml(item.civ_name)}</h4><p>${escapeHtml(item.final_result || item.disposition || item.status)}</p></div>
+          <div><h4>${escapeHtml(item.charge_code)} / ${escapeHtml(item.civ_name)}</h4><p>${escapeHtml(String(item.final_result || item.disposition || item.status).replace(/^Liable\b/i, "Guilty"))}</p></div>
           <span>${item.conflict_of_interest ? "CONFLICT" : item.sentence_minutes ? `${item.sentence_minutes} min` : money(item.fine_amount)}</span>
         </article>
       `).join("") || `<div class="empty">No filed decisions</div>`}
@@ -4807,6 +4813,18 @@ function bindCourt() {
   $$("[data-court-select]").forEach((button) => button.addEventListener("click", () => {
     state.courtSelectedCaseId = Number(button.dataset.courtSelect);
     render();
+  }));
+  $$("[data-court-disposition]").forEach((select) => select.addEventListener("change", () => {
+    const form = select.closest(".court-decision-form");
+    const continuance = form?.querySelector("[data-court-continuance]");
+    const dateInput = continuance?.querySelector('input[name="court_date"]');
+    const continuing = select.value === "continued";
+    if (continuance) continuance.hidden = !continuing;
+    if (dateInput) {
+      dateInput.disabled = !continuing;
+      dateInput.required = continuing;
+      if (!continuing) dateInput.value = "";
+    }
   }));
   $$(".court-license-form").forEach((form) => form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -8690,6 +8708,11 @@ function renderDevWorkspace() {
     intelligence: ["Game Intelligence", "Read-only FCRPMUSSALO assets, records, and identity matches"],
     anticheat: ["Anti-Cheat Intelligence", "Live presence, detection history, and linked identity analysis"],
     campaigns: ["Active Campaigns", "Schedule banners, events, promotions, and entrance bulletins"],
+    settlement: ["Settlement Operations", "Suspend licenses and process controlled fine and tax batches"],
+    "dmv-settings": ["DMV Settings", "Manage driver credentials, endorsements, and restoration fees"],
+    "admin-2fa": ["Admin 2FA", "Issue single-use authorization for permanent CAD and Arma enforcement"],
+    autopilot: ["Auto Pilot", "Control automated civilian account verification"],
+    "system-update": ["System Update", "Publish and control Faircroft limited-service mode"],
     "fnn-settings": ["FNN Settings", "Control newsroom publishing and Press Pass capacity"],
     audit: ["Activity Log", "Chronological record of staff actions"],
     settings: ["App Visibility", "Control which application icons appear for users"],
@@ -8698,7 +8721,7 @@ function renderDevWorkspace() {
     <aside class="dev-sidebar">
       <div class="dev-brand"><img class="dev-emblem" src="/static/brand/faircroft-emblem.webp" alt="" /><div><strong>Faircroft RP</strong><small>Staff Operations</small></div></div>
       <p class="dev-nav-label">Operations index</p>
-      <nav>${[["dashboard","Command Center"],["intelligence","Game Intelligence"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["campaigns","Active Campaigns"],["fnn-settings","FNN Settings"],["audit","Activity Log"],["settings","Settings"]].map(([id,label], index) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><small>${String(index + 1).padStart(2, "0")}</small><span>${label}</span><i></i></button>`).join("")}</nav>
+      <nav>${[["dashboard","Command Center"],["intelligence","Game Intelligence"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["campaigns","Active Campaigns"],["settlement","Settlement"],["dmv-settings","DMV Settings"],["admin-2fa","Admin 2FA"],["autopilot","Auto Pilot"],["system-update","System Update"],["fnn-settings","FNN Settings"],["audit","Activity Log"],["settings","Settings"]].map(([id,label], index) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><small>${String(index + 1).padStart(2, "0")}</small><span>${label}</span><i></i></button>`).join("")}</nav>
       <div class="dev-sidebar-footer"><span class="dev-access-dot"></span><div><strong>Authorized Staff</strong><small>${escapeHtml(state.session?.user?.name || "Staff member")}</small></div></div>
     </aside>
     <main class="dev-main">
@@ -8775,11 +8798,76 @@ function renderDevBetaModal(beta) {
   </div>`;
 }
 
+function dmvEndorsements(value) {
+  try {
+    const parsed = JSON.parse(value || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function renderDevDmvSettings(dmv) {
+  const licenses = dmv.licenses || [];
+  const classes = dmv.classes || [];
+  const stats = dmv.stats || {};
+  const primaryClasses = classes.filter((item) => item.type === "license" && item.active);
+  const endorsements = classes.filter((item) => item.type === "endorsement" && item.active);
+  return `<div class="stack dev-dmv-settings">
+    <div class="dev-view-intro"><div><span>FAIRCROFT MOTOR VEHICLE AUTHORITY</span><h2>Credential administration</h2><p>Suspend, revoke, expire, restore, classify, and endorse driver credentials. Every action is audited and delivered to the resident.</p></div><strong>${Number(stats.total || 0)} RECORDS</strong></div>
+    <div class="dev-metrics dmv-admin-metrics">
+      <div class="dev-metric green-tone"><span>Valid</span><strong>${Number(stats.valid || 0)}</strong><small>Active credentials</small></div>
+      <div class="dev-metric amber-tone"><span>Suspended</span><strong>${Number(stats.suspended || 0)}</strong><small>Temporarily restricted</small></div>
+      <div class="dev-metric red-tone"><span>Revoked</span><strong>${Number(stats.revoked || 0)}</strong><small>Withdrawn credentials</small></div>
+      <div class="dev-metric"><span>Expired</span><strong>${Number(stats.expired || 0)}</strong><small>Renewal required</small></div>
+    </div>
+    <section class="dev-card dmv-class-control">
+      <div class="dev-card-header"><div><span>CREDENTIAL CATALOG</span><h2>Classes & endorsements</h2><p>Create the classifications that may be assigned to resident licenses.</p></div><button class="secondary" type="button" data-dmv-add-class>Add classification</button></div>
+      <form id="devDmvClassesForm"><div class="dmv-class-ledger" data-dmv-class-list>${classes.map((item) => `<div data-dmv-class-row><input name="name" value="${escapeHtml(item.name)}" maxlength="60" required /><select name="type"><option value="license" ${item.type === "license" ? "selected" : ""}>Primary class</option><option value="endorsement" ${item.type === "endorsement" ? "selected" : ""}>Endorsement</option></select><label><input name="active" type="checkbox" ${item.active ? "checked" : ""} /> Active</label><button class="danger" type="button" data-dmv-remove-class>Remove</button></div>`).join("")}</div><button class="primary" type="submit">Save credential catalog</button></form>
+    </section>
+    <section class="dev-card dmv-license-registry">
+      <div class="dev-card-header"><div><span>DRIVER DIRECTORY</span><h2>License records</h2><p>Restoration fees become DMV administrative charges in Settlement Operations for the next manual midnight deduction.</p></div><label class="dmv-registry-search">Search<input data-dmv-license-search placeholder="Name, CIV, status, class" /></label></div>
+      <div class="dmv-license-ledger">
+        ${licenses.map((record) => {
+          const assigned = dmvEndorsements(record.endorsements);
+          const search = `${record.name} ${record.civ_number || ""} ${record.license_status} ${record.license_class}`.toLowerCase();
+          return `<form class="dmv-license-row" data-dmv-license-form="${record.user_id}" data-dmv-search="${escapeHtml(search)}">
+            <div class="dmv-license-identity"><strong>${escapeHtml(record.name)}</strong><span>CIV ${escapeHtml(record.civ_number || "pending")} · ${escapeHtml(record.email || "")}</span></div>
+            <span class="dmv-license-state ${String(record.license_status || "").toLowerCase()}">${escapeHtml(record.license_status)}</span>
+            <label>Primary class<select name="license_class">${primaryClasses.map((item) => `<option value="${escapeHtml(item.name)}" ${item.name === record.license_class ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label>
+            <fieldset><legend>Endorsements</legend>${endorsements.map((item) => `<label><input type="checkbox" name="endorsements" value="${escapeHtml(item.name)}" ${assigned.includes(item.name) ? "checked" : ""} /> ${escapeHtml(item.name)}</label>`).join("") || `<small>No active endorsements</small>`}</fieldset>
+            <label>Administrative reason<input name="reason" maxlength="1000" placeholder="Required for status actions" /></label>
+            <label>Restoration fee<input name="restoration_fee" type="number" min="0" max="1000000" step="0.01" value="0" /></label>
+            <div class="dmv-license-actions"><button class="secondary" name="action" value="update">Save details</button><button class="secondary" name="action" value="suspend">Suspend</button><button class="danger" name="action" value="revoke">Revoke</button><button class="secondary" name="action" value="expire">Expire</button><button class="primary" name="action" value="restore">Restore</button></div>
+          </form>`;
+        }).join("") || `<div class="empty">No DMV license records</div>`}
+      </div>
+    </section>
+    <section class="dev-card dmv-bulk-control">
+      <div><span>STATEWIDE CREDENTIAL ACTION</span><h2>Bulk status control</h2><p>Use only for a planned expiration cycle or full administrative revocation. Every affected resident receives a notice.</p></div>
+      <form id="devDmvBulkForm"><label>Action<select name="status"><option value="Expired">Mark all expired</option><option value="Revoked">Mark all revoked</option></select></label><label>Official reason<input name="reason" minlength="3" maxlength="1000" required /></label><label>Typed confirmation<input name="confirmation" required placeholder="MARK ALL EXPIRED" /></label><button class="danger" type="submit">Execute statewide action</button></form>
+    </section>
+  </div>`;
+}
+
 function renderDevTools() {
   const data = state.cache["dev-tools"] || {};
   const users = data.users || [], sanctions = data.sanctions || [], warnings = data.warnings || [], logs = data.audit_logs || [], codes = data.unlink_codes || [];
   const metrics = devMetrics(data, warnings);
   if (state.devTab === "anticheat") return renderDevAntiCheat(data.anti_cheat || {});
+  if (state.devTab === "dmv-settings") return renderDevDmvSettings(data.dmv_settings || {});
+  if (state.devTab === "admin-2fa") {
+    const adminCodes = data.admin_2fa_codes || [];
+    return `<div class="stack dev-ops-view dev-admin-2fa-view">
+      <div class="dev-view-intro"><div><span>PRIVILEGED ADMIN AUTHORIZATION</span><h2>Admin 2FA</h2><p>Issue a single-use code for a permanent CAD ban or any Arma ban. CAD timeouts, suspensions, and temporary bans do not consume a code.</p></div><strong>${adminCodes.filter((x) => x.uses_remaining && !x.revoked_at && new Date(x.expires_at) > new Date()).length} ACTIVE</strong></div>
+      <div class="dev-grid-2">
+        <section class="dev-card dev-access-panel"><p class="eyebrow">Controlled authorization</p><h2>Generate one-time code</h2><form id="admin2faCodeForm" class="form-grid"><label>Validity window<input name="expiry_minutes" type="number" min="5" max="120" value="15" required /><small>Minutes until automatic expiration</small></label><button class="primary">Generate Admin 2FA</button></form>
+          ${state.generatedAdmin2faCode ? `<div class="dev-generated-code"><span>Shown once</span><strong>${escapeHtml(state.generatedAdmin2faCode.code)}</strong><small>Expires ${escapeHtml(state.generatedAdmin2faCode.expires_at)}</small></div>` : ""}
+        </section>
+        <section class="dev-card dev-record-panel"><div class="dev-card-header"><div><span>AUTHORIZATION LEDGER</span><h2>Recent codes</h2></div><strong>${adminCodes.length}</strong></div><div class="dev-code-ledger">${adminCodes.slice(0,30).map((x) => `<div><code>••••-${escapeHtml(x.code_hint)}</code><span>${escapeHtml(x.created_by_name)}${x.used_by_name ? ` → ${escapeHtml(x.used_by_name)}` : ""}</span><strong class="${x.uses_remaining ? "available" : ""}">${x.revoked_at ? "Revoked" : x.uses_remaining ? "Available" : "Consumed"}</strong></div>`).join("") || `<div class="empty">No Admin 2FA codes issued</div>`}</div></section>
+      </div>
+    </div>`;
+  }
   if (state.devTab === "intelligence") return renderDevGameIntelligence(data);
   if (state.devTab === "dashboard") return `<div class="stack dev-overview">${metrics}<div class="dev-section-heading"><div><h2>Work queue</h2><p>Items requiring staff attention and recent review.</p></div></div><div class="dev-overview-queue"><section class="dev-card dev-queue-card enforcement"><div class="dev-card-header"><div><span>ENFORCEMENT</span><h2>Active cases</h2></div><button class="secondary" data-dev-go="enforcement">View cases</button></div>${sanctions.filter((x) => !x.revoked_at).slice(0,8).map(devSanctionRow).join("") || `<div class="dev-queue-clear"><i></i><div><strong>Queue clear</strong><span>No active enforcement cases require review.</span></div></div>`}</section><section class="dev-card dev-queue-card identity"><div class="dev-card-header"><div><span>IDENTITY</span><h2>Recent Arma links</h2></div><button class="secondary" data-dev-go="linking">View accounts</button></div>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card dev-activity-panel"><div class="dev-card-header"><div><span>STAFF RECORD</span><h2>Latest activity</h2></div><button class="secondary" data-dev-go="audit">View complete log</button></div>${devAudit(logs.slice(0,10))}</section></div>`;
   if (state.devTab === "enforcement") return `<div class="dev-ops-view dev-cases-view"><div class="dev-view-intro"><div><span>ENFORCEMENT CONTROL</span><h2>Case administration</h2><p>Document an incident, apply a proportionate action, and preserve the complete decision record.</p></div><strong>${sanctions.filter((x) => !x.revoked_at).length} ACTIVE</strong></div><div class="dev-grid-enforcement"><section class="dev-card dev-editor-panel"><div class="row"><div><p class="eyebrow">Required incident documentation</p><h2>Open enforcement report</h2><p class="muted">A ban or timeout cannot be issued until this report is complete.</p></div><span class="pill red">required</span></div>
@@ -8827,6 +8915,48 @@ function renderDevTools() {
       </form>
     </div>`;
   }
+  if (state.devTab === "settlement") {
+    return `<div class="stack dev-settlement-view">
+      <div class="dev-view-intro"><div><span>DCJS CONTROLLED COLLECTIONS</span><h2>Settlement Operations</h2><p>Place unpaid drivers under suspension before any forced bank settlement is authorized.</p></div><strong>RESTRICTED</strong></div>
+      ${operationsConsole("Settlement execution log", state.settlementConsole, "Batch actions and license suspensions will appear here.")}
+      ${renderFineSettlement(true)}
+    </div>`;
+  }
+  if (state.devTab === "autopilot") {
+    const settings = data.system_settings || {};
+    const stats = data.autopilot_stats || {};
+    return `<div class="stack dev-system-control">
+      <div class="dev-view-intro"><div><span>FAIRCROFT AUTOMATION SERVICE</span><h2>Account Verification Auto Pilot</h2><p>Automatically verify eligible civilian accounts after the configured review window.</p></div><strong>${settings.autopilot_verify_enabled ? "ONLINE" : "MANUAL"}</strong></div>
+      <section class="dev-system-command">
+        <div class="dev-system-stat"><span>Pending accounts</span><strong>${Number(stats.pending_accounts || 0)}</strong><small>Awaiting verification</small></div>
+        <div class="dev-system-stat"><span>Eligible now</span><strong>${Number(stats.eligible_accounts || 0)}</strong><small>Ready for next processing cycle</small></div>
+        <form id="systemSettingsForm" class="dev-system-form">
+          <label class="dev-experience-section"><span><b>AUTOMATION STATE</b><strong>Enable account verification auto pilot</strong></span><input type="checkbox" name="autopilot_verify_enabled" ${settings.autopilot_verify_enabled ? "checked" : ""} /></label>
+          <label>Verification delay in minutes<input name="autopilot_verify_minutes" type="number" min="1" max="10080" value="${Number(settings.autopilot_verify_minutes || 120)}" /></label>
+          <button class="primary" type="submit">Save auto pilot configuration</button>
+        </form>
+      </section>
+      <div class="dev-policy-note"><strong>Driver licensing automation retired</strong><span>Every driver must now pass the scored DMV examination. No timer or staff automation can issue a license.</span></div>
+    </div>`;
+  }
+  if (state.devTab === "system-update") {
+    const settings = data.system_settings || {};
+    const enabled = Boolean(settings.update_lockdown_enabled);
+    return `<div class="stack dev-system-control">
+      <div class="dev-view-intro"><div><span>FAIRCROFT RELEASE OPERATIONS</span><h2>System Update Mode</h2><p>Limit high-risk features during releases while keeping essential resident services available.</p></div><strong>${enabled ? "LIMITED SERVICE" : "NORMAL"}</strong></div>
+      <section class="dev-update-command ${enabled ? "live" : ""}">
+        <div class="dev-update-status"><i></i><div><small>CURRENT NETWORK STATE</small><strong>${enabled ? "Faircroft limited-service mode is active" : "All Faircroft services are available"}</strong></div></div>
+        <form id="systemSettingsForm" class="dev-system-form">
+          <label class="dev-experience-section"><span><b>RELEASE CONTROL</b><strong>Enable limited-service update mode</strong></span><input type="checkbox" name="update_lockdown_enabled" ${enabled ? "checked" : ""} /></label>
+          <label>Public update title<input name="update_lockdown_title" maxlength="100" value="${escapeHtml(settings.update_lockdown_title || "Faircroft systems update")}" /></label>
+          <label>Public service message<textarea name="update_lockdown_message" maxlength="240">${escapeHtml(settings.update_lockdown_message || "")}</textarea></label>
+          <label>Estimated completion or status<input name="update_lockdown_eta" maxlength="80" value="${escapeHtml(settings.update_lockdown_eta || "")}" placeholder="Example: Expected completion 8:30 PM EST" /></label>
+          <button class="primary" type="submit">${enabled ? "Update maintenance notice" : "Publish limited-service mode"}</button>
+        </form>
+        <div class="dev-update-access"><span>AVAILABLE DURING UPDATE</span><strong>Profile · Getting Started · Messages · Changelog · DMV · Authorized MDT · Dev Tools</strong></div>
+      </section>
+    </div>`;
+  }
   if (state.devTab === "fnn-settings") {
     const fnn = data.fnn_settings || { press_pass_limit: 25, active_press_passes: 0, press_members: [] };
     const pressMembers = fnn.press_members || [];
@@ -8853,6 +8983,7 @@ function renderDevTools() {
         <div><p class="eyebrow">Newsroom publishing</p><h2>Faircroft News Now Edition</h2><p class="muted">Generate or replace today's public edition from eligible CAD, court, citation, criminal, and Press Desk records.</p></div>
         <button class="danger" type="button" data-dev-generate-fnn>Regenerate today's edition</button>
       </section>
+      ${operationsConsole("FNN generation log", state.fnnConsole, "Newsroom generation activity will stream here when an edition is requested.")}
     </div>`;
   }
   if (state.devTab === "settings") {
@@ -8883,18 +9014,20 @@ function renderDevTools() {
         <div>
           <p class="eyebrow">Government recruitment control</p>
           <h2>Application Intake</h2>
-          <p class="muted">Close every department, legal, and FNN application without removing the job advertisements. Active applications remain available for staff review.</p>
+          <p class="muted">Open or close each department, legal, and FNN application independently without removing its advertisement. Active files remain available for staff review.</p>
         </div>
         <form id="devApplicationIntakeForm">
-          <div class="dev-intake-status ${data.applications_accepting === false ? "closed" : ""}">
+          <div class="dev-intake-status ${(data.application_intake || []).some((item) => item.accepting) ? "" : "closed"}">
             <i></i>
-            <span><small>CURRENT STATUS</small><strong>${data.applications_accepting === false ? "Applications closed" : "Accepting applications"}</strong></span>
+            <span><small>CURRENT STATUS</small><strong>${(data.application_intake || []).filter((item) => item.accepting).length} of ${(data.application_intake || []).length} applications open</strong></span>
           </div>
-          <label class="dev-experience-section">
-            <span><b>PUBLIC INTAKE</b><strong>Allow users to submit new applications</strong></span>
-            <input type="checkbox" name="accepting" ${data.applications_accepting === false ? "" : "checked"} />
-          </label>
-          <button class="primary" type="submit">Save application status</button>
+          <div class="dev-application-intake-grid">
+            ${(data.application_intake || []).map((item) => `<label class="dev-application-intake-row ${item.accepting ? "" : "closed"}">
+              <span><b>${escapeHtml(item.division)}</b><strong>${escapeHtml(item.label)}</strong><small>${item.accepting ? "Users may apply" : "Advertisement remains visible; applications closed"}</small></span>
+              <input type="checkbox" name="${escapeHtml(item.key)}" ${item.accepting ? "checked" : ""} />
+            </label>`).join("") || `<div class="empty">No application postings configured.</div>`}
+          </div>
+          <button class="primary" type="submit">Save individual application statuses</button>
         </form>
       </section>
       <section class="dev-card dev-visibility-intro">
@@ -9053,6 +9186,25 @@ function renderDevAntiCheat(data) {
   </div>`;
 }
 
+function operationsConsole(title, entries, emptyText) {
+  const rows = (entries || []).slice(-18);
+  return `<section class="dev-operations-console" aria-live="polite">
+    <header><div><span class="console-status-light ${rows.some((entry) => entry.status === "running") ? "running" : ""}"></span><strong>${escapeHtml(title)}</strong></div><small>${rows.length ? `${rows.length} events` : "standing by"}</small></header>
+    <div class="dev-console-stream">
+      ${rows.map((entry) => `<div class="dev-console-line ${escapeHtml(entry.status || "info")}"><time>${escapeHtml(entry.time || "")}</time><span>${escapeHtml(entry.message || "")}</span></div>`).join("") || `<div class="dev-console-empty">${escapeHtml(emptyText)}</div>`}
+    </div>
+  </section>`;
+}
+
+function pushOperationsLog(channel, message, status = "info") {
+  const key = channel === "fnn" ? "fnnConsole" : "settlementConsole";
+  state[key] = [...(state[key] || []), {
+    time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+    message,
+    status,
+  }].slice(-40);
+}
+
 function renderAntiCheatMetricModal(data, metric) {
   const players = data.players || [];
   const definitions = {
@@ -9122,7 +9274,7 @@ function renderAntiCheatRemovalList(locks) {
   </section>`;
 }
 
-function renderAntiCheatModal(data, uid) {
+function renderAntiCheatModalLegacy(data, uid) {
   const player = (data.players || []).find((item) => item.uid === uid);
   if (!player) return "";
   const events = (data.events || []).filter((item) => item.player_uid === uid);
@@ -9288,7 +9440,70 @@ function devDetailList(items, mapper) {
 
 function bindDevWorkspace() {
   bindDevTools();
-  $$("[data-dev-tab], [data-dev-go]").forEach((button) => button.addEventListener("click", () => { state.devTab = button.dataset.devTab || button.dataset.devGo; render(); }));
+  bindSystem();
+  if (state.devTab === "settlement") bindFineSettlement();
+  $("[data-dmv-add-class]")?.addEventListener("click", () => {
+    const list = $("[data-dmv-class-list]");
+    if (!list) return;
+    const row = document.createElement("div");
+    row.dataset.dmvClassRow = "";
+    row.innerHTML = `<input name="name" maxlength="60" placeholder="Classification name" required /><select name="type"><option value="license">Primary class</option><option value="endorsement" selected>Endorsement</option></select><label><input name="active" type="checkbox" checked /> Active</label><button class="danger" type="button" data-dmv-remove-class>Remove</button>`;
+    list.appendChild(row);
+    row.querySelector("[data-dmv-remove-class]")?.addEventListener("click", () => row.remove());
+  });
+  $$("[data-dmv-remove-class]").forEach((button) => button.addEventListener("click", () => button.closest("[data-dmv-class-row]")?.remove()));
+  $("#devDmvClassesForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const classes = $$("[data-dmv-class-row]", event.currentTarget).map((row) => ({
+      name: row.querySelector('[name="name"]')?.value || "",
+      type: row.querySelector('[name="type"]')?.value || "endorsement",
+      active: Boolean(row.querySelector('[name="active"]')?.checked),
+    }));
+    try {
+      await api("/api/dev-tools/dmv/classes", { method: "PATCH", body: { classes } });
+      toast("DMV credential catalog saved");
+      await refreshDevTools();
+    } catch (error) { toast(error.message); }
+  });
+  $("[data-dmv-license-search]")?.addEventListener("input", (event) => {
+    const query = event.currentTarget.value.trim().toLowerCase();
+    $$("[data-dmv-license-form]").forEach((form) => form.classList.toggle("search-hidden", Boolean(query) && !String(form.dataset.dmvSearch || "").includes(query)));
+  });
+  $$("[data-dmv-license-form]").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const action = event.submitter?.value || "update";
+    const formData = new FormData(form);
+    if (["revoke", "suspend"].includes(action) && !confirm(`${action === "revoke" ? "Revoke" : "Suspend"} this driver license?`)) return;
+    try {
+      const result = await api(`/api/dev-tools/dmv/licenses/${form.dataset.dmvLicenseForm}`, {
+        method: "PATCH",
+        body: { action, license_class: formData.get("license_class"), endorsements: formData.getAll("endorsements"), reason: formData.get("reason"), restoration_fee: formData.get("restoration_fee") },
+      });
+      toast(result.restoration_fee > 0 ? `License restored; ${money(result.restoration_fee)} queued for Settlement Operations` : `DMV license ${action} complete`);
+      await refreshDevTools();
+    } catch (error) { toast(error.message); }
+  }));
+  $("#devDmvBulkForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const body = Object.fromEntries(new FormData(event.currentTarget).entries());
+    if (!confirm(`This will mark every driver license ${String(body.status).toLowerCase()}. Continue?`)) return;
+    try {
+      const result = await api("/api/dev-tools/dmv/bulk", { method: "POST", body });
+      toast(`${result.affected} driver licenses marked ${String(result.status).toLowerCase()}`);
+      await refreshDevTools();
+    } catch (error) { toast(error.message); }
+  });
+  $$("[data-dev-tab], [data-dev-go]").forEach((button) => button.addEventListener("click", async () => {
+    state.devTab = button.dataset.devTab || button.dataset.devGo;
+    if (state.devTab === "settlement") {
+      try {
+        state.cache["fine-settlement"] = await api("/api/fine-settlement");
+      } catch (error) {
+        toast(error.message);
+      }
+    }
+    render();
+  }));
   $$("[data-anticheat-player]").forEach((button) => button.addEventListener("click", () => {
     state.devAntiCheatUid = button.dataset.anticheatPlayer;
     state.devAntiCheatMetric = null;
@@ -9362,25 +9577,89 @@ function bindDevWorkspace() {
 
 async function refreshDevTools() {
   await loadAppData("dev-tools");
+  if (state.devTab === "settlement") state.cache["fine-settlement"] = await api("/api/fine-settlement");
   render();
 }
 
-function renderFineSettlement() {
+function renderAntiCheatModal(data, uid) {
+  const player = (data.players || []).find((item) => item.uid === uid);
+  if (!player) return "";
+  const events = (data.events || []).filter((item) => item.player_uid === uid);
+  const memberships = (data.alt_members || []).filter((item) => item.uid === uid);
+  const groups = memberships.map((member) => {
+    const group = (data.alt_groups || []).find((item) => item.group_key === member.group_key) || {};
+    return { ...group, members: (data.alt_members || []).filter((item) => item.group_key === member.group_key) };
+  });
+  const isLocked = player.active_lock_id || Number(player.grey_screened || 0) || Number(player.profile_locked || 0);
+  const platform = devPlatformIdentity(player.detected_system);
+  const riskSignals = Number(player.teleport_flags || 0) + Number(player.aim_flags || 0);
+  return `<div class="dev-profile-backdrop" data-close-anticheat>
+    <section class="dev-profile-modal anticheat-profile anticheat-dossier" role="dialog" aria-modal="true" aria-label="Anti-cheat intelligence dossier">
+      <header class="anticheat-dossier-head">
+        <div class="anticheat-subject">
+          <span class="anticheat-subject-mark">${escapeHtml((player.player_name || "UN").slice(0, 2).toUpperCase())}</span>
+          <div><p class="eyebrow">TBS / Anti-Cheat Intelligence</p><h2>${escapeHtml(player.player_name || "Unknown player")}</h2><code>${escapeHtml(player.uid)}</code></div>
+        </div>
+        <div class="anticheat-dossier-actions">
+          <span class="anticheat-clearance ${isLocked || riskSignals ? "review" : "clear"}"><i></i>${isLocked ? "Locked" : riskSignals ? "Review required" : "No active threat"}</span>
+          ${player.linked_user_id ? `<button class="danger" data-dev-enforce="${player.linked_user_id}">Open enforcement</button>` : ""}
+          <button class="secondary" data-close-anticheat>Close</button>
+        </div>
+      </header>
+      <div class="dev-profile-scroll anticheat-dossier-body">
+        ${isLocked ? `<div class="anticheat-lock-notice"><strong>RESTART ACTION REQUIRED</strong><span>${escapeHtml(player.active_lock_reason || player.grey_screen_reason || "Remove the active profile lock from the server anti-cheat JSON during the restart procedure.")}</span></div>` : ""}
+        <section class="anticheat-identity-strip">
+          <div class="anticheat-platform-signature">
+            <span>${platform.asset ? `<img src="${platform.asset}" alt="" />` : escapeHtml(platform.mark)}</span>
+            <div><small>Reported platform</small><strong>${escapeHtml(platform.label)}</strong><em>${escapeHtml(platform.detail)}</em></div>
+          </div>
+          <dl>
+            <div><dt>Presence</dt><dd class="${player.online ? "online" : ""}">${player.online ? "Online now" : "Offline"}</dd></div>
+            <div><dt>CAD identity</dt><dd>${escapeHtml(player.account_name || "Not linked")}</dd></div>
+            <div><dt>Civilian record</dt><dd>${player.civ_number ? `CIV ${escapeHtml(player.civ_number)}` : "Not matched"}</dd></div>
+            <div><dt>Profile state</dt><dd class="${isLocked ? "alert" : ""}">${isLocked ? "Locked" : "Clear"}</dd></div>
+          </dl>
+        </section>
+        <section class="anticheat-telemetry-ledger">
+          <header><div><p class="eyebrow">Telemetry assessment</p><h3>Recorded signals</h3></div><span>${riskSignals ? `${riskSignals} FLAG${riskSignals === 1 ? "" : "S"}` : "CLEAR"}</span></header>
+          <div class="anticheat-ledger-row head"><span>Signal</span><span>Value</span><span>Assessment</span></div>
+          <div class="anticheat-ledger-row"><strong>Teleport detection</strong><b>${Number(player.teleport_flags || 0)}</b><span>${Number(player.teleport_flags || 0) ? "Requires evidence review" : "No detection"}</span></div>
+          <div class="anticheat-ledger-row"><strong>Aim detection</strong><b>${Number(player.aim_flags || 0)}</b><span>${Number(player.aim_flags || 0) ? "Requires evidence review" : "No detection"}</span></div>
+          <div class="anticheat-ledger-row"><strong>Issued tickets</strong><b>${Number(player.ticket_count || 0)}</b><span>Administrative history</span></div>
+          <div class="anticheat-ledger-row"><strong>Last anti-cheat sighting</strong><b class="text">${escapeHtml(player.last_seen_at || "Not observed")}</b><span>Game telemetry</span></div>
+          <div class="anticheat-ledger-row"><strong>Last database sync</strong><b class="text">${escapeHtml(player.last_synced_at || "Not synced")}</b><span>Persistence index</span></div>
+        </section>
+        <div class="anticheat-intelligence-sections">
+          <section class="anticheat-intelligence-ledger">
+            <header><div><span>01</span><h3>Detection evidence</h3></div><strong>${events.length}</strong></header>
+            ${events.map((event) => `<article><div><strong>${escapeHtml(event.event_type || "Event")}</strong><time>${escapeHtml(event.event_time || "Time unavailable")}</time></div><p>${escapeHtml(event.details || "No evidence details recorded.")}</p></article>`).join("") || `<div class="anticheat-ledger-empty">No detection evidence recorded.</div>`}
+          </section>
+          <section class="anticheat-intelligence-ledger">
+            <header><div><span>02</span><h3>Alt associations</h3></div><strong>${groups.length}</strong></header>
+            ${groups.map((group) => `<article><div><strong>${escapeHtml(group.group_key || "Association group")}</strong><time>${(group.members || []).length} identities</time></div><p>${escapeHtml(group.note || "No staff note")} · ${escapeHtml((group.members || []).map((member) => member.observed_name || member.uid).join(", ") || "No members listed")}</p></article>`).join("") || `<div class="anticheat-ledger-empty">No known alternate-account associations.</div>`}
+          </section>
+        </div>
+      </div>
+    </section>
+  </div>`;
+}
+
+function renderFineSettlement(embedded = false) {
   const data = state.cache["fine-settlement"] || { unpaid: [], batches: [] };
   const unpaid = data.unpaid || [];
   const batches = data.batches || [];
   const taxReady = data.tax_ready || [];
   const taxBatches = data.tax_batches || [];
   return `
-    <div class="stack">
-      <section class="profile-hero">
+    <div class="stack ${embedded ? "dev-settlement-embedded" : ""}">
+      ${embedded ? "" : `<section class="profile-hero">
         <div>
           <p class="eyebrow">State of Faircroft DCJS</p>
           <h3>Fine Settlement Control</h3>
           <p>Owner/developer-only processing for court fines against live FCRPMUSSALO bank balances.</p>
         </div>
         <span class="pill">${unpaid.length} READY</span>
-      </section>
+      </section>`}
       <div class="court-tabs">
         <button class="${state.settlementTab === "fines" ? "active" : ""}" data-settlement-tab="fines">Fine Settlement</button>
         <button class="${state.settlementTab === "taxes" ? "active" : ""}" data-settlement-tab="taxes">Tax Settlement</button>
@@ -9417,10 +9696,15 @@ function renderFineSettlement() {
             <div class="row"><div><p class="eyebrow">${escapeHtml(batch.batch_number)}</p><h3>${escapeHtml(String(batch.status || "").replaceAll("_", " "))}</h3></div><strong>${money(batch.total_amount)}</strong></div>
             ${(batch.items || []).map((item) => `
               <div class="row"><span>${escapeHtml(item.name)} · Case ${item.citation_id}<small>${escapeHtml(item.charge_code)} · ${money(item.balance_before)} → ${money(item.expected_balance)}</small></span>
+              <span class="pill ${item.license_status === "Suspended" ? "amber" : ""}">${escapeHtml(item.license_status || "No license")}</span>
               <span class="pill">${escapeHtml(item.status)}</span></div>
               ${item.failure_reason ? `<p class="muted small">${escapeHtml(item.failure_reason)}</p>` : ""}`).join("")}
             ${batch.status === "draft" ? `
-              <div class="row"><button type="button" class="secondary" data-fine-code="${batch.id}">Generate 10-minute code</button>
+              <div class="settlement-suspension-gate">
+                <div><strong>Required first action</strong><span>Suspend every affected driver license and notify each player before forced collection.</span></div>
+                <button type="button" class="warning" data-fine-suspend="${batch.id}" data-batch-number="${escapeHtml(batch.batch_number)}" ${(batch.items || []).length && (batch.items || []).every((item) => item.license_status === "Suspended") ? "disabled" : ""}>${(batch.items || []).length && (batch.items || []).every((item) => item.license_status === "Suspended") ? "Licenses suspended" : "Suspend licenses in batch"}</button>
+              </div>
+              <div class="row"><button type="button" class="secondary" data-fine-code="${batch.id}" ${(batch.items || []).length && (batch.items || []).every((item) => item.license_status === "Suspended") ? "" : "disabled"}>Generate 10-minute code</button>
               ${state.fineSettlementCode?.batchId === batch.id ? `<strong>${escapeHtml(state.fineSettlementCode.code)}</strong>` : ""}</div>
               <form data-fine-approve="${batch.id}" class="inline-form"><input name="code" required placeholder="DCJS authorization code" autocomplete="off" /><button>Approve for Codex</button></form>` : ""}
             ${batch.status === "awaiting_codex" || batch.status === "needs_review" ? `
@@ -9489,27 +9773,55 @@ function bindFineSettlement() {
     const form = event.currentTarget;
     const citation_ids = $$('input[name="citation_ids"]:checked', form).map((input) => Number(input.value));
     if (!citation_ids.length) return toast("Select at least one fine");
-    await api("/api/fine-settlement/batches", { method: "POST", body: { citation_ids, notes: form.notes?.value || "" } });
+    pushOperationsLog("settlement", `Locking ${citation_ids.length} fine record(s) into a controlled batch.`, "running");
+    render();
+    const result = await api("/api/fine-settlement/batches", { method: "POST", body: { citation_ids, notes: form.notes?.value || "" } });
+    pushOperationsLog("settlement", `${result.batch_number} created. License suspension is required before authorization.`, "success");
     state.cache["fine-settlement"] = await api("/api/fine-settlement");
     render();
   });
+  $$("[data-fine-suspend]").forEach((button) => button.addEventListener("click", async () => {
+    const batchId = Number(button.dataset.fineSuspend);
+    const batchNumber = button.dataset.batchNumber || `batch ${batchId}`;
+    if (!window.confirm(`Suspend every driver license in ${batchNumber} for failure to pay fines? Each player will be notified.`)) return;
+    pushOperationsLog("settlement", `${batchNumber}: validating affected civilian and DMV records.`, "running");
+    render();
+    try {
+      const result = await api(`/api/fine-settlement/batches/${batchId}/suspend-licenses`, { method: "POST", body: {} });
+      for (const player of result.suspended || []) {
+        pushOperationsLog("settlement", `CIV ${player.civ_number || "pending"} · ${player.name}: ${player.previous_status} → Suspended`, "success");
+      }
+      pushOperationsLog("settlement", `${result.batch_number}: ${(result.suspended || []).length} suspension notice(s) delivered.`, "success");
+      state.cache["fine-settlement"] = await api("/api/fine-settlement");
+    } catch (error) {
+      pushOperationsLog("settlement", `${batchNumber}: suspension failed — ${error.message}`, "error");
+      toast(error.message);
+    }
+    render();
+  }));
   $$("[data-fine-code]").forEach((button) => button.addEventListener("click", async () => {
     const batchId = Number(button.dataset.fineCode);
+    pushOperationsLog("settlement", `Generating a time-limited authorization for batch ${batchId}.`, "running");
     const result = await api(`/api/fine-settlement/batches/${batchId}/code`, { method: "POST", body: {} });
     state.fineSettlementCode = { batchId, code: result.code, expiresAt: result.expires_at };
+    pushOperationsLog("settlement", `Authorization generated for batch ${batchId}.`, "success");
     render();
   }));
   $$("[data-fine-approve]").forEach((form) => form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const batchId = Number(form.dataset.fineApprove);
     const result = await api(`/api/fine-settlement/batches/${batchId}/approve`, { method: "POST", body: { code: form.code.value } });
+    pushOperationsLog("settlement", `Batch ${batchId} authorized for controlled balance processing.`, "success");
     state.fineSettlementPrompt = result.codex_prompt || "";
     state.fineSettlementCode = null;
     state.cache["fine-settlement"] = await api("/api/fine-settlement");
     render();
   }));
   $$("[data-fine-verify]").forEach((button) => button.addEventListener("click", async () => {
+    pushOperationsLog("settlement", `Comparing synced bank balances for batch ${button.dataset.fineVerify}.`, "running");
+    render();
     const result = await api(`/api/fine-settlement/batches/${button.dataset.fineVerify}/complete`, { method: "POST", body: {} });
+    pushOperationsLog("settlement", `${result.paid}/${result.total} deductions verified; status ${result.status}.`, result.status === "completed" ? "success" : "error");
     toast(result.status === "completed" ? "All deductions verified and fines marked paid" : "Balance mismatch found; batch requires review");
     state.cache["fine-settlement"] = await api("/api/fine-settlement");
     render();
@@ -9555,20 +9867,30 @@ function bindDevTools() {
     if (!window.confirm("Replace today’s FNN edition? This will publish a newly generated edition to every reader.")) return;
     const button = event.currentTarget;
     button.disabled = true;
+    state.fnnConsole = [];
+    pushOperationsLog("fnn", "Generation request accepted. Opening newsroom source index.", "running");
+    pushOperationsLog("fnn", "Scanning CAD, court, citation, criminal, and Press Desk records.", "running");
+    render();
     button.textContent = "Building newsroom edition…";
     try {
       const result = await api("/api/fnn/generate", { method: "POST" });
       if (result.status === "no_reports") {
+        pushOperationsLog("fnn", "Source scan complete. No eligible records were available.", "error");
         toast("No eligible CAD, court, citation, or press records are available");
       } else if (result.status === "configuration_required") {
+        pushOperationsLog("fnn", "Generation stopped: newsroom model configuration is unavailable.", "error");
         toast("The Gemini newsroom connection is not configured");
       } else {
+        pushOperationsLog("fnn", "Draft returned. Validating headlines, sections, and source attribution.", "running");
+        pushOperationsLog("fnn", "Edition validated and published to Faircroft News Now.", "success");
         toast("Today’s FNN edition has been published");
       }
     } catch (error) {
+      pushOperationsLog("fnn", `Generation failed: ${error.message}`, "error");
       toast(error.message);
     } finally {
       button.disabled = false;
+      render();
       button.textContent = "Regenerate today’s edition";
     }
   });
@@ -9630,9 +9952,12 @@ function bindDevTools() {
   });
   $("#devApplicationIntakeForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const accepting = event.currentTarget.accepting.checked;
-    await api("/api/dev-tools/application-intake", { method: "PATCH", body: { accepting } });
-    toast(accepting ? "Applications are now open" : "Application intake has been closed");
+    const application_intake = {};
+    $$('input[type="checkbox"]', event.currentTarget).forEach((input) => {
+      application_intake[input.name] = input.checked;
+    });
+    await api("/api/dev-tools/application-intake", { method: "PATCH", body: { application_intake } });
+    toast("Individual application statuses updated");
     await refreshDevTools();
   });
   $("#devFnnSettingsForm")?.addEventListener("submit", async (event) => {
@@ -9715,35 +10040,97 @@ function bindDevTools() {
   }));
 }
 
-function renderAdmin() {
+function renderAdminWorkspace() {
   const data = state.cache.admin;
-  if (!data) return `<div class="empty">Admin loading</div>`;
-  const accountModal = state.adminAccountId ? renderAdminAccountModal(data.users.users.find((user) => String(user.id) === String(state.adminAccountId))) : "";
-  const pendingReferrals = data.referrals?.stats?.pending || data.overview.stats.pending_referrals || 0;
-  const applicationStats = data.applications?.stats || {};
-  const activeApplications = applicationStats.active || data.overview.stats.department_applications || 0;
-  const body = state.adminTab === "referrals"
-    ? renderAdminReferrals(data.referrals || { stats: {}, referrals: [] })
-    : state.adminTab === "applications"
-      ? renderAdminDepartmentApplications(data.applications || { stats: {}, applications: [] })
-      : renderAdminUsers(data.users.users);
+  if (!data) return `<section class="admin-workspace"><div class="empty">Admin workspace loading</div></section>`;
+  if (!["overview", "users"].includes(state.adminTab)) state.adminTab = "overview";
+  const users = data.users?.users || [];
+  const stats = data.overview?.stats || {};
+  const verified = users.filter((user) => user.verified).length;
+  const linked = users.filter((user) => user.arma_linked).length;
+  const ownerCount = users.filter((user) => (user.roles || []).includes("owner")).length;
+  const accountModal = state.adminAccountId ? renderAdminAccountModal(users.find((user) => String(user.id) === String(state.adminAccountId))) : "";
+  const overview = `
+    <section class="admin-command-summary">
+      <div class="admin-summary-lead">
+        <span>ACCOUNT OPERATIONS</span>
+        <h2>Resident identity control</h2>
+        <p>Review verification, account roles, agency assignments, identity links, password recovery, and account access from one controlled directory.</p>
+        <button class="primary" type="button" data-admin-workspace-tab="users">Open account directory</button>
+      </div>
+      <div class="admin-readiness-ledger">
+        <div><span>Verification rate</span><strong>${users.length ? Math.round((verified / users.length) * 100) : 0}%</strong><small>${verified} verified identities</small></div>
+        <div><span>Arma linkage</span><strong>${users.length ? Math.round((linked / users.length) * 100) : 0}%</strong><small>${linked} connected accounts</small></div>
+        <div><span>Pending review</span><strong>${Number(stats.unverified || 0)}</strong><small>Accounts requiring staff action</small></div>
+      </div>
+    </section>
+    <section class="admin-directory-preview">
+      <header><div><span>RECENT ACCOUNT INTAKE</span><h2>Latest resident records</h2></div><button class="secondary" type="button" data-admin-workspace-tab="users">View all ${users.length}</button></header>
+      <div class="admin-preview-ledger">${users.slice(0, 8).map((user) => `<button type="button" data-open-admin-account="${user.id}">
+        <span class="admin-status-rail ${user.verified ? "verified" : "pending"}"></span>
+        <div><strong>${escapeHtml(user.name)}</strong><small>CIV ${escapeHtml(user.civ_number || "pending")} · ${escapeHtml(user.email)}</small></div>
+        <span>${user.arma_linked ? "ARMA LINKED" : "LINK REQUIRED"}</span><em>${user.verified ? "VERIFIED" : "REVIEW"}</em>
+      </button>`).join("") || `<div class="empty">No resident accounts</div>`}</div>
+    </section>`;
   return `
-    <div class="stack">
-      <div class="grid-2">
-        <div class="metric"><span>Users</span><strong>${data.overview.stats.users}</strong></div>
-        <div class="metric"><span>Unverified</span><strong>${data.overview.stats.unverified}</strong></div>
-        <div class="metric"><span>Job applications</span><strong>${activeApplications}</strong></div>
-        <div class="metric"><span>Referral tickets</span><strong>${pendingReferrals}</strong></div>
-      </div>
-      <div class="segmented">
-        <button class="${state.adminTab === "users" ? "active" : ""}" data-admin-tab="users">Users</button>
-        <button class="${state.adminTab === "applications" ? "active" : ""}" data-admin-tab="applications">Job Apps</button>
-        <button class="${state.adminTab === "referrals" ? "active" : ""}" data-admin-tab="referrals">Referral Tickets</button>
-      </div>
-      ${body}
-    </div>
-    ${accountModal}
-  `;
+    <section class="admin-workspace">
+      <aside class="admin-sidebar">
+        <div class="dev-brand"><img class="dev-emblem" src="/static/brand/faircroft-emblem.webp" alt="" /><div><strong>Faircroft RP</strong><small>Administration</small></div></div>
+        <p class="dev-nav-label">Administrative index</p>
+        <nav>
+          <button class="${state.adminTab === "overview" ? "active" : ""}" data-admin-workspace-tab="overview"><small>01</small><span>Overview</span><i></i></button>
+          <button class="${state.adminTab === "users" ? "active" : ""}" data-admin-workspace-tab="users"><small>02</small><span>Accounts</span><i></i></button>
+        </nav>
+        <div class="dev-sidebar-footer"><span class="dev-access-dot"></span><div><strong>Authorized Admin</strong><small>${escapeHtml(state.session?.user?.name || "Staff member")}</small></div></div>
+      </aside>
+      <main class="admin-main">
+        <header class="admin-topbar">
+          <div><span>FC / CIVIL ADMINISTRATION</span><h1>${state.adminTab === "users" ? "Account Directory" : "Administration Overview"}</h1><p>${state.adminTab === "users" ? "Search, verify, assign, and maintain resident accounts" : "Identity readiness and account operations"}</p></div>
+          <div class="dev-toolbar"><span class="dev-system-status"><i></i>Registry online</span><button class="secondary" type="button" data-refresh-admin>Sync records</button><button class="primary" type="button" data-close-admin>Exit workspace</button></div>
+        </header>
+        <div class="admin-content">
+          <div class="admin-metrics">
+            <div><span>Total accounts</span><strong>${Number(stats.users || users.length)}</strong><small>Resident profiles</small></div>
+            <div><span>Verified</span><strong>${verified}</strong><small>Approved identities</small></div>
+            <div><span>Pending</span><strong>${Number(stats.unverified || 0)}</strong><small>Awaiting review</small></div>
+            <div><span>Arma linked</span><strong>${linked}</strong><small>Connected identities</small></div>
+            <div><span>Administrators</span><strong>${ownerCount}</strong><small>Owner accounts</small></div>
+          </div>
+          ${state.adminTab === "users" ? `<section class="admin-directory"><header><div><span>RESIDENT REGISTRY</span><h2>Account records</h2></div><strong>${users.length} FILES</strong></header>${renderAdminUsers(users)}</section>` : overview}
+        </div>
+      </main>
+      ${accountModal}
+    </section>`;
+}
+
+function renderAdmin() {
+  return `<div class="empty">Opening Administration workspace…</div>`;
+}
+
+function bindAdminWorkspace() {
+  bindAdmin();
+  $$("[data-admin-workspace-tab]").forEach((button) => button.addEventListener("click", () => {
+    state.adminTab = button.dataset.adminWorkspaceTab;
+    state.adminAccountId = null;
+    render();
+  }));
+  $("[data-refresh-admin]")?.addEventListener("click", async () => {
+    await loadAppData("admin");
+    render();
+  });
+  $("#admin2faCodeForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      state.generatedAdmin2faCode = await api("/api/dev-tools/admin-2fa", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast("Single-use Admin 2FA code generated");
+      await refreshDevTools();
+    } catch (error) { toast(error.message); }
+  });
+  $("[data-close-admin]")?.addEventListener("click", async () => {
+    state.activeApp = null;
+    state.adminAccountId = null;
+    await loadSession();
+  });
 }
 
 function renderSystem() {
@@ -9751,9 +10138,7 @@ function renderSystem() {
   const settings = data.settings || { autopilot_verify_enabled: false, autopilot_verify_minutes: 120, autopilot_license_enabled: true, autopilot_license_minutes: 6, update_lockdown_enabled: false, update_lockdown_message: "System update in progress. Driver License and LEO MDT remain available." };
   const stats = data.stats || { pending_accounts: 0, eligible_accounts: 0, pending_license_applications: 0, eligible_license_applications: 0 };
   const minutesValue = Number(settings.autopilot_verify_minutes || 120);
-  const licenseMinutesValue = Number(settings.autopilot_license_minutes || 6);
   const hoursLabel = minutesValue >= 60 ? `${(minutesValue / 60).toFixed(minutesValue % 60 ? 1 : 0)} hours` : `${minutesValue} minutes`;
-  const licenseLabel = licenseMinutesValue >= 60 ? `${(licenseMinutesValue / 60).toFixed(licenseMinutesValue % 60 ? 1 : 0)} hours` : `${licenseMinutesValue} minutes`;
   const lockdownEnabled = Boolean(settings.update_lockdown_enabled);
   return `
     <div class="stack system-app">
@@ -9761,15 +10146,13 @@ function renderSystem() {
         <div>
           <p class="eyebrow">Owner controls</p>
           <h3>System Settings</h3>
-          <p>Verification autopilot is ${settings.autopilot_verify_enabled ? "enabled" : "disabled"} / Driver license autopilot is ${settings.autopilot_license_enabled ? "enabled" : "disabled"} / Update lockdown is ${lockdownEnabled ? "enabled" : "disabled"}</p>
+          <p>Verification auto pilot is ${settings.autopilot_verify_enabled ? "enabled" : "disabled"} / Driver licensing requires the DMV examination / Update mode is ${lockdownEnabled ? "enabled" : "disabled"}</p>
         </div>
-        <span class="pill ${lockdownEnabled ? "amber" : settings.autopilot_license_enabled || settings.autopilot_verify_enabled ? "green" : "amber"}">${lockdownEnabled ? "lockdown" : settings.autopilot_license_enabled || settings.autopilot_verify_enabled ? "auto" : "manual"}</span>
+        <span class="pill ${lockdownEnabled ? "amber" : settings.autopilot_verify_enabled ? "green" : "amber"}">${lockdownEnabled ? "update" : settings.autopilot_verify_enabled ? "auto" : "manual"}</span>
       </section>
       <div class="grid-2">
         <div class="metric"><span>Pending accounts</span><strong>${stats.pending_accounts || 0}</strong></div>
         <div class="metric"><span>Account eligible</span><strong>${stats.eligible_accounts || 0}</strong></div>
-        <div class="metric"><span>Pending licenses</span><strong>${stats.pending_license_applications || 0}</strong></div>
-        <div class="metric"><span>License eligible</span><strong>${stats.eligible_license_applications || 0}</strong></div>
       </div>
       <form id="systemSettingsForm" class="card form-grid">
         <div class="system-setting-block">
@@ -9782,18 +10165,6 @@ function renderSystem() {
           </div>
           <label class="check-row"><input type="checkbox" name="autopilot_verify_enabled" ${settings.autopilot_verify_enabled ? "checked" : ""} /> Enable account auto pilot</label>
           <label>Verify accounts after minutes<input name="autopilot_verify_minutes" type="number" min="1" max="10080" step="1" value="${escapeHtml(minutesValue)}" /></label>
-        </div>
-        <div class="system-setting-block">
-          <div class="row">
-            <div>
-              <p class="eyebrow">DMV auto pilot</p>
-              <h3>Driver License Applications</h3>
-            </div>
-            <span class="pill">${escapeHtml(licenseLabel)}</span>
-          </div>
-          <label class="check-row"><input type="checkbox" name="autopilot_license_enabled" ${settings.autopilot_license_enabled ? "checked" : ""} /> Enable driver license auto approval</label>
-          <label>Approve licenses after minutes<input name="autopilot_license_minutes" type="number" min="1" max="10080" step="1" value="${escapeHtml(licenseMinutesValue)}" /></label>
-          <p class="muted small">Default is 6 minutes. Suspended or revoked licenses are not auto-reinstated.</p>
         </div>
         <div class="system-setting-block update-lockdown-setting">
           <div class="row">
@@ -9810,7 +10181,6 @@ function renderSystem() {
         <button class="primary" type="submit">Save system settings</button>
       </form>
       ${data.auto_verified_now ? `<div class="card"><h3>${data.auto_verified_now} accounts verified</h3><p class="muted small">Auto pilot processed eligible accounts on this check.</p></div>` : ""}
-      ${data.auto_licensed_now ? `<div class="card"><h3>${data.auto_licensed_now} driver licenses approved</h3><p class="muted small">DMV auto pilot processed eligible license applications on this check.</p></div>` : ""}
     </div>
   `;
 }
@@ -10078,14 +10448,18 @@ function renderAdminAccountModal(user) {
           <div><span>CIV</span><strong>${escapeHtml(user.civ_number || "pending")}</strong></div>
           <div><span>Linked Arma ID</span><strong>${escapeHtml(user.arma_id || "Not linked")}</strong></div>
           <div><span>Car Entry</span><strong>${escapeHtml(user.car_entry_code || "Required")}</strong></div>
-          <div><span>Referral</span><strong>${escapeHtml(user.referral_code || "Generating")}</strong></div>
           <div><span>Email</span><strong>${escapeHtml(user.email)}</strong></div>
           <div><span>Today</span><strong>${minutes(user.presence_seconds_today)}m</strong></div>
           <div><span>Characters</span><strong>${Number(user.character_count || 0)}</strong></div>
           <div><span>Name changes</span><strong>${nameChange.locked ? "Locked" : `${nameChange.remaining}/${nameChange.limit} left`}</strong></div>
         </div>
+        <nav class="admin-account-tabs">
+          <button type="button" class="${state.adminAccountSection === "account" ? "active" : ""}" data-admin-account-section="account">Account</button>
+          <button type="button" class="${state.adminAccountSection === "security" ? "active" : ""}" data-admin-account-section="security">Security</button>
+          <button type="button" class="${state.adminAccountSection === "enforcement" ? "active" : ""}" data-admin-account-section="enforcement">Enforcement</button>
+        </nav>
         <div class="admin-account-scroll">
-          <form class="admin-user-form form-grid account-section" data-user-id="${user.id}">
+          <form class="admin-user-form form-grid account-section ${state.adminAccountSection === "account" ? "" : "search-hidden"}" data-user-id="${user.id}">
             <div class="row tight"><h3>Access</h3><span class="pill ${user.verified ? "green" : "amber"}">${user.verified ? "verified" : "pending"}</span></div>
             <label class="check-row"><input type="checkbox" name="verified" ${user.verified ? "checked" : ""} /> Verified civilian</label>
             <label>Agency/division<input name="primary_agency" value="${escapeHtml(user.primary_agency || "")}" placeholder="Sheriff / Police / State Police / CID" /></label>
@@ -10101,7 +10475,7 @@ function renderAdminAccountModal(user) {
             </div>
             <button class="primary" type="submit">Save account</button>
           </form>
-          <form class="admin-password-form form-grid account-section" data-user-id="${user.id}">
+          <form class="admin-password-form form-grid account-section ${state.adminAccountSection === "security" ? "" : "search-hidden"}" data-user-id="${user.id}">
             <div>
               <h3>Forgot password</h3>
               <p class="muted small">Set a new temporary password for this account. The user can sign in with it immediately.</p>
@@ -10111,7 +10485,7 @@ function renderAdminAccountModal(user) {
             <button class="secondary" type="submit">Reset password</button>
           </form>
           ${canDeleteAccount ? `
-            <section class="account-section danger-zone">
+            <section class="account-section danger-zone ${state.adminAccountSection === "security" ? "" : "search-hidden"}">
               <div>
                 <h3>Delete account</h3>
                 <p class="muted small">Permanently remove this account and its owned civilian records from the system.</p>
@@ -10119,6 +10493,18 @@ function renderAdminAccountModal(user) {
               <button class="danger" type="button" data-delete-admin-user="${user.id}" data-delete-name="${escapeHtml(user.name)}">Delete account</button>
             </section>
           ` : ""}
+          <section class="account-section admin-enforcement-section ${state.adminAccountSection === "enforcement" ? "" : "search-hidden"}">
+            <div class="row"><div><p class="eyebrow">Administrative enforcement</p><h3>RP OS/CAD & Arma controls</h3></div>${user.admin_restriction ? `<span class="pill amber">${escapeHtml(humanLabel(String(user.admin_restriction.sanction_type || "").replace("cad_", "")))}</span>` : `<span class="pill green">clear</span>`}</div>
+            ${user.admin_restriction ? `<div class="admin-current-restriction"><strong>${escapeHtml(user.admin_restriction.reason)}</strong><span>${user.admin_restriction.expires_at ? `Ends ${escapeHtml(new Date(user.admin_restriction.expires_at).toLocaleString())}` : "Permanent until reviewed"}</span></div>` : ""}
+            <form class="admin-enforcement-form form-grid" data-user-id="${user.id}">
+              <label>Duration (minutes)<input name="duration_minutes" type="number" min="1" max="525600" value="60" /></label>
+              <label>Admin 2FA code<input name="two_factor_code" autocomplete="one-time-code" placeholder="Required only for permanent CAD or Arma ban" /></label>
+              <label class="wide">Reason<textarea name="reason" minlength="10" maxlength="1200" required placeholder="State the action, evidence, and staff direction."></textarea></label>
+              <div class="admin-enforcement-group wide"><span>RP OS / CAD only</span><button name="action" value="cad_timeout" class="secondary">Timeout</button><button name="action" value="cad_suspension" class="secondary">Suspend</button><button name="action" value="cad_temp_ban" class="warning">Temporary CAD ban</button><button name="action" value="cad_permanent_ban" class="danger">Permanent CAD ban · 2FA</button></div>
+              <div class="admin-enforcement-group wide arma"><span>Arma server enforcement</span><button name="action" value="arma_temp_ban" class="warning">Temporary Arma ban · 2FA</button><button name="action" value="arma_permanent_ban" class="danger">Permanent Arma ban · 2FA</button></div>
+              <p class="muted small wide">CAD actions never alter the linked Arma account. Arma actions are the only controls that send a game-ban command.</p>
+            </form>
+          </section>
         </div>
       </section>
     </div>
@@ -10161,21 +10547,26 @@ function renderAdminMarkets(markets) {
 function bindSystem() {
   $("#systemSettingsForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const body = {};
+    if (form.elements.namedItem("autopilot_verify_enabled")) {
+      body.autopilot_verify_enabled = formData.get("autopilot_verify_enabled") === "on";
+      body.autopilot_verify_minutes = formData.get("autopilot_verify_minutes");
+    }
+    if (form.elements.namedItem("update_lockdown_enabled")) {
+      body.update_lockdown_enabled = formData.get("update_lockdown_enabled") === "on";
+      body.update_lockdown_title = formData.get("update_lockdown_title");
+      body.update_lockdown_message = formData.get("update_lockdown_message");
+      body.update_lockdown_eta = formData.get("update_lockdown_eta");
+    }
     try {
       await api("/api/system/settings", {
         method: "PATCH",
-        body: {
-          autopilot_verify_enabled: formData.get("autopilot_verify_enabled") === "on",
-          autopilot_verify_minutes: formData.get("autopilot_verify_minutes"),
-          autopilot_license_enabled: formData.get("autopilot_license_enabled") === "on",
-          autopilot_license_minutes: formData.get("autopilot_license_minutes"),
-          update_lockdown_enabled: formData.get("update_lockdown_enabled") === "on",
-          update_lockdown_message: formData.get("update_lockdown_message"),
-        },
+        body,
       });
       toast("System settings saved");
-      await loadAppData("system");
+      await loadAppData(state.activeApp === "dev-tools" ? "dev-tools" : "system");
       await loadSession();
     } catch (error) {
       toast(error.message);
@@ -10284,6 +10675,11 @@ function bindAdmin() {
   }));
   $$("[data-open-admin-account]").forEach((button) => button.addEventListener("click", () => {
     state.adminAccountId = button.dataset.openAdminAccount;
+    state.adminAccountSection = "account";
+    render();
+  }));
+  $$("[data-admin-account-section]").forEach((button) => button.addEventListener("click", () => {
+    state.adminAccountSection = button.dataset.adminAccountSection;
     render();
   }));
   $$("[data-close-admin-account]").forEach((button) => button.addEventListener("click", (event) => {
@@ -10329,6 +10725,26 @@ function bindAdmin() {
       form.reset();
       toast("Password reset");
       await loadAppData("admin");
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+  $$(".admin-enforcement-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const formData = new FormData(form, event.submitter);
+    const action = String(formData.get("action") || "");
+    const label = humanLabel(action.replace("cad_", "").replace("arma_", ""));
+    const destination = action.startsWith("arma_") ? "Arma server" : "RP OS/CAD";
+    if (!confirm(`Apply ${label} to ${destination} for this account?`)) return;
+    try {
+      const result = await api(`/api/admin/users/${form.dataset.userId}/enforcement`, {
+        method: "POST",
+        body: Object.fromEntries(formData.entries()),
+      });
+      toast(`${label} applied · ${result.report_number}`);
+      await loadAppData("admin");
+      await loadSession();
       render();
     } catch (error) {
       toast(error.message);
@@ -10394,7 +10810,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.2.0-arma-deeplink").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.2.1-admin-workspace").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {

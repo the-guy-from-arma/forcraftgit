@@ -1490,7 +1490,9 @@ SYSTEM_SETTING_DEFAULTS = {
     "autopilot_license_enabled": "1",
     "autopilot_license_minutes": "6",
     "update_lockdown_enabled": "0",
-    "update_lockdown_message": "System update in progress. Driver License and LEO MDT remain available.",
+    "update_lockdown_title": "Faircroft systems update",
+    "update_lockdown_message": "Core services are being upgraded. Essential resident and public-safety services remain available.",
+    "update_lockdown_eta": "",
     "beta_recruiting_enabled": "0",
     "beta_recruiting_message": "Help test upcoming Faircroft features before public release. Beta testers receive guided tasks and can report issues directly to the development team.",
     "beta_campaign_id": "1",
@@ -1507,7 +1509,9 @@ SYSTEM_SETTING_DEFAULTS = {
     "splash_end_at": "",
     "splash_revision": "1",
     "applications_accepting": "1",
+    "application_intake": "{}",
     "fnn_press_pass_limit": "25",
+    "dmv_license_classes": "[{\"name\":\"Class D\",\"type\":\"license\",\"active\":true},{\"name\":\"Motorcycle\",\"type\":\"endorsement\",\"active\":true},{\"name\":\"Commercial\",\"type\":\"endorsement\",\"active\":true}]",
     "app_visibility": "{}",
 }
 APP_VISIBILITY_OPTIONS = (
@@ -1529,10 +1533,9 @@ APP_VISIBILITY_OPTIONS = (
     ("fire-settings", "Fire Settings"),
     ("indeed-admin", "Indeed Admin"),
     ("admin", "Admin"),
-    ("fine-settlement", "Fine Settlement"),
     ("beta-tasks", "Beta Tasks"),
 )
-PROTECTED_APP_IDS = frozenset(("profile", "jobs", "dev-tools", "system", "restriction"))
+PROTECTED_APP_IDS = frozenset(("profile", "jobs", "dev-tools", "restriction"))
 
 
 def posting_command_roles(posting: dict[str, Any]) -> tuple[str, ...]:
@@ -1920,6 +1923,22 @@ def ensure_schema() -> None:
                 id SERIAL PRIMARY KEY,
                 code_hash TEXT NOT NULL UNIQUE,
                 code_hint TEXT NOT NULL,
+                created_by INTEGER NOT NULL,
+                expires_at TEXT NOT NULL,
+                uses_remaining INTEGER NOT NULL DEFAULT 1,
+                used_by INTEGER,
+                used_at TEXT,
+                revoked_at TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (used_by) REFERENCES users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS admin_2fa_codes (
+                id SERIAL PRIMARY KEY,
+                code_hash TEXT NOT NULL UNIQUE,
+                code_hint TEXT NOT NULL,
+                purpose TEXT NOT NULL DEFAULT 'admin_enforcement',
                 created_by INTEGER NOT NULL,
                 expires_at TEXT NOT NULL,
                 uses_remaining INTEGER NOT NULL DEFAULT 1,
@@ -2871,6 +2890,10 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE mdt_bookings ADD COLUMN IF NOT EXISTS transport_confirmed_at TEXT")
     db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS record_expunged_at TEXT")
     db.execute("ALTER TABLE citations ADD COLUMN IF NOT EXISTS record_expunged_by INTEGER")
+    db.execute("ALTER TABLE dmv_records ADD COLUMN IF NOT EXISTS endorsements TEXT NOT NULL DEFAULT '[]'")
+    db.execute("ALTER TABLE dmv_records ADD COLUMN IF NOT EXISTS action_notice_pending INTEGER NOT NULL DEFAULT 0")
+    db.execute("ALTER TABLE dmv_records ADD COLUMN IF NOT EXISTS action_notice_reason TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE dmv_records ADD COLUMN IF NOT EXISTS action_notice_at TEXT")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS court_record_requests (
@@ -3211,6 +3234,15 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         for app_id, _label in APP_VISIBILITY_OPTIONS
     }
     try:
+        application_intake_raw = json.loads(str(raw.get("application_intake") or "{}"))
+    except (TypeError, json.JSONDecodeError):
+        application_intake_raw = {}
+    global_application_default = str(raw.get("applications_accepting") or "1") in ("1", "true", "True", "yes", "on")
+    application_intake = {
+        str(posting["key"]): bool(application_intake_raw.get(str(posting["key"]), global_application_default))
+        for posting in DEPARTMENT_POSTINGS
+    }
+    try:
         beta_campaign_id = max(1, int(raw.get("beta_campaign_id") or "1"))
     except (TypeError, ValueError):
         beta_campaign_id = 1
@@ -3245,13 +3277,21 @@ def get_system_settings(db: Database) -> dict[str, Any]:
             return False
         return True
 
+    try:
+        dmv_license_classes = json.loads(str(raw.get("dmv_license_classes") or SYSTEM_SETTING_DEFAULTS["dmv_license_classes"]))
+        if not isinstance(dmv_license_classes, list):
+            raise ValueError
+    except (TypeError, ValueError, json.JSONDecodeError):
+        dmv_license_classes = json.loads(SYSTEM_SETTING_DEFAULTS["dmv_license_classes"])
     return {
         "autopilot_verify_enabled": str(raw.get("autopilot_verify_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "autopilot_verify_minutes": minutes,
-        "autopilot_license_enabled": str(raw.get("autopilot_license_enabled") or "0") in ("1", "true", "True", "yes", "on"),
+        "autopilot_license_enabled": False,
         "autopilot_license_minutes": license_minutes,
         "update_lockdown_enabled": str(raw.get("update_lockdown_enabled") or "0") in ("1", "true", "True", "yes", "on"),
+        "update_lockdown_title": str(raw.get("update_lockdown_title") or SYSTEM_SETTING_DEFAULTS["update_lockdown_title"]).strip()[:100],
         "update_lockdown_message": str(raw.get("update_lockdown_message") or SYSTEM_SETTING_DEFAULTS["update_lockdown_message"]).strip()[:240],
+        "update_lockdown_eta": str(raw.get("update_lockdown_eta") or "").strip()[:80],
         "beta_recruiting_enabled": str(raw.get("beta_recruiting_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "beta_recruiting_message": str(raw.get("beta_recruiting_message") or SYSTEM_SETTING_DEFAULTS["beta_recruiting_message"]).strip()[:600],
         "beta_campaign_id": beta_campaign_id,
@@ -3270,7 +3310,9 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "splash_end_at": splash_end_at,
         "splash_revision": splash_revision,
         "applications_accepting": str(raw.get("applications_accepting") or "1") in ("1", "true", "True", "yes", "on"),
+        "application_intake": application_intake,
         "fnn_press_pass_limit": fnn_press_pass_limit,
+        "dmv_license_classes": dmv_license_classes,
         "app_visibility": app_visibility,
     }
 
@@ -3892,6 +3934,49 @@ def active_account_block(db: Database, user_id: int) -> DbRow | None:
     )
 
 
+def active_admin_account_restriction(db: Database, user_id: int) -> DbRow | None:
+    now = now_iso()
+    return one(
+        db,
+        """
+        SELECT * FROM account_sanctions
+        WHERE user_id = ?
+          AND revoked_at IS NULL
+          AND sanction_type IN ('cad_timeout', 'cad_suspension', 'cad_temp_ban', 'cad_permanent_ban')
+          AND starts_at <= ?
+          AND (expires_at IS NULL OR expires_at > ?)
+        ORDER BY CASE sanction_type
+            WHEN 'cad_permanent_ban' THEN 0
+            WHEN 'cad_temp_ban' THEN 1
+            WHEN 'cad_suspension' THEN 2
+            ELSE 3 END, created_at DESC
+        LIMIT 1
+        """,
+        (user_id, now, now),
+    )
+
+
+def consume_admin_2fa_code(db: Database, raw_code: str, admin_id: int, consume: bool = True) -> bool:
+    code_hash = hashlib.sha256(str(raw_code or "").strip().upper().encode("utf-8")).hexdigest()
+    row = one(
+        db,
+        """
+        SELECT * FROM admin_2fa_codes
+        WHERE code_hash = ? AND purpose = 'admin_enforcement'
+          AND revoked_at IS NULL AND uses_remaining > 0 AND expires_at > ?
+        """,
+        (code_hash, now_iso()),
+    )
+    if not row:
+        return False
+    if consume:
+        db.execute(
+            "UPDATE admin_2fa_codes SET uses_remaining = uses_remaining - 1, used_by = ?, used_at = ? WHERE id = ?",
+            (admin_id, now_iso(), row["id"]),
+        )
+    return True
+
+
 def add_admin_audit(
     db: Database,
     actor_id: int,
@@ -4042,13 +4127,18 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
     contracts_enabled = contracts_required(user) is None
     business_enabled = verified or is_business_staff(user)
     if lockdown:
-        apps: list[dict[str, Any]] = []
+        apps: list[dict[str, Any]] = [
+            {"id": "profile", "label": "Profile", "icon": "user", "enabled": True, "coming_soon": False, "hidden": False},
+            {"id": "getting-started", "label": "Getting Started", "icon": "map", "enabled": True, "coming_soon": False, "hidden": False},
+            {"id": "messages", "label": "Messages", "icon": "message", "enabled": True, "coming_soon": False, "hidden": False},
+            {"id": "changelog", "label": "Changelog", "icon": "scroll", "enabled": True, "coming_soon": False, "hidden": False},
+        ]
         if verified:
             apps.append({"id": "dmv", "label": "Driver License", "icon": "id-card", "enabled": True, "coming_soon": False, "hidden": False})
         if has_any(user, *LAW_SERVICE_ROLES):
             apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "coming_soon": False, "hidden": False})
-        if has_any(user, "owner"):
-            apps.append({"id": "system", "label": "System", "icon": "settings", "enabled": True, "coming_soon": False, "hidden": False})
+        if has_any(user, "owner", "dev"):
+            apps.append({"id": "dev-tools", "label": "Dev Tools", "icon": "code", "enabled": True, "coming_soon": False, "hidden": False})
         visibility = settings.get("app_visibility") or {}
         return [item for item in apps if item["id"] in PROTECTED_APP_IDS or visibility.get(item["id"], True)]
     base = [
@@ -4079,8 +4169,6 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps.append({"id": "fire", "label": "Fire MDT", "icon": "flame", "enabled": True, "hidden": False})
     if has_any(user, *FIRE_COMMAND_ROLES, "owner"):
         apps.append({"id": "fire-settings", "label": "Fire Settings", "icon": "settings", "enabled": True, "hidden": False})
-    if has_any(user, "owner"):
-        apps.append({"id": "system", "label": "System", "icon": "settings", "enabled": True, "hidden": False})
     if has_any(user, "owner", "admin", "dev", INDEED_ADMIN_ROLE, "judge"):
         apps.append({"id": "indeed-admin", "label": "Indeed Admin", "icon": "briefcase", "enabled": True, "hidden": False})
     if has_any(user, "owner", "admin"):
@@ -4091,8 +4179,6 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps.append({"id": "beta-tasks", "label": "Beta Tasks", "icon": "target", "enabled": True, "hidden": False})
     if has_any(user, "owner", "dev") or (has_any(user, "press") and str(user.get("press_pass_status") or "active").lower() == "active"):
         apps.append({"id": "press", "label": "Press Desk", "icon": "press", "enabled": True, "hidden": False})
-    if has_any(user, "owner", "dev"):
-        apps.append({"id": "fine-settlement", "label": "Fine Settlement", "icon": "gavel", "enabled": True, "hidden": False})
     visibility = settings.get("app_visibility") or {}
     return [item for item in apps if item["id"] in PROTECTED_APP_IDS or visibility.get(item["id"], True)]
 
@@ -4303,7 +4389,57 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
             ORDER BY r.created_at DESC
             """,
         )
-    if not reports and not court_records and not press_reports:
+        court_requests = all_rows(
+            db,
+            """
+            SELECT request.id, request.request_type, request.reason,
+                   request.supporting_statement, request.status,
+                   request.decision_notes, request.created_at, request.decided_at,
+                   c.charge_code, c.charge_title,
+                   civ.name AS civilian_name, judge.name AS judge_name
+            FROM court_record_requests request
+            JOIN citations c ON c.id = request.citation_id
+            JOIN users civ ON civ.id = request.civ_id
+            LEFT JOIN users judge ON judge.id = request.judge_id
+            WHERE c.record_expunged_at IS NULL
+            ORDER BY request.created_at DESC
+            """,
+        )
+        warrants = all_rows(
+            db,
+            """
+            SELECT w.id, w.warrant_number, w.subject_name, w.warrant_type,
+                   w.status, w.priority, w.probable_cause, w.operation_plan,
+                   w.authorized_by, w.issued_at, w.expires_at, creator.name AS created_by_name
+            FROM cid_warrants w
+            JOIN users creator ON creator.id = w.created_by
+            ORDER BY w.issued_at DESC
+            """,
+        )
+        wanted_records = all_rows(
+            db,
+            """
+            SELECT b.id, b.bolo_number, b.target_name, b.target_description,
+                   b.vehicle_description, b.plate, b.last_seen, b.caution_level,
+                   b.reason, b.status, b.created_at, b.resolved_at,
+                   creator.name AS created_by_name
+            FROM mdt_bolos b
+            JOIN users creator ON creator.id = b.created_by
+            ORDER BY b.created_at DESC
+            """,
+        )
+        license_suspensions = all_rows(
+            db,
+            """
+            SELECT u.id, u.name AS civilian_name, d.license_class,
+                   d.license_status, d.updated_at
+            FROM dmv_records d
+            JOIN users u ON u.id = d.user_id
+            WHERE d.license_status = 'Suspended'
+            ORDER BY d.updated_at DESC
+            """,
+        )
+    if not any((reports, court_records, press_reports, court_requests, warrants, wanted_records, license_suspensions)):
         return {"status": "no_reports", "edition": None}
     if not GEMINI_API_KEY:
         return {"status": "configuration_required", "edition": None}
@@ -4363,6 +4499,64 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
         }
         for row in press_reports
     ]
+    source_court_documents = [
+        {
+            "request_type": str(row["request_type"] or "")[:40],
+            "status": str(row["status"] or "")[:40],
+            "charge_code": str(row["charge_code"] or "")[:80],
+            "charge_title": str(row["charge_title"] or "")[:180],
+            "civilian_name": str(row["civilian_name"] or "")[:140],
+            "reason": str(row["reason"] or "")[:3000],
+            "supporting_statement": str(row["supporting_statement"] or "")[:4000],
+            "decision_notes": str(row["decision_notes"] or "")[:3000],
+            "judge_name": str(row["judge_name"] or "")[:140],
+            "filed_at": row["created_at"],
+            "decided_at": row["decided_at"],
+        }
+        for row in court_requests
+    ]
+    source_warrants = [
+        {
+            "warrant_number": str(row["warrant_number"] or "")[:80],
+            "subject_name": str(row["subject_name"] or "")[:140],
+            "warrant_type": str(row["warrant_type"] or "")[:80],
+            "status": str(row["status"] or "")[:40],
+            "priority": str(row["priority"] or "")[:40],
+            "probable_cause": str(row["probable_cause"] or "")[:4000],
+            "operation_plan": str(row["operation_plan"] or "")[:2000],
+            "authorized_by": str(row["authorized_by"] or "")[:140],
+            "created_by": str(row["created_by_name"] or "")[:140],
+            "issued_at": row["issued_at"],
+            "expires_at": row["expires_at"],
+        }
+        for row in warrants
+    ]
+    source_wanted_records = [
+        {
+            "bolo_number": str(row["bolo_number"] or "")[:80],
+            "target_name": str(row["target_name"] or "")[:140],
+            "target_description": str(row["target_description"] or "")[:1000],
+            "vehicle_description": str(row["vehicle_description"] or "")[:1000],
+            "plate": str(row["plate"] or "")[:40],
+            "last_seen": str(row["last_seen"] or "")[:240],
+            "caution_level": str(row["caution_level"] or "")[:40],
+            "reason": str(row["reason"] or "")[:3000],
+            "status": str(row["status"] or "")[:40],
+            "created_by": str(row["created_by_name"] or "")[:140],
+            "created_at": row["created_at"],
+            "resolved_at": row["resolved_at"],
+        }
+        for row in wanted_records
+    ]
+    source_license_suspensions = [
+        {
+            "civilian_name": str(row["civilian_name"] or "")[:140],
+            "license_class": str(row["license_class"] or "")[:40],
+            "status": str(row["license_status"] or "")[:40],
+            "record_updated_at": row["updated_at"],
+        }
+        for row in license_suspensions
+    ]
     response_schema = {
         "type": "OBJECT",
         "required": ["headline", "deck", "lead_story", "stories", "public_safety"],
@@ -4399,7 +4593,8 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
     prompt = (
         "Create today's extensive Faircroft News Now edition from the complete supplied "
         "archive of fictional Arma Reforger roleplay CAD after-action reports, citations, "
-        "criminal court records, and reporter-submitted press briefs, regardless of when "
+        "criminal court records and petitions, license suspensions, warrants, wanted-person "
+        "bulletins, and reporter-submitted FNN Newsroom press briefs, regardless of when "
         "each record was filed. Treat press verification notes as sourcing guidance and "
         "never invent missing facts. Produce a "
         "substantial local newspaper edition suitable for a "
@@ -4418,7 +4613,11 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
         "while using older records for historical context.\n\n"
         f"CAD_AFTER_ACTION_REPORTS:\n{json.dumps(source_reports, separators=(',', ':'), ensure_ascii=False)}\n\n"
         f"COURT_CITATIONS_AND_CRIMINAL_CHARGES:\n{json.dumps(source_court_records, separators=(',', ':'), ensure_ascii=False)}\n\n"
-        f"PRESS_REPORTS:\n{json.dumps(source_press_reports, separators=(',', ':'), ensure_ascii=False)}"
+        f"COURT_APPEALS_EXPUNGEMENT_REQUESTS:\n{json.dumps(source_court_documents, separators=(',', ':'), ensure_ascii=False)}\n\n"
+        f"CRIMINAL_WARRANTS:\n{json.dumps(source_warrants, separators=(',', ':'), ensure_ascii=False)}\n\n"
+        f"WANTED_PERSON_BOLOS:\n{json.dumps(source_wanted_records, separators=(',', ':'), ensure_ascii=False)}\n\n"
+        f"DRIVER_LICENSE_SUSPENSIONS:\n{json.dumps(source_license_suspensions, separators=(',', ':'), ensure_ascii=False)}\n\n"
+        f"FNN_NEWSROOM_PRESS_REPORTS:\n{json.dumps(source_press_reports, separators=(',', ':'), ensure_ascii=False)}"
     )
     request_body = {
         "systemInstruction": {
@@ -4501,6 +4700,10 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
     source_ids = {
         "cad_after_action_reports": [int(row["id"]) for row in reports],
         "court_records": [int(row["id"]) for row in court_records],
+        "court_documents": [int(row["id"]) for row in court_requests],
+        "criminal_warrants": [int(row["id"]) for row in warrants],
+        "wanted_person_bolos": [int(row["id"]) for row in wanted_records],
+        "license_suspensions": [int(row["id"]) for row in license_suspensions],
         "press_reports": [int(row["id"]) for row in press_reports],
     }
     with conn() as db:
@@ -4521,9 +4724,17 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
                 json.dumps(stories[:8], separators=(",", ":")),
                 json.dumps(public_safety[:10], separators=(",", ":")),
                 json.dumps(source_ids, separators=(",", ":")),
-                len(reports) + len(court_records) + len(press_reports), generation_model, generated_at, generated_at,
+                sum(len(rows) for rows in (reports, court_records, court_requests, warrants, wanted_records, license_suspensions, press_reports)),
+                generation_model, generated_at, generated_at,
             ),
         ).fetchone()
+        if press_reports:
+            press_ids = [int(row["id"]) for row in press_reports]
+            placeholders = ",".join("?" for _ in press_ids)
+            db.execute(
+                f"UPDATE press_reports SET status = 'included', updated_at = ? WHERE id IN ({placeholders})",
+                (generated_at, *press_ids),
+            )
         if not created:
             created = one(db, "SELECT * FROM fnn_editions WHERE edition_date = ?", (edition_date,))
     return {"status": "published", "edition": public_fnn_edition(created)}
@@ -4662,7 +4873,7 @@ def final_result_for(status: str, notes: str | None = None, fine_amount: float |
 
 def court_decision_result(disposition: str, fine_amount: float, sentence_minutes: int, notes: str) -> str:
     labels = {
-        "liable": "Liable",
+        "liable": "Guilty",
         "guilty": "Guilty",
         "plea_agreement": "Plea agreement accepted",
         "not_guilty": "Not guilty",
@@ -4910,6 +5121,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 user = self.current_user(db)
                 if user and path not in ("/api/session", "/api/auth/logout"):
                     block = active_account_block(db, int(user["id"]))
+                    admin_restriction = active_admin_account_restriction(db, int(user["id"]))
                     anticheat_lock = active_anticheat_profile_lock(db, int(user["id"]))
                     if block and block["sanction_type"] == "ban":
                         self.error(403, f"Account {block['sanction_type']}: {block['reason']}")
@@ -4922,6 +5134,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                         timeout_allowed = path in ("/api/health", "/api/profile", "/api/bank", "/api/presence")
                         if block and not timeout_allowed:
                             self.error(403, f"Account {block['sanction_type']}: {block['reason']}")
+                            return
+                        admin_allowed = path in ("/api/health", "/api/messages", "/api/presence")
+                        if admin_restriction and path not in admin_allowed:
+                            self.error(403, f"CAD access restricted: {admin_restriction['reason']}")
                             return
                 if path == "/api/health" and method == "GET":
                     self.send_json(200, {"ok": True, "time": now_iso()})
@@ -5151,6 +5367,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_account(db, user, self.path_int(path, 3))
                 elif path == "/api/dev-tools/unlink-codes" and method == "POST":
                     self.api_dev_generate_unlink_code(db, user)
+                elif path == "/api/dev-tools/admin-2fa" and method == "POST":
+                    self.api_dev_generate_admin_2fa_code(db, user)
                 elif path == "/api/dev-tools/sanctions" and method == "POST":
                     self.api_dev_create_sanction(db, user)
                 elif path.startswith("/api/dev-tools/sanctions/") and path.endswith("/revoke") and method == "POST":
@@ -5163,18 +5381,28 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_update_application_intake(db, user)
                 elif path == "/api/dev-tools/fnn-settings" and method == "PATCH":
                     self.api_dev_update_fnn_settings(db, user)
+                elif path == "/api/dev-tools/dmv/classes" and method == "PATCH":
+                    self.api_dev_update_dmv_classes(db, user)
+                elif path == "/api/dev-tools/dmv/bulk" and method == "POST":
+                    self.api_dev_bulk_dmv_licenses(db, user)
+                elif path.startswith("/api/dev-tools/dmv/licenses/") and method == "PATCH":
+                    self.api_dev_update_dmv_license(db, user, self.path_int(path, 4))
                 elif path.startswith("/api/dev-tools/press-members/") and method == "PATCH":
                     self.api_dev_update_press_member(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/dev-tools/warnings/") and path.endswith("/resolve") and method == "POST":
                     self.api_dev_resolve_warning(db, user, self.path_int(path, 3))
                 elif path == "/api/press-pass/acknowledge" and method == "POST":
                     self.api_press_pass_acknowledge(db, user)
+                elif path == "/api/dmv/action-notice/acknowledge" and method == "POST":
+                    self.api_dmv_action_notice_acknowledge(db, user)
                 elif path == "/api/fine-settlement" and method == "GET":
                     self.api_fine_settlement(db, user)
                 elif path == "/api/fine-settlement/batches" and method == "POST":
                     self.api_create_fine_settlement_batch(db, user)
                 elif path.startswith("/api/fine-settlement/batches/") and path.endswith("/code") and method == "POST":
                     self.api_fine_settlement_code(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/fine-settlement/batches/") and path.endswith("/suspend-licenses") and method == "POST":
+                    self.api_suspend_fine_batch_licenses(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/fine-settlement/batches/") and path.endswith("/approve") and method == "POST":
                     self.api_approve_fine_settlement(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/fine-settlement/batches/") and path.endswith("/complete") and method == "POST":
@@ -5205,6 +5433,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_admin_review_department_application(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/admin/users/") and method == "DELETE":
                     self.api_admin_delete_user(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/admin/users/") and path.endswith("/enforcement") and method == "POST":
+                    self.api_admin_enforcement(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/admin/users/") and method == "PATCH":
                     self.api_admin_update_user(db, user, self.path_int(path, 3))
                 elif path == "/api/admin/jobs" and method == "GET":
@@ -5245,20 +5475,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if len(password) < 6:
             self.error(400, "Password must be at least 6 characters")
             return
-        try:
-            referral_code = clean_referral_code(payload.get("referral_code") or payload.get("referral"))
-        except ValueError as exc:
-            self.error(400, str(exc))
-            return
-        referrer = None
-        if referral_code:
-            referrer = one(db, "SELECT id, name, email FROM users WHERE referral_code = ?", (referral_code,))
-            if not referrer:
-                self.error(400, "Referral code was not found")
-                return
-            if str(referrer["email"]).strip().lower() == email:
-                self.error(400, "You cannot use your own referral code")
-                return
         ts = now_iso()
         cur = db.execute(
             """
@@ -5273,7 +5489,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 None,
                 car_entry_code,
                 generate_referral_code(db),
-                referrer["id"] if referrer else None,
+                None,
                 hash_password(password),
                 json.dumps(["civ"]),
                 ts,
@@ -5284,42 +5500,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         user_id = int(created["id"])
         create_default_dmv(db, user_id)
         ensure_default_character(db, user_id, str(payload["name"]).strip())
-        if referrer:
-            db.execute(
-                """
-                INSERT INTO referrals
-                (referrer_id, referred_user_id, code_used, bonus_amount, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 'pending', ?, ?)
-                """,
-                (referrer["id"], user_id, referral_code, REFERRAL_BONUS_AMOUNT, ts, ts),
-            )
-            add_message(
-                db,
-                int(referrer["id"]),
-                "Referral payout pending",
-                f"{str(payload['name']).strip()} used your referral code. An in-game reward ticket is waiting for staff review.",
-                user_id,
-            )
-            add_message(
-                db,
-                user_id,
-                "Referral code accepted",
-                f"Your registration used {referrer['name']}'s referral code. Their in-game reward ticket is pending staff review.",
-                int(referrer["id"]),
-            )
-            staff = all_rows(
-                db,
-                "SELECT id FROM users WHERE roles LIKE ? OR roles LIKE ? ORDER BY id LIMIT 120",
-                ('%"owner"%', '%"admin"%'),
-            )
-            for row in staff:
-                add_message(
-                    db,
-                    int(row["id"]),
-                    "Referral payout ticket",
-                    f"{referrer['name']} earned a ${REFERRAL_BONUS_AMOUNT:,.0f} referral ticket from {str(payload['name']).strip()}. Deposit it from Admin > Referral Tickets.",
-                    user_id,
-                )
         owner = one(db, "SELECT id FROM users WHERE email = ?", (OWNER_EMAIL,))
         add_message(
             db,
@@ -5358,6 +5538,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         user = one(db, "SELECT * FROM users WHERE id = ?", (user["id"],)) or user
         sync_linked_vehicles_to_dmv(db, int(user["id"]))
         block = active_account_block(db, int(user["id"]))
+        admin_restriction = active_admin_account_restriction(db, int(user["id"]))
         if block and block["sanction_type"] == "ban":
             self.send_json(
                 403,
@@ -5383,6 +5564,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                ORDER BY created_at DESC""",
             (user["id"],),
         )
+        dmv_action_notice = one(
+            db,
+            """SELECT license_status, license_class, action_notice_reason, action_notice_at
+               FROM dmv_records
+               WHERE user_id = ? AND action_notice_pending <> 0""",
+            (user["id"],),
+        )
         beta_response = one(
             db,
             "SELECT response FROM beta_program_responses WHERE user_id = ? AND campaign_id = ?",
@@ -5400,7 +5588,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             apps = [
                 {"id": "messages", "label": "Dev Chat", "icon": "message", "enabled": True, "coming_soon": False, "hidden": False},
             ]
-        if block and block["sanction_type"] == "timeout" and not anticheat_profile_locked:
+        if admin_restriction and not anticheat_profile_locked:
+            apps = [
+                {"id": "messages", "label": "Admin Chat", "icon": "message", "enabled": True, "coming_soon": False, "hidden": False},
+                {"id": "restriction", "label": "Account Notice", "icon": "lock", "enabled": True, "coming_soon": False, "hidden": False},
+            ]
+        if block and block["sanction_type"] == "timeout" and not anticheat_profile_locked and not admin_restriction:
             apps = [
                 {"id": "profile", "label": "Profile", "icon": "user", "enabled": True, "coming_soon": False, "hidden": False},
                 {"id": "bank", "label": "Bank", "icon": "bank", "enabled": True, "coming_soon": False, "hidden": False},
@@ -5434,6 +5627,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "required": bool(vehicle_compliance),
                     "vehicles": [dict(row) for row in vehicle_compliance],
                 },
+                "dmv_action_notice": dict(dmv_action_notice) if dmv_action_notice else None,
                 "sanction": (
                     {
                         "type": block["sanction_type"],
@@ -5445,10 +5639,23 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     if block and block["sanction_type"] == "timeout"
                     else None
                 ),
+                "admin_restriction": (
+                    {
+                        "type": admin_restriction["sanction_type"],
+                        "reason": admin_restriction["reason"],
+                        "report_number": admin_restriction.get("report_number") or "",
+                        "expires_at": admin_restriction.get("expires_at"),
+                        "created_at": admin_restriction.get("created_at"),
+                    }
+                    if admin_restriction
+                    else None
+                ),
                 "anti_cheat_lock": public_anticheat_profile_lock(anticheat_lock) if anticheat_profile_locked else None,
                 "system": {
                     "update_lockdown_enabled": settings["update_lockdown_enabled"],
+                    "update_lockdown_title": settings["update_lockdown_title"],
                     "update_lockdown_message": settings["update_lockdown_message"],
+                    "update_lockdown_eta": settings["update_lockdown_eta"],
                     "beta_invite": beta_invite,
                     "beta_recruiting_message": settings["beta_recruiting_message"],
                     "desktop_beta_access": has_any(user, "beta"),
@@ -6581,7 +6788,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "jobs": [],
                 "active_jobs": [],
                 "income": income_snapshot(db, user),
-                "department_postings": [dict(posting) for posting in DEPARTMENT_POSTINGS],
+                "department_postings": [
+                    {**dict(posting), "accepting_applications": get_system_settings(db)["application_intake"].get(str(posting["key"]), True)}
+                    for posting in DEPARTMENT_POSTINGS
+                ],
                 "applications_accepting": get_system_settings(db)["applications_accepting"],
                 "exam_questions": {
                     key: [[question, list(options)] for question, options, _answer in questions]
@@ -6595,14 +6805,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not user:
             self.error(401, "Authentication required")
             return
-        if not get_system_settings(db)["applications_accepting"]:
-            self.error(403, "Applications are not being accepted at this time. Please try again later. Sincerely, Faircroft Government.")
-            return
         payload = self.read_json()
         department_key = str(payload.get("department_key") or "").strip().lower()
         posting = next((item for item in DEPARTMENT_POSTINGS if item["key"] == department_key), None)
         if not posting:
             self.error(400, "Unknown department posting")
+            return
+        settings = get_system_settings(db)
+        if not settings["application_intake"].get(department_key, settings["applications_accepting"]):
+            self.error(403, f"{posting['label']} applications are not being accepted at this time. Please try again later. Sincerely, Faircroft Government.")
             return
         existing = one(
             db,
@@ -8524,15 +8735,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             legacy_status = str(payload.get("status") or "").strip().lower()
             disposition = {
                 "reviewed": "under_review",
-                "reduced": "liable",
+                "reduced": "guilty",
                 "dismissed": "dismissed",
-                "closed": "liable" if case["kind"] == "citation" else "guilty",
+                "closed": "guilty",
             }.get(legacy_status, legacy_status)
+        # Preserve compatibility with older clients and records while presenting
+        # one consistent Faircroft criminal/citation finding vocabulary.
+        if disposition == "liable":
+            disposition = "guilty"
         if disposition not in COURT_DISPOSITIONS:
             self.error(400, "Select a valid court disposition")
-            return
-        if case["kind"] == "citation" and disposition in CONVICTION_DISPOSITIONS:
-            self.error(400, "Traffic and civil citations use a liable or not-liable disposition")
             return
         if case["kind"] == "criminal" and disposition == "liable":
             self.error(400, "Criminal matters require a guilty, plea agreement, not guilty, or dismissal disposition")
@@ -8576,6 +8788,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             if scheduled_date < utcnow().date():
                 self.error(400, "The continued hearing date cannot be in the past")
                 return
+        elif final_decision:
+            court_date = ""
         if final_decision and len(notes) < 3:
             self.error(400, "A short written finding is required for a final decision")
             return
@@ -8626,7 +8840,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 user["id"],
                 final_result,
                 decided_at,
-                court_date,
+                court_date or None,
                 now_iso(),
                 case_id,
             ),
@@ -10450,18 +10664,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(201, {"ok": True})
 
     def api_system_settings(self, db: Database, user: DbRow | None) -> None:
-        err = owner_required(user)
+        err = developer_required(user)
         if err:
             self.error(403 if user else 401, err)
             return
         auto_verified = apply_auto_verification(db)
-        auto_licensed = apply_auto_license_approval(db)
         settings = get_system_settings(db)
-        stats = {**auto_verify_stats(db, settings), **auto_license_stats(db, settings)}
-        self.send_json(200, {"settings": settings, "stats": stats, "auto_verified_now": auto_verified, "auto_licensed_now": auto_licensed})
+        stats = auto_verify_stats(db, settings)
+        self.send_json(200, {"settings": settings, "stats": stats, "auto_verified_now": auto_verified})
 
     def api_update_system_settings(self, db: Database, user: DbRow | None) -> None:
-        err = owner_required(user)
+        err = developer_required(user)
         if err:
             self.error(403 if user else 401, err)
             return
@@ -10479,32 +10692,23 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(400, "Autopilot time must be a number of minutes")
             return
         minutes = max(1, min(minutes, 10080))
-        if "autopilot_license_enabled" in payload:
-            license_enabled = payload.get("autopilot_license_enabled")
-        else:
-            license_enabled = current_settings["autopilot_license_enabled"]
-        try:
-            license_minutes = int(payload.get("autopilot_license_minutes") or current_settings["autopilot_license_minutes"])
-        except (TypeError, ValueError):
-            self.error(400, "Driver license autopilot time must be a number of minutes")
-            return
-        license_minutes = max(1, min(license_minutes, 10080))
         enabled_value = "1" if str(enabled).lower() in ("1", "true", "yes", "on") else "0"
-        license_enabled_value = "1" if str(license_enabled).lower() in ("1", "true", "yes", "on") else "0"
         lockdown_enabled = payload.get("update_lockdown_enabled", current_settings["update_lockdown_enabled"])
         lockdown_enabled_value = "1" if str(lockdown_enabled).lower() in ("1", "true", "yes", "on") else "0"
+        lockdown_title = str(payload.get("update_lockdown_title") or current_settings["update_lockdown_title"]).strip()[:100]
         lockdown_message = str(payload.get("update_lockdown_message") or current_settings["update_lockdown_message"] or SYSTEM_SETTING_DEFAULTS["update_lockdown_message"]).strip()[:240]
+        lockdown_eta = str(payload.get("update_lockdown_eta") or current_settings["update_lockdown_eta"]).strip()[:80]
         set_system_setting(db, "autopilot_verify_enabled", enabled_value)
         set_system_setting(db, "autopilot_verify_minutes", str(minutes))
-        set_system_setting(db, "autopilot_license_enabled", license_enabled_value)
-        set_system_setting(db, "autopilot_license_minutes", str(license_minutes))
+        set_system_setting(db, "autopilot_license_enabled", "0")
         set_system_setting(db, "update_lockdown_enabled", lockdown_enabled_value)
+        set_system_setting(db, "update_lockdown_title", lockdown_title)
         set_system_setting(db, "update_lockdown_message", lockdown_message)
+        set_system_setting(db, "update_lockdown_eta", lockdown_eta)
         auto_verified = apply_auto_verification(db)
-        auto_licensed = apply_auto_license_approval(db)
         settings = get_system_settings(db)
-        stats = {**auto_verify_stats(db, settings), **auto_license_stats(db, settings)}
-        self.send_json(200, {"ok": True, "settings": settings, "stats": stats, "auto_verified_now": auto_verified, "auto_licensed_now": auto_licensed})
+        stats = auto_verify_stats(db, settings)
+        self.send_json(200, {"ok": True, "settings": settings, "stats": stats, "auto_verified_now": auto_verified})
 
     def api_desktop_access(self, user: DbRow | None) -> None:
         if not user:
@@ -10727,6 +10931,30 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         system_settings = get_system_settings(db)
         app_visibility = system_settings["app_visibility"]
+        dmv_license_rows = all_rows(
+            db,
+            """
+            SELECT u.id AS user_id, u.name, u.civ_number, u.email,
+                   d.license_status, d.license_class, d.endorsements, d.updated_at,
+                   link.identity_id
+            FROM users u
+            JOIN dmv_records d ON d.user_id = u.id
+            LEFT JOIN arma_account_links link ON link.user_id = u.id
+            ORDER BY u.name, u.id
+            LIMIT 1000
+            """,
+        )
+        admin_2fa_codes = all_rows(
+            db,
+            """
+            SELECT c.id, c.code_hint, c.expires_at, c.uses_remaining, c.used_at, c.revoked_at, c.created_at,
+                   creator.name AS created_by_name, used.name AS used_by_name
+            FROM admin_2fa_codes c
+            JOIN users creator ON creator.id = c.created_by
+            LEFT JOIN users used ON used.id = c.used_by
+            ORDER BY c.created_at DESC LIMIT 100
+            """,
+        )
         beta_tasks = all_rows(db, "SELECT * FROM beta_tasks ORDER BY active DESC, updated_at DESC LIMIT 100")
         beta_reports = all_rows(
             db,
@@ -10914,6 +11142,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "warnings": [dict(row) for row in warnings],
                 "audit_logs": [dict(row) for row in audit_logs],
                 "unlink_codes": [dict(row) for row in codes],
+                "admin_2fa_codes": [dict(row) for row in admin_2fa_codes],
                 "beta_program": {
                     "recruiting_enabled": system_settings["beta_recruiting_enabled"],
                     "recruiting_message": system_settings["beta_recruiting_message"],
@@ -10988,11 +11217,33 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "protected": sorted(PROTECTED_APP_IDS),
                 },
                 "applications_accepting": system_settings["applications_accepting"],
+                "system_settings": system_settings,
+                "autopilot_stats": auto_verify_stats(db, system_settings),
+                "application_intake": [
+                    {
+                        "key": str(posting["key"]),
+                        "label": str(posting["label"]),
+                        "division": str(posting["division"]),
+                        "accepting": system_settings["application_intake"].get(str(posting["key"]), True),
+                    }
+                    for posting in DEPARTMENT_POSTINGS
+                ],
                 "fnn_settings": {
                     "press_pass_limit": system_settings["fnn_press_pass_limit"],
                     "active_press_passes": sum(1 for member in press_members if str(member.get("press_pass_status") or "active") == "active"),
                     "issued_press_passes": len(press_members),
                     "press_members": press_members,
+                },
+                "dmv_settings": {
+                    "licenses": [dict(row) for row in dmv_license_rows],
+                    "classes": system_settings["dmv_license_classes"],
+                    "stats": {
+                        "total": len(dmv_license_rows),
+                        "valid": sum(1 for row in dmv_license_rows if row["license_status"] == "Valid"),
+                        "suspended": sum(1 for row in dmv_license_rows if row["license_status"] == "Suspended"),
+                        "revoked": sum(1 for row in dmv_license_rows if row["license_status"] == "Revoked"),
+                        "expired": sum(1 for row in dmv_license_rows if row["license_status"] == "Expired"),
+                    },
                 },
             },
         )
@@ -11137,6 +11388,33 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         add_admin_audit(db, int(user["id"]), "dev.unlink_code.created", details={"code_hint": raw_code[-4:], "expires_at": expires_at.isoformat()})
         self.send_json(201, {"ok": True, "code": raw_code, "expires_at": expires_at.isoformat(), "uses": 1})
 
+    def api_dev_generate_admin_2fa_code(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        try:
+            expiry_minutes = max(5, min(int(payload.get("expiry_minutes") or 15), 120))
+        except (TypeError, ValueError):
+            self.error(400, "Expiry must be a number of minutes")
+            return
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        raw_code = "ADM-" + "".join(secrets.choice(alphabet) for _ in range(4)) + "-" + "".join(secrets.choice(alphabet) for _ in range(4))
+        code_hash = hashlib.sha256(raw_code.upper().encode("utf-8")).hexdigest()
+        created_at = utcnow()
+        expires_at = created_at + dt.timedelta(minutes=expiry_minutes)
+        db.execute(
+            """
+            INSERT INTO admin_2fa_codes
+            (code_hash, code_hint, purpose, created_by, expires_at, uses_remaining, created_at)
+            VALUES (?, ?, 'admin_enforcement', ?, ?, 1, ?)
+            """,
+            (code_hash, raw_code[-4:], user["id"], expires_at.isoformat(), created_at.isoformat()),
+        )
+        add_admin_audit(db, int(user["id"]), "admin.2fa.created", details={"code_hint": raw_code[-4:], "expires_at": expires_at.isoformat()})
+        self.send_json(201, {"ok": True, "code": raw_code, "expires_at": expires_at.isoformat(), "uses": 1})
+
     def api_dev_account(self, db: Database, user: DbRow | None, target_id: int) -> None:
         err = developer_required(user)
         if err:
@@ -11248,15 +11526,23 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         assert user is not None
         payload = self.read_json()
-        accepting = bool(payload.get("accepting"))
+        raw_intake = payload.get("application_intake")
+        valid_keys = {str(posting["key"]) for posting in DEPARTMENT_POSTINGS}
+        if isinstance(raw_intake, dict):
+            intake = {key: bool(raw_intake.get(key, True)) for key in valid_keys}
+        else:
+            accepting = bool(payload.get("accepting"))
+            intake = {key: accepting for key in valid_keys}
+        set_system_setting(db, "application_intake", json.dumps(intake, separators=(",", ":"), sort_keys=True))
+        accepting = any(intake.values())
         set_system_setting(db, "applications_accepting", "1" if accepting else "0")
         add_admin_audit(
             db,
             int(user["id"]),
             "system.application_intake.updated",
-            details={"accepting": accepting},
+            details={"accepting": accepting, "application_intake": intake},
         )
-        self.send_json(200, {"ok": True, "applications_accepting": accepting})
+        self.send_json(200, {"ok": True, "applications_accepting": accepting, "application_intake": intake})
 
     def api_dev_update_fnn_settings(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
@@ -11311,6 +11597,176 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 issued_now += 1
         add_admin_audit(db, int(user["id"]), "fnn.press_pass_limit.updated", details={"press_pass_limit": pass_limit, "issued_now": issued_now})
         self.send_json(200, {"ok": True, "press_pass_limit": pass_limit, "issued_now": issued_now})
+
+    def api_dev_update_dmv_classes(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        raw_classes = payload.get("classes")
+        if not isinstance(raw_classes, list):
+            self.error(400, "License classes must be supplied as a list")
+            return
+        classes: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for raw in raw_classes[:50]:
+            if not isinstance(raw, dict):
+                continue
+            name = str(raw.get("name") or "").strip()[:60]
+            class_type = str(raw.get("type") or "endorsement").strip().lower()
+            if len(name) < 2 or name.lower() in seen:
+                continue
+            if class_type not in ("license", "endorsement"):
+                class_type = "endorsement"
+            seen.add(name.lower())
+            classes.append({"name": name, "type": class_type, "active": bool(raw.get("active", True))})
+        if not any(item["type"] == "license" and item["active"] for item in classes):
+            self.error(400, "Keep at least one active primary license class")
+            return
+        set_system_setting(db, "dmv_license_classes", json.dumps(classes, separators=(",", ":")))
+        add_admin_audit(db, int(user["id"]), "dmv.classes.updated", details={"classes": classes})
+        self.send_json(200, {"ok": True, "classes": classes})
+
+    def api_dev_bulk_dmv_licenses(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        status = str(payload.get("status") or "").strip().title()
+        if status not in ("Expired", "Revoked"):
+            self.error(400, "Bulk DMV action must be Expired or Revoked")
+            return
+        if str(payload.get("confirmation") or "").strip().upper() != f"MARK ALL {status.upper()}":
+            self.error(400, f"Type MARK ALL {status.upper()} to confirm")
+            return
+        reason = str(payload.get("reason") or f"Statewide DMV {status.lower()} action").strip()[:1000]
+        targets = all_rows(
+            db,
+            "SELECT user_id FROM dmv_records WHERE license_status <> ? AND license_status <> 'Exam Required'",
+            (status,),
+        )
+        ts = now_iso()
+        db.execute(
+            """UPDATE dmv_records
+               SET license_status = ?, action_notice_pending = 1,
+                   action_notice_reason = ?, action_notice_at = ?, updated_at = ?
+               WHERE license_status <> 'Exam Required'""",
+            (status, reason, ts, ts),
+        )
+        for target in targets:
+            add_message(db, int(target["user_id"]), f"Driver license {status.lower()}", f"Faircroft DMV marked your driver credential {status.lower()}. Reason: {reason}", int(user["id"]))
+        add_admin_audit(db, int(user["id"]), f"dmv.licenses.bulk_{status.lower()}", details={"affected": len(targets), "reason": reason})
+        self.send_json(200, {"ok": True, "status": status, "affected": len(targets)})
+
+    def api_dev_update_dmv_license(self, db: Database, user: DbRow | None, target_id: int) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        target = one(
+            db,
+            """SELECT u.id, u.name, u.civ_number, d.license_status, d.license_class, d.endorsements
+               FROM users u JOIN dmv_records d ON d.user_id = u.id WHERE u.id = ?""",
+            (target_id,),
+        )
+        if not target:
+            self.error(404, "Driver license record not found")
+            return
+        payload = self.read_json()
+        action = str(payload.get("action") or "").strip().lower()
+        allowed = {"suspend": "Suspended", "revoke": "Revoked", "expire": "Expired", "restore": "Valid", "update": str(target["license_status"])}
+        if action not in allowed:
+            self.error(400, "Select suspend, revoke, expire, restore, or update")
+            return
+        reason = str(payload.get("reason") or "").strip()[:1000]
+        if action != "update" and len(reason) < 3:
+            self.error(400, "Record a reason for this DMV action")
+            return
+        settings = get_system_settings(db)
+        configured = settings["dmv_license_classes"]
+        primary_names = {str(item.get("name")) for item in configured if item.get("type") == "license" and item.get("active")}
+        endorsement_names = {str(item.get("name")) for item in configured if item.get("type") == "endorsement" and item.get("active")}
+        license_class = str(payload.get("license_class") or target["license_class"]).strip()[:60]
+        if license_class not in primary_names:
+            self.error(400, "Select an active primary license class")
+            return
+        raw_endorsements = payload.get("endorsements")
+        endorsements = [str(value) for value in raw_endorsements] if isinstance(raw_endorsements, list) else []
+        endorsements = sorted({value for value in endorsements if value in endorsement_names})
+        status = allowed[action]
+        fee = 0.0
+        if action == "restore":
+            try:
+                fee = round(max(0.0, min(1000000.0, float(payload.get("restoration_fee") or 0))), 2)
+            except (TypeError, ValueError):
+                self.error(400, "Restoration fee must be a valid amount")
+                return
+        ts = now_iso()
+        requires_notice = action in ("suspend", "revoke", "expire")
+        db.execute(
+            """UPDATE dmv_records
+               SET license_status = ?, license_class = ?, endorsements = ?,
+                   action_notice_pending = ?, action_notice_reason = ?,
+                   action_notice_at = ?, updated_at = ?
+               WHERE user_id = ?""",
+            (
+                status, license_class, json.dumps(endorsements, separators=(",", ":")),
+                int(requires_notice), reason if requires_notice else "",
+                ts if requires_notice else None, ts, target_id,
+            ),
+        )
+        fee_case_id = None
+        if action == "restore":
+            if fee > 0:
+                charge = db.execute(
+                    """INSERT INTO charge_catalog
+                       (code, title, category, description, fine_amount, points, severity, kind)
+                       VALUES ('DMV-RESTORE', 'Driver License Restoration Fee', 'DMV Administrative Fee',
+                               'Administrative fee assessed when a suspended, revoked, or expired credential is restored.',
+                               0, 0, 'Administrative', 'citation')
+                       ON CONFLICT(code) DO UPDATE SET title = excluded.title
+                       RETURNING id"""
+                ).fetchone()
+                created = db.execute(
+                    """INSERT INTO citations
+                       (civ_id, officer_id, charge_id, charge_code, charge_title, category,
+                        fine_amount, points, severity, location, narrative, status, disposition,
+                        final_result, decided_at, created_at, updated_at)
+                       VALUES (?, ?, ?, 'DMV-RESTORE', 'Driver License Restoration Fee',
+                               'DMV Administrative Fee', ?, 0, 'Administrative',
+                               'Faircroft DMV', ?, 'closed', 'guilty', ?, ?, ?, ?)
+                       RETURNING id""",
+                    (
+                        target_id, user["id"], charge["id"], fee,
+                        reason or "Credential restored by Faircroft DMV.",
+                        f"Restoration fee due - ${fee:,.2f}",
+                        ts, ts, ts,
+                    ),
+                ).fetchone()
+                fee_case_id = int(created["id"])
+        action_label = {
+            "update": "credential details updated",
+            "suspend": "license suspended",
+            "revoke": "license revoked",
+            "expire": "license expired",
+            "restore": "license restored",
+        }[action]
+        body = f"Faircroft DMV {action_label}. Status: {status}. Class: {license_class}."
+        if reason:
+            body += f" Reason: {reason}."
+        if fee > 0:
+            body += f" A ${fee:,.2f} restoration fee was submitted to Settlement Operations for the next manual midnight deduction."
+        add_message(db, target_id, "Faircroft DMV credential update", body, int(user["id"]))
+        add_admin_audit(
+            db, int(user["id"]), f"dmv.license.{action}", target_id,
+            {"status": status, "license_class": license_class, "endorsements": endorsements, "reason": reason, "restoration_fee": fee, "fee_case_id": fee_case_id},
+        )
+        self.send_json(200, {"ok": True, "status": status, "restoration_fee": fee, "fee_case_id": fee_case_id})
 
     def api_dev_update_press_member(self, db: Database, user: DbRow | None, member_id: int) -> None:
         err = developer_required(user)
@@ -11372,6 +11828,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(401, "Authentication required")
             return
         db.execute("UPDATE users SET press_pass_notice_pending = 0 WHERE id = ?", (user["id"],))
+        self.send_json(200, {"ok": True})
+
+    def api_dmv_action_notice_acknowledge(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        db.execute("UPDATE dmv_records SET action_notice_pending = 0 WHERE user_id = ?", (user["id"],))
         self.send_json(200, {"ok": True})
 
     def send_dev_account_response(
@@ -11776,10 +12239,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 for row in all_rows(
                     db,
                     """
-                    SELECT i.*, c.charge_code, c.charge_title, u.name, u.civ_number
+                    SELECT i.*, c.charge_code, c.charge_title, u.name, u.civ_number,
+                           COALESCE(d.license_status, 'No license') AS license_status
                     FROM fine_settlement_items i
                     JOIN citations c ON c.id = i.citation_id
                     JOIN users u ON u.id = i.user_id
+                    LEFT JOIN dmv_records d ON d.user_id = i.user_id
                     WHERE i.batch_id = ? ORDER BY i.id
                     """,
                     (batch["id"],),
@@ -11940,6 +12405,69 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         add_admin_audit(db, int(user["id"]), "fine_settlement.code.created", details={"batch_id": batch_id, "hint": raw_code[-4:]})
         self.send_json(201, {"ok": True, "code": raw_code, "expires_at": expires_at})
 
+    def api_suspend_fine_batch_licenses(self, db: Database, user: DbRow | None, batch_id: int) -> None:
+        err = fine_settlement_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        batch = one(db, "SELECT * FROM fine_settlement_batches WHERE id = ?", (batch_id,))
+        if not batch:
+            self.error(404, "Settlement batch not found")
+            return
+        if batch["status"] != "draft":
+            self.error(409, "Licenses can only be suspended while the batch is awaiting authorization")
+            return
+        targets = all_rows(
+            db,
+            """
+            SELECT DISTINCT i.user_id, u.name, u.civ_number,
+                   COALESCE(d.license_status, 'No license') AS license_status
+            FROM fine_settlement_items i
+            JOIN users u ON u.id = i.user_id
+            LEFT JOIN dmv_records d ON d.user_id = i.user_id
+            WHERE i.batch_id = ?
+            ORDER BY u.name
+            """,
+            (batch_id,),
+        )
+        if not targets:
+            self.error(409, "Settlement batch has no players")
+            return
+        suspended_at = now_iso()
+        results: list[dict[str, Any]] = []
+        for target in targets:
+            if not one(db, "SELECT id FROM dmv_records WHERE user_id = ?", (target["user_id"],)):
+                create_default_dmv(db, int(target["user_id"]))
+            previous = str(target["license_status"] or "No license")
+            db.execute(
+                "UPDATE dmv_records SET license_status = 'Suspended', updated_at = ? WHERE user_id = ?",
+                (suspended_at, target["user_id"]),
+            )
+            reason = f"Failure to pay fines in settlement batch {batch['batch_number']}."
+            add_message(
+                db,
+                int(target["user_id"]),
+                "Driver license suspended for unpaid fines",
+                f"Your Faircroft driver license has been suspended for failure to pay outstanding fines. "
+                f"Reference: {batch['batch_number']}. Resolve the listed fines before requesting reinstatement.",
+                int(user["id"]),
+            )
+            results.append({
+                "user_id": int(target["user_id"]),
+                "name": target["name"],
+                "civ_number": target["civ_number"],
+                "previous_status": previous,
+                "license_status": "Suspended",
+                "reason": reason,
+            })
+        add_admin_audit(
+            db,
+            int(user["id"]),
+            "fine_settlement.licenses.batch_suspended",
+            details={"batch_id": batch_id, "batch_number": batch["batch_number"], "players": results},
+        )
+        self.send_json(200, {"ok": True, "batch_number": batch["batch_number"], "suspended": results})
+
     def api_approve_fine_settlement(self, db: Database, user: DbRow | None, batch_id: int) -> None:
         err = fine_settlement_required(user)
         if err:
@@ -11950,6 +12478,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         code = str(payload.get("code") or "").strip().upper()
         if not batch or batch["status"] != "draft":
             self.error(409, "Settlement batch is not awaiting approval")
+            return
+        unsuspended = all_rows(
+            db,
+            """
+            SELECT DISTINCT u.name
+            FROM fine_settlement_items i
+            JOIN users u ON u.id = i.user_id
+            LEFT JOIN dmv_records d ON d.user_id = i.user_id
+            WHERE i.batch_id = ? AND COALESCE(d.license_status, '') != 'Suspended'
+            """,
+            (batch_id,),
+        )
+        if unsuspended:
+            self.error(409, "Suspend every affected driver license before authorizing forced fine removal")
             return
         if not batch["approval_code_hash"] or not verify_password(code, batch["approval_code_hash"]):
             self.error(403, "Invalid settlement authorization code")
@@ -12194,10 +12736,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         stats = {
             "users": one(db, "SELECT COUNT(*) AS count FROM users")["count"],
             "unverified": one(db, "SELECT COUNT(*) AS count FROM users WHERE verified = 0")["count"],
-            "department_applications": one(db, "SELECT COUNT(*) AS count FROM department_applications WHERE status IN ('submitted','under_review','interview_requested')")["count"],
             "open_cases": one(db, "SELECT COUNT(*) AS count FROM citations WHERE status NOT IN ('paid','dismissed')")["count"],
             "panic_alerts": one(db, "SELECT COUNT(*) AS count FROM panic_alerts WHERE status = 'active'")["count"],
-            "pending_referrals": one(db, "SELECT COUNT(*) AS count FROM referrals WHERE status = 'pending'")["count"],
         }
         self.send_json(200, {"stats": stats})
 
@@ -12227,8 +12767,100 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             active = one(db, "SELECT character_name FROM user_characters WHERE user_id = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1", (row["id"],))
             item["character_count"] = int(count["count"] if count else 0)
             item["active_character_name"] = active["character_name"] if active else row["name"]
+            restriction = active_admin_account_restriction(db, int(row["id"]))
+            item["admin_restriction"] = dict(restriction) if restriction else None
             users.append(item)
         self.send_json(200, {"users": users})
+
+    def api_admin_enforcement(self, db: Database, user: DbRow | None, target_id: int) -> None:
+        err = admin_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        payload = self.read_json()
+        action = str(payload.get("action") or "").strip().lower()
+        allowed = {"cad_timeout", "cad_suspension", "cad_temp_ban", "cad_permanent_ban", "arma_temp_ban", "arma_permanent_ban"}
+        if action not in allowed:
+            self.error(400, "Unsupported enforcement action")
+            return
+        reason = str(payload.get("reason") or "").strip()
+        if len(reason) < 10:
+            self.error(400, "Provide an enforcement reason of at least 10 characters")
+            return
+        target = one(db, "SELECT * FROM users WHERE id = ?", (target_id,))
+        if not target:
+            self.error(404, "Account not found")
+            return
+        if has_any(target, "owner") and not has_any(user, "owner"):
+            self.error(403, "Only the owner can enforce an owner account")
+            return
+        requires_2fa = action in {"cad_permanent_ban", "arma_temp_ban", "arma_permanent_ban"}
+        identity = None
+        if action.startswith("arma_"):
+            identity = one(db, "SELECT identity_id FROM arma_account_links WHERE user_id = ? ORDER BY linked_at DESC LIMIT 1", (target_id,))
+            if not identity or not str(identity.get("identity_id") or "").strip():
+                self.error(409, "This account has no linked Bohemia identity")
+                return
+            if not arma_rcon_configured():
+                self.error(503, "Arma RCON is not configured")
+                return
+        two_factor_code = str(payload.get("two_factor_code") or "")
+        if requires_2fa and not consume_admin_2fa_code(db, two_factor_code, int(user["id"]), consume=False):
+            self.error(403, "A valid unused Admin 2FA code is required")
+            return
+        starts_at = utcnow()
+        expires_at: str | None = None
+        duration_minutes = 0
+        if action in {"cad_timeout", "cad_suspension", "cad_temp_ban", "arma_temp_ban"}:
+            try:
+                duration_minutes = max(1, min(int(payload.get("duration_minutes") or 60), 525600))
+            except (TypeError, ValueError):
+                self.error(400, "Duration must be a number of minutes")
+                return
+            expires_at = (starts_at + dt.timedelta(minutes=duration_minutes)).isoformat()
+        report_number = f"ADM-{starts_at.strftime('%Y%m%d')}-{secrets.randbelow(900000) + 100000}"
+        game_status = "not_requested"
+        game_response = ""
+        if action.startswith("arma_"):
+            seconds = duration_minutes * 60 if action == "arma_temp_ban" else 0
+            try:
+                result = execute_arma_rcon(f"#ban create {identity['identity_id']} {seconds} {' '.join(reason.replace('#', '').split())[:240]}")
+            except (OSError, RuntimeError) as exc:
+                self.error(502, f"Arma enforcement failed: {exc}")
+                return
+            game_status = result["status"]
+            game_response = result["response"]
+        if requires_2fa and not consume_admin_2fa_code(db, two_factor_code, int(user["id"])):
+            self.error(409, "The Admin 2FA code was already consumed")
+            return
+        db.execute(
+            """
+            INSERT INTO account_sanctions
+            (user_id, sanction_type, reason, report_number, starts_at, expires_at, created_by, created_at,
+             game_enforcement_status, game_enforcement_response, game_enforcement_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (target_id, action, reason[:1200], report_number, starts_at.isoformat(), expires_at, user["id"],
+             starts_at.isoformat(), game_status, game_response, starts_at.isoformat() if action.startswith("arma_") else None),
+        )
+        if action.startswith("cad_"):
+            label = action.replace("cad_", "").replace("_", " ").title()
+            add_message(
+                db,
+                target_id,
+                f"Account {label}",
+                f"Your Faircroft RP OS/CAD access has been restricted. Reason: {reason}. "
+                f"Admin Chat remains available. Reference {report_number}.",
+                int(user["id"]),
+            )
+        add_admin_audit(
+            db,
+            int(user["id"]),
+            f"admin.enforcement.{action}",
+            target_id,
+            {"report_number": report_number, "reason": reason, "expires_at": expires_at, "two_factor_required": requires_2fa},
+        )
+        self.send_json(201, {"ok": True, "report_number": report_number, "expires_at": expires_at, "game_enforcement_status": game_status})
 
     def api_admin_referrals(self, db: Database, user: DbRow | None) -> None:
         err = admin_required(user)
