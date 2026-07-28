@@ -6309,9 +6309,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
 
     def find_arma_link_for_event(self, db: Database, event: dict[str, Any]) -> DbRow | None:
-        identity_id = str(event.get("IdentityId") or "").strip()
-        uid = str(event.get("Uid") or "").strip()
-        rpl_identity = str(self.bridge_value(event, "RplIdentityValue", "RplIdentity")).strip()
+        identity_id = str(self.bridge_value(event, "IdentityId", "identityId", "identity_id")).strip()
+        uid = str(self.bridge_value(event, "Uid", "uid", "PlayerUid", "playerUid")).strip()
+        rpl_identity = str(self.bridge_value(event, "RplIdentityValue", "rplIdentityValue", "RplIdentity", "rplIdentity")).strip()
         return one(
             db,
             """
@@ -6332,30 +6332,34 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         payload = self.read_json()
         data = self.bridge_payload_data(payload)
-        events = data.get("PendingEvents") or data.get("Events")
+        events = self.bridge_value(data, "PendingEvents", "pendingEvents", "pending_events", "Events", "events", default=[])
         if not isinstance(events, list):
-            events = [data] if self.bridge_value(data, "EventTypeName", "EventType") else []
+            events = [data] if self.bridge_value(data, "EventTypeName", "eventTypeName", "EventType", "eventType", "event_type") else []
         accepted: list[str] = []
         skipped: list[str] = []
         for event in events:
             if not isinstance(event, dict):
                 continue
-            event_id = str(event.get("EventId") or "").strip()
+            event_id = str(self.bridge_value(event, "EventId", "eventId", "event_id")).strip()
             if not event_id:
-                sequence = self.bridge_value(event, "EventSequence", "Sequence", default=secrets.token_hex(4))
-                event_id = f"{event.get('ServerId') or data.get('ServerId') or 'default'}-{sequence}"
+                sequence = self.bridge_value(event, "EventSequence", "eventSequence", "event_sequence", "Sequence", "sequence", default=secrets.token_hex(4))
+                event_server = self.bridge_value(event, "ServerId", "serverId", "server_id") or self.bridge_value(data, "ServerId", "serverId", "server_id", default="default")
+                event_id = f"{event_server}-{sequence}"
             if one(db, "SELECT id FROM arma_activity_logs WHERE event_id = ?", (event_id,)):
                 skipped.append(event_id)
                 continue
             link = self.find_arma_link_for_event(db, event)
             user_id = link["user_id"] if link else None
-            amount = round(float(event.get("Amount") or 0), 2)
-            currency = str(event.get("Currency") or "").strip().lower()
-            event_type = str(self.bridge_value(event, "EventTypeName", "EventType", default="player.action")).strip()[:80]
-            action = str(event.get("Action") or "").strip()[:80]
-            reason = str(event.get("Reason") or "").strip()[:240]
-            source_system = str(event.get("SourceSystem") or "TBS_RP_LINKING_SYSTEM").strip()[:120]
-            created_at = parse_bridge_datetime(str(event.get("CreatedAtUtc") or "")).isoformat()
+            try:
+                amount = round(float(self.bridge_value(event, "Amount", "amount", default=0) or 0), 2)
+            except (TypeError, ValueError):
+                amount = 0.0
+            currency = str(self.bridge_value(event, "Currency", "currency")).strip().lower()
+            event_type = str(self.bridge_value(event, "EventTypeName", "eventTypeName", "EventType", "eventType", "event_type", default="player.action")).strip()[:80]
+            action = str(self.bridge_value(event, "Action", "action")).strip()[:80]
+            reason = str(self.bridge_value(event, "Reason", "reason")).strip()[:240]
+            source_system = str(self.bridge_value(event, "SourceSystem", "sourceSystem", "source_system", default="TBS_RP_LINKING_SYSTEM")).strip()[:120]
+            created_at = parse_bridge_datetime(str(self.bridge_value(event, "CreatedAtUtc", "createdAtUtc", "created_at_utc", "CreatedAt", "createdAt"))).isoformat()
             received_at = now_iso()
             db.execute(
                 """
@@ -6367,19 +6371,19 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 (
                     event_id,
                     user_id,
-                    str(event.get("ServerId") or data.get("ServerId") or "default")[:80],
+                    str(self.bridge_value(event, "ServerId", "serverId", "server_id") or self.bridge_value(data, "ServerId", "serverId", "server_id", default="default"))[:80],
                     event_type,
                     action,
                     source_system,
                     reason,
                     amount,
                     currency,
-                    round(float(event.get("BalanceAfter") or 0), 2),
-                    str(event.get("IdentityId") or "")[:160],
-                    str(event.get("Uid") or "")[:160],
-                    str(self.bridge_value(event, "RplIdentityValue", "RplIdentity"))[:160],
-                    str(event.get("Platform") or "")[:60],
-                    str(event.get("PlayerName") or "")[:120],
+                    round(float(self.bridge_value(event, "BalanceAfter", "balanceAfter", "balance_after", default=0) or 0), 2),
+                    str(self.bridge_value(event, "IdentityId", "identityId", "identity_id"))[:160],
+                    str(self.bridge_value(event, "Uid", "uid", "PlayerUid", "playerUid"))[:160],
+                    str(self.bridge_value(event, "RplIdentityValue", "rplIdentityValue", "RplIdentity", "rplIdentity"))[:160],
+                    str(self.bridge_value(event, "Platform", "platform", "PlatformName", "platformName"))[:60],
+                    str(self.bridge_value(event, "PlayerName", "playerName", "player_name"))[:120],
                     json.dumps(event, separators=(",", ":"), default=str)[:4000],
                     created_at,
                     received_at,
@@ -11223,6 +11227,19 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "SELECT * FROM arma_game_bank_balances WHERE identity_id = ?",
             (account.get("identity_id") or "",),
         )
+        self.send_dev_account_response(
+            db,
+            account,
+            active_block,
+            sanctions,
+            warnings,
+            arma_activity,
+            characters,
+            jobs,
+            citations,
+            properties,
+            game_bank,
+        )
 
     def api_dev_update_application_intake(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
@@ -11356,6 +11373,21 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         db.execute("UPDATE users SET press_pass_notice_pending = 0 WHERE id = ?", (user["id"],))
         self.send_json(200, {"ok": True})
+
+    def send_dev_account_response(
+        self,
+        db: Database,
+        account: DbRow,
+        active_block: DbRow | None,
+        sanctions: list[DbRow],
+        warnings: list[DbRow],
+        arma_activity: list[DbRow],
+        characters: list[DbRow],
+        jobs: list[DbRow],
+        citations: list[DbRow],
+        properties: list[DbRow],
+        game_bank: DbRow | None,
+    ) -> None:
         identity_candidates = [
             str(account.get("identity_id") or "").strip(),
             str(account.get("uid") or "").strip(),

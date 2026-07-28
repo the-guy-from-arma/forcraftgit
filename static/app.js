@@ -41,6 +41,8 @@ const state = {
   devAntiCheatUid: null,
   devAntiCheatSearch: "",
   devAntiCheatPage: 1,
+  devAntiCheatMetric: null,
+  devAntiCheatMetricSearch: "",
   dmvTab: "overview",
   jobsTab: "state_police",
   mdtTab: "search",
@@ -1770,8 +1772,8 @@ function renderProfile() {
           </div>
           <button class="danger" type="button" data-open-arma-unlink>Unlink Arma Account</button>
           ${state.armaUnlinkOpen ? `
-            <div class="modal-backdrop" data-close-arma-unlink>
-              <section class="mdt-modal force-code-modal" role="dialog" aria-modal="true" aria-label="Developer Arma unlink">
+            <div class="modal-backdrop force-code-backdrop arma-unlink-backdrop" data-close-arma-unlink>
+              <section class="mdt-modal force-code-modal arma-unlink-modal" role="dialog" aria-modal="true" aria-label="Developer Arma unlink">
                 <header class="row">
                   <div><p class="eyebrow">Development use only</p><h2>Unlink Arma Account</h2></div>
                   <button class="icon-action" type="button" data-close-arma-unlink aria-label="Close">${iconSvg.back}</button>
@@ -9016,13 +9018,13 @@ function renderDevAntiCheat(data) {
       <div><span class="anticheat-command-mark">TB</span><div><p class="eyebrow">Thunder Buddies Security Network</p><h2>Live player intelligence</h2><p>Anti-cheat telemetry correlated against verified Faircroft identities.</p></div></div>
       <div class="anticheat-sync">${sync.map((item) => `<span class="pill ${item.status === "synced" ? "green" : "amber"}">${escapeHtml(item.source_key)} · ${Number(item.records || 0)} · ${escapeHtml(item.status)}</span>`).join("") || `<span class="pill amber">awaiting first SFTP sync</span>`}</div>
     </section>
-    <div class="dev-metrics">
-      <div class="dev-metric green-tone"><span>Online now</span><strong>${Number(metrics.online || 0)}</strong><small>Anti-Cheat JSON status</small></div>
-      <div class="dev-metric"><span>Known players</span><strong>${Number(metrics.players || 0)}</strong><small>Anti-cheat records</small></div>
-      <div class="dev-metric red-tone"><span>Flagged</span><strong>${Number(metrics.flagged || 0)}</strong><small>Aim or movement</small></div>
-      <div class="dev-metric red-tone"><span>Grey screened</span><strong>${Number(metrics.grey_screened || 0)}</strong><small>Profile locks</small></div>
-      <div class="dev-metric amber-tone"><span>Active locks</span><strong>${Number(metrics.active_locks || 0)}</strong><small>Dev Chat only</small></div>
-      <div class="dev-metric blue-tone"><span>Events</span><strong>${Number(metrics.events || 0)}</strong><small>Recent evidence</small></div>
+    <div class="dev-metrics anticheat-metric-grid">
+      <button class="dev-metric green-tone" type="button" data-anticheat-metric="online"><span>Online now</span><strong>${Number(metrics.online || 0)}</strong><small>View live identities</small><i>Open roster</i></button>
+      <button class="dev-metric" type="button" data-anticheat-metric="players"><span>Known players</span><strong>${Number(metrics.players || 0)}</strong><small>Browse anti-cheat records</small><i>Open directory</i></button>
+      <button class="dev-metric red-tone" type="button" data-anticheat-metric="flagged"><span>Flagged</span><strong>${Number(metrics.flagged || 0)}</strong><small>Aim or movement</small><i>Review flags</i></button>
+      <button class="dev-metric red-tone" type="button" data-anticheat-metric="grey"><span>Grey screened</span><strong>${Number(metrics.grey_screened || 0)}</strong><small>Restricted profiles</small><i>Review profiles</i></button>
+      <button class="dev-metric amber-tone" type="button" data-anticheat-metric="locks"><span>Active locks</span><strong>${Number(metrics.active_locks || 0)}</strong><small>Dev Chat only</small><i>Open lock queue</i></button>
+      <button class="dev-metric blue-tone" type="button" data-anticheat-metric="events"><span>Events</span><strong>${Number(metrics.events || 0)}</strong><small>Recent evidence</small><i>Open event stream</i></button>
     </div>
     ${renderAntiCheatRemovalList(data.profile_locks || [])}
     <section class="dev-card anticheat-directory">
@@ -9043,6 +9045,64 @@ function renderDevAntiCheat(data) {
         <span>${players.length ? `${pageStart + 1}–${Math.min(pageStart + pageSize, players.length)} of ${players.length} records` : "0 records"}</span>
         <div><button class="secondary" type="button" data-anticheat-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>Previous</button><strong>Page ${page} / ${pageCount}</strong><button class="secondary" type="button" data-anticheat-page="${page + 1}" ${page >= pageCount ? "disabled" : ""}>Next</button></div>
       </footer>
+    </section>
+    ${state.devAntiCheatMetric ? renderAntiCheatMetricModal(data, state.devAntiCheatMetric) : ""}
+  </div>`;
+}
+
+function renderAntiCheatMetricModal(data, metric) {
+  const players = data.players || [];
+  const definitions = {
+    online: ["Live server roster", "Players currently marked online by anti-cheat telemetry"],
+    players: ["Known player directory", "Every identity held in the synchronized anti-cheat records"],
+    flagged: ["Flagged intelligence", "Players with aim or movement detection evidence"],
+    grey: ["Grey-screened profiles", "Players currently restricted by profile enforcement"],
+    locks: ["Active lock queue", "Restrictions awaiting developer review or JSON removal"],
+    events: ["Evidence event stream", "Recent anti-cheat events received from the game server"],
+  };
+  const [title, subtitle] = definitions[metric] || definitions.players;
+  let records = [];
+  if (metric === "online") records = players.filter((player) => player.online);
+  else if (metric === "flagged") records = players.filter((player) => Number(player.teleport_flags || 0) + Number(player.aim_flags || 0) > 0);
+  else if (metric === "grey") records = players.filter((player) => player.active_lock_id || Number(player.grey_screened || 0) || Number(player.profile_locked || 0));
+  else if (metric === "locks") records = (data.profile_locks || []).filter((lock) => !lock.cleared_at);
+  else if (metric === "events") records = data.events || [];
+  else records = players;
+  const query = state.devAntiCheatMetricSearch.trim().toLowerCase();
+  records = records.filter((record) => !query || [
+    record.player_name, record.player_uid, record.uid, record.account_name, record.civ_number,
+    record.event_type, record.action, record.reason,
+  ].some((value) => String(value || "").toLowerCase().includes(query)));
+  const isEvent = metric === "events";
+  const isLock = metric === "locks";
+  return `<div class="dev-profile-backdrop anticheat-roster-backdrop" data-close-anticheat-metric>
+    <section class="anticheat-roster-modal" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+      <header>
+        <div><p class="eyebrow">ANTI-CHEAT OPERATIONS</p><h2>${escapeHtml(title)}</h2><p>${escapeHtml(subtitle)}</p></div>
+        <button class="secondary" type="button" data-close-anticheat-metric>Close</button>
+      </header>
+      <div class="anticheat-roster-tools">
+        <label><span>SEARCH THIS VIEW</span><input id="antiCheatMetricSearch" type="search" value="${escapeHtml(state.devAntiCheatMetricSearch)}" placeholder="Player, UID, account, CIV, or evidence…" /></label>
+        <strong>${records.length} ${records.length === 1 ? "record" : "records"}</strong>
+      </div>
+      <div class="anticheat-roster-list">
+        ${records.map((record) => {
+          const uid = record.uid || record.player_uid || "";
+          const player = players.find((item) => item.uid === uid) || record;
+          const flags = Number(player.teleport_flags || 0) + Number(player.aim_flags || 0);
+          const primary = isEvent ? (record.event_type || record.action || "Anti-cheat event") : (record.player_name || player.player_name || "Unknown player");
+          const secondary = isEvent
+            ? `${record.player_name || uid || "Unknown identity"} · ${record.reason || record.action || "Evidence received"}`
+            : `${uid || "UID unavailable"}${record.account_name || player.account_name ? ` · ${record.account_name || player.account_name}` : ""}`;
+          const status = isEvent ? (record.received_at || record.created_at || "") : isLock ? "ACTIVE LOCK" : player.online ? "ONLINE" : flags ? `${flags} FLAGS` : "CLEAR";
+          return `<button type="button" class="anticheat-roster-row" ${uid ? `data-anticheat-player="${escapeHtml(uid)}"` : "disabled"}>
+            <span class="anticheat-presence ${player.online ? "online" : ""}"></span>
+            <span><strong>${escapeHtml(primary)}</strong><small>${escapeHtml(secondary)}</small></span>
+            <em class="${player.online ? "online" : flags || isLock ? "alert" : ""}">${escapeHtml(status)}</em>
+            <i>›</i>
+          </button>`;
+        }).join("") || `<div class="anticheat-roster-empty"><strong>No matching records</strong><span>This view will update with the next anti-cheat synchronization.</span></div>`}
+      </div>
     </section>
   </div>`;
 }
@@ -9228,8 +9288,29 @@ function bindDevWorkspace() {
   $$("[data-dev-tab], [data-dev-go]").forEach((button) => button.addEventListener("click", () => { state.devTab = button.dataset.devTab || button.dataset.devGo; render(); }));
   $$("[data-anticheat-player]").forEach((button) => button.addEventListener("click", () => {
     state.devAntiCheatUid = button.dataset.anticheatPlayer;
+    state.devAntiCheatMetric = null;
     render();
   }));
+  $$("[data-anticheat-metric]").forEach((button) => button.addEventListener("click", () => {
+    state.devAntiCheatMetric = button.dataset.anticheatMetric;
+    state.devAntiCheatMetricSearch = "";
+    render();
+  }));
+  $$("[data-close-anticheat-metric]").forEach((button) => button.addEventListener("click", (event) => {
+    if (event.target !== event.currentTarget && event.currentTarget.classList.contains("dev-profile-backdrop")) return;
+    state.devAntiCheatMetric = null;
+    state.devAntiCheatMetricSearch = "";
+    render();
+  }));
+  $("#antiCheatMetricSearch")?.addEventListener("input", (event) => {
+    state.devAntiCheatMetricSearch = event.target.value;
+    render();
+    const input = $("#antiCheatMetricSearch");
+    if (input) {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+  });
   $$("[data-close-anticheat]").forEach((button) => button.addEventListener("click", (event) => {
     if (event.target !== event.currentTarget && event.currentTarget.classList.contains("dev-profile-backdrop")) return;
     state.devAntiCheatUid = null;
@@ -10310,7 +10391,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.2.0").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.2.0-unlink-layout").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {
