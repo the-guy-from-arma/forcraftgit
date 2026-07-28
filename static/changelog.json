@@ -17,7 +17,8 @@
         "Fixed the mobile Arma unlink dialog being constrained by the animated profile panel and overlapping Recent Link Claims.",
         "Contained the unlink guidance, authorization field, acknowledgment, and confirmation action within a responsive single-column mobile dialog.",
         "Restored the missing Developer Tools linked-account API response that caused Recent Arma Link records to display Request failed.",
-        "Expanded Arma event ingestion compatibility for alternate event wrappers, casing, identity fields, timestamps, and numeric payload values."
+        "Expanded Arma event ingestion compatibility for alternate event wrappers, casing, identity fields, timestamps, and numeric payload values.",
+        "Made /link/arma a dedicated PWA deep link that opens Profile directly on Game Link, with optional link-code prefilling through the code query parameter."
       ]
     },
     {

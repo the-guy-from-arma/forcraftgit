@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v020-unlink-layout";
+const CACHE = "faircroft-rp-v020-arma-deeplink";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.2.0-unlink-layout",
+  "/static/styles.css?v=0.2.0-arma-deeplink",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.2.0-unlink-layout",
+  "/static/app.js?v=0.2.0-arma-deeplink",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
   "/static/brand/platforms/playstation.svg",

@@ -22,6 +22,7 @@ const state = {
   activeApp: null,
   returnToMdtOnClose: false,
   pendingArmaCode: new URL(window.location.href).searchParams.get("code") || "",
+  armaLinkDeepLink: window.location.pathname.replace(/\/+$/, "") === "/link/arma",
   profileTab: "overview",
   profilePhotoOpen: false,
   starterStep: 0,
@@ -436,8 +437,9 @@ async function loadSession() {
   state.session = await api("/api/session", { timeoutMs: SESSION_BOOT_TIMEOUT_MS });
   if (state.session?.user) startSessionRefresh();
   else stopSessionRefresh();
-  if (state.session?.user && state.pendingArmaCode && !state.activeApp) {
+  if (state.session?.user && (state.pendingArmaCode || state.armaLinkDeepLink) && !state.activeApp) {
     state.activeApp = "profile";
+    state.profileView = "connections";
     await loadAppData("profile");
   }
   render();
@@ -1962,7 +1964,8 @@ function bindProfile() {
       await api("/api/profile/link-arma", { method: "POST", body: payload });
       toast("Arma account attached");
       state.pendingArmaCode = "";
-      if (window.location.search.includes("code=")) {
+      state.armaLinkDeepLink = false;
+      if (window.location.pathname === "/link/arma" || window.location.search.includes("code=")) {
         window.history.replaceState({}, "", "/");
       }
       await loadAppData("profile");
@@ -10391,7 +10394,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.2.0-unlink-layout").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.2.0-arma-deeplink").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {
