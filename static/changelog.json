@@ -62,6 +62,9 @@
         ,"Temporarily restricted Leaderboards and Ravenhood Markets visibility and API access to Owner and Developer accounts during controlled testing."
         ,"Established Ravenhood Markets as Faircroft's official in-world securities exchange throughout resident and developer interfaces."
         ,"Rebuilt the complete Ravenhood trading floor with an animated live price curve, instrument quotes, market pulse, exchange ticker, order-entry dock, position book, execution ledger, securities directory, portfolio allocation, and responsive terminal navigation."
+        ,"Reworked System Changelog into a guided release-story experience with an animated chapter route, focused Added, Changed, Fixed, and Removed views, release-impact highlights, and progressive disclosure instead of one continuous ledger."
+        ,"Restored the Faircroft local-involvement ordinance control directly inside Developer Tools ICE Settings while keeping it synchronized with MDT Settings."
+        ,"Upgraded Leaderboards with animated competitive podiums, flame effects for leading placements, rank-progression meters, leader margins, and exact performance needed to advance to the next position."
       ],
       "fixed": [
         "Prevented temporary anti-cheat event and outbox records from contaminating persistent leaderboard rankings.",
@@ -84,8 +87,12 @@
         ,"Moved the local-law-enforcement immigration restriction switch from ICE Settings into a dedicated Developer Tools MDT Settings tab while preserving the existing audited policy enforcement."
         ,"Rebuilt MyFaircroft as a full-screen animated resident-services dashboard with synchronized game-bank status, civic-account navigation, obligation summaries, court calendars, payment ledgers, taxes, appeals, and records outside the retired compact panel."
         ,"Fixed MyFaircroft game-bank, payment, contest, appeal, and expungement requests failing because the active-character database resolver received a user dictionary instead of a numeric account ID."
+        ,"Added a persistent, explicitly labeled Exit Ravenhood control that remains visible across desktop, tablet, and mobile exchange layouts."
+        ,"Upgraded Ravenhood with professional bid, ask, spread, venue, and order-flow telemetry; staged workstation entrances; animated depth scanning; stronger exchange hierarchy; and refined execution, directory, and order-entry surfaces."
         ,"Fixed the home-screen application grid being clipped beneath the RP OS footer by adding a dedicated scroll region and device-safe bottom clearance."
         ,"Fixed the Developer Tools operations sidebar cutting off lower navigation entries by adding an independent height-aware navigation scroller while keeping staff identity controls anchored."
+        ,"Fixed large changelog releases rendering every category as an overwhelming, uninterrupted list by introducing selectable chapters and compact release previews on desktop and mobile."
+        ,"Fixed PC anti-cheat records being displayed as PlayStation by correcting the Arma PlatformKind mapping and replacing raw enum numbers with explicit platform names in new telemetry."
       ]
     },
     {

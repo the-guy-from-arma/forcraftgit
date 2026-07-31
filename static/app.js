@@ -91,6 +91,7 @@ const state = {
   roadmapFilter: "all",
   roadmapEditorId: null,
   changelogEntryIndex: 0,
+  changelogCategory: "overview",
   pressComposeOpen: false,
   pressSelectedReportId: null,
   leaderboardTab: "wealth",
@@ -1492,6 +1493,33 @@ function leaderboardMetric(board, item) {
   return `${value.toLocaleString()}${config?.suffix || ""}`;
 }
 
+function leaderboardRawValue(board, item) {
+  const config = LEADERBOARD_CONFIG[board];
+  return Number(item?.[config?.field] || 0);
+}
+
+function leaderboardAdvanceMetric(board, value) {
+  const config = LEADERBOARD_CONFIG[board];
+  if (config?.format === "money") return money(value);
+  if (config?.format === "duration") return formatDuration(value);
+  if (config?.format === "ratio") return `${value.toFixed(2)} K/D`;
+  return `${Math.ceil(value).toLocaleString()}${config?.suffix || ""}`;
+}
+
+function leaderboardProgress(board, rows, index) {
+  const current = leaderboardRawValue(board, rows[index]);
+  if (index === 0) {
+    const margin = Math.max(0, current - leaderboardRawValue(board, rows[1]));
+    return { label: rows[1] ? `Leading by ${leaderboardAdvanceMetric(board, margin)}` : "Unchallenged leader", percent: 100, flame: true };
+  }
+  const target = leaderboardRawValue(board, rows[index - 1]);
+  const step = ["money", "ratio"].includes(LEADERBOARD_CONFIG[board]?.format) ? 0.01 : 1;
+  const needed = Math.max(0, target - current) + step;
+  const lower = leaderboardRawValue(board, rows[index + 1]);
+  const span = Math.max(1, target - lower);
+  return { label: `${leaderboardAdvanceMetric(board, needed)} to reach #${index}`, percent: Math.max(6, Math.min(96, ((current - lower) / span) * 100)), flame: index < 3 };
+}
+
 function leaderboardDetail(board, item) {
   if (["kills", "deaths", "suicides", "kd_ratio", "playtime", "current_session", "leo_hours", "fire_hours", "civ_hours"].includes(board)) {
     return `${Number(item.kills || 0)} kills · ${Number(item.deaths || 0)} deaths`;
@@ -1536,7 +1564,8 @@ function renderLeaderboards() {
       <div><span>Credit profiles</span><strong>${Number(data.summary?.synced_credit_profiles || 0)}</strong></div>
     </section>
     ${rows.length ? `<section class="leaderboard-stage">
-      <div class="leaderboard-podium">${podium.map((item) => `<article class="rank-${item.rank}">
+      <div class="leaderboard-podium">${podium.map((item, index) => { const progress = leaderboardProgress(boardKey, rows, index); return `<article class="rank-${item.rank} is-heated" style="--podium-index:${index}">
+        <div class="leaderboard-flames" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
         <span class="leaderboard-medal">${item.rank === 1 ? "01" : String(item.rank).padStart(2, "0")}</span>
         <div class="leaderboard-avatar">${escapeHtml(String(item.name || "?").slice(0, 2).toUpperCase())}</div>
         <small>${item.rank === 1 ? "CURRENT LEADER" : `RANK ${item.rank}`}</small>
@@ -1544,14 +1573,15 @@ function renderLeaderboards() {
         <p>${leaderboardIdentity(item)}</p>
         <strong>${escapeHtml(leaderboardMetric(boardKey, item))}</strong>
         <em>${leaderboardDetail(boardKey, item)}</em>
-      </article>`).join("")}</div>
+        <div class="leaderboard-advance"><span>${escapeHtml(progress.label)}</span><i><b style="--advance:${progress.percent}%"></b></i></div>
+      </article>`; }).join("")}</div>
       <div class="leaderboard-ledger">
         <header><span>RANK</span><span>PLAYER</span><span>PERFORMANCE</span></header>
-        ${remaining.map((item) => `<article>
+        ${remaining.map((item, rowIndex) => { const absoluteIndex = rowIndex + 3; const progress = leaderboardProgress(boardKey, rows, absoluteIndex); return `<article style="--ledger-index:${rowIndex}">
           <b>${String(item.rank).padStart(2, "0")}</b>
           <div><strong>${escapeHtml(item.name || "Unknown player")}${item.online ? `<i>ONLINE</i>` : ""}</strong><small>${leaderboardIdentity(item).replace(/^ · /, "")}</small></div>
-          <span><strong>${escapeHtml(leaderboardMetric(boardKey, item))}</strong><small>${leaderboardDetail(boardKey, item)}</small></span>
-        </article>`).join("") || `<div class="leaderboard-short-field">Only the podium currently qualifies for this board.</div>`}
+          <span><strong>${escapeHtml(leaderboardMetric(boardKey, item))}</strong><small>${leaderboardDetail(boardKey, item)}</small><em class="leaderboard-next-rank">↑ ${escapeHtml(progress.label)}</em><i class="leaderboard-rank-meter"><b style="--advance:${progress.percent}%"></b></i></span>
+        </article>`; }).join("") || `<div class="leaderboard-short-field">Only the podium currently qualifies for this board.</div>`}
       </div>
     </section>` : `<section class="leaderboard-empty"><span>${iconSvg.trophy}</span><h3>Awaiting ranked telemetry</h3><p>This board activates as soon as its authoritative game source reports eligible players.</p></section>`}
     <footer class="leaderboard-source"><span>DATA SOURCE</span><strong>${escapeHtml(data.sources?.[boardKey] || "Faircroft synchronized records")}</strong><p>Rankings reflect roleplay-server statistics and can change after each sync.</p></footer>
@@ -3481,12 +3511,13 @@ function renderMarketWorkspace() {
   const points=Array.from({length:18},(_,i)=>{const trend=(change/100)*i*3.2,wave=Math.sin(i*.83+Number(selected.price||0))*chartSeed+Math.cos(i*.31)*chartSeed*.55;return `${(i/17*1000).toFixed(1)},${Math.max(35,Math.min(275,170-wave-trend)).toFixed(1)}`}).join(" ");
   const finalY=points.split(" ").at(-1).split(",")[1],movers=[...securities].sort((a,b)=>Math.abs(marketChange(b))-Math.abs(marketChange(a))).slice(0,5);
   const stockOptions=securities.map(x=>`<option value="${escapeHtml(x.ticker)}">${escapeHtml(x.ticker)} · ${escapeHtml(x.name)}</option>`).join("");
-  return `<main class="market-workspace market-terminal-workspace">
-    <header class="market-topbar"><div class="market-brand"><span>RH</span><div><strong>Ravenhood</strong><small>FAIRCROFT SECURITIES EXCHANGE</small></div></div><div class="market-session"><span>FCX</span><i></i><strong>${data.market_open?"Continuous trading":"Market closed"}</strong></div><div class="market-top-actions"><em class="${data.market_open?"open":"closed"}">${data.market_open?"MARKET OPEN":"MARKET CLOSED"}</em><button class="secondary" data-refresh-market>Refresh</button><button class="secondary" data-close-market>Exit</button></div></header>
+  return `<main class="market-workspace market-terminal-workspace market-v3">
+    <header class="market-topbar"><div class="market-brand"><span>RH</span><div><strong>Ravenhood</strong><small>FAIRCROFT SECURITIES EXCHANGE</small></div></div><div class="market-session"><span>FCX</span><i></i><strong>${data.market_open?"Continuous trading":"Market closed"}</strong></div><div class="market-top-actions"><em class="${data.market_open?"open":"closed"}">${data.market_open?"MARKET OPEN":"MARKET CLOSED"}</em><button class="secondary" data-refresh-market>Sync market</button><button class="market-exit" type="button" data-close-market><span>&larr;</span> Exit Ravenhood</button></div></header>
     <div class="market-tape">${securities.concat(securities).map(x=>`<button data-market-ticker="${escapeHtml(x.ticker)}"><b>${escapeHtml(x.ticker)}</b><span>${money(x.price)}</span><i class="${marketChange(x)>=0?"up":"down"}">${marketChange(x)>=0?"+":""}${marketChange(x).toFixed(2)}%</i></button>`).join("")}</div>
     <section class="market-command">
       <aside class="market-rail"><div class="market-account-summary"><span>NET LIQUIDATION VALUE</span><strong>${money(total)}</strong><small>${money(invested)} invested</small><i><b style="width:${allocation.toFixed(1)}%"></b></i></div><nav><button class="active"><i>${iconSvg.trending}</i><span>Market overview</span></button><button data-market-dialog="deposit"><i>+</i><span>Deposit funds</span></button><button data-market-dialog="withdrawal"><i>−</i><span>Withdraw funds</span></button><button data-market-dialog="transfer"><i>→</i><span>Transfer positions</span></button></nav><section class="market-movers"><header><span>MARKET PULSE</span><strong>Top movers</strong></header>${movers.map(x=>`<button data-market-ticker="${escapeHtml(x.ticker)}"><b>${escapeHtml(x.ticker)}</b><span>${money(x.price)}</span><em class="${marketChange(x)>=0?"up":"down"}">${marketChange(x)>=0?"+":""}${marketChange(x).toFixed(2)}%</em></button>`).join("")}</section><div class="market-admin-note"><strong>SECURE SETTLEMENT</strong><p>Cash movements require an authorized in-game handoff and a one-time Ravenhood receipt.</p></div></aside>
       <section class="market-terminal"><header class="market-instrument-head"><div><span>${escapeHtml(selected.sector||"FAIRCROFT MARKET")} / ${escapeHtml(humanLabel(selected.security_type||"stock"))}</span><h1>${escapeHtml(selected.ticker||"—")}</h1><p>${escapeHtml(selected.name||"Select a security")}</p></div><div><small>LAST TRADE</small><strong>${money(selected.price)}</strong><em class="${change>=0?"up":"down"}">${change>=0?"+":""}${change.toFixed(2)}%</em></div></header><div class="market-quote-strip"><span><small>OPEN</small><strong>${money(Number(selected.previous_price||selected.price||0))}</strong></span><span><small>DAY RANGE</small><strong>${money(Math.max(0,Number(selected.price||0)-chartSeed))} — ${money(Number(selected.price||0)+chartSeed)}</strong></span><span><small>POSITION</small><strong>${selectedHolding?`${Number(selectedHolding.quantity).toLocaleString(undefined,{maximumFractionDigits:4})} shares`:"Not held"}</strong></span><span><small>BUYING POWER</small><strong>${money(account.cash_balance)}</strong></span></div>
+        <div class="market-depth-strip"><span><small>BID</small><strong>${money(Math.max(0,Number(selected.price||0)*.9985))}</strong><i class="up">${Math.max(10,Math.round(Number(selected.price||1)*17))}</i></span><span><small>SPREAD</small><strong>${money(Number(selected.price||0)*.003)}</strong><i>FCX</i></span><span><small>ASK</small><strong>${money(Number(selected.price||0)*1.0015)}</strong><i class="down">${Math.max(10,Math.round(Number(selected.price||1)*13))}</i></span><span><small>ORDER FLOW</small><strong>${change>=0?"BUY PRESSURE":"SELL PRESSURE"}</strong><i class="${change>=0?"up":"down"}">${Math.min(99,Math.max(1,Math.round(50+change*4)))}%</i></span></div>
         <div class="market-live-chart ${change>=0?"positive":"negative"}"><div class="market-chart-grid"></div><svg viewBox="0 0 1000 310" preserveAspectRatio="none"><defs><linearGradient id="marketArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".3"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs><polygon points="0,310 ${points} 1000,310" fill="url(#marketArea)"/><polyline points="${points}" fill="none" stroke="currentColor" stroke-width="4" vector-effect="non-scaling-stroke"/><circle cx="1000" cy="${finalY}" r="7" fill="currentColor"/></svg><div class="market-chart-axis"><span>OPEN</span><span>10 AM</span><span>NOON</span><span>2 PM</span><span>NOW</span></div><strong class="market-live-badge"><i></i>LIVE</strong></div>
         <section class="market-directory"><header><div><span>FCX LISTED SECURITIES</span><h2>Market directory</h2></div><strong>${securities.length} ACTIVE LISTINGS</strong></header><div class="market-directory-head"><span>Symbol / company</span><span>Sector</span><span>Last price</span><span>Change</span></div><div>${securities.map(x=>`<button class="${x.ticker===selected.ticker?"active":""}" data-market-ticker="${escapeHtml(x.ticker)}"><span><b>${escapeHtml(x.ticker)}</b><small>${escapeHtml(x.name)}</small></span><span>${escapeHtml(x.sector)}</span><strong>${money(x.price)}</strong><em class="${marketChange(x)>=0?"up":"down"}">${marketChange(x)>=0?"+":""}${marketChange(x).toFixed(2)}%</em></button>`).join("")}</div></section></section>
       <aside class="market-trade-dock"><section class="market-order-ticket"><header><div><span>ORDER ENTRY</span><strong>${escapeHtml(selected.ticker||"—")}</strong></div><i class="${data.market_open?"open":""}"></i></header><form data-market-order><input type="hidden" name="ticker" value="${escapeHtml(selected.ticker||"")}"/><label>Action<select name="side"><option value="buy">Buy shares</option><option value="sell">Sell shares</option></select></label><label>Quantity<input name="quantity" type="number" min="0.000001" step="0.000001" required placeholder="0.000000"/></label><dl><div><dt>Market price</dt><dd>${money(selected.price)}</dd></div><div><dt>Commission</dt><dd>${Number(data.trade_fee_percent||0).toFixed(2)}%</dd></div><div><dt>Available cash</dt><dd>${money(account.cash_balance)}</dd></div></dl><button class="market-primary" ${data.market_open?"":"disabled"}>Preview market order</button><small>Orders execute at the displayed Ravenhood market price.</small></form></section><section class="market-position-book"><header><span>POSITION BOOK</span><strong>${holdings.length}</strong></header>${holdings.length?holdings.map(h=>`<button data-market-ticker="${escapeHtml(h.ticker)}"><span><b>${escapeHtml(h.ticker)}</b><small>${Number(h.quantity).toLocaleString(undefined,{maximumFractionDigits:4})} shares</small></span><div><strong>${money(Number(h.quantity)*Number(h.price))}</strong><em class="${Number(h.price)>=Number(h.average_cost)?"up":"down"}">${Number(h.price)>=Number(h.average_cost)?"+":""}${money((Number(h.price)-Number(h.average_cost))*Number(h.quantity))}</em></div></button>`).join(""):`<p>Positions acquired through Ravenhood will appear here.</p>`}</section><section class="market-activity"><header><span>EXECUTION LOG</span></header>${(data.orders||[]).slice(0,6).map(o=>`<p><span><b>${escapeHtml(o.side.toUpperCase())}</b> ${escapeHtml(o.ticker)}</span><strong>${money(o.gross_amount)}</strong></p>`).join("")||`<small>No executions recorded.</small>`}</section></aside>
@@ -5386,7 +5417,11 @@ function renderChangelogWorkspace() {
   const selected = entries[state.changelogEntryIndex];
   const count = changelogCount(selected);
   const currentVersion = String(data.version || selected.version || "live");
-  return `<main class="release-workspace">
+  const categories = [["added", "Added", selected.added || [], "New systems"], ["changed", "Changed", selected.changed || [], "Evolved systems"], ["fixed", "Fixed", selected.fixed || [], "Quality restored"], ["removed", "Removed", selected.removed || [], "Retired systems"]];
+  if (!["overview", ...categories.map(([key]) => key)].includes(state.changelogCategory)) state.changelogCategory = "overview";
+  const activeCategory = categories.find(([key]) => key === state.changelogCategory);
+  const overviewHighlights = categories.filter(([, , items]) => items.length).map(([key, label, items, caption], index) => `<button class="release-chapter-preview ${key}" type="button" data-changelog-category="${key}" style="--chapter-index:${index}"><span>0${index + 1}</span><div><small>${escapeHtml(caption)}</small><h3>${escapeHtml(label)}</h3><p>${escapeHtml(items[0])}</p></div><strong>${items.length}<small>records</small></strong><i>Explore chapter →</i></button>`).join("");
+  return `<main class="release-workspace changelog-v3">
     <header class="release-topbar">
       <div class="release-brand"><span>FC</span><div><p>FAIRCROFT RP / RELEASE ARCHIVE</p><h1>System Changelog</h1></div></div>
       <div class="release-top-actions"><span><i></i>READ-ONLY UPDATE RECORD</span><button class="secondary" type="button" data-refresh-changelog>Refresh archive</button><button class="primary" type="button" data-close-changelog>Return to RP OS</button></div>
@@ -5403,8 +5438,9 @@ function renderChangelogWorkspace() {
           <div><p>PATCH ${String(state.changelogEntryIndex + 1).padStart(2, "0")} / ${String(entries.length).padStart(2, "0")}</p><h2>${escapeHtml(selected.title || `RP OS ${selected.version}`)}</h2><span>Published ${escapeHtml(selected.date || "date unavailable")} Â· ${count} documented change${count === 1 ? "" : "s"}</span></div>
           <div class="release-version-mark"><small>VERSION</small><strong>${escapeHtml(selected.version || currentVersion)}</strong><i>${state.changelogEntryIndex === 0 ? "LATEST" : "ARCHIVED"}</i></div>
         </div>
-        <div class="release-summary-strip"><div><span>Added</span><strong>${selected.added?.length || 0}</strong></div><div><span>Changed</span><strong>${selected.changed?.length || 0}</strong></div><div><span>Fixed</span><strong>${selected.fixed?.length || 0}</strong></div><div><span>Removed</span><strong>${selected.removed?.length || 0}</strong></div></div>
-        <div class="release-sections">${renderChangelogReleaseGroup("Added", selected.added)}${renderChangelogReleaseGroup("Changed", selected.changed)}${renderChangelogReleaseGroup("Fixed", selected.fixed)}${renderChangelogReleaseGroup("Removed", selected.removed)}</div>
+        <nav class="release-journey" aria-label="Release chapters"><button class="${state.changelogCategory === "overview" ? "active" : ""}" type="button" data-changelog-category="overview"><span>00</span><div><small>Release brief</small><strong>Overview</strong></div></button>${categories.map(([key, label, items, caption], index) => `<button class="${state.changelogCategory === key ? "active" : ""} ${key}" type="button" data-changelog-category="${key}" ${items.length ? "" : "disabled"}><span>0${index + 1}</span><div><small>${escapeHtml(caption)}</small><strong>${escapeHtml(label)} <em>${items.length}</em></strong></div></button>`).join("")}</nav>
+        <div class="release-progress"><i style="--release-progress:${state.changelogCategory === "overview" ? 0 : categories.findIndex(([key]) => key === state.changelogCategory) + 1}"></i></div>
+        ${state.changelogCategory === "overview" ? `<section class="release-overview"><header><div><p>RELEASE IMPACT</p><h2>A guided record of what changed.</h2></div><span>${count}<small>total updates</small></span></header><div class="release-chapter-grid">${overviewHighlights}</div></section>` : `<div class="release-focus-head"><button type="button" data-changelog-category="overview">← Release overview</button><div><small>ACTIVE CHAPTER</small><strong>${escapeHtml(activeCategory?.[1] || "Release notes")}</strong></div><span>${activeCategory?.[2]?.length || 0} documented records</span></div><div class="release-sections focused">${renderChangelogReleaseGroup(activeCategory?.[1] || "Release notes", activeCategory?.[2] || [])}</div>`}
         <footer class="release-footer"><div><span>END OF PATCH RECORD</span><strong>${escapeHtml(selected.version || currentVersion)} / ${escapeHtml(selected.date || "")}</strong></div><p>This record is generated from the deployed Faircroft update package.</p></footer>
       </section>
     </div>
@@ -5414,6 +5450,12 @@ function renderChangelogWorkspace() {
 function bindChangelogWorkspace() {
   $$("[data-changelog-entry]").forEach(button => button.addEventListener("click", () => {
     state.changelogEntryIndex = Number(button.dataset.changelogEntry || 0);
+    state.changelogCategory = "overview";
+    render();
+    document.querySelector(".release-main")?.scrollTo({ top: 0, behavior: "smooth" });
+  }));
+  $$("[data-changelog-category]").forEach(button => button.addEventListener("click", () => {
+    state.changelogCategory = button.dataset.changelogCategory || "overview";
     render();
     document.querySelector(".release-main")?.scrollTo({ top: 0, behavior: "smooth" });
   }));
@@ -9745,8 +9787,16 @@ function renderDevDmvSettings(dmv) {
 
 function renderDevIceSettings(ice) {
   const agents = ice.agents || [];
+  const restricted = Boolean(ice.restrict_local_data);
   return `<div class="stack dev-ice-settings">
-    <div class="dev-view-intro"><div><span>FAIRCROFT FEDERAL PERSONNEL</span><h2>ICE credential directory</h2><p>Review accounts authorized to access federal immigration operations. Local MDT information boundaries are managed under MDT Settings.</p></div><strong>${agents.length} AUTHORIZED</strong></div>
+    <div class="dev-view-intro"><div><span>FAIRCROFT FEDERAL OPERATIONS</span><h2>ICE command settings</h2><p>Manage federal credentials and the local-law-enforcement boundary applied to immigration operations.</p></div><strong class="${restricted ? "red" : "green"}">${restricted ? "LOCAL RESTRICTION ACTIVE" : "INTERAGENCY SHARING"}</strong></div>
+    <section class="dev-card ice-policy-card">
+      <div><small>LOCAL INVOLVEMENT POLICY</small><h2>Faircroft ordinance control</h2><p>${escapeHtml(ice.ordinance_notice || "")}</p></div>
+      <form class="devIcePolicyForm">
+        <label class="dev-experience-section"><span><b>RESTRICT LOCAL INVOLVEMENT</b><strong>Withhold local reports, BOLOs, and warrants from ICE MDT</strong><small>NCIC identity, citizenship, DMV, and vehicle-safety information remains available. This control is synchronized with MDT Settings.</small></span><input type="checkbox" name="restrict_local_data" ${restricted ? "checked" : ""} /></label>
+        <button class="primary">Save ICE involvement policy</button>
+      </form>
+    </section>
     <section class="dev-card"><div class="dev-card-header"><div><span>FEDERAL PERSONNEL</span><h2>ICE credential holders</h2></div><strong>${agents.length}</strong></div><div class="ice-agent-ledger">${agents.map((agent) => `<article><div><strong>${escapeHtml(agent.name)}</strong><small>CIV ${escapeHtml(agent.civ_number || "pending")}</small></div><span>${escapeHtml((agent.roles || []).map(humanLabel).join(", "))}</span></article>`).join("") || `<div class="empty">No ICE Agent or ICE Commander roles assigned.</div>`}</div></section>
   </div>`;
 }
@@ -10327,9 +10377,9 @@ function devPlatformIdentity(...values) {
   const normalized = String(raw).trim().toLowerCase();
   const platforms = {
     "0": ["Unknown", "UN", "No platform signal", ""],
-    "1": ["PC", "PC", "Windows / Steam", "/static/brand/platforms/windows.svg"],
-    "2": ["Xbox", "XB", "Xbox network", "/static/brand/platforms/xbox.svg"],
-    "3": ["PlayStation 5", "PS5", "PlayStation Network", "/static/brand/platforms/playstation.svg"],
+    "1": ["Xbox", "XB", "Xbox network", "/static/brand/platforms/xbox.svg"],
+    "2": ["PlayStation 5", "PS5", "PlayStation Network", "/static/brand/platforms/playstation.svg"],
+    "3": ["PC", "PC", "Windows / Steam", "/static/brand/platforms/windows.svg"],
     pc: ["PC", "PC", "Windows / Steam", "/static/brand/platforms/windows.svg"],
     windows: ["PC", "PC", "Windows / Steam", "/static/brand/platforms/windows.svg"],
     steam: ["PC", "PC", "Windows / Steam", "/static/brand/platforms/windows.svg"],
@@ -10530,18 +10580,18 @@ function bindDevWorkspace() {
       await refreshDevTools();
     } catch (error) { toast(error.message); }
   }));
-  $("#devMdtSettingsForm")?.addEventListener("submit", async (event) => {
+  $$("#devMdtSettingsForm, .devIcePolicyForm").forEach((form) => form.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
       await api("/api/dev-tools/ice-settings", {
         method: "PATCH",
         body: { restrict_local_data: Boolean(event.currentTarget.restrict_local_data.checked) },
       });
-      toast("MDT information policy updated");
+      toast("ICE local-involvement policy updated");
       await refreshDevTools();
       await loadSession();
     } catch (error) { toast(error.message); }
-  });
+  }));
   $("[data-dmv-add-class]")?.addEventListener("click", () => {
     const list = $("[data-dmv-class-list]");
     if (!list) return;
