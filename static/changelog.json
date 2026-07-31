@@ -28,7 +28,8 @@
         ,"Added an Admin Chat-only resident experience while RP OS/CAD access is restricted."
         ,"Added live linked-account search in Developer Tools across resident name, email, CIV number, in-game name, and Bohemia identity."
         ,"Added a Beta-only Download Our App icon with dedicated PWA, Windows desktop, and Android APK release locations.",
-        "Added an audited Developer Tools emergency control that resets every active Arma account link and notifies affected residents to reconnect with a new code."
+        "Added an audited Developer Tools emergency control that resets every active Arma account link and notifies affected residents to reconnect with a new code.",
+        "Added a guarded Developer Tools game-economy migration control that clears stale Railway FCRPMUSSALO balance snapshots while preserving links, CAD records, fines, taxes, and settlement history."
       ],
       "changed": [
         "Consolidated the current platform work into the RP OS 0.2.1 release.",
@@ -72,7 +73,8 @@
         ,"Fixed successfully filed press briefs not appearing immediately in the reporter archive even though the newsroom had accepted them.",
         "Fixed Press Desk submissions failing before database insertion because press reports were omitted from the approved record-number generator.",
         "Fixed Fire MDT retaining desktop-width navigation, controls, incident rows, and telemetry sizing on mobile devices.",
-        "Updated the PWA asset cache so the repaired Press Desk and responsive Fire MDT load immediately after deployment."
+        "Updated the PWA asset cache so the repaired Press Desk and responsive Fire MDT load immediately after deployment.",
+        "Game-bank snapshot resets now place affected PWA accounts into Awaiting sync until the new Arma database reports their current balances."
       ]
     },
     {

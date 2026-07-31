@@ -5389,6 +5389,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_generate_unlink_code(db, user)
                 elif path == "/api/dev-tools/emergency-unlink-all" and method == "POST":
                     self.api_dev_emergency_unlink_all(db, user)
+                elif path == "/api/dev-tools/reset-game-bank-sync" and method == "POST":
+                    self.api_dev_reset_game_bank_sync(db, user)
                 elif path == "/api/dev-tools/admin-2fa" and method == "POST":
                     self.api_dev_generate_admin_2fa_code(db, user)
                 elif path == "/api/dev-tools/sanctions" and method == "POST":
@@ -11530,6 +11532,49 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "ok": True,
                 "unlinked": len(links),
                 "affected_users": len(affected_user_ids),
+            },
+        )
+
+    def api_dev_reset_game_bank_sync(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        if str(payload.get("confirmation") or "").strip().upper() != "CLEAR ALL SYNCED GAME MONEY":
+            self.error(400, "Type CLEAR ALL SYNCED GAME MONEY to authorize the imported balance reset")
+            return
+        snapshot = one(
+            db,
+            """
+            SELECT COUNT(*) AS records,
+                   COALESCE(SUM(balance), 0) AS total_balance,
+                   MAX(synced_at) AS last_synced_at
+            FROM arma_game_bank_balances
+            """,
+        ) or {"records": 0, "total_balance": 0, "last_synced_at": None}
+        records = int(snapshot["records"] or 0)
+        total_balance = round(float(snapshot["total_balance"] or 0), 2)
+        db.execute("DELETE FROM arma_game_bank_balances")
+        add_admin_audit(
+            db,
+            int(user["id"]),
+            "arma.game_bank_sync.reset",
+            details={
+                "deleted_records": records,
+                "cleared_total": total_balance,
+                "previous_last_synced_at": snapshot.get("last_synced_at"),
+                "scope": "imported_snapshot_only",
+            },
+        )
+        self.send_json(
+            200,
+            {
+                "ok": True,
+                "cleared_records": records,
+                "cleared_total": total_balance,
+                "status": "awaiting_new_server_sync",
             },
         )
 

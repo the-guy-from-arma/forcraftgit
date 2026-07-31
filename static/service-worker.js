@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v021-emergency-link-fire-press";
+const CACHE = "faircroft-rp-v021-game-bank-migration";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.2.1-emergency-link-fire-press",
+  "/static/styles.css?v=0.2.1-game-bank-migration",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.2.1-emergency-link-fire-press",
+  "/static/app.js?v=0.2.1-game-bank-migration",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
   "/static/brand/platforms/playstation.svg",

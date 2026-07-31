@@ -871,6 +871,34 @@ textarea:focus {
 .dev-emergency-link-reset input { width: 100%; min-width: 0; border-color: rgba(239, 78, 99, .35); background: #0b1116; }
 .dev-emergency-link-reset button { width: 100%; }
 
+.dev-game-bank-reset {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(320px, .85fr);
+  align-items: end;
+  gap: 24px;
+  border-color: rgba(247, 183, 51, .34);
+  background: linear-gradient(120deg, rgba(115, 75, 15, .16), rgba(15, 23, 29, .96) 48%);
+}
+.dev-game-bank-reset h2 { margin: 4px 0 7px; }
+.dev-game-bank-reset p { margin: 0 0 8px; color: var(--muted); line-height: 1.55; }
+.dev-game-bank-reset > div > small { color: #8d9ba1; line-height: 1.5; }
+.dev-game-bank-reset form { display: grid; gap: 10px; }
+.dev-game-bank-reset label { display: grid; gap: 7px; color: #aab5ba; font-size: 11px; }
+.dev-game-bank-reset label strong { color: #f7c766; }
+.dev-game-bank-reset input { width: 100%; min-width: 0; border-color: rgba(247, 183, 51, .35); background: #0b1116; }
+.dev-game-bank-reset button { width: 100%; }
+.dev-game-bank-reset output {
+  min-height: 31px;
+  display: flex;
+  align-items: center;
+  padding: 7px 10px;
+  color: #9cabaf;
+  border: 1px solid #29353a;
+  border-radius: 6px;
+  background: #0b1115;
+  font-size: 10px;
+}
+
 .dev-game-db-status {
   border-color: rgba(247, 183, 51, 0.28);
   background: rgba(247, 183, 51, 0.055);
@@ -1276,6 +1304,10 @@ textarea:focus {
   }
 
   .dev-emergency-link-reset {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .dev-game-bank-reset {
     grid-template-columns: 1fr;
     gap: 16px;
   }

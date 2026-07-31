@@ -9161,6 +9161,21 @@ function renderDevTools() {
           <button class="danger" type="submit">Emergency unlink all accounts</button>
         </form>
       </section>
+      <section class="dev-card dev-game-bank-reset">
+        <div>
+          <p class="eyebrow">Game economy migration</p>
+          <h2>Clear imported Arma money snapshots</h2>
+          <p>Remove stale FCRPMUSSALO balances imported from the previous game server. PWA balances will show Awaiting sync until the new server database reports each identity again.</p>
+          <small>Before running this, confirm Railway's Shadowhaven SFTP bank-sync variables point to the new server database. An active old-server sync would import the stale balances again. This reset does not unlink accounts or alter fines, taxes, settlement batches, CAD records, or in-game files.</small>
+        </div>
+        <form id="devGameBankResetForm">
+          <label>Type <strong>CLEAR ALL SYNCED GAME MONEY</strong> to continue
+            <input name="confirmation" autocomplete="off" spellcheck="false" required />
+          </label>
+          <button class="danger" type="submit">Clear stale synced balances</button>
+          <output data-game-bank-reset-status>Ready for a controlled migration reset</output>
+        </form>
+      </section>
     </div>`;
   }
   return `<div class="dev-ops-view dev-audit-view"><div class="dev-view-intro"><div><span>IMMUTABLE STAFF RECORD</span><h2>Administrative activity</h2><p>Chronological accountability across enforcement, identity, moderation, and system controls.</p></div><strong>${logs.length} EVENTS</strong></div><section class="dev-card dev-audit-panel"><div class="dev-card-header"><div><span>EVENT STREAM</span><h2>Activity ledger</h2></div><span class="dev-live-indicator"><i></i>Current</span></div>${devAudit(logs)}</section></div>`;
@@ -10136,6 +10151,37 @@ function bindDevTools() {
       button.textContent = "Emergency unlink all accounts";
     }
   });
+  $("#devGameBankResetForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const confirmation = String(new FormData(form).get("confirmation") || "").trim();
+    if (confirmation.toUpperCase() !== "CLEAR ALL SYNCED GAME MONEY") {
+      toast("Type the full game-money reset phrase");
+      return;
+    }
+    if (!window.confirm("Clear every imported FCRPMUSSALO balance from Railway? PWA accounts will show Awaiting sync until the new server reports them.")) return;
+    const button = form.querySelector('button[type="submit"]');
+    const status = form.querySelector("[data-game-bank-reset-status]");
+    button.disabled = true;
+    button.textContent = "Clearing imported snapshots…";
+    status.textContent = "Removing stale Railway balance snapshots";
+    try {
+      const result = await api("/api/dev-tools/reset-game-bank-sync", {
+        method: "POST",
+        confirm: false,
+        body: { confirmation },
+      });
+      status.textContent = `${Number(result.cleared_records || 0)} stale balances cleared · awaiting new server sync`;
+      toast(`${Number(result.cleared_records || 0)} imported game balances cleared`);
+      form.reset();
+      button.textContent = "Balance snapshots cleared";
+    } catch (error) {
+      status.textContent = error.message;
+      toast(error.message);
+      button.disabled = false;
+      button.textContent = "Clear stale synced balances";
+    }
+  });
   $("#devFnnSettingsForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     await api("/api/dev-tools/fnn-settings", {
@@ -10986,7 +11032,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.2.1-emergency-link-fire-press").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.2.1-game-bank-migration").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {
