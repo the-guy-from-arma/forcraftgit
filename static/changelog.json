@@ -46,6 +46,9 @@
         ,"Added an active scheduled-movement ledger to Ravenhood Stock Market Settings with affected securities, target percentage, schedule timing, live progress, and immediate stop controls."
       ],
       "changed": [
+        "Rebuilt Ravenhood around selectable Day, Week, Month, and Year market views for every security, with animated recorded and projected paths, range-specific timelines, a continuous borderless ticker tape, and streamlined trading rails.",
+        "Replaced the boxed Leaderboards podium with a continuous ranking runway: a single editorial leader feature, streamlined challenger flow, integrated personal position, fast division and category navigation, and one uninterrupted responsive standings sequence.",
+        "Rebuilt the Faircroft Lottery as an immersive live drawing experience with a kinetic draw chamber, circulating numbered balls, physical resident entry ticket, prize and countdown stage, live drawing tape, transparent entry-to-winner journey, verified chance record, and integrated prize-funding story.",
         "Reimagined Faircroft Financial as a flagship private-client banking experience with a dimensional resident credential, cinematic account command center, live financial-position narratives, credit threshold guidance, authoritative activity presentation, identity assurance, and premium responsive motion.",
         "Moved audited CAD, Press Desk, and published-story content maintenance out of Administration and into Developer Tools FNN Settings, with complete source-file review dialogs required before deletion controls are exposed.",
         "Rebuilt Leaderboards as a full championship arena with a dominant first-place stage, staggered challengers, live leader advantage, signed-in player chase intelligence, continuous contender standings, division-scale typography, and responsive competitive motion.",
