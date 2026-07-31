@@ -855,6 +855,22 @@ textarea:focus {
   font-size: 13px;
 }
 
+.dev-emergency-link-reset {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(320px, .85fr);
+  align-items: end;
+  gap: 24px;
+  border-color: rgba(239, 78, 99, .42);
+  background: linear-gradient(120deg, rgba(120, 20, 37, .18), rgba(15, 23, 29, .96) 48%);
+}
+.dev-emergency-link-reset h2 { margin: 4px 0 7px; }
+.dev-emergency-link-reset p:last-child { margin: 0; color: var(--muted); line-height: 1.55; }
+.dev-emergency-link-reset form { display: grid; gap: 10px; }
+.dev-emergency-link-reset label { display: grid; gap: 7px; color: #aab5ba; font-size: 11px; }
+.dev-emergency-link-reset label strong { color: #ff8797; }
+.dev-emergency-link-reset input { width: 100%; min-width: 0; border-color: rgba(239, 78, 99, .35); background: #0b1116; }
+.dev-emergency-link-reset button { width: 100%; }
+
 .dev-game-db-status {
   border-color: rgba(247, 183, 51, 0.28);
   background: rgba(247, 183, 51, 0.055);
@@ -1257,6 +1273,11 @@ textarea:focus {
 @media (max-width: 650px) {
   .dev-visibility-grid {
     grid-template-columns: 1fr;
+  }
+
+  .dev-emergency-link-reset {
+    grid-template-columns: 1fr;
+    gap: 16px;
   }
 
   .dev-visibility-intro,
@@ -14851,8 +14872,10 @@ textarea:focus {
   --fire-red: #ef4c53;
   --fire-amber: #ffb34f;
   --ems-blue: #45a9e8;
-  width: 100vw;
+  width: 100%;
+  max-width: 100vw;
   min-height: 100svh;
+  overflow-x: hidden;
   display: grid;
   grid-template-columns: 246px minmax(0, 1fr);
   color: #eaf0f1;
@@ -14909,7 +14932,7 @@ textarea:focus {
 .fire-command-user div { display: grid; }
 .fire-command-user strong { font-size: 12px; }
 .fire-command-user small { color: #6f7c82; font-size: 10px; }
-.fire-command-main { min-width: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr); }
+.fire-command-main { width: 100%; min-width: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr); }
 .fire-command-topbar {
   min-height: 80px;
   display: flex;
@@ -15040,24 +15063,45 @@ textarea:focus {
 }
 @media (max-width: 980px) {
   .fire-command-workspace { grid-template-columns: 1fr; }
-  .fire-command-sidebar { min-height: 0; padding: 11px; }
+  .fire-command-sidebar { min-width: 0; min-height: 0; gap: 0; padding: 9px 10px; border-right: 0; border-bottom: 1px solid #242b30; }
   .fire-command-brand, .fire-command-user { display: none; }
-  .fire-command-sidebar nav { display: flex; overflow-x: auto; }
-  .fire-command-sidebar nav button { min-width: 150px; }
+  .fire-command-sidebar nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; }
+  .fire-command-sidebar nav button { min-width: 0; min-height: 46px; grid-template-columns: 22px minmax(0, 1fr); padding: 0 9px; }
+  .fire-command-sidebar nav button small { display: none; }
   .fire-incident-row { grid-template-columns: 25px 1fr auto; }
   .fire-incident-report { grid-column: 2 / -1; }
   .fire-incident-units { display: none; }
 }
 @media (max-width: 650px) {
-  .fire-command-topbar { align-items: flex-start; padding: 12px; }
+  .fire-command-workspace { min-height: 100dvh; }
+  .fire-command-topbar { min-width: 0; min-height: 0; align-items: stretch; flex-direction: column; gap: 10px; padding: 11px 12px; }
+  .fire-command-topbar h1 { font-size: 24px; }
+  .fire-command-topbar > div:last-child { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
   .fire-command-topbar em { display: none; }
-  .fire-command-topbar button { padding: 0 9px; }
+  .fire-command-topbar button { width: 100%; min-width: 0; padding: 0 9px; }
   .fire-command-metrics { grid-template-columns: repeat(2, 1fr); }
+  .fire-command-metrics article { min-width: 0; min-height: 66px; padding: 10px 13px; }
+  .fire-command-metrics article:nth-child(2) { border-right: 0; }
+  .fire-command-metrics article:nth-child(-n+2) { border-bottom: 1px solid #242c31; }
+  .fire-command-metrics strong { font-size: 20px; }
   .fire-command-content { padding: 10px; }
-  .fire-incident-row { grid-template-columns: 22px 1fr; }
+  .fire-incident-board, .fire-personnel-board, .fire-command-content > .fire-command-board { width: 100%; max-width: 100%; }
+  .fire-incident-row { min-width: 0; grid-template-columns: 19px minmax(0, 1fr); gap: 8px; padding: 11px 10px; }
+  .fire-incident-report { min-width: 0; }
+  .fire-incident-report p, .fire-incident-report small, .fire-incident-type strong { overflow-wrap: anywhere; }
   .fire-incident-status, .fire-incident-actions { grid-column: 2; }
   .fire-incident-actions { justify-content: start; }
+  .fire-incident-actions button { flex: 1; }
+  .fire-cleared-log > div { grid-template-columns: 58px minmax(0, 1fr); }
+  .fire-cleared-log time { grid-column: 2; }
   .fire-personnel-grid { grid-template-columns: 1fr; }
+  .fire-personnel-grid article { min-width: 0; grid-template-columns: 38px minmax(0, 1fr); }
+  .fire-personnel-grid article > span:last-child { grid-column: 2; }
+}
+@media (max-width: 390px) {
+  .fire-command-sidebar nav button { grid-template-columns: 1fr; justify-items: center; padding: 6px 4px; text-align: center; }
+  .fire-command-sidebar nav button b { display: none; }
+  .fire-command-sidebar nav button span { font-size: 10px; }
 }
 
 /* Press Desk */

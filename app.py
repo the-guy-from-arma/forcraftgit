@@ -1239,6 +1239,7 @@ def generate_record_number(db: Database, table: str, column: str, prefix: str) -
         ("businesses", "license_number"),
         ("department_applications", "application_number"),
         ("treasury_requests", "request_number"),
+        ("press_reports", "report_number"),
     }
     if (table, column) not in allowed:
         raise ValueError("Invalid record number target")
@@ -5386,6 +5387,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_account(db, user, self.path_int(path, 3))
                 elif path == "/api/dev-tools/unlink-codes" and method == "POST":
                     self.api_dev_generate_unlink_code(db, user)
+                elif path == "/api/dev-tools/emergency-unlink-all" and method == "POST":
+                    self.api_dev_emergency_unlink_all(db, user)
                 elif path == "/api/dev-tools/admin-2fa" and method == "POST":
                     self.api_dev_generate_admin_2fa_code(db, user)
                 elif path == "/api/dev-tools/sanctions" and method == "POST":
@@ -11476,6 +11479,59 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         add_admin_audit(db, int(user["id"]), "dev.unlink_code.created", details={"code_hint": raw_code[-4:], "expires_at": expires_at.isoformat()})
         self.send_json(201, {"ok": True, "code": raw_code, "expires_at": expires_at.isoformat(), "uses": 1})
+
+    def api_dev_emergency_unlink_all(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        if str(payload.get("confirmation") or "").strip().upper() != "UNLINK ALL ARMA ACCOUNTS":
+            self.error(400, "Type UNLINK ALL ARMA ACCOUNTS to authorize the emergency reset")
+            return
+        links = all_rows(
+            db,
+            "SELECT user_id, identity_id, player_name FROM arma_account_links ORDER BY id",
+        )
+        if not links:
+            self.send_json(200, {"ok": True, "unlinked": 0, "message": "No linked Arma accounts were found"})
+            return
+        affected_user_ids = sorted({int(link["user_id"]) for link in links})
+        db.execute("DELETE FROM arma_account_links")
+        db.execute("UPDATE users SET arma_id = NULL WHERE arma_id IS NOT NULL")
+        db.execute(
+            """
+            UPDATE arma_link_codes
+            SET status = 'emergency_unlinked'
+            WHERE status = 'claimed' OR claimed_by IS NOT NULL
+            """
+        )
+        for user_id in affected_user_ids:
+            add_message(
+                db,
+                user_id,
+                "Arma account link reset",
+                "Faircroft development staff performed an emergency reset of all Arma account links. Open Profile > Game Link and use a new in-game code to reconnect.",
+            )
+        add_admin_audit(
+            db,
+            int(user["id"]),
+            "arma.emergency_unlink_all",
+            details={
+                "unlinked": len(links),
+                "affected_users": len(affected_user_ids),
+                "identity_ids": [str(link["identity_id"]) for link in links[:100]],
+            },
+        )
+        self.send_json(
+            200,
+            {
+                "ok": True,
+                "unlinked": len(links),
+                "affected_users": len(affected_user_ids),
+            },
+        )
 
     def api_dev_generate_admin_2fa_code(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)

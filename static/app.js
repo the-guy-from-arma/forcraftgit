@@ -9148,6 +9148,19 @@ function renderDevTools() {
           <button class="primary" type="submit">Save icon visibility</button>
         </div>
       </form>
+      <section class="dev-card dev-emergency-link-reset">
+        <div>
+          <p class="eyebrow">Emergency identity control</p>
+          <h2>Reset every Arma account link</h2>
+          <p>This removes every current website-to-Arma identity connection in one audited transaction. Residents will be notified and must link again with a new in-game code.</p>
+        </div>
+        <form id="devEmergencyUnlinkAllForm">
+          <label>Type <strong>UNLINK ALL ARMA ACCOUNTS</strong> to continue
+            <input name="confirmation" autocomplete="off" spellcheck="false" required />
+          </label>
+          <button class="danger" type="submit">Emergency unlink all accounts</button>
+        </form>
+      </section>
     </div>`;
   }
   return `<div class="dev-ops-view dev-audit-view"><div class="dev-view-intro"><div><span>IMMUTABLE STAFF RECORD</span><h2>Administrative activity</h2><p>Chronological accountability across enforcement, identity, moderation, and system controls.</p></div><strong>${logs.length} EVENTS</strong></div><section class="dev-card dev-audit-panel"><div class="dev-card-header"><div><span>EVENT STREAM</span><h2>Activity ledger</h2></div><span class="dev-live-indicator"><i></i>Current</span></div>${devAudit(logs)}</section></div>`;
@@ -10096,6 +10109,33 @@ function bindDevTools() {
     toast("Individual application statuses updated");
     await refreshDevTools();
   });
+  $("#devEmergencyUnlinkAllForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const confirmation = String(new FormData(form).get("confirmation") || "").trim();
+    if (confirmation.toUpperCase() !== "UNLINK ALL ARMA ACCOUNTS") {
+      toast("Type the full emergency confirmation phrase");
+      return;
+    }
+    if (!window.confirm("Emergency reset every linked Arma account? All residents will have to link again with a new in-game code.")) return;
+    const button = form.querySelector('button[type="submit"]');
+    button.disabled = true;
+    button.textContent = "Resetting identity links…";
+    try {
+      const result = await api("/api/dev-tools/emergency-unlink-all", {
+        method: "POST",
+        confirm: false,
+        body: { confirmation },
+      });
+      toast(`${Number(result.unlinked || 0)} Arma account links reset`);
+      form.reset();
+      await refreshDevTools();
+    } catch (error) {
+      toast(error.message);
+      button.disabled = false;
+      button.textContent = "Emergency unlink all accounts";
+    }
+  });
   $("#devFnnSettingsForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     await api("/api/dev-tools/fnn-settings", {
@@ -10946,7 +10986,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.2.1-admin-workspace").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.2.1-emergency-link-fire-press").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {
