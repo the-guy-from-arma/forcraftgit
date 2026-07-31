@@ -522,7 +522,7 @@ async function bootApp() {
 function phone(content) {
   const time = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   return `
-    <section class="phone-shell">
+    <section class="phone-shell rp-workspace-shell">
       <div class="phone-screen">
         <div class="status-bar">
           <span>${time}</span>
@@ -636,6 +636,12 @@ function render() {
   if (state.activeApp === "bank") {
     app.innerHTML = renderSystemBanner() + renderBankWorkspace() + renderRequiredProfileModals();
     bindBankWorkspace();
+    bindRequiredProfileModals();
+    return;
+  }
+  if (state.activeApp === "my-faircroft") {
+    app.innerHTML = renderSystemBanner() + renderMyFaircroftWorkspace() + renderRequiredProfileModals();
+    bindMyFaircroft();
     bindRequiredProfileModals();
     return;
   }
@@ -3464,12 +3470,37 @@ function marketChange(security) {
 }
 
 function renderMarketWorkspace() {
+  const data=state.cache.wallstreet;
+  if(!data)return `<main class="market-workspace"><div class="empty">Opening Ravenhood Markets...</div></main>`;
+  if(!data.account)return renderMarketWorkspaceLegacy();
+  const account=data.account,securities=data.securities||[],holdings=data.holdings||[];
+  const selected=securities.find(x=>x.ticker===state.marketTicker)||securities[0]||{};state.marketTicker=selected.ticker||"";
+  const total=Number(data.portfolio_value||0)+Number(account.cash_balance||0),change=marketChange(selected),invested=Number(data.portfolio_value||0);
+  const selectedHolding=holdings.find(x=>x.ticker===selected.ticker),allocation=total>0?Math.min(100,invested/total*100):0;
+  const chartSeed=Math.max(8,Math.abs(Number(selected.price||1)*.06));
+  const points=Array.from({length:18},(_,i)=>{const trend=(change/100)*i*3.2,wave=Math.sin(i*.83+Number(selected.price||0))*chartSeed+Math.cos(i*.31)*chartSeed*.55;return `${(i/17*1000).toFixed(1)},${Math.max(35,Math.min(275,170-wave-trend)).toFixed(1)}`}).join(" ");
+  const finalY=points.split(" ").at(-1).split(",")[1],movers=[...securities].sort((a,b)=>Math.abs(marketChange(b))-Math.abs(marketChange(a))).slice(0,5);
+  const stockOptions=securities.map(x=>`<option value="${escapeHtml(x.ticker)}">${escapeHtml(x.ticker)} · ${escapeHtml(x.name)}</option>`).join("");
+  return `<main class="market-workspace market-terminal-workspace">
+    <header class="market-topbar"><div class="market-brand"><span>RH</span><div><strong>Ravenhood</strong><small>FAIRCROFT SECURITIES EXCHANGE</small></div></div><div class="market-session"><span>FCX</span><i></i><strong>${data.market_open?"Continuous trading":"Market closed"}</strong></div><div class="market-top-actions"><em class="${data.market_open?"open":"closed"}">${data.market_open?"MARKET OPEN":"MARKET CLOSED"}</em><button class="secondary" data-refresh-market>Refresh</button><button class="secondary" data-close-market>Exit</button></div></header>
+    <div class="market-tape">${securities.concat(securities).map(x=>`<button data-market-ticker="${escapeHtml(x.ticker)}"><b>${escapeHtml(x.ticker)}</b><span>${money(x.price)}</span><i class="${marketChange(x)>=0?"up":"down"}">${marketChange(x)>=0?"+":""}${marketChange(x).toFixed(2)}%</i></button>`).join("")}</div>
+    <section class="market-command">
+      <aside class="market-rail"><div class="market-account-summary"><span>NET LIQUIDATION VALUE</span><strong>${money(total)}</strong><small>${money(invested)} invested</small><i><b style="width:${allocation.toFixed(1)}%"></b></i></div><nav><button class="active"><i>${iconSvg.trending}</i><span>Market overview</span></button><button data-market-dialog="deposit"><i>+</i><span>Deposit funds</span></button><button data-market-dialog="withdrawal"><i>−</i><span>Withdraw funds</span></button><button data-market-dialog="transfer"><i>→</i><span>Transfer positions</span></button></nav><section class="market-movers"><header><span>MARKET PULSE</span><strong>Top movers</strong></header>${movers.map(x=>`<button data-market-ticker="${escapeHtml(x.ticker)}"><b>${escapeHtml(x.ticker)}</b><span>${money(x.price)}</span><em class="${marketChange(x)>=0?"up":"down"}">${marketChange(x)>=0?"+":""}${marketChange(x).toFixed(2)}%</em></button>`).join("")}</section><div class="market-admin-note"><strong>SECURE SETTLEMENT</strong><p>Cash movements require an authorized in-game handoff and a one-time Ravenhood receipt.</p></div></aside>
+      <section class="market-terminal"><header class="market-instrument-head"><div><span>${escapeHtml(selected.sector||"FAIRCROFT MARKET")} / ${escapeHtml(humanLabel(selected.security_type||"stock"))}</span><h1>${escapeHtml(selected.ticker||"—")}</h1><p>${escapeHtml(selected.name||"Select a security")}</p></div><div><small>LAST TRADE</small><strong>${money(selected.price)}</strong><em class="${change>=0?"up":"down"}">${change>=0?"+":""}${change.toFixed(2)}%</em></div></header><div class="market-quote-strip"><span><small>OPEN</small><strong>${money(Number(selected.previous_price||selected.price||0))}</strong></span><span><small>DAY RANGE</small><strong>${money(Math.max(0,Number(selected.price||0)-chartSeed))} — ${money(Number(selected.price||0)+chartSeed)}</strong></span><span><small>POSITION</small><strong>${selectedHolding?`${Number(selectedHolding.quantity).toLocaleString(undefined,{maximumFractionDigits:4})} shares`:"Not held"}</strong></span><span><small>BUYING POWER</small><strong>${money(account.cash_balance)}</strong></span></div>
+        <div class="market-live-chart ${change>=0?"positive":"negative"}"><div class="market-chart-grid"></div><svg viewBox="0 0 1000 310" preserveAspectRatio="none"><defs><linearGradient id="marketArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".3"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs><polygon points="0,310 ${points} 1000,310" fill="url(#marketArea)"/><polyline points="${points}" fill="none" stroke="currentColor" stroke-width="4" vector-effect="non-scaling-stroke"/><circle cx="1000" cy="${finalY}" r="7" fill="currentColor"/></svg><div class="market-chart-axis"><span>OPEN</span><span>10 AM</span><span>NOON</span><span>2 PM</span><span>NOW</span></div><strong class="market-live-badge"><i></i>LIVE</strong></div>
+        <section class="market-directory"><header><div><span>FCX LISTED SECURITIES</span><h2>Market directory</h2></div><strong>${securities.length} ACTIVE LISTINGS</strong></header><div class="market-directory-head"><span>Symbol / company</span><span>Sector</span><span>Last price</span><span>Change</span></div><div>${securities.map(x=>`<button class="${x.ticker===selected.ticker?"active":""}" data-market-ticker="${escapeHtml(x.ticker)}"><span><b>${escapeHtml(x.ticker)}</b><small>${escapeHtml(x.name)}</small></span><span>${escapeHtml(x.sector)}</span><strong>${money(x.price)}</strong><em class="${marketChange(x)>=0?"up":"down"}">${marketChange(x)>=0?"+":""}${marketChange(x).toFixed(2)}%</em></button>`).join("")}</div></section></section>
+      <aside class="market-trade-dock"><section class="market-order-ticket"><header><div><span>ORDER ENTRY</span><strong>${escapeHtml(selected.ticker||"—")}</strong></div><i class="${data.market_open?"open":""}"></i></header><form data-market-order><input type="hidden" name="ticker" value="${escapeHtml(selected.ticker||"")}"/><label>Action<select name="side"><option value="buy">Buy shares</option><option value="sell">Sell shares</option></select></label><label>Quantity<input name="quantity" type="number" min="0.000001" step="0.000001" required placeholder="0.000000"/></label><dl><div><dt>Market price</dt><dd>${money(selected.price)}</dd></div><div><dt>Commission</dt><dd>${Number(data.trade_fee_percent||0).toFixed(2)}%</dd></div><div><dt>Available cash</dt><dd>${money(account.cash_balance)}</dd></div></dl><button class="market-primary" ${data.market_open?"":"disabled"}>Preview market order</button><small>Orders execute at the displayed Ravenhood market price.</small></form></section><section class="market-position-book"><header><span>POSITION BOOK</span><strong>${holdings.length}</strong></header>${holdings.length?holdings.map(h=>`<button data-market-ticker="${escapeHtml(h.ticker)}"><span><b>${escapeHtml(h.ticker)}</b><small>${Number(h.quantity).toLocaleString(undefined,{maximumFractionDigits:4})} shares</small></span><div><strong>${money(Number(h.quantity)*Number(h.price))}</strong><em class="${Number(h.price)>=Number(h.average_cost)?"up":"down"}">${Number(h.price)>=Number(h.average_cost)?"+":""}${money((Number(h.price)-Number(h.average_cost))*Number(h.quantity))}</em></div></button>`).join(""):`<p>Positions acquired through Ravenhood will appear here.</p>`}</section><section class="market-activity"><header><span>EXECUTION LOG</span></header>${(data.orders||[]).slice(0,6).map(o=>`<p><span><b>${escapeHtml(o.side.toUpperCase())}</b> ${escapeHtml(o.ticker)}</span><strong>${money(o.gross_amount)}</strong></p>`).join("")||`<small>No executions recorded.</small>`}</section></aside>
+    </section>${renderMarketDialog(data,stockOptions)}
+  </main>`;
+}
+
+function renderMarketWorkspaceLegacy() {
   const data = state.cache.wallstreet;
   if (!data) return `<main class="market-workspace"><div class="empty">Opening Ravenhood Marketsâ€¦</div></main>`;
   const account = data.account;
   if (!account) return `<main class="market-workspace market-onboarding">
     <header class="market-topbar"><div class="market-brand"><span>RH</span><div><strong>Ravenhood Markets</strong><small>Faircroft securities exchange</small></div></div><button class="secondary" data-close-market>Exit</button></header>
-    <section class="market-open-account"><div class="market-orbit"><i></i><b>RH</b></div><p class="eyebrow">Investing, rewritten for roleplay</p><h1>Build your Faircroft portfolio.</h1><p>Trade fictional companies, municipal bonds, and high-volatility day-trading securities. Every dollar is settled through an in-game admin handoff.</p><button class="market-primary" data-create-market-account>Create investment account</button><small>No real money, securities, or financial advice. Ravenhood is an RP simulation.</small></section>
+    <section class="market-open-account"><div class="market-orbit"><i></i><b>RH</b></div><p class="eyebrow">The Faircroft investment network</p><h1>Build your Faircroft portfolio.</h1><p>Trade listed companies, municipal bonds, and high-volatility day-trading securities. Every dollar is settled through an authorized in-game cash handoff.</p><button class="market-primary" data-create-market-account>Create investment account</button><small>Ravenhood account activity is governed by Faircroft exchange policy and settlement controls.</small></section>
   </main>`;
   const securities = data.securities || [], holdings = data.holdings || [];
   const selected = securities.find(x => x.ticker === state.marketTicker) || securities[0] || {};
@@ -3478,13 +3509,13 @@ function renderMarketWorkspace() {
   const change = marketChange(selected);
   const stockOptions = securities.map(x => `<option value="${escapeHtml(x.ticker)}">${escapeHtml(x.ticker)} Â· ${escapeHtml(x.name)}</option>`).join("");
   return `<main class="market-workspace">
-    <header class="market-topbar"><div class="market-brand"><span>RH</span><div><strong>Ravenhood Markets</strong><small>Simulated Faircroft exchange</small></div></div><div class="market-top-actions"><em class="${data.market_open ? "open" : "closed"}">${data.market_open ? "MARKET OPEN" : "MARKET CLOSED"}</em><button class="secondary" data-refresh-market>Refresh</button><button class="secondary" data-close-market>Exit</button></div></header>
+    <header class="market-topbar"><div class="market-brand"><span>RH</span><div><strong>Ravenhood Markets</strong><small>Faircroft securities exchange</small></div></div><div class="market-top-actions"><em class="${data.market_open ? "open" : "closed"}">${data.market_open ? "MARKET OPEN" : "MARKET CLOSED"}</em><button class="secondary" data-refresh-market>Refresh</button><button class="secondary" data-close-market>Exit</button></div></header>
     <div class="market-tape">${securities.map(x => `<button data-market-ticker="${escapeHtml(x.ticker)}"><b>${escapeHtml(x.ticker)}</b><span>${money(x.price)}</span><i class="${marketChange(x) >= 0 ? "up" : "down"}">${marketChange(x) >= 0 ? "+" : ""}${marketChange(x).toFixed(2)}%</i></button>`).join("")}</div>
     <section class="market-shell">
       <aside class="market-portfolio"><p class="eyebrow">Total portfolio</p><h1>${money(total)}</h1><div class="market-balance-line"><span>Buying power</span><strong>${money(account.cash_balance)}</strong></div><nav><button class="active">Overview</button><button data-market-dialog="deposit">Deposit funds</button><button data-market-dialog="withdrawal">Withdraw funds</button><button data-market-dialog="transfer">Transfer shares</button></nav><div class="market-admin-note"><strong>In-game settlement required</strong><p>An admin must receive or issue funds in game before giving you a one-time receipt PIN.</p></div></aside>
       <section class="market-main">
         <div class="market-security-head"><div><span>${escapeHtml(selected.sector || "Market")}</span><h2>${escapeHtml(selected.name || "Select a security")}</h2><p>${escapeHtml(selected.ticker || "")} Â· ${escapeHtml(humanLabel(selected.security_type || "stock"))}</p></div><div><strong>${money(selected.price)}</strong><em class="${change >= 0 ? "up" : "down"}">${change >= 0 ? "+" : ""}${change.toFixed(2)}%</em></div></div>
-        <div class="market-chart" aria-label="Animated simulated price chart"><i></i><i></i><i></i><i></i><i></i><i></i><span>Simulated RP pricing Â· updates when market programs run</span></div>
+        <div class="market-chart" aria-label="Animated Ravenhood price chart"><i></i><i></i><i></i><i></i><i></i><i></i><span>Live Ravenhood pricing Â· updates when market programs run</span></div>
         <div class="market-trade-row"><form data-market-order><input type="hidden" name="ticker" value="${escapeHtml(selected.ticker || "")}"/><label>Order type<select name="side"><option value="buy">Buy</option><option value="sell">Sell</option></select></label><label>Shares<input name="quantity" type="number" min="0.000001" step="0.000001" required placeholder="0.00"/></label><button class="market-primary" ${data.market_open ? "" : "disabled"}>Review order</button></form><div class="market-order-note"><span>Trade fee</span><strong>${Number(data.trade_fee_percent || 0).toFixed(2)}%</strong><small>Fees leave circulation and enter the market holding ledger.</small></div></div>
         <section class="market-list"><header><div><p class="eyebrow">Market directory</p><h2>Discover securities</h2></div><span>${securities.length} listings</span></header>${securities.map(x => `<button class="market-row ${x.ticker === selected.ticker ? "active" : ""}" data-market-ticker="${escapeHtml(x.ticker)}"><div><b>${escapeHtml(x.ticker)}</b><span>${escapeHtml(x.name)}</span></div><small>${escapeHtml(x.sector)}</small><strong>${money(x.price)}</strong><em class="${marketChange(x) >= 0 ? "up" : "down"}">${marketChange(x).toFixed(2)}%</em></button>`).join("")}</section>
       </section>
@@ -5070,6 +5101,17 @@ function renderMyFaircroft() {
   `;
 }
 
+function renderMyFaircroftWorkspace() {
+  return `<section class="myfc-workspace">
+    <header class="myfc-workspace-topbar">
+      <div class="myfc-workspace-brand"><span>SF</span><div><small>STATE OF FAIRCROFT</small><strong>Resident Services</strong></div></div>
+      <div class="myfc-workspace-title"><span>PERSONAL CIVIC ACCOUNT</span><h1>MyFaircroft</h1></div>
+      <div class="myfc-workspace-actions"><i></i><small>Records network online</small><button class="secondary" type="button" data-refresh-myfc>Refresh records</button><button class="primary" type="button" data-close-myfc>Close workspace</button></div>
+    </header>
+    <main class="myfc-workspace-scroll"><div class="myfc-workspace-content">${renderMyFaircroft()}</div></main>
+  </section>`;
+}
+
 function renderMyFaircroftCourtDates(cases) {
   return `
     <section class="myfc-ledger">
@@ -5193,6 +5235,14 @@ function renderMyFaircroftHistory(cases, taxes, recordRequests = []) {
 }
 
 function bindMyFaircroft() {
+  $("[data-close-myfc]")?.addEventListener("click", async () => {
+    state.activeApp = null;
+    await loadSession();
+  });
+  $("[data-refresh-myfc]")?.addEventListener("click", async () => {
+    await loadAppData("my-faircroft");
+    render();
+  });
   $$("[data-myfc-tab]").forEach((button) => button.addEventListener("click", () => {
     state.myFaircroftTab = button.dataset.myfcTab;
     render();
@@ -9535,8 +9585,9 @@ function renderDevWorkspace() {
     campaigns: ["Active Campaigns", "Schedule banners, events, promotions, and entrance bulletins"],
     settlement: ["Settlement Operations", "Suspend licenses and process controlled fine and tax batches"],
     "dmv-settings": ["DMV Settings", "Manage driver credentials, endorsements, and restoration fees"],
+    "mdt-settings": ["MDT Settings", "Control local law-enforcement access and interagency information boundaries"],
     "court-settings": ["Court Settings", "Secure court-record maintenance and audited resets"],
-    "ice-settings": ["ICE Settings", "Control federal and local immigration information boundaries"],
+    "ice-settings": ["ICE Settings", "Review federal immigration personnel and credential assignments"],
     "admin-2fa": ["Admin 2FA", "Issue single-use authorization for permanent CAD and Arma enforcement"],
     autopilot: ["Auto Pilot", "Control automated civilian account verification"],
     "system-update": ["System Update", "Publish and control Faircroft limited-service mode"],
@@ -9549,7 +9600,7 @@ function renderDevWorkspace() {
     <aside class="dev-sidebar">
       <div class="dev-brand"><img class="dev-emblem" src="/static/brand/faircroft-emblem.webp" alt="" /><div><strong>Faircroft RP</strong><small>Staff Operations</small></div></div>
       <p class="dev-nav-label">Operations index</p>
-      <nav>${[["dashboard","Command Center"],["intelligence","Game Intelligence"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["campaigns","Active Campaigns"],["settlement","Settlement"],["market-settings","Stock Market"],["dmv-settings","DMV Settings"],["court-settings","Court Settings"],["ice-settings","ICE Settings"],["admin-2fa","Admin 2FA"],["autopilot","Auto Pilot"],["system-update","System Update"],["fnn-settings","FNN Settings"],["audit","Activity Log"],["settings","Settings"]].map(([id,label], index) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><small>${String(index + 1).padStart(2, "0")}</small><span>${label}</span><i></i></button>`).join("")}</nav>
+      <nav>${[["dashboard","Command Center"],["intelligence","Game Intelligence"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["campaigns","Active Campaigns"],["settlement","Settlement"],["market-settings","Stock Market"],["dmv-settings","DMV Settings"],["mdt-settings","MDT Settings"],["court-settings","Court Settings"],["ice-settings","ICE Settings"],["admin-2fa","Admin 2FA"],["autopilot","Auto Pilot"],["system-update","System Update"],["fnn-settings","FNN Settings"],["audit","Activity Log"],["settings","Settings"]].map(([id,label], index) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><small>${String(index + 1).padStart(2, "0")}</small><span>${label}</span><i></i></button>`).join("")}</nav>
       <div class="dev-sidebar-footer"><span class="dev-access-dot"></span><div><strong>Authorized Staff</strong><small>${escapeHtml(state.session?.user?.name || "Staff member")}</small></div></div>
     </aside>
     <main class="dev-main">
@@ -9695,9 +9746,22 @@ function renderDevDmvSettings(dmv) {
 function renderDevIceSettings(ice) {
   const agents = ice.agents || [];
   return `<div class="stack dev-ice-settings">
-    <div class="dev-view-intro"><div><span>FAIRCROFT FEDERAL INFORMATION POLICY</span><h2>ICE interagency controls</h2><p>Control whether federal immigration personnel may see local reports, BOLOs, and warrants. NCIC identity, citizenship, DMV, and vehicle safety checks remain available.</p></div><strong>${ice.restrict_local_data ? "RESTRICTED" : "SHARED"}</strong></div>
-    <section class="dev-card ice-policy-card"><div><small>LOCAL ORDINANCE</small><h2>Local involvement restriction</h2><p>${escapeHtml(ice.ordinance_notice || "")}</p></div><form id="devIceSettingsForm"><label class="dev-experience-section"><span><b>INFORMATION BOUNDARY</b><strong>Restrict local reports, BOLOs, and warrants from ICE MDT</strong></span><input type="checkbox" name="restrict_local_data" ${ice.restrict_local_data ? "checked" : ""} /></label><button class="primary">Save federal information policy</button></form></section>
+    <div class="dev-view-intro"><div><span>FAIRCROFT FEDERAL PERSONNEL</span><h2>ICE credential directory</h2><p>Review accounts authorized to access federal immigration operations. Local MDT information boundaries are managed under MDT Settings.</p></div><strong>${agents.length} AUTHORIZED</strong></div>
     <section class="dev-card"><div class="dev-card-header"><div><span>FEDERAL PERSONNEL</span><h2>ICE credential holders</h2></div><strong>${agents.length}</strong></div><div class="ice-agent-ledger">${agents.map((agent) => `<article><div><strong>${escapeHtml(agent.name)}</strong><small>CIV ${escapeHtml(agent.civ_number || "pending")}</small></div><span>${escapeHtml((agent.roles || []).map(humanLabel).join(", "))}</span></article>`).join("") || `<div class="empty">No ICE Agent or ICE Commander roles assigned.</div>`}</div></section>
+  </div>`;
+}
+
+function renderDevMdtSettings(ice) {
+  const restricted = Boolean(ice.restrict_local_data);
+  return `<div class="stack dev-mdt-settings">
+    <div class="dev-view-intro"><div><span>FAIRCROFT LAW ENFORCEMENT NETWORK</span><h2>MDT information policy</h2><p>Control the local-law-enforcement boundary for federal immigration operations while preserving ordinary NCIC identity and public-safety access.</p></div><strong class="${restricted ? "red" : "green"}">${restricted ? "RESTRICTION ACTIVE" : "INTERAGENCY SHARING"}</strong></div>
+    <section class="dev-card ice-policy-card">
+      <div><small>FAIRCROFT LOCAL ORDINANCE</small><h2>Local involvement restriction</h2><p>${escapeHtml(ice.ordinance_notice || "")}</p></div>
+      <form id="devMdtSettingsForm">
+        <label class="dev-experience-section"><span><b>MDT INFORMATION BOUNDARY</b><strong>Restrict local reports, BOLOs, and warrants from ICE MDT</strong><small>NCIC identity, citizenship, DMV, and vehicle-safety records remain available.</small></span><input type="checkbox" name="restrict_local_data" ${restricted ? "checked" : ""} /></label>
+        <button class="primary">Save MDT information policy</button>
+      </form>
+    </section>
   </div>`;
 }
 
@@ -9717,14 +9781,14 @@ function renderDevMarketSettings(market, users) {
   const listings = market.securities || [], codes = market.codes || [], programs = market.programs || [];
   const tickerOptions = [`<option value="ALL">Entire market</option>`, ...listings.map(x => `<option value="${escapeHtml(x.ticker)}">${escapeHtml(x.ticker)} Â· ${escapeHtml(x.name)}</option>`)].join("");
   return `<div class="stack dev-market-view">
-    <div class="dev-view-intro"><div><span>RAVENHOOD EXCHANGE CONTROL</span><h2>Market operations</h2><p>Control the fictional Faircroft market, authorize in-game cash handoffs, and stage RP price events.</p></div><strong class="${market.market_open ? "green" : "red"}">${market.market_open ? "MARKET OPEN" : "MARKET CLOSED"}</strong></div>
-    <section class="market-dev-terminal"><header><span></span><b>RAVENHOOD / MARKET CONTROL LOG</b><em>LIVE SIMULATION</em></header><div>${(market.events || []).slice(0,8).map(x => `<p><time>${escapeHtml(String(x.created_at || "").slice(11,19))}</time><strong>${escapeHtml(x.title)}</strong><span>${escapeHtml(x.detail)}</span></p>`).join("") || `<p><time>--:--:--</time><strong>Exchange ready</strong><span>No market events have been staged.</span></p>`}</div></section>
+    <div class="dev-view-intro"><div><span>RAVENHOOD EXCHANGE CONTROL</span><h2>Market operations</h2><p>Control the Faircroft market, authorize in-game cash handoffs, and stage exchange price events.</p></div><strong class="${market.market_open ? "green" : "red"}">${market.market_open ? "MARKET OPEN" : "MARKET CLOSED"}</strong></div>
+    <section class="market-dev-terminal"><header><span></span><b>RAVENHOOD / MARKET CONTROL LOG</b><em>LIVE EXCHANGE</em></header><div>${(market.events || []).slice(0,8).map(x => `<p><time>${escapeHtml(String(x.created_at || "").slice(11,19))}</time><strong>${escapeHtml(x.title)}</strong><span>${escapeHtml(x.detail)}</span></p>`).join("") || `<p><time>--:--:--</time><strong>Exchange ready</strong><span>No market events have been staged.</span></p>`}</div></section>
     <div class="dev-grid-2">
       <section class="dev-card"><div class="dev-card-header"><div><span>EXCHANGE POLICY</span><h2>Market and fee controls</h2></div><strong>${money(market.holding_balance || 0)} HELD</strong></div><form id="devMarketSettingsForm" class="form-grid"><label class="dev-certify wide"><input name="market_open" type="checkbox" ${market.market_open ? "checked" : ""}/> Market open for resident trading</label><label>Trade fee %<input name="trade_fee_percent" type="number" min="0" max="10" step="0.01" value="${Number(market.trade_fee_percent || 0)}"/></label><label>Transfer fee %<input name="transfer_fee_percent" type="number" min="0" max="25" step="0.01" value="${Number(market.transfer_fee_percent || 0)}"/></label><label class="dev-certify wide"><input name="ai_enabled" type="checkbox" ${market.ai_enabled ? "checked" : ""}/> Allow Gemini market briefing support</label><button class="primary wide">Save exchange policy</button></form><p class="muted small">Collected trade and transfer fees are displayed above and remain outside the active RP economy.</p></section>
       <section class="dev-card"><div class="dev-card-header"><div><span>PRICE PROGRAM</span><h2>Schedule movement</h2></div><strong>1.00 EXAMPLE</strong></div><form id="devMarketProgramForm" class="form-grid"><label>Security<select name="ticker">${tickerOptions}</select></label><label>RP event<input name="event_name" maxlength="100" required placeholder="Port expansion announcement"/></label><label>Percentage change<input name="percent_change" type="number" min="-95" max="500" step="0.01" required/><small data-market-example>$1.00 becomes $1.00</small></label><label>Duration in minutes<input name="duration_minutes" type="number" min="1" max="10080" value="60" required/></label><button class="primary wide">Launch price program</button></form><div class="market-presets"><button data-market-preset="market_crash">Market crash</button><button data-market-preset="flash_crash">Flash crash</button><button data-market-preset="market_rally">Broad rally</button><button data-market-preset="random_skyrocket">Random skyrocket</button></div></section>
     </div>
     <section class="dev-card market-code-authority"><div class="dev-card-header"><div><span>IN-GAME SETTLEMENT RECEIPTS</span><h2>Deposit and withdrawal PINs</h2><p>A PIN verifies a completed roleplay handoff. It never edits the Arma database.</p></div><span class="pill red">NEVER ISSUE EARLY</span></div><div class="dev-grid-2"><form id="devMarketCodeForm" class="form-grid"><label>Resident<select name="target_user_id" required><option value="">Select resident</option>${devUserOptions(users)}</select></label><label>Direction<select name="transaction_type"><option value="deposit">Deposit into Ravenhood</option><option value="withdrawal">Withdraw from Ravenhood</option></select></label><label>Exact amount<input name="amount" type="number" min="0.01" step="0.01" required/></label><label>Expires after<input name="expiry_minutes" type="number" min="5" max="120" value="30"/></label><label class="wide">Required confirmation<input name="confirmation" required placeholder="MONEY RECEIVED or WITHDRAWAL APPROVED"/><small>For a deposit, receive the in-game money first. For a withdrawal, confirm the payout with the resident first.</small></label><button class="primary wide">Issue four-digit receipt</button></form><div>${state.generatedMarketCode ? `<div class="dev-generated-code"><span>${escapeHtml(humanLabel(state.generatedMarketCode.transaction_type))} receipt Â· ${money(state.generatedMarketCode.amount)}</span><strong>${escapeHtml(state.generatedMarketCode.code)}</strong><small>Expires ${new Date(state.generatedMarketCode.expires_at).toLocaleString()}</small></div>` : `<div class="empty">No Ravenhood receipt generated this session</div>`}<div class="dev-code-ledger">${codes.slice(0,30).map(x => `<div><code>â€¢â€¢${escapeHtml(x.code_hint)}</code><span>${escapeHtml(x.target_name)} Â· ${money(x.amount)}<small>Issued by ${escapeHtml(x.created_by_name)}${x.used_by_name ? ` Â· redeemed by ${escapeHtml(x.used_by_name)}` : " Â· not redeemed"}</small></span><strong class="${!x.used_at && !x.revoked_at && new Date(x.expires_at)>new Date() ? "available" : ""}">${x.used_at ? "Redeemed" : x.revoked_at ? "Revoked" : new Date(x.expires_at)<=new Date() ? "Expired" : "Available"}</strong></div>`).join("") || `<div class="empty">No receipts</div>`}</div></div></div></section>
-    <div class="dev-grid-2"><section class="dev-card"><div class="dev-card-header"><div><span>ACTIVE AUTOMATION</span><h2>Price programs</h2></div><strong>${programs.filter(x=>x.status==="active").length} ACTIVE</strong></div><div class="dev-detail-list">${programs.map(x => `<div><strong>${escapeHtml(x.ticker || "ALL")} Â· ${escapeHtml(x.event_name)}</strong><small>${Number(x.percent_change)>=0?"+":""}${Number(x.percent_change).toFixed(2)}% over ${Number(x.duration_minutes)} minutes Â· ${escapeHtml(x.status)}</small></div>`).join("") || `<div class="empty">No programs</div>`}</div></section><section class="dev-card"><div class="dev-card-header"><div><span>GEMINI ANALYST</span><h2>Generate RP market briefing</h2><p>Gemini reads current fictional listings and your scenario, then recommends optional programs. Nothing is applied automatically.</p></div><span class="pill ${market.ai_enabled ? "green" : ""}">${market.ai_enabled ? "enabled" : "disabled"}</span></div><form id="devMarketAiForm" class="form-grid"><label class="wide">RP scenario or market inputs<textarea name="context" maxlength="2000" required placeholder="New mining permit, severe storm, major public contract, political uncertaintyâ€¦"></textarea></label><button class="primary wide" ${market.ai_enabled ? "" : "disabled"}>Generate analyst briefing</button></form>${state.marketAiBriefing ? `<pre class="market-ai-briefing">${escapeHtml(state.marketAiBriefing)}</pre>` : ""}</section></div>
+    <div class="dev-grid-2"><section class="dev-card"><div class="dev-card-header"><div><span>ACTIVE AUTOMATION</span><h2>Price programs</h2></div><strong>${programs.filter(x=>x.status==="active").length} ACTIVE</strong></div><div class="dev-detail-list">${programs.map(x => `<div><strong>${escapeHtml(x.ticker || "ALL")} Â· ${escapeHtml(x.event_name)}</strong><small>${Number(x.percent_change)>=0?"+":""}${Number(x.percent_change).toFixed(2)}% over ${Number(x.duration_minutes)} minutes Â· ${escapeHtml(x.status)}</small></div>`).join("") || `<div class="empty">No programs</div>`}</div></section><section class="dev-card"><div class="dev-card-header"><div><span>GEMINI ANALYST</span><h2>Generate market briefing</h2><p>Gemini reads current listings and your market scenario, then recommends optional programs. Nothing is applied automatically.</p></div><span class="pill ${market.ai_enabled ? "green" : ""}">${market.ai_enabled ? "enabled" : "disabled"}</span></div><form id="devMarketAiForm" class="form-grid"><label class="wide">Market scenario or operational inputs<textarea name="context" maxlength="2000" required placeholder="New mining permit, severe storm, major public contract, political uncertaintyâ€¦"></textarea></label><button class="primary wide" ${market.ai_enabled ? "" : "disabled"}>Generate analyst briefing</button></form>${state.marketAiBriefing ? `<pre class="market-ai-briefing">${escapeHtml(state.marketAiBriefing)}</pre>` : ""}</section></div>
   </div>`;
 }
 
@@ -9736,6 +9800,7 @@ function renderDevTools() {
   if (state.devTab === "dmv-settings") return renderDevDmvSettings(data.dmv_settings || {});
   if (state.devTab === "court-settings") return renderDevCourtSettings(data.court_settings || {});
   if (state.devTab === "market-settings") return renderDevMarketSettings(data.market_settings || {}, users);
+  if (state.devTab === "mdt-settings") return renderDevMdtSettings(data.ice_settings || {});
   if (state.devTab === "ice-settings") return renderDevIceSettings(data.ice_settings || {});
   if (state.devTab === "admin-2fa") {
     const adminCodes = data.admin_2fa_codes || [];
@@ -10396,7 +10461,7 @@ function bindDevWorkspace() {
   $("#devMarketSettingsForm")?.addEventListener("submit", async event => { event.preventDefault(); const form=event.currentTarget; try { await api("/api/dev-tools/market/settings", {method:"PATCH",body:{market_open:form.market_open.checked,ai_enabled:form.ai_enabled.checked,trade_fee_percent:form.trade_fee_percent.value,transfer_fee_percent:form.transfer_fee_percent.value}}); toast("Ravenhood policy saved"); await refreshDevTools(); } catch(error){toast(error.message);} });
   $("#devMarketProgramForm [name='percent_change']")?.addEventListener("input", event => { const output=$("[data-market-example]"); if(output) output.textContent=`$1.00 becomes ${money(1 + Number(event.currentTarget.value || 0)/100)}`; });
   $("#devMarketProgramForm")?.addEventListener("submit", async event => { event.preventDefault(); try { const result=await api("/api/dev-tools/market/programs",{method:"POST",body:Object.fromEntries(new FormData(event.currentTarget))}); toast(`Price program launched Â· $1 becomes $${Number(result.example_one_dollar).toFixed(4)}`); await refreshDevTools(); } catch(error){toast(error.message);} });
-  $$("[data-market-preset]").forEach(button => button.addEventListener("click", async () => { if(!confirm(`Launch ${humanLabel(button.dataset.marketPreset)} simulation?`)) return; try { await api("/api/dev-tools/market/presets",{method:"POST",body:{preset:button.dataset.marketPreset}}); toast("Market event launched"); await refreshDevTools(); } catch(error){toast(error.message);} }));
+  $$("[data-market-preset]").forEach(button => button.addEventListener("click", async () => { if(!confirm(`Launch ${humanLabel(button.dataset.marketPreset)} market event?`)) return; try { await api("/api/dev-tools/market/presets",{method:"POST",body:{preset:button.dataset.marketPreset}}); toast("Market event launched"); await refreshDevTools(); } catch(error){toast(error.message);} }));
   $("#devMarketCodeForm")?.addEventListener("submit", async event => { event.preventDefault(); try { state.generatedMarketCode=await api("/api/dev-tools/market/codes",{method:"POST",body:Object.fromEntries(new FormData(event.currentTarget))}); toast("Ravenhood receipt PIN issued"); await refreshDevTools(); } catch(error){toast(error.message);} });
   $("#devMarketAiForm")?.addEventListener("submit", async event => { event.preventDefault(); try { const result=await api("/api/dev-tools/market/ai-briefing",{method:"POST",body:Object.fromEntries(new FormData(event.currentTarget)),timeoutMs:120000}); state.marketAiBriefing=result.briefing; toast("Gemini market briefing complete"); await refreshDevTools(); } catch(error){toast(error.message);} });
   $("#admin2faCodeForm")?.addEventListener("submit", async (event) => {
@@ -10465,14 +10530,14 @@ function bindDevWorkspace() {
       await refreshDevTools();
     } catch (error) { toast(error.message); }
   }));
-  $("#devIceSettingsForm")?.addEventListener("submit", async (event) => {
+  $("#devMdtSettingsForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
       await api("/api/dev-tools/ice-settings", {
         method: "PATCH",
         body: { restrict_local_data: Boolean(event.currentTarget.restrict_local_data.checked) },
       });
-      toast("ICE information policy updated");
+      toast("MDT information policy updated");
       await refreshDevTools();
       await loadSession();
     } catch (error) { toast(error.message); }

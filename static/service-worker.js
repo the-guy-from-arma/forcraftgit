@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v022-home-grid-scroll";
+const CACHE = "faircroft-rp-v022-myfaircroft-workspace";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.2.2-home-grid-scroll",
+  "/static/styles.css?v=0.2.2-myfaircroft-workspace",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.2.2-home-grid-scroll",
+  "/static/app.js?v=0.2.2-myfaircroft-workspace",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
   "/static/brand/platforms/playstation.svg",

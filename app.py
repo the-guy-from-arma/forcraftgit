@@ -9614,7 +9614,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.error(410, "Website bank purchases are disabled. Complete this purchase through the in-game economy.")
 
     def my_faircroft_payload(self, db: Database, user: DbRow) -> dict[str, Any]:
-        active_character = ensure_default_character(db, user)
+        active_character = ensure_default_character(db, int(user["id"]), str(user.get("name") or "Civilian"))
         active_character_id = int(active_character["id"])
         cases = all_rows(
             db,
@@ -9728,7 +9728,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(401, "Authentication required")
             return
         payload = self.read_json()
-        active_character = ensure_default_character(db, user)
+        active_character = ensure_default_character(db, int(user["id"]), str(user.get("name") or "Civilian"))
         case = one(
             db,
             """
@@ -9987,7 +9987,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not user:
             self.error(401, "Authentication required")
             return
-        active_character = ensure_default_character(db, user)
+        active_character = ensure_default_character(db, int(user["id"]), str(user.get("name") or "Civilian"))
         case = one(db, "SELECT * FROM citations WHERE id = ? AND civ_id = ? AND character_id = ?", (case_id, user["id"], active_character["id"]))
         if not case:
             self.error(404, "Case not found")
@@ -10009,7 +10009,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not user:
             self.error(401, "Authentication required")
             return
-        active_character = ensure_default_character(db, user)
+        active_character = ensure_default_character(db, int(user["id"]), str(user.get("name") or "Civilian"))
         case = one(db, "SELECT * FROM citations WHERE id = ? AND civ_id = ? AND character_id = ?", (case_id, user["id"], active_character["id"]))
         if not case:
             self.error(404, "Court record not found")
@@ -13353,7 +13353,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(409, "Gemini market briefings are not configured or are disabled."); return
         context = str(self.read_json().get("context") or "Routine Faircroft market session").strip()[:2000]
         listings = [dict(row) for row in all_rows(db, "SELECT ticker,name,security_type,sector,price,previous_price,volatility FROM market_securities WHERE active=1 ORDER BY ticker")]
-        prompt = ("You are the analyst for Ravenhood Markets, a fictional roleplay stock exchange. Produce a concise market operations briefing. "
+        prompt = ("You are the analyst for Ravenhood Markets, Faircroft's in-world stock exchange. Produce a concise market operations briefing. "
                   "Do not claim this is real financial advice. Recommend at most three OPTIONAL RP price programs with ticker, percent_change, duration_minutes, and rationale. "
                   f"STAFF SCENARIO:\n{context}\nLISTINGS:\n{json.dumps(listings, separators=(',', ':'))}")
         body = {"contents":[{"role":"user","parts":[{"text":prompt}]}],"generationConfig":{"temperature":0.55,"maxOutputTokens":1800}}

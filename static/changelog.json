@@ -27,12 +27,12 @@
         ,"Added separate Traffic Violations and Criminal Charges dockets for judges and residents, with every issued character-specific citation retained in the Court application."
         ,"Added direct MyFaircroft fine payments using resident-specific four-digit receipt codes issued by developers only after in-game currency is received."
         ,"Added a MyFaircroft receipt-code authority and ledger under Admin 2FA showing the issuing developer, authorized resident and amount, redemption status, redeeming user, and court case."
-        ,"Added Ravenhood Markets, a full-screen fictional Faircroft investing and day-trading application with animated onboarding, live market tape, portfolio analytics, fractional trading, bonds, volatile securities, and order history."
-        ,"Added 20 fictional RP securities spanning media, finance, logistics, mining, utilities, healthcare, energy, municipal bonds, infrastructure bonds, and high-volatility day trading."
+        ,"Added Ravenhood Markets, a full-screen Faircroft investing and day-trading application with animated onboarding, live market tape, portfolio analytics, fractional trading, bonds, volatile securities, and order history."
+        ,"Added 20 Faircroft securities spanning media, finance, logistics, mining, utilities, healthcare, energy, municipal bonds, infrastructure bonds, and high-volatility day trading."
         ,"Added resident-to-resident securities transfers with configurable fees held outside the active RP economy."
         ,"Added audited four-digit Ravenhood deposit and withdrawal receipts that require an in-game administrator handoff and never directly edit the Arma database."
         ,"Added Developer Tools Stock Market Settings with market open/close control, trade and transfer fees, hidden fee-holding balance, timed percentage programs, $1 gain/loss examples, crash/rally/skyrocket presets, and a live market event console."
-        ,"Added Gemini-assisted fictional market briefings that read current listings and staff RP scenarios, then recommend optional price programs without applying them automatically."
+        ,"Added Gemini-assisted market briefings that read current listings and staff market scenarios, then recommend optional price programs without applying them automatically."
         ,"Added Admin Content Control for deleting individual CAD after-action reports, submitted Press Desk stories, and individual published FNN stories without clearing an entire archive."
         ,"Added a full-screen read-only System Changelog workspace with a patch navigator, release summaries, and dedicated Added, Changed, Fixed, and Removed ledgers."
         ,"Added a full-screen Faircroft Careers recruitment workspace with a vacancy directory, department-specific opening briefs, personal application tracking, and focused application dialogs."
@@ -60,6 +60,8 @@
         ,"Moved Jobs outside the simulated phone and reorganized department, legal, emergency-service, and FNN recruitment into a responsive professional hiring portal."
         ,"FNN automatic publishing now defaults to 5:00 AM and 5:00 PM Faircroft time while retaining manual newsroom regeneration controls."
         ,"Temporarily restricted Leaderboards and Ravenhood Markets visibility and API access to Owner and Developer accounts during controlled testing."
+        ,"Established Ravenhood Markets as Faircroft's official in-world securities exchange throughout resident and developer interfaces."
+        ,"Rebuilt the complete Ravenhood trading floor with an animated live price curve, instrument quotes, market pulse, exchange ticker, order-entry dock, position book, execution ledger, securities directory, portfolio allocation, and responsive terminal navigation."
       ],
       "fixed": [
         "Prevented temporary anti-cheat event and outbox records from contaminating persistent leaderboard rankings.",
@@ -71,11 +73,19 @@
         ,"Fixed the Getting Started final-stage controls overflowing the guide panel by moving progress to its own row and sizing both navigation actions to the available width."
         ,"Fixed traffic citations and criminal charges sharing one congested Court docket and restored resident Court visibility for issued citations."
         ,"Added responsive desktop and mobile market workspaces, bottom-sheet settlement dialogs, protected receipt instructions, and overflow-safe ticker and portfolio layouts."
+        ,"Replaced the block-by-block Ravenhood dashboard and decorative bar chart with a continuous professional exchange terminal and animated security-level market visualization."
         ,"Fixed content-maintenance controls being unreachable when an administrator did not also hold an LEO or Press role by adding the complete maintenance ledger to the Admin workspace."
         ,"Replaced the basic vertically stacked changelog cards with responsive desktop navigation and a mobile horizontal patch selector."
         ,"Fixed long job advertisements and application questionnaires stretching one continuous page by opening each packet in an overflow-safe application dialog."
         ,"Fixed PostgreSQL startup and Leaderboards failures caused by literal SQL wildcard patterns being interpreted as unsupported Psycopg placeholders."
+        ,"Fixed the bounded Developer Tools canvas cutting off final Anti-Cheat roster records and page controls by adding reliable end-of-scroll clearance."
+        ,"Rebuilt Anti-Cheat Intelligence as a professional animated operations console with a command masthead, continuous telemetry rail, evidence ledger, staged record entrances, live-status motion, and Roadmap-inspired transitions."
+        ,"Removed the simulated phone frame and fixed handset-width container from RP OS while preserving every application, permission, icon, and workflow in a responsive full-browser workspace."
+        ,"Moved the local-law-enforcement immigration restriction switch from ICE Settings into a dedicated Developer Tools MDT Settings tab while preserving the existing audited policy enforcement."
+        ,"Rebuilt MyFaircroft as a full-screen animated resident-services dashboard with synchronized game-bank status, civic-account navigation, obligation summaries, court calendars, payment ledgers, taxes, appeals, and records outside the retired compact panel."
+        ,"Fixed MyFaircroft game-bank, payment, contest, appeal, and expungement requests failing because the active-character database resolver received a user dictionary instead of a numeric account ID."
         ,"Fixed the home-screen application grid being clipped beneath the RP OS footer by adding a dedicated scroll region and device-safe bottom clearance."
+        ,"Fixed the Developer Tools operations sidebar cutting off lower navigation entries by adding an independent height-aware navigation scroller while keeping staff identity controls anchored."
       ]
     },
     {
