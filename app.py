@@ -4690,6 +4690,14 @@ def press_required(user: DbRow | None) -> str | None:
     return None
 
 
+def fnn_content_control_required(user: DbRow | None) -> str | None:
+    if not user:
+        return "Authentication required"
+    if not has_any(user, "owner", "admin", "dev"):
+        return "FNN content-control access required"
+    return None
+
+
 def ice_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
@@ -7117,7 +7125,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
 
     def api_admin_delete_press_report(self, db: Database, user: DbRow | None, report_id: int) -> None:
-        err = admin_required(user)
+        err = fnn_content_control_required(user)
         if err:
             self.error(403 if user else 401, err); return
         report = one(db, "SELECT * FROM press_reports WHERE id = ?", (report_id,))
@@ -7131,7 +7139,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"ok": True, "deleted_id": report_id, "report_number": report.get("report_number")})
 
     def api_admin_delete_fnn_story(self, db: Database, user: DbRow | None, edition_id: int, story_index: int) -> None:
-        err = admin_required(user)
+        err = fnn_content_control_required(user)
         if err:
             self.error(403 if user else 401, err); return
         edition = one(db, "SELECT * FROM fnn_editions WHERE id = ?", (edition_id,))
@@ -11422,7 +11430,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
 
     def api_admin_delete_cad_report(self, db: Database, user: DbRow | None, report_id: int) -> None:
-        err = admin_required(user)
+        err = fnn_content_control_required(user)
         if err:
             self.error(403 if user else 401, err); return
         report = one(db, "SELECT * FROM cad_after_call_reports WHERE id = ?", (report_id,))
@@ -12671,6 +12679,24 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             """,
         )
         press_members = [dict(account) for account in users if has_any(account, "press")]
+        fnn_cad_reports = all_rows(db, """SELECT r.*, o.name AS officer_name
+            FROM cad_after_call_reports r JOIN users o ON o.id=r.officer_id
+            ORDER BY r.created_at DESC LIMIT 200""")
+        fnn_press_reports = all_rows(db, """SELECT r.*, u.name AS author_name
+            FROM press_reports r JOIN users u ON u.id=r.author_id
+            ORDER BY r.created_at DESC LIMIT 200""")
+        fnn_content_editions = []
+        for edition_row in all_rows(db, "SELECT id,edition_date,headline,deck,lead_story,stories_json,published_at FROM fnn_editions ORDER BY published_at DESC LIMIT 30"):
+            try:
+                edition_stories = json.loads(edition_row.get("stories_json") or "[]")
+            except (TypeError, json.JSONDecodeError):
+                edition_stories = []
+            fnn_content_editions.append({
+                "id": edition_row["id"], "edition_date": edition_row["edition_date"],
+                "headline": edition_row["headline"], "deck": edition_row.get("deck") or "",
+                "lead_story": edition_row.get("lead_story") or "", "published_at": edition_row["published_at"],
+                "stories": edition_stories,
+            })
         sanctions = all_rows(
             db,
             """
@@ -13071,6 +13097,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "active_press_passes": sum(1 for member in press_members if str(member.get("press_pass_status") or "active") == "active"),
                     "issued_press_passes": len(press_members),
                     "press_members": press_members,
+                    "content_control": {
+                        "cad_reports": [dict(row) for row in fnn_cad_reports],
+                        "press_reports": [dict(row) for row in fnn_press_reports],
+                        "editions": fnn_content_editions,
+                    },
                 },
                 "ice_settings": {
                     "restrict_local_data": system_settings["ice_restrict_local_data"],

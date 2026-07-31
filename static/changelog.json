@@ -46,6 +46,9 @@
         ,"Added an active scheduled-movement ledger to Ravenhood Stock Market Settings with affected securities, target percentage, schedule timing, live progress, and immediate stop controls."
       ],
       "changed": [
+        "Reimagined Faircroft Financial as a flagship private-client banking experience with a dimensional resident credential, cinematic account command center, live financial-position narratives, credit threshold guidance, authoritative activity presentation, identity assurance, and premium responsive motion.",
+        "Moved audited CAD, Press Desk, and published-story content maintenance out of Administration and into Developer Tools FNN Settings, with complete source-file review dialogs required before deletion controls are exposed.",
+        "Rebuilt Leaderboards as a full championship arena with a dominant first-place stage, staggered challengers, live leader advantage, signed-in player chase intelligence, continuous contender standings, division-scale typography, and responsive competitive motion.",
         "Rebuilt Ravenhood into a more continuous exchange-floor experience with ambient market motion, animated projection intelligence, verified position delivery, and a persistent workspace exit control.",
         "Established RP OS 0.2.2 as the active development release; additional completed work will be appended to this release entry before publication.",
         "Leaderboards now combine live FCRPMUSSALO bank balances, Thunder Buddies player telemetry, MedicalHud reputation-based credit, and RP OS public-safety records.",
@@ -74,6 +77,9 @@
         ,"Upgraded Leaderboards with animated competitive podiums, flame effects for leading placements, rank-progression meters, leader margins, and exact performance needed to advance to the next position."
         ,"Rebuilt Faircroft Financial as a continuous personal-banking experience with persistent account navigation, checking activity, account actions, synchronized balance history, integrated credit insights, and a restrained institutional banking design."
         ,"Rebuilt Developer Tools Game Intelligence as a continuous live-economy operations screen with circulation concentration, funded-account coverage, identity-match rates, integrated financial rankings, and streamlined persistence ledgers driven by the FCRPMUSSALO mirror."
+        ,"Rebuilt the Faircroft Lottery as a continuous 2026-style resident prize campaign with a prominent weekly-winnings billboard, live drawing countdown, streamlined full-width entry runway, open participation timeline, winner spotlight, and compact transparent prize funding without stacked widget cards."
+        ,"Rebuilt Faircroft Commerce as a modern licensing authority with an editorial filing masthead, connected application journey, contextual section guidance, document-style controls, streamlined operational telemetry, and responsive Commerce branding instead of boxed form widgets."
+        ,"Rebuilt the Faircroft citizen passport as a presentation-grade digital booklet with an official embossed cover, security artwork, portrait and ghost image, bilingual identity fields, verification hologram, holder signature, ten-year validity, issuing authority, live registry authentication, and machine-readable travel-document zone."
         ,"Changed all newly issued MyFaircroft and Ravenhood four-digit receipt PINs to unassigned bearer codes that permanently record the issuing administrator and first eligible resident who redeems them."
       ],
       "fixed": [
@@ -105,6 +111,8 @@
         ,"Fixed the Developer Tools operations sidebar cutting off lower navigation entries by adding an independent height-aware navigation scroller while keeping staff identity controls anchored."
         ,"Fixed large changelog releases rendering every category as an overwhelming, uninterrupted list by introducing selectable chapters and compact release previews on desktop and mobile."
         ,"Fixed PC anti-cheat records being displayed as PlayStation by correcting the Arma PlatformKind mapping and replacing raw enum numbers with explicit platform names in new telemetry."
+        ,"Fixed Ravenhood structural entrance animations and the inherited RP OS app container intermittently hiding the exchange header, navigation, instrument details, order entry, and portfolio controls behind oversized empty regions."
+        ,"Stabilized the Ravenhood desktop, tablet, and mobile viewport with a bounded trading canvas, persistent structural panels, compact chart proportions, responsive order controls, and reliable workspace exit placement."
       ]
     },
     {

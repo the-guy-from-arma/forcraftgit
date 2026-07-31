@@ -1548,6 +1548,13 @@ function renderLeaderboards() {
   const rows = data.boards?.[boardKey] || [];
   const podium = rows.slice(0, 3);
   const remaining = rows.slice(3);
+  const leaderGap = rows[1] ? Math.max(0, leaderboardRawValue(boardKey, rows[0]) - leaderboardRawValue(boardKey, rows[1])) : 0;
+  const sessionUser = state.session?.user || state.session || {};
+  const personalIndex = rows.findIndex((item) => (
+    (sessionUser.civ_number && String(item.civ_number || "") === String(sessionUser.civ_number)) ||
+    (sessionUser.name && String(item.name || "").toLowerCase() === String(sessionUser.name).toLowerCase())
+  ));
+  const personal = personalIndex >= 0 ? rows[personalIndex] : null;
   const groups = {
     wealth: "Wealth & Credit",
     activity: "Activity",
@@ -1556,22 +1563,23 @@ function renderLeaderboards() {
     community: "Community",
   };
   const activeGroup = config.group;
-  return `<div class="leaderboard-command ${config.accent}">
+  return `<div class="leaderboard-command leaderboard-v3 ${config.accent}">
     <section class="leaderboard-hero">
       <div><p>${escapeHtml(config.kicker)}</p><h2>${escapeHtml(config.label)}</h2><span>${escapeHtml(config.unit)} · refreshed from authoritative Faircroft systems</span></div>
-      <div class="leaderboard-live"><i></i><strong>LIVE RANKINGS</strong><small>${escapeHtml(data.generated_at ? new Date(data.generated_at).toLocaleString() : "Syncing")}</small></div>
+      <div class="leaderboard-hero-score"><small>FIELD STATUS</small><strong>${rows.length}<em> ranked</em></strong><span><i></i> Live ${escapeHtml(data.generated_at ? new Date(data.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "sync")}</span></div>
     </section>
     <nav class="leaderboard-groups">${Object.entries(groups).map(([key, label]) => `<button type="button" class="${activeGroup === key ? "active" : ""}" data-leaderboard-group="${key}">${escapeHtml(label)}</button>`).join("")}</nav>
     <nav class="leaderboard-tabs">${Object.entries(LEADERBOARD_CONFIG).filter(([, item]) => item.group === activeGroup).map(([key, item]) => `<button type="button" class="${boardKey === key ? "active" : ""}" data-leaderboard-tab="${key}"><span>${escapeHtml(item.kicker)}</span><strong>${escapeHtml(item.label)}</strong></button>`).join("")}</nav>
     <section class="leaderboard-network-strip">
-      <div><span>Tracked players</span><strong>${Number(data.summary?.tracked_players || 0)}</strong></div>
-      <div><span>Online now</span><strong>${Number(data.summary?.online_players || 0)}</strong></div>
-      <div><span>Synced balances</span><strong>${Number(data.summary?.synced_balances || 0)}</strong></div>
-      <div><span>Credit profiles</span><strong>${Number(data.summary?.synced_credit_profiles || 0)}</strong></div>
+      <div><span>Tracked field</span><strong>${Number(data.summary?.tracked_players || 0)}</strong></div>
+      <div><span>Competing now</span><strong>${Number(data.summary?.online_players || 0)}</strong></div>
+      <div><span>Verified records</span><strong>${Number(data.summary?.synced_balances || 0)}</strong></div>
+      <div><span>Leader advantage</span><strong>${rows.length > 1 ? escapeHtml(leaderboardAdvanceMetric(boardKey, leaderGap)) : "UNCONTESTED"}</strong></div>
     </section>
     ${rows.length ? `<section class="leaderboard-stage">
+      <header class="leaderboard-stage-intro"><div><span>THE FRONT OF THE FIELD</span><h3>Championship standings</h3></div><p>The podium is earned. Rankings move as verified server activity arrives.</p></header>
       <div class="leaderboard-podium">${podium.map((item, index) => { const progress = leaderboardProgress(boardKey, rows, index); return `<article class="rank-${item.rank} is-heated" style="--podium-index:${index}">
-        <div class="leaderboard-flames" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="leaderboard-spotlight" aria-hidden="true"></div>
         <span class="leaderboard-medal">${item.rank === 1 ? "01" : String(item.rank).padStart(2, "0")}</span>
         <div class="leaderboard-avatar">${escapeHtml(String(item.name || "?").slice(0, 2).toUpperCase())}</div>
         <small>${item.rank === 1 ? "CURRENT LEADER" : `RANK ${item.rank}`}</small>
@@ -1580,7 +1588,10 @@ function renderLeaderboards() {
         <strong>${escapeHtml(leaderboardMetric(boardKey, item))}</strong>
         <em>${leaderboardDetail(boardKey, item)}</em>
         <div class="leaderboard-advance"><span>${escapeHtml(progress.label)}</span><i><b style="--advance:${progress.percent}%"></b></i></div>
+        <div class="leaderboard-plinth"><b>${String(item.rank).padStart(2, "0")}</b><span>${item.rank === 1 ? "DEFEND THE LEAD" : "CHASE THE CROWN"}</span></div>
       </article>`; }).join("")}</div>
+      ${personal ? `<aside class="leaderboard-personal"><span>YOUR POSITION</span><strong>#${personal.rank} ${escapeHtml(personal.name || "Resident")}</strong><b>${escapeHtml(leaderboardMetric(boardKey, personal))}</b><small>${escapeHtml(leaderboardProgress(boardKey, rows, personalIndex).label)}</small></aside>` : ""}
+      <div class="leaderboard-field-head"><div><span>LIVE CHASE</span><h3>Contender field</h3></div><strong>${remaining.length} challengers</strong></div>
       <div class="leaderboard-ledger">
         <header><span>RANK</span><span>PLAYER</span><span>PERFORMANCE</span></header>
         ${remaining.map((item, rowIndex) => { const absoluteIndex = rowIndex + 3; const progress = leaderboardProgress(boardKey, rows, absoluteIndex); return `<article style="--ledger-index:${rowIndex}">
@@ -1988,16 +1999,19 @@ function renderCitizenship() {
   const record = data.record || {};
   const holder = data.holder || {};
   const valid = String(record.citizenship_status || "Undocumented").toLowerCase() === "valid citizen";
+  const issuedDate = record.issued_at ? new Date(record.issued_at) : new Date();
+  const expiryDate = new Date(issuedDate); expiryDate.setFullYear(expiryDate.getFullYear() + 10);
+  const passportNumber = String(record.passport_number || "PENDING").toUpperCase();
+  const citizenName = String(holder.name || "Faircroft Citizen").trim();
+  const nameParts = citizenName.split(/\s+/), surname = (nameParts.pop() || "CITIZEN").toUpperCase(), givenNames = (nameParts.join(" ") || citizenName).toUpperCase();
+  const mrzName = `P<FC${surname}<<${givenNames}`.replace(/[^A-Z<]/g, "<").padEnd(44, "<").slice(0, 44);
+  const mrzIdentity = `${passportNumber.replace(/[^A-Z0-9]/g, "").padEnd(9, "<")}9FC${String(holder.civ_number || "000000").replace(/\D/g, "").padStart(6, "0")}<<<FAIRCROFT<CITIZEN<<<<<<`.padEnd(44, "<").slice(0, 44);
   return `<div class="citizenship-app">
     <section class="citizenship-command">
       <div><span>FAIRCROFT CITIZENSHIP & IMMIGRATION SERVICES</span><h2>${valid ? "Citizenship confirmed" : "Citizenship review required"}</h2><p>${valid ? "Your Faircroft citizenship and passport credential are active." : "Complete the Faircroft civics examination to establish lawful citizenship."}</p></div>
       <strong class="${valid ? "valid" : "warning"}">${escapeHtml(record.citizenship_status || "Undocumented")}</strong>
     </section>
-    ${valid ? `<section class="faircroft-passport">
-      <header><span>${iconSvg.passport}</span><div><small>STATE OF FAIRCROFT</small><h3>Citizen Passport</h3></div><b>FC</b></header>
-      <div class="passport-body"><div class="passport-photo">${holder.photo ? `<img src="${escapeHtml(holder.photo)}" alt="" />` : escapeHtml(String(holder.name || "F").slice(0,1))}</div><dl><div><dt>Citizen</dt><dd>${escapeHtml(holder.name || "")}</dd></div><div><dt>Passport number</dt><dd>${escapeHtml(record.passport_number || "Pending")}</dd></div><div><dt>CIV identification</dt><dd>${escapeHtml(holder.civ_number || "Pending")}</dd></div><div><dt>Issued</dt><dd>${record.issued_at ? new Date(record.issued_at).toLocaleDateString() : "Official record"}</dd></div></dl></div>
-      <footer>VALID FAIRCROFT CITIZENSHIP · OFFICIAL DIGITAL CREDENTIAL</footer>
-    </section>` : `<form id="citizenshipExamForm" class="citizenship-exam">
+    ${valid ? `<section class="passport-presentation"><header class="passport-intro"><div><span>OFFICIAL TRAVEL CREDENTIAL</span><h3>Your Faircroft passport</h3><p>Issued to a verified citizen of the State of Faircroft.</p></div><strong><i></i> DOCUMENT VERIFIED</strong></header><div class="passport-book"><section class="passport-cover"><div class="passport-cover-pattern"></div><span>STATE OF</span><h3>FAIRCROFT</h3><div class="passport-coat"><i>FC</i><b>✦</b></div><strong>PASSPORT</strong><small>OFFICIAL CITIZEN TRAVEL DOCUMENT</small><div class="passport-chip">▰</div></section><section class="passport-data-page"><div class="passport-security-wave"></div><header><div class="passport-page-seal"><b>FC</b></div><span><small>STATE OF FAIRCROFT</small><strong>PASSPORT / PASSEPORT</strong></span><em>${escapeHtml(passportNumber)}</em></header><main><div class="passport-portrait"><div class="passport-photo">${holder.photo ? `<img src="${escapeHtml(holder.photo)}" alt="Portrait of ${escapeHtml(citizenName)}" />` : escapeHtml(citizenName.slice(0,1))}</div><div class="passport-ghost">${holder.photo ? `<img src="${escapeHtml(holder.photo)}" alt="" />` : escapeHtml(citizenName.slice(0,1))}</div><span>FC</span></div><dl><div class="wide"><dt>Surname / Nom</dt><dd>${escapeHtml(surname)}</dd></div><div class="wide"><dt>Given names / Prénoms</dt><dd>${escapeHtml(givenNames)}</dd></div><div><dt>Nationality / Nationalité</dt><dd>FAIRCROFT</dd></div><div><dt>Citizen ID</dt><dd>${escapeHtml(holder.civ_number || "PENDING")}</dd></div><div><dt>Date of issue</dt><dd>${issuedDate.toLocaleDateString()}</dd></div><div><dt>Date of expiry</dt><dd>${expiryDate.toLocaleDateString()}</dd></div><div><dt>Authority</dt><dd>FCIS</dd></div><div><dt>Status</dt><dd>VALID CITIZEN</dd></div></dl><div class="passport-hologram"><b>FC</b><span>VALID</span></div></main><div class="passport-signature"><span>Holder signature</span><strong>${escapeHtml(citizenName)}</strong></div><footer><code>${mrzName}</code><code>${mrzIdentity}</code></footer></section></div><div class="passport-authentication"><span><i></i> LIVE REGISTRY MATCH</span><p>Credential ${escapeHtml(passportNumber)} is digitally matched to CIV ${escapeHtml(holder.civ_number || "pending")}.</p><b>FAIRCROFT CITIZENSHIP &amp; IMMIGRATION SERVICES</b></div></section>` : `<form id="citizenshipExamForm" class="citizenship-exam">
       <header><span>FAIRCROFT CIVICS ASSESSMENT</span><h3>Six-question citizenship examination</h3><p>Answer every question. Results are recorded in the federal citizenship registry.</p></header>
       ${(data.questions || []).map((question) => `<fieldset><legend><small>QUESTION ${question.number} OF 6</small>${escapeHtml(question.question)}</legend>${question.options.map((option, index) => `<label><input type="radio" name="q${question.number}" value="${"ABCD"[index]}" required /><span>${"ABCD"[index]}</span>${escapeHtml(option)}</label>`).join("")}</fieldset>`).join("")}
       <button class="primary" type="submit">Submit citizenship examination</button>
@@ -3513,13 +3527,15 @@ function renderLotteryWorkspace() {
   if(!data)return `<main class="lottery-workspace"><div class="empty">Opening Faircroft Lottery...</div></main>`;
   const draw=data.draw||{},funding=data.funding||{},entries=data.entries||[],remaining=Number(data.remaining_today||0);
   const scheduled=draw.scheduled_at?new Date(draw.scheduled_at):null;
-  return `<main class="lottery-workspace">
-    <header class="lottery-header"><div class="lottery-seal"><i>FC</i><span>FAIRCROFT PUBLIC BENEFIT DRAW</span></div><div class="lottery-header-actions"><span><i></i>${data.enabled?"ENTRIES OPEN":"ENTRIES CLOSED"}</span><button data-refresh-lottery>Refresh</button><button class="lottery-exit" data-close-lottery>Exit lottery</button></div></header>
-    <section class="lottery-hero"><div class="lottery-orbits"><i></i><i></i><b>FC</b></div><div><span>NEXT OFFICIAL DRAWING</span><h1>${money(funding.available)}</h1><p>Current Faircroft community prize pool</p><strong>${scheduled?scheduled.toLocaleString(undefined,{weekday:"long",month:"long",day:"numeric",hour:"numeric",minute:"2-digit",timeZone:data.timezone}):"Tuesday · 11:59 PM Eastern"}</strong></div><aside><span>YOUR DAILY ACCESS</span><strong>${remaining}<small> / ${data.daily_limit}</small></strong><p>entries remaining today</p><button data-lottery-enter ${!data.enabled||data.excluded||remaining<=0?"disabled":""}>Enter tonight's pool</button></aside></section>
+  const drawLabel=scheduled?scheduled.toLocaleString(undefined,{weekday:"long",month:"long",day:"numeric",hour:"numeric",minute:"2-digit",timeZone:data.timezone}):"Tuesday · 11:59 PM Eastern";
+  const until=Math.max(0,(scheduled?.getTime()||Date.now())-Date.now()),days=Math.floor(until/86400000),hours=Math.floor(until%86400000/3600000),minutes=Math.floor(until%3600000/60000);
+  const prize=Number(funding.available||0),prizeHeadline=prize>0?money(prize):"POOL BUILDING";
+  return `<main class="lottery-workspace lottery-v2 lottery-v3">
+    <header class="lottery-header"><div class="lottery-seal"><i>FC</i><div><strong>FAIRCROFT LOTTERY</strong><span>OFFICIAL COMMUNITY DRAW</span></div></div><nav class="lottery-header-actions"><span><i></i>${data.enabled?"ENTRIES OPEN":"ENTRIES CLOSED"}</span><button data-refresh-lottery>Refresh draw</button><button class="lottery-exit" data-close-lottery>Return to RP OS</button></nav></header>
+    <section class="lottery-promo"><div class="lottery-promo-copy"><span class="lottery-kicker">YOUR SHOT AT THE NEXT BIG WIN</span><h1><small>WIN THE</small> FAIRCROFT<br/><em>WEEKLY POOL</em></h1><p>Three complimentary chances every day. One verified resident takes the community prize.</p><div class="lottery-draw-date"><i></i><span><small>NEXT LIVE DRAWING</small><strong>${escapeHtml(drawLabel)}</strong></span></div></div><div class="lottery-prize-stage"><div class="lottery-prize-rays"></div><div class="lottery-prize-ring"><span>ESTIMATED PRIZE</span><strong>${prizeHeadline}</strong><small>${prize>0?"ONE WINNER · ONE PAYOUT":"NEW RECEIPTS INCREASE THE PRIZE"}</small></div><div class="lottery-countdown"><span><b>${String(days).padStart(2,"0")}</b><small>DAYS</small></span><i>:</i><span><b>${String(hours).padStart(2,"0")}</b><small>HRS</small></span><i>:</i><span><b>${String(minutes).padStart(2,"0")}</b><small>MIN</small></span></div></div><aside class="lottery-entry-pass"><span class="lottery-pass-label">TODAY'S ENTRY PASS</span><div class="lottery-chances"><strong>${remaining}</strong><span>OF ${data.daily_limit}<small>CHANCES LEFT</small></span></div><div class="lottery-entry-dots">${Array.from({length:Number(data.daily_limit||0)},(_,index)=>`<i class="${index<remaining?"available":"used"}"></i>`).join("")}</div><p>${data.excluded?"Your role is not eligible for this drawing.":remaining>0?"Tap once to secure a verified entry in the next official drawing.":"All of today's chances have been entered. Come back tomorrow."}</p><button data-lottery-enter ${!data.enabled||data.excluded||remaining<=0?"disabled":""}><span>${remaining>0?"ENTER THE DRAW":"ENTRIES USED"}</span><b>→</b></button><small>No purchase required · One winner selected from eligible verified entries</small></aside></section>
     ${data.excluded?`<div class="lottery-policy-alert"><strong>Participation unavailable</strong><span>Your current role is excluded by lottery integrity policy: ${escapeHtml((data.excluded_roles||[]).join(", "))}</span></div>`:""}
-    <section class="lottery-flow"><div><span>POOL COMPOSITION</span><h2>Where the prize originates</h2><p>Faircroft redirects recorded public-service receipts into a transparent weekly benefit drawing.</p></div><dl><div><dt>Collected fine receipts</dt><dd>${money(funding.fines)}</dd></div><div><dt>Ravenhood exchange fees</dt><dd>${money(funding.market_fees)}</dd></div><div><dt>Previous awards</dt><dd>−${money(funding.awarded)}</dd></div></dl></section>
-    <section class="lottery-ledger"><header><div><span>YOUR VERIFIED ENTRIES</span><h2>Drawing ledger</h2></div><strong>${entries.length} CURRENT</strong></header><div>${entries.map((entry,index)=>`<article style="--entry-delay:${index*.06}s"><i>${String(entry.entry_number).padStart(2,"0")}</i><div><strong>FC-${String(entry.id).padStart(7,"0")}</strong><span>${new Date(entry.created_at).toLocaleString()}</span></div><em class="${entry.status}">${entry.fraud_flag?"UNDER REVIEW":escapeHtml(entry.status.toUpperCase())}</em></article>`).join("")||`<div class="empty">Use one of your daily entries to join the next drawing.</div>`}</div></section>
-    ${data.latest_result?`<section class="lottery-last-result"><span>PREVIOUS DRAWING</span><strong>${escapeHtml(data.latest_result.winner_name||"No eligible winner")}</strong><p>${data.latest_result.winner_civ?`CIV ${escapeHtml(data.latest_result.winner_civ)} · `:""}${money(data.latest_result.payout_amount)} authorized</p></section>`:""}
+    <section class="lottery-trust-strip"><article><span>01</span><div><strong>ENTER FREE</strong><p>Use up to ${data.daily_limit} verified chances each day.</p></div></article><article><span>02</span><div><strong>WATCH THE POOL GROW</strong><p>Eligible Faircroft receipts build the weekly prize.</p></div></article><article><span>03</span><div><strong>WINNER VERIFIED</strong><p>Every entry and award is recorded to a CIV identity.</p></div></article></section>
+    <section class="lottery-dashboard"><section class="lottery-ledger"><header><div><span>MY DRAWING ACTIVITY</span><h2>Your verified chances</h2><p>Official entries for the upcoming Faircroft drawing.</p></div><strong>${entries.length} ENTERED</strong></header><div>${entries.map((entry,index)=>`<article style="--entry-delay:${index*.06}s"><i>${String(entry.entry_number).padStart(2,"0")}</i><div><strong>FC-${String(entry.id).padStart(7,"0")}</strong><span>${new Date(entry.created_at).toLocaleString()}</span></div><em class="${entry.status}">${entry.fraud_flag?"UNDER REVIEW":escapeHtml(entry.status.toUpperCase())}</em></article>`).join("")||`<div class="lottery-empty"><span>✦</span><strong>Your next winning chance starts here.</strong><p>Enter the draw above to receive an official entry number.</p></div>`}</div></section><aside class="lottery-insider"><span>BEHIND THE PRIZE</span><h2>Faircroft gives back.</h2><p>Recorded public-service receipts and Ravenhood exchange fees return to residents through the weekly drawing.</p><dl><div><dt>Public-service receipts</dt><dd>${money(funding.fines)}</dd></div><div><dt>Exchange contributions</dt><dd>${money(funding.market_fees)}</dd></div><div><dt>Awards already paid</dt><dd>${money(funding.awarded)}</dd></div></dl>${data.latest_result?`<div class="lottery-winner"><span>LATEST WINNER</span><strong>${escapeHtml(data.latest_result.winner_name||"No eligible winner")}</strong><p>${money(data.latest_result.payout_amount)} prize authorized</p></div>`:`<div class="lottery-winner awaiting"><span>WINNER SPOTLIGHT</span><strong>Could this be you?</strong><p>The first completed drawing will appear here.</p></div>`}</aside></section>
   </main>`;
 }
 
@@ -3617,6 +3633,40 @@ function bindMarketWorkspace() {
 }
 
 function renderBankOnlineV2(data, credit, userName, identitySuffix, creditScore, creditProgress, creditRating, refreshedAt, syncLabel) {
+  const availableBalance = data.balance_synced ? money(data.balance) : "Awaiting sync";
+  const scoreValue = Number(credit.score || 0);
+  const nextCreditLevel = scoreValue < 580 ? 580 : scoreValue < 670 ? 670 : scoreValue < 740 ? 740 : scoreValue < 800 ? 800 : 850;
+  const pointsToNext = Math.max(0, nextCreditLevel - scoreValue);
+  return `<main class="bank-workspace bank-v3">
+    <header class="bank-workspace-topbar bank-v3-topbar"><div class="bank-workspace-brand"><span class="bank-workspace-mark"><b>F</b><i>C</i></span><div><strong>Faircroft Financial</strong><small>Private resident banking</small></div></div><nav class="bank-global-nav"><button class="active" data-bank-section="bankChecking">Overview</button><button data-bank-section="bankActivity">Activity</button><button data-bank-section="bankCredit">Credit intelligence</button></nav><div class="bank-workspace-actions"><span class="bank-secure-session"><i></i> Vault session active</span><button class="secondary" type="button" data-refresh-bank>Sync</button><button class="primary" type="button" data-close-bank>Exit bank</button></div></header>
+    <section class="bank-v3-canvas">
+      <header class="bank-v3-welcome"><div><p>FAIRCROFT PRIVATE CLIENT</p><h1>Good ${new Date().getHours() < 12 ? "morning" : new Date().getHours() < 18 ? "afternoon" : "evening"},<br><strong>${escapeHtml(userName)}.</strong></h1><span>Your game economy, identity, and financial standing—one protected relationship.</span></div><aside><i></i><span><small>LIVE FINANCIAL LINK</small><strong>${syncLabel}</strong><em>${refreshedAt}</em></span></aside></header>
+      <section class="bank-v3-command" id="bankChecking">
+        <div class="bank-v3-account">
+          <header><span>PRIMARY RELATIONSHIP</span><strong>01 / CHECKING</strong></header>
+          <div class="bank-v3-balance"><small>Available balance</small><strong>${availableBalance}</strong><span>${data.balance_synced ? "Cleared and available through the Shadow Haven banking network" : "Connection pending—your authoritative balance has not yet arrived"}</span></div>
+          <div class="bank-v3-actions"><button type="button" data-refresh-bank><i>↻</i><span><strong>Synchronize</strong><small>Request latest balance</small></span></button><button type="button" data-bank-section="bankActivity"><i>≡</i><span><strong>View activity</strong><small>Inspect account record</small></span></button><button type="button" data-bank-section="bankCredit"><i>↗</i><span><strong>Credit intelligence</strong><small>Understand your standing</small></span></button></div>
+          <footer><span><small>ACCOUNT REFERENCE</small><strong>•••• ${identitySuffix}</strong></span><span><small>RELATIONSHIP STATUS</small><strong>${data.balance_synced ? "Current" : "Pending sync"}</strong></span><span><small>IDENTITY SECURITY</small><strong>${data.identity_id ? "Verified" : "Link required"}</strong></span></footer>
+        </div>
+        <aside class="bank-v3-card-stage">
+          <div class="bank-v3-orbit"><i></i><i></i><i></i></div>
+          <article class="bank-v3-card"><header><span>FC</span><small>FAIRCROFT FINANCIAL<br>PRIVATE CLIENT</small><i></i></header><div class="bank-v3-chip"><i></i><i></i><i></i></div><strong>•••• &nbsp; •••• &nbsp; ${identitySuffix.slice(0,4)} &nbsp; ${identitySuffix.slice(-4)}</strong><footer><span><small>RESIDENT</small><b>${escapeHtml(userName)}</b></span><span><small>STATUS</small><b>${data.balance_synced ? "ACTIVE" : "PENDING"}</b></span></footer></article>
+          <p><i></i> Digitally secured by your verified Faircroft identity</p>
+        </aside>
+      </section>
+      <section class="bank-v3-intelligence">
+        <header><div><span>FINANCIAL POSITION</span><h2>Your money, translated.</h2></div><p>Clear signals from the systems that shape your Faircroft financial profile.</p></header>
+        <div class="bank-v3-signal-line">
+          <article><span>01</span><div><small>LIQUIDITY</small><strong>${data.balance_synced ? "Fully available" : "Not yet verified"}</strong><p>${data.balance_synced ? `${availableBalance} is currently recognized by the game-bank connection.` : "Complete an authoritative game-bank synchronization to establish liquidity."}</p></div><i class="${data.balance_synced ? "positive" : ""}"></i></article>
+          <article><span>02</span><div><small>CREDIT TRAJECTORY</small><strong>${creditRating}</strong><p>${credit.synced ? `${pointsToNext ? `${pointsToNext} points separate you from the next Faircroft credit threshold.` : "You have reached the highest tracked credit threshold."}` : "Reputation intelligence is awaiting synchronization."}</p></div><i class="${credit.synced ? "positive" : ""}"></i></article>
+          <article><span>03</span><div><small>ACCOUNT INTEGRITY</small><strong>${data.identity_id ? "Identity confirmed" : "Action required"}</strong><p>${data.identity_id ? `Account reference ${identitySuffix} is attached to your verified resident record.` : "Link your in-game identity to protect and synchronize this relationship."}</p></div><i class="${data.identity_id ? "positive" : ""}"></i></article>
+        </div>
+      </section>
+      <section class="bank-v3-ledger" id="bankActivity"><header><div><span>RELATIONSHIP ACTIVITY</span><h2>Account record</h2></div><button type="button" data-refresh-bank>Refresh ledger</button></header><div class="bank-v3-ledger-head"><span>DATE</span><span>EVENT</span><span>NETWORK</span><span>VALUE</span></div><article><time>${data.balance_synced_at ? escapeHtml(new Date(data.balance_synced_at).toLocaleDateString()) : "Pending"}</time><div><i></i><span><strong>Authoritative balance synchronized</strong><small>Verified account snapshot · •••• ${identitySuffix}</small></span></div><span>Shadow Haven</span><b>${availableBalance}</b></article><footer>Only authoritative game-bank events and verified Faircroft records appear here.</footer></section>
+      <section class="bank-v3-credit" id="bankCredit"><div class="bank-v3-credit-copy"><span>FAIRCROFT CREDIT INTELLIGENCE</span><h2>Know where you stand.<br><strong>Know what comes next.</strong></h2><p>${credit.synced ? "Your standing is calculated from synchronized financial reputation and established Faircroft records." : "Your credit intelligence will activate when the reputation network reports its next verified snapshot."}</p><div><span>300</span><i><b style="width:${creditProgress}%"></b></i><span>850</span></div></div><aside><small>CURRENT INDEX</small><strong>${creditScore}</strong><span>${creditRating}</span><em>${credit.synced && pointsToNext ? `${pointsToNext} points to next threshold` : credit.synced ? "Top tracked threshold" : "Sync pending"}</em></aside></section>
+      <footer class="bank-v3-assurance"><div class="bank-v3-seal"><span>FC</span><i></i></div><div><small>OFFICIAL COVERAGE AUTHORITY</small><strong>Faircroft Citizens Insurance Corporation</strong><p>Eligible resident deposit relationships are protected under applicable Faircroft financial rules. Coverage applies only to balances recognized by the authoritative game banking system.</p></div><span><i></i> Protected relationship</span></footer>
+    </section>
+  </main>`;
   return `<main class="bank-workspace bank-v2">
     <header class="bank-workspace-topbar"><div class="bank-workspace-brand"><span class="bank-workspace-mark">FC</span><div><strong>Faircroft Financial</strong><small>Personal banking</small></div></div><nav class="bank-global-nav"><button class="active" data-bank-section="bankChecking">Accounts</button><button data-bank-section="bankActivity">Activity</button><button data-bank-section="bankCredit">Credit</button></nav><div class="bank-workspace-actions"><span class="bank-secure-session"><i></i> Protected session</span><button class="secondary" type="button" data-refresh-bank>Refresh</button><button class="primary" type="button" data-close-bank>Sign out</button></div></header>
     <section class="bank-dashboard"><header class="bank-welcome"><div><p class="eyebrow">Personal banking</p><h1>Good ${new Date().getHours() < 12 ? "morning" : new Date().getHours() < 18 ? "afternoon" : "evening"}, ${escapeHtml(userName)}.</h1><p>Manage your Faircroft checking and credit profile.</p></div><div class="bank-sync-state ${data.balance_synced ? "is-live" : ""}"><i></i><span><small>Game-bank connection</small><strong>${syncLabel}</strong></span></div></header>
@@ -4346,7 +4396,7 @@ function renderBusinessWorkspace() {
   const active = tabs.find(([id]) => id === state.businessTab) || tabs[0];
   const sectionCodes = { apply: "FILE", licenses: "PORTFOLIO", review: "INTAKE", market: "REGISTRY" };
   return `
-    <section class="business-workspace">
+    <section class="business-workspace commerce-v2">
       <aside class="business-workspace-sidebar">
         <div class="commerce-brand"><img src="/static/brand/faircroft-emblem.webp" alt="" /><div><span>STATE OF FAIRCROFT</span><strong>Commerce</strong><small>Licensing Authority</small></div></div>
         <p class="dev-nav-label">Commerce systems</p>
@@ -4403,11 +4453,11 @@ function renderBusinessApply(data) {
       ` : ""}
       <form id="businessApplicationForm" class="business-form commerce-filing">
         <header>
-          <div><span>FC-COM 01</span><h2>Business license application</h2></div>
-          <strong>DRAFT</strong>
+          <div class="commerce-filing-title"><span>FC-COM 01 · OFFICIAL FILING</span><h2>Build your Faircroft business.</h2><p>Establish the entity, identify its responsible owner, and present a credible operating plan for Commerce review.</p></div>
+          <div class="commerce-draft-mark"><i>FC</i><span>DRAFT APPLICATION</span></div>
         </header>
         <div class="commerce-form-section">
-          <div class="commerce-form-index"><b>01</b><span>Entity</span></div>
+          <div class="commerce-form-index"><b>01</b><span>Entity</span><small>Define the public identity and license class.</small></div>
           <div class="commerce-form-fields">
             <label class="wide">Registered business name<input name="business_name" maxlength="120" required /></label>
             <label>Business classification<select name="business_type" required>
@@ -4417,7 +4467,7 @@ function renderBusinessApply(data) {
           </div>
         </div>
         <div class="commerce-form-section">
-          <div class="commerce-form-index"><b>02</b><span>Ownership</span></div>
+          <div class="commerce-form-index"><b>02</b><span>Ownership</span><small>Connect the filing to the responsible character and capital.</small></div>
           <div class="commerce-form-fields">
             ${characterSelectField(data.characters || [], "character_id", "Responsible owner character")}
             <label>Responsible owner<input name="owner_name" value="${escapeHtml(data.active_character?.character_name || state.session.user.name)}" maxlength="120" required readonly /></label>
@@ -4427,7 +4477,7 @@ function renderBusinessApply(data) {
           </div>
         </div>
         <div class="commerce-form-section">
-          <div class="commerce-form-index"><b>03</b><span>Operations</span></div>
+          <div class="commerce-form-index"><b>03</b><span>Operations</span><small>Explain how the business will operate in Faircroft.</small></div>
           <div class="commerce-form-fields">
             <label class="wide">Capital source<textarea name="funding_source" maxlength="700" placeholder="RP source of startup capital" required></textarea></label>
             <label class="wide">Operating plan<textarea name="description" maxlength="1200" placeholder="Services, customers, staffing, restricted activity, and roleplay purpose" required></textarea></label>
@@ -9919,6 +9969,28 @@ function renderDevLotterySettings(lottery){
   </div>`;
 }
 
+function renderFnnContentControl(fnn) {
+  const content = fnn.content_control || { cad_reports: [], press_reports: [], editions: [] };
+  const published = (content.editions || []).flatMap((edition) => (edition.stories || []).map((story, index) => ({ edition, story, index })));
+  const selectedKey = state.fnnContentPreview || "";
+  let preview = "";
+  if (selectedKey) {
+    const [type, first, second] = selectedKey.split(":");
+    if (type === "cad") {
+      const report = (content.cad_reports || []).find((item) => String(item.id) === first);
+      if (report) preview = `<div class="fnn-review-modal" data-close-fnn-review><article role="dialog" aria-modal="true"><header><div><span>CAD AFTER-ACTION REPORT</span><h2>${escapeHtml(report.report_number)}</h2><p>${escapeHtml(report.call_type)} · ${escapeHtml(report.location || "Location not filed")}</p></div><button type="button" data-close-fnn-review>×</button></header><div class="fnn-review-meta"><span><small>OFFICER</small><strong>${escapeHtml(report.officer_name)}</strong></span><span><small>DISPOSITION</small><strong>${escapeHtml(humanLabel(report.disposition))}</strong></span><span><small>FILED</small><strong>${new Date(report.created_at).toLocaleString()}</strong></span><span><small>INVOLVED PARTY</small><strong>${escapeHtml(report.involved_name || "None filed")}</strong></span></div><section><h3>Filed narrative</h3><p>${escapeHtml(report.narrative || "No narrative filed.")}</p></section><section><h3>Actions taken</h3><p>${escapeHtml(report.actions_taken || "No actions documented.")}</p></section><section><h3>Evidence and references</h3><p>${escapeHtml(report.evidence_links || "No evidence references filed.")}</p></section><footer><span>Deletion permanently removes this source from future FNN generation and is audited.</span><button class="danger" type="button" data-fnn-content-delete="cad" data-record-id="${report.id}" data-label="${escapeHtml(report.report_number)}">Delete report</button></footer></article></div>`;
+    } else if (type === "press") {
+      const report = (content.press_reports || []).find((item) => String(item.id) === first);
+      if (report) preview = `<div class="fnn-review-modal" data-close-fnn-review><article role="dialog" aria-modal="true"><header><div><span>PRESS DESK SUBMISSION</span><h2>${escapeHtml(report.headline)}</h2><p>${escapeHtml(report.report_number)} · ${escapeHtml(humanLabel(report.category))}</p></div><button type="button" data-close-fnn-review>×</button></header><div class="fnn-review-meta"><span><small>AUTHOR</small><strong>${escapeHtml(report.author_name)}</strong></span><span><small>STATUS</small><strong>${escapeHtml(humanLabel(report.status))}</strong></span><span><small>LOCATION</small><strong>${escapeHtml(report.location || "Not filed")}</strong></span><span><small>EVENT TIME</small><strong>${escapeHtml(report.event_at || "Not filed")}</strong></span></div><section><h3>Verified facts</h3><p>${escapeHtml(report.facts || "No facts filed.")}</p></section><section><h3>People and organizations</h3><p>${escapeHtml([report.people, report.organizations].filter(Boolean).join(" · ") || "None filed.")}</p></section><section><h3>Quotes</h3><p>${escapeHtml(report.quotes || "No quotations filed.")}</p></section><section><h3>Background and public impact</h3><p>${escapeHtml([report.background, report.public_impact].filter(Boolean).join("\n\n") || "No additional context filed.")}</p></section><section><h3>Verification notes</h3><p>${escapeHtml(report.verification_notes || "No verification notes filed.")}</p></section><footer><span>Deletion permanently removes this submission from Gemini newsroom sources and is audited.</span><button class="danger" type="button" data-fnn-content-delete="press" data-record-id="${report.id}" data-label="${escapeHtml(report.report_number)}">Delete submission</button></footer></article></div>`;
+    } else if (type === "fnn") {
+      const edition = (content.editions || []).find((item) => String(item.id) === first);
+      const story = edition?.stories?.[Number(second)];
+      if (edition && story) preview = `<div class="fnn-review-modal" data-close-fnn-review><article role="dialog" aria-modal="true"><header><div><span>PUBLISHED FNN STORY</span><h2>${escapeHtml(story.headline || "Untitled story")}</h2><p>${escapeHtml(edition.edition_date)} · ${escapeHtml(story.category || "Faircroft")}</p></div><button type="button" data-close-fnn-review>×</button></header><div class="fnn-review-meta"><span><small>EDITION</small><strong>${escapeHtml(edition.headline)}</strong></span><span><small>PUBLISHED</small><strong>${new Date(edition.published_at).toLocaleString()}</strong></span></div><section><h3>Published copy</h3><p>${escapeHtml(story.body || story.story || story.content || story.summary || "No story copy available.")}</p></section><footer><span>Deletion removes this story from the public edition and records the action.</span><button class="danger" type="button" data-fnn-content-delete="fnn" data-edition-id="${edition.id}" data-story-index="${Number(second)}">Delete published story</button></footer></article></div>`;
+    }
+  }
+  return `<section class="dev-card fnn-content-control"><header><div><p class="eyebrow">News source archive</p><h2>Content review and maintenance</h2><p>Open the complete source record before deciding whether it should be permanently removed.</p></div><strong>${(content.cad_reports || []).length + (content.press_reports || []).length + published.length} RECORDS</strong></header><div class="fnn-content-switchboard"><section><div><span>CAD SOURCES</span><strong>${(content.cad_reports || []).length}</strong></div>${(content.cad_reports || []).map((item) => `<button type="button" data-fnn-content-preview="cad:${item.id}"><small>${escapeHtml(item.report_number)} · ${new Date(item.created_at).toLocaleDateString()}</small><strong>${escapeHtml(item.call_type)}</strong><span>${escapeHtml(item.location || "No location")} · ${escapeHtml(item.officer_name)}</span><em>Review file →</em></button>`).join("") || `<p class="empty">No CAD reports</p>`}</section><section><div><span>PRESS DESK</span><strong>${(content.press_reports || []).length}</strong></div>${(content.press_reports || []).map((item) => `<button type="button" data-fnn-content-preview="press:${item.id}"><small>${escapeHtml(item.report_number)} · ${new Date(item.created_at).toLocaleDateString()}</small><strong>${escapeHtml(item.headline)}</strong><span>${escapeHtml(item.author_name)} · ${escapeHtml(humanLabel(item.status))}</span><em>Review story →</em></button>`).join("") || `<p class="empty">No Press Desk stories</p>`}</section><section><div><span>PUBLISHED FNN</span><strong>${published.length}</strong></div>${published.map(({ edition, story, index }) => `<button type="button" data-fnn-content-preview="fnn:${edition.id}:${index}"><small>${escapeHtml(edition.edition_date)} · ${escapeHtml(story.category || "Faircroft")}</small><strong>${escapeHtml(story.headline || "Untitled story")}</strong><span>${escapeHtml(edition.headline)}</span><em>Review edition →</em></button>`).join("") || `<p class="empty">No published supporting stories</p>`}</section></div></section>${preview}`;
+}
+
 function renderDevTools() {
   const data = state.cache["dev-tools"] || {};
   const users = data.users || [], sanctions = data.sanctions || [], warnings = data.warnings || [], logs = data.audit_logs || [], codes = data.unlink_codes || [];
@@ -10078,6 +10150,7 @@ function renderDevTools() {
         <div><p class="eyebrow">Newsroom publishing</p><h2>Faircroft News Now Edition</h2><p class="muted">Generate or replace today's public edition from eligible CAD, court, citation, criminal, and Press Desk records.</p></div>
         <button class="danger" type="button" data-dev-generate-fnn>Regenerate today's edition</button>
       </section>
+      ${renderFnnContentControl(fnn)}
       ${operationsConsole("FNN generation log", state.fnnConsole, "Newsroom generation activity will stream here when an edition is requested.")}
     </div>`;
   }
@@ -11289,6 +11362,29 @@ function bindDevTools() {
     toast("FNN newsroom settings updated");
     await refreshDevTools();
   });
+  $$('[data-fnn-content-preview]').forEach((button) => button.addEventListener("click", () => {
+    state.fnnContentPreview = button.dataset.fnnContentPreview;
+    render();
+  }));
+  $$('[data-close-fnn-review]').forEach((element) => element.addEventListener("click", (event) => {
+    if (element.tagName === "BUTTON" || event.target === element) {
+      state.fnnContentPreview = null;
+      render();
+    }
+  }));
+  $$('[data-fnn-content-delete]').forEach((button) => button.addEventListener("click", async () => {
+    const type = button.dataset.fnnContentDelete;
+    const label = button.dataset.label || "this published story";
+    if (!window.confirm(`Permanently delete ${label}? This action is audited and cannot be undone.`)) return;
+    try {
+      if (type === "cad") await api(`/api/admin/cad-reports/${button.dataset.recordId}`, { method: "DELETE" });
+      if (type === "press") await api(`/api/admin/press-reports/${button.dataset.recordId}`, { method: "DELETE" });
+      if (type === "fnn") await api(`/api/admin/fnn-editions/${button.dataset.editionId}/stories/${button.dataset.storyIndex}`, { method: "DELETE" });
+      state.fnnContentPreview = null;
+      toast(type === "cad" ? "After-action report deleted" : type === "press" ? "Press Desk submission deleted" : "Published FNN story deleted");
+      await refreshDevTools();
+    } catch (error) { toast(error.message); }
+  }));
   $$("[data-press-pass-action]").forEach((button) => button.addEventListener("click", async () => {
     const action = button.dataset.pressPassAction;
     const memberName = button.dataset.memberName || "this Press member";
@@ -11363,7 +11459,7 @@ function bindDevTools() {
 function renderAdminWorkspace() {
   const data = state.cache.admin;
   if (!data) return `<section class="admin-workspace"><div class="empty">Admin workspace loading</div></section>`;
-  if (!["overview", "users", "content"].includes(state.adminTab)) state.adminTab = "overview";
+  if (!["overview", "users"].includes(state.adminTab)) state.adminTab = "overview";
   const users = data.users?.users || [];
   const stats = data.overview?.stats || {};
   const verified = users.filter((user) => user.verified).length;
@@ -11402,13 +11498,12 @@ function renderAdminWorkspace() {
         <nav>
           <button class="${state.adminTab === "overview" ? "active" : ""}" data-admin-workspace-tab="overview"><small>01</small><span>Overview</span><i></i></button>
           <button class="${state.adminTab === "users" ? "active" : ""}" data-admin-workspace-tab="users"><small>02</small><span>Accounts</span><i></i></button>
-          <button class="${state.adminTab === "content" ? "active" : ""}" data-admin-workspace-tab="content"><small>03</small><span>Content Control</span><i></i></button>
         </nav>
         <div class="dev-sidebar-footer"><span class="dev-access-dot"></span><div><strong>Authorized Admin</strong><small>${escapeHtml(state.session?.user?.name || "Staff member")}</small></div></div>
       </aside>
       <main class="admin-main">
         <header class="admin-topbar">
-          <div><span>FC / CIVIL ADMINISTRATION</span><h1>${state.adminTab === "users" ? "Account Directory" : state.adminTab === "content" ? "Content Control" : "Administration Overview"}</h1><p>${state.adminTab === "users" ? "Search, verify, assign, and maintain resident accounts" : state.adminTab === "content" ? "Audited maintenance for CAD and FNN records" : "Identity readiness and account operations"}</p></div>
+          <div><span>FC / CIVIL ADMINISTRATION</span><h1>${state.adminTab === "users" ? "Account Directory" : "Administration Overview"}</h1><p>${state.adminTab === "users" ? "Search, verify, assign, and maintain resident accounts" : "Identity readiness and account operations"}</p></div>
           <div class="dev-toolbar"><span class="dev-system-status"><i></i>Registry online</span><button class="secondary" type="button" data-refresh-admin>Sync records</button><button class="primary" type="button" data-close-admin>Exit workspace</button></div>
         </header>
         <div class="admin-content">
@@ -11419,7 +11514,7 @@ function renderAdminWorkspace() {
             <div><span>Arma linked</span><strong>${linked}</strong><small>Connected identities</small></div>
             <div><span>Administrators</span><strong>${ownerCount}</strong><small>Owner accounts</small></div>
           </div>
-          ${state.adminTab === "users" ? `<section class="admin-directory"><header><div><span>RESIDENT REGISTRY</span><h2>Account records</h2></div><strong>${users.length} FILES</strong></header>${renderAdminUsers(users)}</section>` : state.adminTab === "content" ? contentDesk : overview}
+          ${state.adminTab === "users" ? `<section class="admin-directory"><header><div><span>RESIDENT REGISTRY</span><h2>Account records</h2></div><strong>${users.length} FILES</strong></header>${renderAdminUsers(users)}</section>` : overview}
         </div>
       </main>
       ${accountModal}
