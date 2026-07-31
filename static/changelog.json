@@ -74,6 +74,7 @@
         ,"Fixed content-maintenance controls being unreachable when an administrator did not also hold an LEO or Press role by adding the complete maintenance ledger to the Admin workspace."
         ,"Replaced the basic vertically stacked changelog cards with responsive desktop navigation and a mobile horizontal patch selector."
         ,"Fixed long job advertisements and application questionnaires stretching one continuous page by opening each packet in an overflow-safe application dialog."
+        ,"Fixed PostgreSQL startup and Leaderboards failures caused by literal SQL wildcard patterns being interpreted as unsupported Psycopg placeholders."
       ]
     },
     {

@@ -2723,7 +2723,7 @@ def ensure_schema() -> None:
         )
         ensure_migrations(db)
         seed_owner(db)
-        for owner in all_rows(db, "SELECT id, civ_number FROM users WHERE roles LIKE '%owner%'"):
+        for owner in all_rows(db, "SELECT id, civ_number FROM users WHERE roles LIKE ?", ("%owner%",)):
             passport_number = f"FCP-{str(owner.get('civ_number') or owner['id']).replace(' ', '').upper()}"[:40]
             db.execute(
                 """
@@ -6698,11 +6698,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             FROM citations c JOIN users u ON u.id = c.civ_id
             LEFT JOIN arma_account_links l ON l.user_id = u.id
             WHERE LOWER(COALESCE(c.final_result, '') || ' ' || COALESCE(c.disposition, ''))
-                  SIMILAR TO '%(not guilty|dismiss)%'
+                  SIMILAR TO ?
             GROUP BY u.id, u.name, u.civ_number, l.player_name
             ORDER BY victory_count DESC LIMIT 100
             """,
             "victory_count",
+            ("%(not guilty|dismiss)%",),
         )
         reports_submitted = activity_board(
             """
@@ -6777,13 +6778,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                      + (SELECT COUNT(*) * 2 FROM mdt_bolos bo WHERE bo.created_by = u.id AND LOWER(bo.status) <> 'active')
                    ) AS safety_score
             FROM users u LEFT JOIN arma_account_links l ON l.user_id = u.id
-            WHERE LOWER(u.roles) LIKE '%leo%'
-               OR LOWER(u.roles) LIKE '%sheriff%'
-               OR LOWER(u.roles) LIKE '%fire%'
-               OR LOWER(u.roles) LIKE '%ems%'
+            WHERE LOWER(u.roles) LIKE ?
+               OR LOWER(u.roles) LIKE ?
+               OR LOWER(u.roles) LIKE ?
+               OR LOWER(u.roles) LIKE ?
             ORDER BY safety_score DESC LIMIT 100
             """,
             "safety_score",
+            ("%leo%", "%sheriff%", "%fire%", "%ems%"),
         )
 
         reputation = [{**item, "reputation_score": item["reputation"]} for item in credit]
