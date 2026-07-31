@@ -1,10 +1,85 @@
 {
-  "version": "0.2.1",
+  "version": "0.2.2",
   "entries": [
     {
-      "date": "2026-07-28",
-      "version": "0.2.1",
-      "title": "RP OS 0.2.1",
+      "date": "2026-07-31",
+      "version": "0.2.2",
+      "title": "RP OS 0.2.2",
+      "added": [
+        "Added a full-screen Faircroft Leaderboards application with 27 synchronized rankings across Wealth and Credit, Activity, Combat, Public Safety, and Community divisions.",
+        "Added Top Earners, monthly wealth growth, Credit Elite, credit improvement, Server Veterans, current-session activity, role-service time, K/D, kills, deaths, suicides, arrests, citations, warrants, court, DMV, CAD reporting, Press Desk, clean-driver, and Public Safety MVP rankings.",
+        "Added top-three podiums, compact ranked ledgers, online indicators, authoritative source labels, division navigation, and responsive mobile leaderboard controls.",
+        "Added daily SHS bank and MedicalHud reputation snapshots for monthly wealth-growth and credit-improvement comparisons.",
+        "Added authoritative Thunder Buddies lifetime playtime and combat telemetry from the SHS tb_player_database.json source.",
+        "Added the Faircroft Citizenship and Passport program with an official Passport application, citizenship registry, digital passport credential, and status history.",
+        "Added a one-time migration that grants Valid Faircroft Citizenship and passports to accounts that existed before the citizenship program.",
+        "Added a six-question Faircroft civics examination for new residents with automatic citizenship and passport issuance after a passing result.",
+        "Added ICE Agent and ICE Commander roles with restricted access to a dedicated full-screen ICE MDT.",
+        "Added ICE citizenship and NCIC search, immigration case creation, detainers, case notes, command dispositions, and citizenship-status statistics.",
+        "Added Developer Tools ICE Settings with an ICE personnel roster and a control for enforcing the Faircroft local-information ordinance.",
+        "Added citizenship status and passport numbers to LEO NCIC records and search results."
+        ,"Added a full-screen Faircroft Financial workspace with live game checking, in-game credit scoring, account health, and an official FCIC coverage notice."
+        ,"Added a professionally issued Faircroft driver license with an official portrait, license number, class, status, issue and expiration dates, endorsements, restrictions, holder signature, security pattern, authentication barcode, ghost image, and digital hologram."
+        ,"Added character-specific ownership across citations, criminal cases, bookings, vehicles, insurance, job applications, business applications, and business licenses."
+        ,"Added a mandatory legacy-record assignment workflow so existing account-level records can be permanently assigned to the correct character."
+        ,"Added Developer Tools Court Settings with independent, typed-confirmation controls for wiping citations or criminal charges and their dependent workflow records."
+        ,"Added a Developer Tools DMV vehicle-database migration control that clears old imported game vehicles and cached vehicle snapshots while preserving manual Faircroft DMV filings."
+        ,"Added separate Traffic Violations and Criminal Charges dockets for judges and residents, with every issued character-specific citation retained in the Court application."
+        ,"Added direct MyFaircroft fine payments using resident-specific four-digit receipt codes issued by developers only after in-game currency is received."
+        ,"Added a MyFaircroft receipt-code authority and ledger under Admin 2FA showing the issuing developer, authorized resident and amount, redemption status, redeeming user, and court case."
+        ,"Added Ravenhood Markets, a full-screen fictional Faircroft investing and day-trading application with animated onboarding, live market tape, portfolio analytics, fractional trading, bonds, volatile securities, and order history."
+        ,"Added 20 fictional RP securities spanning media, finance, logistics, mining, utilities, healthcare, energy, municipal bonds, infrastructure bonds, and high-volatility day trading."
+        ,"Added resident-to-resident securities transfers with configurable fees held outside the active RP economy."
+        ,"Added audited four-digit Ravenhood deposit and withdrawal receipts that require an in-game administrator handoff and never directly edit the Arma database."
+        ,"Added Developer Tools Stock Market Settings with market open/close control, trade and transfer fees, hidden fee-holding balance, timed percentage programs, $1 gain/loss examples, crash/rally/skyrocket presets, and a live market event console."
+        ,"Added Gemini-assisted fictional market briefings that read current listings and staff RP scenarios, then recommend optional price programs without applying them automatically."
+        ,"Added Admin Content Control for deleting individual CAD after-action reports, submitted Press Desk stories, and individual published FNN stories without clearing an entire archive."
+        ,"Added a full-screen read-only System Changelog workspace with a patch navigator, release summaries, and dedicated Added, Changed, Fixed, and Removed ledgers."
+        ,"Added a full-screen Faircroft Careers recruitment workspace with a vacancy directory, department-specific opening briefs, personal application tracking, and focused application dialogs."
+        ,"Added an animated FNN live headline ticker sourced from the published lead story, public-safety desk, and supporting newsroom coverage."
+        ,"Added FNN News Cycle Autopilot with configurable morning and evening publication times, timezone validation, duplicate-run protection, and an on/off control inside Developer Tools FNN Settings."
+      ],
+      "changed": [
+        "Established RP OS 0.2.2 as the active development release; additional completed work will be appended to this release entry before publication.",
+        "Leaderboards now combine live FCRPMUSSALO bank balances, Thunder Buddies player telemetry, MedicalHud reputation-based credit, and RP OS public-safety records.",
+        "Restricted SHS leaderboard ingestion to the authoritative profile/profile/TB/tb_player_database.json player database.",
+        "Separated local law-enforcement intelligence from federal immigration operations while preserving NCIC, citizenship, DMV, and vehicle safety access for ICE.",
+        "Reports, BOLOs, and warrants are withheld from ICE whenever the local-information restriction is enabled in Developer Tools.",
+        "Added the Faircroft Local Ordinance advisory to both LEO MDT and ICE MDT when the federal information boundary is active.",
+        "Expanded Developer Tools application visibility controls to include Citizenship and ICE applications.",
+        "Advanced the visible RP OS release designation and PWA installation cache to version 0.2.2."
+        ,"Moved resident banking out of the simulated phone and into a responsive modern financial dashboard while preserving the authoritative game-bank and credit data flows."
+        ,"Replaced the DMV identity-record card with a presentation-grade resident driver credential designed to feel like an authentic character license on desktop and mobile."
+        ,"Court, MyFaircroft, DMV, Jobs, and Business workspaces now resolve records against the selected or active character rather than the parent website account."
+        ,"FCRPMUSSALO persistence scans now reconcile Railway against the complete authoritative SHS file snapshot and prune records that no longer exist on the current server."
+        ,"MyFaircroft direct receipts now record partial payments and mark a citation paid only when its full remaining balance is verified, without writing any change to the Arma database."
+        ,"Ravenhood deposits and withdrawals now settle through a separate RP investment ledger so the authoritative in-game bank remains unchanged until an administrator completes the physical roleplay exchange."
+        ,"Content deletion is now enforced by the server for Owner and Admin accounts and records the deleted report number, headline, author or officer, and acting administrator in the audit log."
+        ,"Moved Changelog outside the simulated phone and aligned its release presentation with the Faircroft Roadmap visual system while preserving a distinct update-archive identity."
+        ,"Changelog content remains deployment controlled and exposes no owner or administrator editing tools inside RP OS."
+        ,"Moved Jobs outside the simulated phone and reorganized department, legal, emergency-service, and FNN recruitment into a responsive professional hiring portal."
+        ,"FNN automatic publishing now defaults to 5:00 AM and 5:00 PM Faircroft time while retaining manual newsroom regeneration controls."
+        ,"Temporarily restricted Leaderboards and Ravenhood Markets visibility and API access to Owner and Developer accounts during controlled testing."
+      ],
+      "fixed": [
+        "Prevented temporary anti-cheat event and outbox records from contaminating persistent leaderboard rankings.",
+        "Added responsive layouts for leaderboard divisions, digital passports, citizenship testing, ICE search, federal case files, and ICE Developer Settings.",
+        "Updated the PWA asset cache so RP OS 0.2.2 interfaces and permissions load immediately after deployment."
+        ,"Fixed citations, criminal records, registered vehicles, insured vehicles, applications, jobs, and licenses incorrectly appearing across every character on an account."
+        ,"Fixed legacy account data migration by preserving unassigned records until the owner explicitly selects the responsible character."
+        ,"Fixed retired-server vehicle records being recreated after a DMV wipe by resetting both the imported DMV layer and its cached Vehicles source."
+        ,"Fixed the Getting Started final-stage controls overflowing the guide panel by moving progress to its own row and sizing both navigation actions to the available width."
+        ,"Fixed traffic citations and criminal charges sharing one congested Court docket and restored resident Court visibility for issued citations."
+        ,"Added responsive desktop and mobile market workspaces, bottom-sheet settlement dialogs, protected receipt instructions, and overflow-safe ticker and portfolio layouts."
+        ,"Fixed content-maintenance controls being unreachable when an administrator did not also hold an LEO or Press role by adding the complete maintenance ledger to the Admin workspace."
+        ,"Replaced the basic vertically stacked changelog cards with responsive desktop navigation and a mobile horizontal patch selector."
+        ,"Fixed long job advertisements and application questionnaires stretching one continuous page by opening each packet in an overflow-safe application dialog."
+      ]
+    },
+    {
+      "date": "2026-07-31",
+      "version": "0.2.2",
+      "title": "RP OS 0.2.2 · Platform Operations",
       "added": [
         "Added focused anti-cheat popup interfaces for online players, known identities, flagged players, grey-screened profiles, active locks, and recent evidence.",
         "Added search and direct player-intelligence drill-down inside every anti-cheat summary popup.",
@@ -32,7 +107,7 @@
         "Added a guarded Developer Tools game-economy migration control that clears stale Railway FCRPMUSSALO balance snapshots while preserving links, CAD records, fines, taxes, and settlement history."
       ],
       "changed": [
-        "Consolidated the current platform work into the RP OS 0.2.1 release.",
+        "Consolidated the current platform operations work into the RP OS 0.2.2 release.",
         "Converted the Anti-Cheat dashboard metrics from passive counters into interactive operational controls.",
         "Moved Fine Settlement out of the phone application grid and into the restricted Developer Tools workspace.",
         "Forced fine-removal authorization now requires all affected driver licenses to be suspended first."
@@ -43,7 +118,7 @@
         "Moved Admin out of the simulated phone and aligned its navigation, records layout, and responsive behavior with the Developer Tools staff workspace.",
         "Removed Job Applications from Admin; recruitment review remains in the dedicated Indeed Admin workflow.",
         "Retired Referral Tickets from Admin, resident profiles, and new-account registration while preserving historical database records.",
-        "Advanced the visible RP OS release designation and PWA installation cache to version 0.2.1.",
+        "Advanced the visible RP OS release designation and PWA installation cache to version 0.2.2.",
         "Press Desk stories are now marked Included after a successful Gemini edition so reporters can confirm newsroom collection.",
         "Standardized citation and criminal findings as Guilty or Not Guilty instead of the retired Liable or Not Liable language.",
         "Driver-license administrative controls now live under Developer Tools > DMV Settings rather than the resident DMV application."

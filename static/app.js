@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.2.1";
+const OS_VERSION = "0.2.2";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const SESSION_REFRESH_MS = 15000;
 const pendingMutations = new Map();
@@ -50,6 +50,8 @@ const state = {
   devAntiCheatMetricSearch: "",
   dmvTab: "overview",
   jobsTab: "state_police",
+  jobsView: "openings",
+  jobApplyOpen: false,
   mdtTab: "search",
   mdtNavOpen: false,
   mdtSideOpen: false,
@@ -88,8 +90,14 @@ const state = {
   contractProofId: null,
   roadmapFilter: "all",
   roadmapEditorId: null,
+  changelogEntryIndex: 0,
   pressComposeOpen: false,
   pressSelectedReportId: null,
+  leaderboardTab: "wealth",
+  marketTicker: "FNN",
+  generatedMarketCode: null,
+  iceSearchResults: [],
+  iceSelectedSubject: null,
   businessTab: "apply",
   businessReviewFilter: "active",
   businessLicensePage: 1,
@@ -153,6 +161,7 @@ const iconSvg = {
   home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/></svg>',
   send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>',
   bank: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m3 10 9-6 9 6Z"/><path d="M5 10v9M9 10v9M15 10v9M19 10v9M3 19h18"/></svg>',
+  trending: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 19 9 13l4 4 8-10"/><path d="M15 7h6v6"/><path d="M3 5v14h18"/></svg>',
   treasury: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="M5 10v8M9 12v6M15 12v6M19 10v8M3 18h18"/><path d="M12 7v4"/></svg>',
   civic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 21h16M6 18h12M7 9v9M11 9v9M15 9v9M19 9v9M3 8h18L12 3 3 8Z"/><path d="M12 5.5v1"/></svg>',
   store: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 10h16l-1-5H5Z"/><path d="M5 10v10h14V10"/><path d="M8 20v-6h8v6"/><path d="M4 10c0 2 3 2 4 0 1 2 5 2 6 0 1 2 4 2 6 0"/></svg>',
@@ -174,6 +183,9 @@ const iconSvg = {
   "thumb-up": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M7 10v11H3V10h4ZM7 19h10a3 3 0 0 0 2.9-2.3l1-4A3 3 0 0 0 18 9h-4l1-4c.3-1.3-.7-2-1.5-2L7 10"/></svg>',
   "thumb-down": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M7 14V3H3v11h4ZM7 5h10a3 3 0 0 1 2.9 2.3l1 4A3 3 0 0 1 18 15h-4l1 4c.3 1.3-.7 2-1.5 2L7 14"/></svg>',
   download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 17v3h16v-3"/></svg>',
+  trophy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 4h8v4a4 4 0 0 1-8 0V4Z"/><path d="M8 6H4v2a4 4 0 0 0 4 4M16 6h4v2a4 4 0 0 1-4 4M12 12v5M8 21h8M9 17h6"/></svg>',
+  passport: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="3" width="14" height="18" rx="2"/><circle cx="12" cy="11" r="4"/><path d="M8 11h8M12 7c1 1 1.5 2.3 1.5 4S13 14 12 15c-1-1-1.5-2.3-1.5-4S11 8 12 7ZM9 18h6"/></svg>',
+  federal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m12 2 8 4v6c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V6l8-4Z"/><path d="M8 9h8M9 9v6M12 9v6M15 9v6M7 16h10M12 5v2"/></svg>',
   plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14M5 12h14"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m15 18-6-6 6-6"/></svg>',
@@ -192,6 +204,7 @@ const tileColors = {
   properties: "linear-gradient(145deg, #28d17c, #17623d)",
   cash: "linear-gradient(145deg, #f15f79, #7a1e31)",
   bank: "linear-gradient(145deg, #5c9cff, #21497e)",
+  wallstreet: "linear-gradient(145deg, #6ef0b0, #075745 58%, #07110e)",
   restriction: "linear-gradient(145deg, #ff9f5c, #7d281f)",
   treasury: "linear-gradient(145deg, #f8d572, #0f806f)",
   business: "linear-gradient(145deg, #58e6a5, #2457a8)",
@@ -209,6 +222,9 @@ const tileColors = {
   "dev-tools": "linear-gradient(145deg, #8bffcf, #3156d8)",
   "beta-tasks": "linear-gradient(145deg, #b78cff, #3156d8)",
   downloads: "linear-gradient(145deg, #59e6c0, #2775cf 58%, #17203d)",
+  leaderboards: "linear-gradient(145deg, #ffe06a, #e06d2f 52%, #46265f)",
+  citizenship: "linear-gradient(145deg, #79d8ff, #244f8e 58%, #c7a348)",
+  "ice-mdt": "linear-gradient(145deg, #7ed8ff, #173d63 55%, #08111a)",
 };
 
 function money(value) {
@@ -611,6 +627,42 @@ function render() {
     bindRequiredProfileModals();
     return;
   }
+  if (state.activeApp === "leaderboards") {
+    app.innerHTML = renderSystemBanner() + renderLeaderboardWorkspace() + renderRequiredProfileModals();
+    bindLeaderboardWorkspace();
+    bindRequiredProfileModals();
+    return;
+  }
+  if (state.activeApp === "bank") {
+    app.innerHTML = renderSystemBanner() + renderBankWorkspace() + renderRequiredProfileModals();
+    bindBankWorkspace();
+    bindRequiredProfileModals();
+    return;
+  }
+  if (state.activeApp === "wallstreet") {
+    app.innerHTML = renderSystemBanner() + renderMarketWorkspace() + renderRequiredProfileModals();
+    bindMarketWorkspace();
+    bindRequiredProfileModals();
+    return;
+  }
+  if (state.activeApp === "changelog") {
+    app.innerHTML = renderSystemBanner() + renderChangelogWorkspace() + renderRequiredProfileModals();
+    bindChangelogWorkspace();
+    bindRequiredProfileModals();
+    return;
+  }
+  if (state.activeApp === "jobs") {
+    app.innerHTML = renderSystemBanner() + renderJobsWorkspace() + renderRequiredProfileModals();
+    bindJobsWorkspace();
+    bindRequiredProfileModals();
+    return;
+  }
+  if (state.activeApp === "ice-mdt") {
+    app.innerHTML = renderSystemBanner() + renderIceWorkspace() + renderRequiredProfileModals();
+    bindIceWorkspace();
+    bindRequiredProfileModals();
+    return;
+  }
   if (state.activeApp) {
     app.innerHTML = phone(renderHome() + renderPanel(state.activeApp) + renderRequiredProfileModals());
     bindHome();
@@ -744,7 +796,37 @@ function renderCallsignRequiredModal() {
 
 function renderRequiredProfileModals() {
   if (state.session?.sanction?.type === "timeout") return "";
-  return renderDmvActionNoticeModal() || renderSystemSplash() || renderPressPassNoticeModal() || renderCarEntryRequiredModal() || renderArmaLinkRequiredModal() || renderDmvComplianceModal() || renderBetaInviteModal();
+  return renderLegacyCharacterAssignmentModal() || renderDmvActionNoticeModal() || renderSystemSplash() || renderPressPassNoticeModal() || renderCarEntryRequiredModal() || renderArmaLinkRequiredModal() || renderDmvComplianceModal() || renderBetaInviteModal();
+}
+
+function renderLegacyCharacterAssignmentModal() {
+  const records = state.session?.unassigned_character_records || [];
+  const characters = state.session?.characters || [];
+  if (!records.length || !characters.length) return "";
+  const record = records[0];
+  return `
+    <div class="modal-backdrop character-assignment-backdrop">
+      <section class="mdt-modal character-assignment-modal" role="dialog" aria-modal="true" aria-label="Assign legacy record to character">
+        <header><p class="eyebrow">Character record migration</p><h2>Who does this record belong to?</h2><p>Old account records must be assigned once. They will no longer appear on every character.</p></header>
+        <div class="character-assignment-progress"><span>${records.length} record${records.length === 1 ? "" : "s"} remaining</span><i><b style="width:${Math.max(8, 100 / records.length)}%"></b></i></div>
+        <section class="character-assignment-record">
+          <small>${escapeHtml(humanLabel(record.record_type))}</small>
+          <strong>${escapeHtml(record.label)}</strong>
+          <span>${record.record_date ? new Date(record.record_date).toLocaleString() : "Legacy Faircroft record"}</span>
+        </section>
+        <form id="legacyCharacterAssignmentForm">
+          <input type="hidden" name="record_type" value="${escapeHtml(record.record_type)}" />
+          <input type="hidden" name="record_id" value="${record.record_id}" />
+          <label>Select the responsible character
+            <select name="character_id" required>
+              <option value="">Choose character</option>
+              ${characters.map((character) => `<option value="${character.id}">${escapeHtml(character.character_name)}${character.is_active ? " — active" : ""}</option>`).join("")}
+            </select>
+          </label>
+          <div><small>This assignment is permanent and becomes part of the audit record.</small><button class="primary" type="submit">Assign record</button></div>
+        </form>
+      </section>
+    </div>`;
 }
 
 function renderDmvActionNoticeModal() {
@@ -834,6 +916,15 @@ function renderArmaLinkRequiredModal() {
 }
 
 function bindRequiredProfileModals() {
+  $("#legacyCharacterAssignmentForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api("/api/profile/assign-character-record", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      await loadSession();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
   $("[data-acknowledge-dmv-action]")?.addEventListener("click", async () => {
     try {
       await api("/api/dmv/action-notice/acknowledge", { method: "POST", body: {} });
@@ -1084,7 +1175,7 @@ function renderUpdateLockdownHome(apps) {
     <section class="update-lockdown-screen faircroft-update-mode">
       <header><img src="/static/brand/faircroft-emblem.webp" alt="" /><div><span>FAIRCROFT RELEASE OPERATIONS</span><strong>Limited-service mode</strong></div><i></i></header>
       <article class="faircroft-update-brief">
-        <div class="faircroft-update-sequence"><span>RP OS</span><strong>0.2.1</strong></div>
+        <div class="faircroft-update-sequence"><span>RP OS</span><strong>0.2.2</strong></div>
         <div><p class="eyebrow">Platform maintenance</p><h2>${escapeHtml(title)}</h2><p>${escapeHtml(updateLockdownMessage())}</p></div>
         <div class="faircroft-update-progress"><span></span></div>
         <footer><span><i></i> Essential network online</span><strong>${escapeHtml(eta)}</strong></footer>
@@ -1113,6 +1204,7 @@ function renderFnnWorkspace() {
   const edition = data.edition;
   const stories = edition?.stories || [];
   const safety = edition?.public_safety || [];
+  const tickerItems = edition ? [edition.headline, ...safety.map((item) => `${item.label}: ${item.detail}`), ...stories.map((story) => story.headline)].filter(Boolean).slice(0, 12) : [];
   const published = edition?.published_at ? new Date(edition.published_at) : null;
   const dateLabel = published && !Number.isNaN(published.getTime())
     ? published.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: "numeric" })
@@ -1134,7 +1226,7 @@ function renderFnnWorkspace() {
       <time>${escapeHtml(dateLabel)}</time>
     </nav>
     ${edition ? `
-      <div class="fnn-breaking"><strong>FNN DAILY</strong><span>${escapeHtml(edition.headline)}</span></div>
+      <div class="fnn-live-ticker" aria-label="FNN live headline ticker"><strong><i></i>LIVE DESK</strong><div><span>${tickerItems.concat(tickerItems).map((item) => `<b>${escapeHtml(item)}</b>`).join("")}</span></div><em>${published ? published.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "LIVE"}</em></div>
       <div class="fnn-page" id="fnn-top">
         <section class="fnn-lead">
           <p class="fnn-kicker">FAIRCROFT LEAD STORY</p>
@@ -1154,6 +1246,7 @@ function renderFnnWorkspace() {
             <h2>${escapeHtml(story.headline || "Developing story")}</h2>
             <p class="fnn-story-deck">${escapeHtml(story.summary || "")}</p>
             ${story.body ? `<div class="fnn-story-body">${fnnStoryText(story.body)}</div>` : ""}
+            ${data.can_admin_delete ? `<button class="fnn-admin-delete" type="button" data-delete-fnn-story="${index}" data-edition-id="${edition.id}">Delete story</button>` : ""}
           </article>`).join("")}
         </section>
         ${(data.archive || []).length ? `<section class="fnn-archive"><div><span>FNN ARCHIVE</span><h2>Earlier editions</h2></div>${data.archive.map((item) => `<article><time>${escapeHtml(item.edition_date || "")}</time><strong>${escapeHtml(item.headline || "")}</strong><p>${escapeHtml(item.deck || "")}</p></article>`).join("")}</section>` : ""}
@@ -1186,6 +1279,15 @@ function bindFnnWorkspace() {
       target.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   });
+  $$("[data-delete-fnn-story]").forEach((button) => button.addEventListener("click", async () => {
+    if (!window.confirm("Permanently delete this published FNN story? The action will be recorded in the admin audit log.")) return;
+    try {
+      await api(`/api/admin/fnn-editions/${button.dataset.editionId}/stories/${button.dataset.deleteFnnStory}`, { method: "DELETE" });
+      toast("Published FNN story deleted");
+      await loadAppData("fnn");
+      render();
+    } catch (error) { toast(error.message); }
+  }));
 }
 
 function renderPressDesk() {
@@ -1245,6 +1347,7 @@ function renderPressDesk() {
         ${selected.background ? `<section><h4>Background</h4><p>${escapeHtml(selected.background)}</p></section>` : ""}
         ${selected.public_impact ? `<section><h4>Public impact</h4><p>${escapeHtml(selected.public_impact)}</p></section>` : ""}
         ${selected.verification_notes ? `<section><h4>Verification notes</h4><p>${escapeHtml(selected.verification_notes)}</p></section>` : ""}
+        ${state.cache.press?.can_admin_delete ? `<button class="danger press-admin-delete" type="button" data-delete-press-report="${selected.id}">Delete newsroom story</button>` : ""}
       </div>
     </article></div>` : ""}
   </div>`;
@@ -1344,6 +1447,152 @@ function bindPressDesk() {
   });
 }
 
+const LEADERBOARD_CONFIG = {
+  wealth: { group: "wealth", label: "Top Earners", kicker: "LIVE WEALTH", unit: "Current synced balance", accent: "gold", field: "balance", format: "money" },
+  bank_growth: { group: "wealth", label: "Biggest Bank Increase", kicker: "MONTHLY GROWTH", unit: "Largest recorded balance gain", accent: "gold", field: "growth", format: "money" },
+  credit: { group: "wealth", label: "Credit Elite", kicker: "CREDIT SCORES", unit: "Faircroft credit score", accent: "green", field: "score", suffix: " score" },
+  credit_improvement: { group: "wealth", label: "Most Improved Credit", kicker: "CREDIT MOMENTUM", unit: "Largest recorded score increase", accent: "green", field: "score_gain", suffix: " points" },
+  reputation: { group: "wealth", label: "Highest Reputation", kicker: "COMMUNITY TRUST", unit: "MedicalHud reputation", accent: "green", field: "reputation_score", suffix: " reputation" },
+  playtime: { group: "activity", label: "Server Veterans", kicker: "TIME IN FAIRCROFT", unit: "Lifetime in-server activity", accent: "cyan", field: "playtime_seconds", format: "duration" },
+  monthly_activity: { group: "activity", label: "Most Active This Month", kicker: "MONTHLY ACTIVITY", unit: "Verified RP OS presence this month", accent: "cyan", field: "monthly_seconds", format: "duration" },
+  current_session: { group: "activity", label: "Longest Current Session", kicker: "ONLINE NOW", unit: "Current live SHS session", accent: "cyan", field: "current_session_seconds", format: "duration" },
+  leo_hours: { group: "activity", label: "LEO Service Time", kicker: "SHERIFF SERVICE", unit: "Lifetime server time for LEO-role members", accent: "cyan", field: "playtime_seconds", format: "duration" },
+  fire_hours: { group: "activity", label: "Fire & EMS Service Time", kicker: "FIRE / EMS SERVICE", unit: "Lifetime server time for Fire-EMS members", accent: "red", field: "playtime_seconds", format: "duration" },
+  civ_hours: { group: "activity", label: "Civilian Time", kicker: "CIVILIAN LIFE", unit: "Lifetime server time for civilians", accent: "cyan", field: "playtime_seconds", format: "duration" },
+  kills: { group: "combat", label: "Badass Board", kicker: "COMBAT LEGENDS", unit: "Lifetime confirmed kills", accent: "violet", field: "kills", suffix: " kills" },
+  deaths: { group: "combat", label: "Most Deaths", kicker: "ROUGH LIVES", unit: "Lifetime recorded deaths", accent: "red", field: "deaths", suffix: " deaths" },
+  suicides: { group: "combat", label: "Danger to Self", kicker: "SELF-INFLICTED", unit: "Lifetime recorded suicides", accent: "red", field: "suicides", suffix: " incidents" },
+  kd_ratio: { group: "combat", label: "Best K/D Ratio", kicker: "COMBAT EFFICIENCY", unit: "Minimum five confirmed kills", accent: "violet", field: "kd_ratio", format: "ratio" },
+  citations_issued: { group: "safety", label: "Most Citations Issued", kicker: "TRAFFIC ENFORCEMENT", unit: "Officer-issued citations", accent: "cyan", field: "citation_count", suffix: " citations" },
+  citations_received: { group: "safety", label: "Most Citations Received", kicker: "TRAFFIC RECORD", unit: "Non-expunged citations received", accent: "red", field: "citation_count", suffix: " citations" },
+  arrests: { group: "safety", label: "Most Arrests", kicker: "CUSTODY OPERATIONS", unit: "Booking activity by officer", accent: "cyan", field: "arrest_count", suffix: " arrests" },
+  most_wanted: { group: "safety", label: "Most Wanted", kicker: "ACTIVE WARRANTS", unit: "Active CID warrants by subject", accent: "red", field: "warrant_count", suffix: " warrants" },
+  court_victories: { group: "safety", label: "Court Victories", kicker: "JUDICIAL OUTCOMES", unit: "Not-guilty and dismissed outcomes", accent: "green", field: "victory_count", suffix: " victories" },
+  cases_filed: { group: "safety", label: "Most Cases Filed", kicker: "COURT FILINGS", unit: "Cases filed by issuing officer", accent: "cyan", field: "citation_count", suffix: " cases" },
+  reports_submitted: { group: "safety", label: "Most Reports Submitted", kicker: "CAD REPORTING", unit: "After-action reports filed", accent: "cyan", field: "report_count", suffix: " reports" },
+  public_safety_mvp: { group: "safety", label: "Public Safety MVP", kicker: "SERVICE INDEX", unit: "Weighted CAD, booking, report, and BOLO activity", accent: "green", field: "safety_score", suffix: " points" },
+  vehicles: { group: "community", label: "Most Vehicles Owned", kicker: "DMV GARAGE", unit: "Registered and imported vehicle records", accent: "gold", field: "vehicle_count", suffix: " vehicles" },
+  press_reports: { group: "community", label: "Top Reporter", kicker: "FNN PRESS DESK", unit: "Press reports submitted", accent: "red", field: "report_count", suffix: " stories" },
+  community_veteran: { group: "community", label: "Community Veteran", kicker: "FOUNDING RESIDENTS", unit: "Oldest verified Faircroft accounts", accent: "gold", field: "member_days", suffix: " days" },
+  clean_driver: { group: "community", label: "Clean Driver", kicker: "DMV COMPLIANCE", unit: "Citation-free drivers with compliant vehicles", accent: "green", field: "compliant_vehicles", suffix: " compliant vehicles" },
+};
+
+function leaderboardMetric(board, item) {
+  const config = LEADERBOARD_CONFIG[board];
+  const value = Number(item[config?.field] || 0);
+  if (config?.format === "money") return money(value);
+  if (config?.format === "duration") return formatDuration(value);
+  if (config?.format === "ratio") return `${value.toFixed(2)} K/D`;
+  return `${value.toLocaleString()}${config?.suffix || ""}`;
+}
+
+function leaderboardDetail(board, item) {
+  if (["kills", "deaths", "suicides", "kd_ratio", "playtime", "current_session", "leo_hours", "fire_hours", "civ_hours"].includes(board)) {
+    return `${Number(item.kills || 0)} kills · ${Number(item.deaths || 0)} deaths`;
+  }
+  if (["credit", "reputation"].includes(board)) return `${escapeHtml(item.rating || "Unrated")} · reputation ${Number(item.reputation || 0).toLocaleString()}`;
+  if (board === "community_veteran") return item.created_at ? `Member since ${new Date(item.created_at).toLocaleDateString()}` : "Verified resident";
+  return item.synced_at ? `Bank sync ${new Date(item.synced_at).toLocaleString()}` : "Live game-bank record";
+}
+
+function leaderboardIdentity(item) {
+  const resident = item.resident_name && item.resident_name !== item.name ? ` · ${escapeHtml(item.resident_name)}` : "";
+  const civ = item.civ_number ? ` · CIV ${escapeHtml(item.civ_number)}` : "";
+  return `${resident}${civ}` || (item.linked ? " · Verified Faircroft identity" : " · Game telemetry identity");
+}
+
+function renderLeaderboards() {
+  const data = state.cache.leaderboards || { boards: {}, summary: {}, sources: {} };
+  const boardKey = LEADERBOARD_CONFIG[state.leaderboardTab] ? state.leaderboardTab : "wealth";
+  const config = LEADERBOARD_CONFIG[boardKey];
+  const rows = data.boards?.[boardKey] || [];
+  const podium = rows.slice(0, 3);
+  const remaining = rows.slice(3);
+  const groups = {
+    wealth: "Wealth & Credit",
+    activity: "Activity",
+    combat: "Combat",
+    safety: "Public Safety",
+    community: "Community",
+  };
+  const activeGroup = config.group;
+  return `<div class="leaderboard-command ${config.accent}">
+    <section class="leaderboard-hero">
+      <div><p>${escapeHtml(config.kicker)}</p><h2>${escapeHtml(config.label)}</h2><span>${escapeHtml(config.unit)} · refreshed from authoritative Faircroft systems</span></div>
+      <div class="leaderboard-live"><i></i><strong>LIVE RANKINGS</strong><small>${escapeHtml(data.generated_at ? new Date(data.generated_at).toLocaleString() : "Syncing")}</small></div>
+    </section>
+    <nav class="leaderboard-groups">${Object.entries(groups).map(([key, label]) => `<button type="button" class="${activeGroup === key ? "active" : ""}" data-leaderboard-group="${key}">${escapeHtml(label)}</button>`).join("")}</nav>
+    <nav class="leaderboard-tabs">${Object.entries(LEADERBOARD_CONFIG).filter(([, item]) => item.group === activeGroup).map(([key, item]) => `<button type="button" class="${boardKey === key ? "active" : ""}" data-leaderboard-tab="${key}"><span>${escapeHtml(item.kicker)}</span><strong>${escapeHtml(item.label)}</strong></button>`).join("")}</nav>
+    <section class="leaderboard-network-strip">
+      <div><span>Tracked players</span><strong>${Number(data.summary?.tracked_players || 0)}</strong></div>
+      <div><span>Online now</span><strong>${Number(data.summary?.online_players || 0)}</strong></div>
+      <div><span>Synced balances</span><strong>${Number(data.summary?.synced_balances || 0)}</strong></div>
+      <div><span>Credit profiles</span><strong>${Number(data.summary?.synced_credit_profiles || 0)}</strong></div>
+    </section>
+    ${rows.length ? `<section class="leaderboard-stage">
+      <div class="leaderboard-podium">${podium.map((item) => `<article class="rank-${item.rank}">
+        <span class="leaderboard-medal">${item.rank === 1 ? "01" : String(item.rank).padStart(2, "0")}</span>
+        <div class="leaderboard-avatar">${escapeHtml(String(item.name || "?").slice(0, 2).toUpperCase())}</div>
+        <small>${item.rank === 1 ? "CURRENT LEADER" : `RANK ${item.rank}`}</small>
+        <h3>${escapeHtml(item.name || "Unknown player")}</h3>
+        <p>${leaderboardIdentity(item)}</p>
+        <strong>${escapeHtml(leaderboardMetric(boardKey, item))}</strong>
+        <em>${leaderboardDetail(boardKey, item)}</em>
+      </article>`).join("")}</div>
+      <div class="leaderboard-ledger">
+        <header><span>RANK</span><span>PLAYER</span><span>PERFORMANCE</span></header>
+        ${remaining.map((item) => `<article>
+          <b>${String(item.rank).padStart(2, "0")}</b>
+          <div><strong>${escapeHtml(item.name || "Unknown player")}${item.online ? `<i>ONLINE</i>` : ""}</strong><small>${leaderboardIdentity(item).replace(/^ · /, "")}</small></div>
+          <span><strong>${escapeHtml(leaderboardMetric(boardKey, item))}</strong><small>${leaderboardDetail(boardKey, item)}</small></span>
+        </article>`).join("") || `<div class="leaderboard-short-field">Only the podium currently qualifies for this board.</div>`}
+      </div>
+    </section>` : `<section class="leaderboard-empty"><span>${iconSvg.trophy}</span><h3>Awaiting ranked telemetry</h3><p>This board activates as soon as its authoritative game source reports eligible players.</p></section>`}
+    <footer class="leaderboard-source"><span>DATA SOURCE</span><strong>${escapeHtml(data.sources?.[boardKey] || "Faircroft synchronized records")}</strong><p>Rankings reflect roleplay-server statistics and can change after each sync.</p></footer>
+  </div>`;
+}
+
+function renderLeaderboardWorkspace() {
+  return `<section class="leaderboard-workspace">
+    <header class="leaderboard-topbar">
+      <div class="leaderboard-brand"><span>${iconSvg.trophy}</span><div><p>FAIRCROFT PERFORMANCE NETWORK</p><h1>Leaderboards</h1></div></div>
+      <div><span><i></i>Statistics online</span><button class="secondary" type="button" data-refresh-leaderboards>Refresh rankings</button><button class="primary" type="button" data-close-leaderboards>Exit</button></div>
+    </header>
+    <main>${renderLeaderboards()}</main>
+  </section>`;
+}
+
+function bindLeaderboardWorkspace() {
+  $$("[data-leaderboard-group]").forEach((button) => button.addEventListener("click", () => {
+    const firstBoard = Object.entries(LEADERBOARD_CONFIG).find(([, config]) => config.group === button.dataset.leaderboardGroup);
+    if (firstBoard) state.leaderboardTab = firstBoard[0];
+    render();
+  }));
+  $("[data-delete-press-report]")?.addEventListener("click", async () => {
+    const id = state.pressSelectedReportId;
+    if (!id || !window.confirm("Permanently delete this submitted newsroom story? It will no longer be available to Gemini and the deletion will be audited.")) return;
+    try {
+      await api(`/api/admin/press-reports/${id}`, { method: "DELETE" });
+      state.pressSelectedReportId = null;
+      state.cache.press = await api("/api/press/reports");
+      toast("Newsroom story deleted");
+      render();
+    } catch (error) { toast(error.message); }
+  });
+  $$("[data-leaderboard-tab]").forEach((button) => button.addEventListener("click", () => {
+    state.leaderboardTab = button.dataset.leaderboardTab;
+    render();
+  }));
+  $("[data-refresh-leaderboards]")?.addEventListener("click", async () => {
+    await loadAppData("leaderboards");
+    render();
+  });
+  $("[data-close-leaderboards]")?.addEventListener("click", async () => {
+    state.activeApp = null;
+    await loadSession();
+  });
+}
+
 function bindHome() {
   $$("[data-open-app]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -1391,7 +1640,9 @@ function renderPanel(id) {
     "dev-tools": "Dev Tools",
     "beta-tasks": "Beta Tasks",
     downloads: "Download Our App",
+    leaderboards: "Leaderboards",
     press: "Press Desk",
+    citizenship: "Citizenship & Passport",
   };
   const body = {
     profile: renderProfile,
@@ -1418,7 +1669,9 @@ function renderPanel(id) {
     "dev-tools": renderDevTools,
     "beta-tasks": renderBetaTasks,
     downloads: renderDownloads,
+    leaderboards: renderLeaderboards,
     press: renderPressDesk,
+    citizenship: renderCitizenship,
   }[id]?.() || `<div class="empty">Module unavailable</div>`;
 
   return `
@@ -1440,9 +1693,10 @@ async function loadAppData(id) {
     jobs: () => api("/api/jobs"),
     "my-faircroft": () => api("/api/my-faircroft"),
     fnn: () => api("/api/fnn"),
-    court: () => api("/api/court/cases"),
+    court: () => api(can("judge") || can("owner") ? "/api/court/cases" : "/api/court/my-cases"),
     properties: () => api("/api/properties"),
     bank: () => api("/api/bank"),
+    wallstreet: () => api("/api/wallstreet"),
     treasury: () => api("/api/treasury"),
     business: () => api("/api/business"),
     messages: () => api("/api/messages"),
@@ -1471,7 +1725,10 @@ async function loadAppData(id) {
     "dev-tools": () => api("/api/dev-tools"),
     "beta-tasks": () => api("/api/beta/tasks"),
     downloads: () => api("/api/downloads/access"),
+    leaderboards: () => api("/api/leaderboards"),
     press: () => api("/api/press/reports"),
+    citizenship: () => api("/api/citizenship"),
+    "ice-mdt": () => api("/api/ice/overview"),
     admin: async () => ({
       overview: await api("/api/admin/overview"),
       users: await api("/api/admin/users"),
@@ -1558,6 +1815,7 @@ function bindPanel() {
     "beta-tasks": bindBetaTasks,
     downloads: bindDownloads,
     press: bindPressDesk,
+    citizenship: bindCitizenship,
   };
   binders[state.activeApp]?.();
 }
@@ -1678,6 +1936,99 @@ function normalizedRole(role) {
 function hasFireCommandAccess() {
   const roles = (state.session?.user?.roles || []).map(normalizedRole);
   return roles.some((role) => ["owner", "fire_chief", "deputy_chief", "fire_marshal"].includes(role));
+}
+
+function renderCitizenship() {
+  const data = state.cache.citizenship || {};
+  const record = data.record || {};
+  const holder = data.holder || {};
+  const valid = String(record.citizenship_status || "Undocumented").toLowerCase() === "valid citizen";
+  return `<div class="citizenship-app">
+    <section class="citizenship-command">
+      <div><span>FAIRCROFT CITIZENSHIP & IMMIGRATION SERVICES</span><h2>${valid ? "Citizenship confirmed" : "Citizenship review required"}</h2><p>${valid ? "Your Faircroft citizenship and passport credential are active." : "Complete the Faircroft civics examination to establish lawful citizenship."}</p></div>
+      <strong class="${valid ? "valid" : "warning"}">${escapeHtml(record.citizenship_status || "Undocumented")}</strong>
+    </section>
+    ${valid ? `<section class="faircroft-passport">
+      <header><span>${iconSvg.passport}</span><div><small>STATE OF FAIRCROFT</small><h3>Citizen Passport</h3></div><b>FC</b></header>
+      <div class="passport-body"><div class="passport-photo">${holder.photo ? `<img src="${escapeHtml(holder.photo)}" alt="" />` : escapeHtml(String(holder.name || "F").slice(0,1))}</div><dl><div><dt>Citizen</dt><dd>${escapeHtml(holder.name || "")}</dd></div><div><dt>Passport number</dt><dd>${escapeHtml(record.passport_number || "Pending")}</dd></div><div><dt>CIV identification</dt><dd>${escapeHtml(holder.civ_number || "Pending")}</dd></div><div><dt>Issued</dt><dd>${record.issued_at ? new Date(record.issued_at).toLocaleDateString() : "Official record"}</dd></div></dl></div>
+      <footer>VALID FAIRCROFT CITIZENSHIP · OFFICIAL DIGITAL CREDENTIAL</footer>
+    </section>` : `<form id="citizenshipExamForm" class="citizenship-exam">
+      <header><span>FAIRCROFT CIVICS ASSESSMENT</span><h3>Six-question citizenship examination</h3><p>Answer every question. Results are recorded in the federal citizenship registry.</p></header>
+      ${(data.questions || []).map((question) => `<fieldset><legend><small>QUESTION ${question.number} OF 6</small>${escapeHtml(question.question)}</legend>${question.options.map((option, index) => `<label><input type="radio" name="q${question.number}" value="${"ABCD"[index]}" required /><span>${"ABCD"[index]}</span>${escapeHtml(option)}</label>`).join("")}</fieldset>`).join("")}
+      <button class="primary" type="submit">Submit citizenship examination</button>
+    </form>`}
+  </div>`;
+}
+
+function bindCitizenship() {
+  $("#citizenshipExamForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const body = Object.fromEntries(new FormData(form).entries());
+    try {
+      const result = await api("/api/citizenship/exam", { method: "POST", body });
+      toast(result.passed ? "Faircroft citizenship approved" : "Examination not passed. Review and try again.");
+      state.cache.citizenship = await api("/api/citizenship");
+      render();
+    } catch (error) { toast(error.message); }
+  });
+}
+
+function renderIceWorkspace() {
+  const data = state.cache["ice-mdt"] || {};
+  const results = state.iceSearchResults || [];
+  const restricted = Boolean(data.local_data_restricted);
+  return `<section class="ice-workspace">
+    <header class="ice-topbar"><div class="ice-brand"><span>${iconSvg.federal}</span><div><small>FAIRCROFT FEDERAL IMMIGRATION SERVICE</small><h1>ICE Mobile Data Terminal</h1></div></div><div><button class="secondary" data-refresh-ice>Refresh</button><button class="primary" data-close-ice>Exit</button></div></header>
+    <div class="ice-ordinance ${restricted ? "restricted" : "shared"}"><strong>${restricted ? "LOCAL DATA RESTRICTION ACTIVE" : "INTERAGENCY SHARING AUTHORIZED"}</strong><p>${escapeHtml(data.ordinance_notice || "")}</p></div>
+    <main>
+      <section class="ice-command-strip"><div><span>Valid citizens</span><strong>${Number(data.stats?.valid_citizens || 0)}</strong></div><div><span>Undocumented</span><strong>${Number(data.stats?.undocumented || 0)}</strong></div><div><span>Open federal cases</span><strong>${Number(data.stats?.open_cases || 0)}</strong></div></section>
+      <section class="ice-search-panel"><header><div><small>NCIC / CITIZENSHIP REGISTRY</small><h2>Status verification</h2></div></header><form id="iceSearchForm"><input name="q" minlength="2" required placeholder="Search name, CIV, or Faircroft passport" /><button class="primary">Run federal check</button></form>
+        <div class="ice-search-results">${results.map((person) => `<button type="button" data-ice-subject="${person.id}"><span><strong>${escapeHtml(person.name)}</strong><small>CIV ${escapeHtml(person.civ_number || "pending")} · ${escapeHtml(person.passport_number || "No passport")}</small></span><b class="${String(person.citizenship_status).toLowerCase() === "valid citizen" ? "valid" : "warning"}">${escapeHtml(person.citizenship_status)}</b></button>`).join("") || `<div class="empty">Run a federal identity check to review citizenship status.</div>`}</div>
+      </section>
+      <section class="ice-case-layout">
+        <div class="ice-case-ledger"><header><small>FEDERAL CASE LEDGER</small><h2>Immigration operations</h2></header>${(data.cases || []).map((item) => `<article><span>${escapeHtml(item.case_number)}</span><div><strong>${escapeHtml(item.subject_name)}</strong><small>${escapeHtml(item.case_type)} · ${escapeHtml(item.citizenship_status || "Undocumented")}</small></div><b>${escapeHtml(item.status)}</b>${data.can_command ? `<button class="secondary" data-ice-case="${item.id}">Update</button>` : ""}</article>`).join("") || `<div class="empty">No federal immigration cases filed.</div>`}</div>
+        <form id="iceCaseForm" class="ice-case-form"><small>NEW FEDERAL CASE</small><h2>Open status investigation</h2><input type="hidden" name="subject_user_id" value="${state.iceSelectedSubject?.id || ""}" /><label>Subject<input value="${escapeHtml(state.iceSelectedSubject?.name || "Select from federal search")}" readonly /></label><label>Case type<select name="case_type"><option>Status Review</option><option>Immigration Detainer</option><option>Removal Proceeding</option><option>Citizenship Fraud Review</option></select></label><label>Priority<select name="priority"><option>standard</option><option>elevated</option><option>critical</option></select></label><label>Location<input name="location" maxlength="240" /></label><label>Federal narrative<textarea name="narrative" minlength="10" maxlength="5000" required></textarea></label><button class="primary" ${state.iceSelectedSubject ? "" : "disabled"}>Open ICE case</button></form>
+      </section>
+    </main>
+  </section>`;
+}
+
+function bindIceWorkspace() {
+  $("[data-close-ice]")?.addEventListener("click", async () => { state.activeApp = null; await loadSession(); });
+  $("[data-refresh-ice]")?.addEventListener("click", async () => { await loadAppData("ice-mdt"); render(); });
+  $("#iceSearchForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const q = new FormData(event.currentTarget).get("q");
+      const result = await api(`/api/ice/search?q=${encodeURIComponent(q)}`);
+      state.iceSearchResults = result.results || [];
+      render();
+    } catch (error) { toast(error.message); }
+  });
+  $$("[data-ice-subject]").forEach((button) => button.addEventListener("click", () => {
+    state.iceSelectedSubject = state.iceSearchResults.find((person) => String(person.id) === String(button.dataset.iceSubject)) || null;
+    render();
+  }));
+  $("#iceCaseForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api("/api/ice/cases", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast("Federal immigration case opened");
+      state.cache["ice-mdt"] = await api("/api/ice/overview");
+      render();
+    } catch (error) { toast(error.message); }
+  });
+  $$("[data-ice-case]").forEach((button) => button.addEventListener("click", async () => {
+    const status = prompt("Case status: open, detained, released, referred, or closed", "closed");
+    if (!status) return;
+    const disposition = prompt("Federal disposition or command notes", "") || "";
+    try {
+      await api(`/api/ice/cases/${button.dataset.iceCase}`, { method: "PATCH", body: { status, disposition } });
+      state.cache["ice-mdt"] = await api("/api/ice/overview");
+      render();
+    } catch (error) { toast(error.message); }
+  }));
 }
 
 function renderProfile() {
@@ -2295,16 +2646,70 @@ function renderDmvOverview(record, vehicles, applications, activeVehicle) {
   const user = state.cache.profile?.user || state.session.user;
   const roadLegal = vehicles.filter((vehicle) => vehicle.registration_status === "Active" && vehicle.insurance_status === "Active").length;
   const endorsements = dmvEndorsements(record.endorsements);
+  const credentialDate = record.updated_at ? new Date(record.updated_at) : new Date();
+  const credentialDateValid = !Number.isNaN(credentialDate.getTime());
+  const issuedDate = credentialDateValid ? credentialDate.toLocaleDateString([], { month: "2-digit", day: "2-digit", year: "numeric" }) : "ON FILE";
+  const expirationDate = credentialDateValid
+    ? new Date(credentialDate.getFullYear() + 5, credentialDate.getMonth(), credentialDate.getDate()).toLocaleDateString([], { month: "2-digit", day: "2-digit", year: "numeric" })
+    : "SEE DMV";
+  const licenseNumber = `FC-${escapeHtml(user?.civ_number || "TEMPORARY")}`;
+  const endorsementText = escapeHtml(endorsements.join(" · ") || "NONE");
   return `
     <div class="dmv-id-layout dmv-identity-file">
-      <article class="dmv-digital-license ${record.license_status === "Valid" ? "valid" : "pending"}">
-        <header><div class="dmv-seal">FC</div><div><span>FAIRCROFT MOTOR VEHICLE AUTHORITY</span><strong>DRIVER CREDENTIAL</strong></div><b>${escapeHtml(record.license_class)}</b></header>
-        <div class="dmv-license-body"><div class="dmv-license-photo">${user?.profile_photo ? `<img src="${escapeHtml(user.profile_photo)}" alt="Driver identification" />` : `<span>${escapeHtml((user?.name || "?").slice(0,1))}</span><small>IDENTITY PHOTO REQUIRED</small>`}</div><div class="dmv-credential-copy"><p>AUTHORIZED RESIDENT</p><h3>${escapeHtml(user?.name || "")}</h3><span>CIVILIAN RECORD ${escapeHtml(user?.civ_number || "PENDING")}</span><dl><div><dt>Credential</dt><dd>${escapeHtml(record.license_status)}</dd></div><div><dt>Classification</dt><dd>${escapeHtml(record.license_class)}</dd></div><div><dt>Endorsements</dt><dd>${escapeHtml(endorsements.join(", ") || "None")}</dd></div><div><dt>Primary plate</dt><dd>${escapeHtml(activeVehicle.plate || "No vehicle")}</dd></div><div><dt>Issued by</dt><dd>Faircroft DMV</dd></div></dl></div></div>
-        <footer><span>VALID ONLY WITH MATCHING CIVILIAN PROFILE</span><strong>FC-${escapeHtml(user?.civ_number || "TEMPORARY")}</strong></footer>
-      </article>
+      <section class="dmv-license-presentation">
+        <article class="dmv-issued-license ${record.license_status === "Valid" ? "valid" : "restricted"}">
+          <div class="dmv-license-security" aria-hidden="true"><i></i><i></i><i></i></div>
+          <header class="dmv-license-masthead">
+            <div class="dmv-license-state-seal"><span>FC</span></div>
+            <div><small>STATE OF FAIRCROFT</small><strong>DRIVER LICENSE</strong><em>MOTOR VEHICLE AUTHORITY</em></div>
+            <b>${escapeHtml(record.license_class)}</b>
+          </header>
+          <div class="dmv-license-number"><span>DL NO.</span><strong>${licenseNumber}</strong><em class="${String(record.license_status || "").toLowerCase()}">${escapeHtml(record.license_status)}</em></div>
+          <div class="dmv-license-face">
+            <div class="dmv-license-portrait">
+              ${user?.profile_photo
+                ? `<img src="${escapeHtml(user.profile_photo)}" alt="Official driver portrait" />`
+                : `<div class="dmv-photo-placeholder"><span>${escapeHtml((user?.name || "?").slice(0,1))}</span><small>OFFICIAL PORTRAIT REQUIRED</small></div>`}
+              <span class="dmv-portrait-stamp">FCMVA</span>
+            </div>
+            <div class="dmv-license-data">
+              <span class="dmv-license-field wide"><small>1 FAMILY / GIVEN NAME</small><strong>${escapeHtml(user?.name || "")}</strong></span>
+              <span class="dmv-license-field"><small>4d CIVILIAN ID</small><strong>${escapeHtml(user?.civ_number || "PENDING")}</strong></span>
+              <span class="dmv-license-field"><small>5 CLASS</small><strong>${escapeHtml(record.license_class)}</strong></span>
+              <span class="dmv-license-field"><small>4a ISSUED</small><strong>${issuedDate}</strong></span>
+              <span class="dmv-license-field"><small>4b EXPIRES</small><strong>${expirationDate}</strong></span>
+              <span class="dmv-license-field"><small>9 ENDORSEMENTS</small><strong>${endorsementText}</strong></span>
+              <span class="dmv-license-field"><small>12 RESTRICTIONS</small><strong>${record.license_status === "Valid" ? "NONE" : escapeHtml(record.license_status)}</strong></span>
+              <div class="dmv-license-signature"><span>${escapeHtml(user?.name || "")}</span><small>AUTHORIZED HOLDER SIGNATURE</small></div>
+            </div>
+            <div class="dmv-license-ghost">
+              ${user?.profile_photo ? `<img src="${escapeHtml(user.profile_photo)}" alt="" />` : `<span>FC</span>`}
+              <small>FAIRCROFT</small>
+            </div>
+          </div>
+          <footer class="dmv-license-authentication">
+            <div class="dmv-license-barcode" aria-hidden="true"></div>
+            <span>NOT VALID UNLESS PRESENTED BY THE AUTHORIZED HOLDER</span>
+            <strong>${licenseNumber}</strong>
+          </footer>
+          <div class="dmv-license-hologram" aria-hidden="true"><span>FC</span><small>AUTHENTIC</small></div>
+        </article>
+        <div class="dmv-license-caption">
+          <span><i></i> Official digital credential</span>
+          <p>This credential reflects the live status stored in Faircroft DMV and visible through NCIC.</p>
+        </div>
+      </section>
       <aside class="dmv-record-summary"><header><span>COMPLIANCE LEDGER</span><strong>${vehicles.length ? `${roadLegal}/${vehicles.length} road legal` : "No vehicles filed"}</strong></header><dl><div><dt>Driver credential</dt><dd class="${record.license_status === "Valid" ? "valid" : "warning"}">${escapeHtml(record.license_status)}</dd></div><div><dt>Vehicle records</dt><dd>${vehicles.length}</dd></div><div><dt>Primary registration</dt><dd class="${activeVehicle.registration_status === "Active" ? "valid" : "warning"}">${escapeHtml(activeVehicle.registration_status || "Not filed")}</dd></div><div><dt>Insurance coverage</dt><dd class="${activeVehicle.insurance_status === "Active" ? "valid" : "warning"}">${escapeHtml(activeVehicle.insurance_status || "Not insured")}</dd></div></dl><div class="dmv-ledger-actions">${record.license_status !== "Valid" ? `<button class="primary" type="button" data-dmv-tab="license">Begin driver examination</button>` : ""}<button class="secondary" type="button" data-dmv-tab="vehicles">${vehicles.length ? "Review vehicle registry" : "Open vehicle registry"}</button></div></aside>
     </div>
   `;
+}
+
+function characterSelectField(characters, name = "character_id", label = "Character") {
+  const active = (characters || []).find((character) => character.is_active);
+  return `<label>${escapeHtml(label)}<select name="${escapeHtml(name)}" required>
+    <option value="">Select character</option>
+    ${(characters || []).map((character) => `<option value="${character.id}" ${active && Number(active.id) === Number(character.id) ? "selected" : ""}>${escapeHtml(character.character_name)}${character.is_active ? " — active" : ""}</option>`).join("")}
+  </select></label>`;
 }
 
 function renderDmvLicense(record, exam) {
@@ -2332,6 +2737,7 @@ function renderDmvVehicles(vehicles, record, gameVehicles = []) {
       ${gameVehicles.length ? `<section class="dmv-game-vehicles"><header><div><p>FCRPMUSSALO LIVE SYNC</p><h3>Profile vehicle source</h3></div><strong>${gameVehicles.length} DETECTED</strong></header><div>${gameVehicles.map((vehicle) => `<article class="${importedIds.has(String(vehicle.record_id)) ? "imported" : ""}"><span>${importedIds.has(String(vehicle.record_id)) ? "DMV FILE CREATED" : "SYNC PENDING"}</span><strong>${escapeHtml(vehicle.title || "Arma vehicle")}</strong><small>${escapeHtml(vehicle.prefab || vehicle.record_id)}</small></article>`).join("")}</div></section>` : ""}
       <details class="dmv-manual-intake"><summary>Register a vehicle that is not on your linked profile</summary><form id="dmvVehicleForm" class="dmv-registration-form">
         <header><div><p>FC-DMV VEHICLE INTAKE</p><h3>Register a vehicle</h3></div><span>Registration does not include insurance</span></header>
+        ${characterSelectField(state.cache.dmv?.characters || [], "character_id", "Registered owner character")}
         <div class="grid-2">
           <label>Year<input name="vehicle_year" type="number" min="1900" max="2100" required /></label>
           <label>Plate<input name="plate" value="${escapeHtml(record.plate || "")}" maxlength="12" required /></label>
@@ -2523,6 +2929,7 @@ function renderDepartmentApplicationField(field, posting) {
 }
 
 function renderDepartmentApplicationForm(posting) {
+  const characterField = characterSelectField(state.cache.jobs?.characters || [], "character_id", "Applicant character");
   if (["bar_exam", "press_exam"].includes(posting.form_type)) {
     const isPressExam = posting.form_type === "press_exam";
     const examQuestions = state.cache.jobs?.exam_questions?.[posting.exam_key || "judicial"] || [];
@@ -2533,6 +2940,7 @@ function renderDepartmentApplicationForm(posting) {
           <span class="pill ${isPressExam ? "red" : "amber"}">${examQuestions.length} Questions</span>
         </div>
         <div class="bar-applicant-grid">
+          ${characterField}
           <label>In-game name<input name="in_game_name" value="${escapeHtml(state.session?.user?.name || "")}" minlength="2" maxlength="120" required /></label>
           <label>Discord name<input name="discord_name" minlength="2" maxlength="120" required /></label>
         </div>
@@ -2566,6 +2974,7 @@ function renderDepartmentApplicationForm(posting) {
           <span class="pill amber">Command Review</span>
         </div>
         <div class="law-application-grid">
+          ${characterField}
           ${lawEnforcementApplicationFields.map((field) => renderDepartmentApplicationField(field, posting)).join("")}
         </div>
         <button class="primary" type="submit">Submit law enforcement application</button>
@@ -2574,6 +2983,7 @@ function renderDepartmentApplicationForm(posting) {
   }
   return `
     <form class="department-application-form" data-department-key="${escapeHtml(posting.key)}">
+      ${characterField}
       <label>Why should command select you?<textarea name="statement" minlength="20" maxlength="4000" required placeholder="Talk about experience, availability, roleplay style, training history, and why you want this department."></textarea></label>
       <button class="primary" type="submit">Submit application</button>
     </form>
@@ -2582,39 +2992,56 @@ function renderDepartmentApplicationForm(posting) {
 
 function renderJobs() {
   const data = state.cache.jobs;
-  if (!data) return `<div class="empty">Jobs loading</div>`;
+  if (!data) return `<div class="empty">Connecting to Faircroft Recruitment</div>`;
   const postings = data.department_postings || [];
   const applications = data.department_applications || [];
+  if (!postings.some((posting) => posting.key === state.jobsTab)) state.jobsTab = postings[0]?.key || "";
+  const selected = postings.find((posting) => posting.key === state.jobsTab) || postings[0];
   const acceptingApplications = postings.some((posting) => posting.accepting_applications !== false);
   const activeApplications = applications.filter((item) => !["approved", "denied", "withdrawn", "closed"].includes(item.status));
+  const selectedApplication = selected ? applications.find((item) => item.department_key === selected.key) : null;
+  const hasActiveApplication = selectedApplication && !["denied", "withdrawn", "closed"].includes(selectedApplication.status);
+  const isLegal = selected && ["lawyer", "prosecutor", "public_defender"].includes(selected.key);
+  const isPress = selected?.key === "press";
+  if (state.jobsView === "applications") return `<section class="recruit-applications-view"><header><div><p>PERSONAL RECRUITMENT FILE</p><h2>My applications</h2><span>Track every submitted Faircroft department application and examination.</span></div><strong>${applications.length} RECORDS</strong></header><div class="recruit-application-ledger">${applications.map((item) => renderJobApplicationFile(item, postings)).join("") || `<div class="empty">You have not submitted an application.</div>`}</div></section>`;
+  if (!selected) return `<div class="empty">No department vacancies are currently published.</div>`;
   return `
-    <div class="stack jobs-portal">
-      <section class="jobs-hero">
-        <div>
-          <p class="eyebrow">Recruitment board</p>
-          <h3>Department Applications</h3>
-          <p>Apply for whitelisted RP departments. Command staff will review your application and assign roles if approved.</p>
-        </div>
-        <div class="jobs-hero-metrics">
-          <div><span>Applications</span><strong>${applications.length}</strong></div>
-          <div><span>Active</span><strong>${activeApplications.length}</strong></div>
-        </div>
-      </section>
-      ${acceptingApplications ? "" : `<section class="applications-closed-notice">
-        <span>RECRUITMENT INTAKE CLOSED</span>
-        <div><h3>Applications are not being accepted at this time.</h3><p>Please try again later.</p><strong>Sincerely, Faircroft Government</strong></div>
-      </section>`}
-      <div class="job-ad-board">
-        ${postings.map((posting, index) => renderJobAdvertisement(posting, applications, index, posting.accepting_applications !== false)).join("") || `<div class="empty">No job advertisements are open</div>`}
+    <section class="recruit-opening-view">
+      ${acceptingApplications ? "" : `<div class="recruit-closed-banner"><strong>RECRUITMENT INTAKE CLOSED</strong><span>Applications are not being accepted at this time. Please try again later. â€” Faircroft Government</span></div>`}
+      <header class="recruit-opening-hero ${isPress ? "press" : isLegal ? "legal" : ""}">
+        <div class="recruit-dept-mark">${isPress ? "FNN" : isLegal ? "Â§" : selected.key === "fire_ems" ? "FC" : "â˜…"}</div>
+        <div><p>${escapeHtml(selected.division)}</p><h1>${escapeHtml(selected.label)}</h1><span>${escapeHtml(selected.schedule)}</span></div>
+        <div class="recruit-opening-status"><i></i><small>${selected.accepting_applications !== false ? "CURRENT STATUS" : "INTAKE STATUS"}</small><strong>${selected.accepting_applications !== false ? "NOW HIRING" : "APPLICATIONS CLOSED"}</strong></div>
+      </header>
+      <div class="recruit-opening-layout">
+        <main>
+          <section class="recruit-position-intro"><p>ROLE OPPORTUNITY</p><h2>${escapeHtml(selected.badge)}</h2><span>${escapeHtml(selected.requirements)}</span></section>
+          <div class="recruit-facts"><div><small>POSITION</small><strong>${escapeHtml(selected.badge)}</strong></div><div><small>ROLE TRACK</small><strong>${escapeHtml(selected.role_label || humanLabel(selected.role_key))}</strong></div><div><small>REVIEW AUTHORITY</small><strong>${isLegal ? "Faircroft Court" : isPress ? "FNN certification" : "Department command"}</strong></div></div>
+          <section class="recruit-process"><header><p>SELECTION PROCESS</p><h2>What happens next</h2></header><div><article><span>01</span><strong>Submit</strong><p>Complete the required character-specific application or examination.</p></article><article><span>02</span><strong>Review</strong><p>${isPress ? "Your scored Press Pass examination is evaluated." : isLegal ? "The Judiciary reviews the legal credential packet." : "Command staff reviews experience, availability, and RP readiness."}</p></article><article><span>03</span><strong>Decision</strong><p>Your status and reviewer notes appear in your application file.</p></article></div></section>
+          ${selectedApplication ? `<section class="recruit-current-file"><div><small>${escapeHtml(selectedApplication.application_number)}</small><strong>Application on file</strong><span>Submitted ${new Date(selectedApplication.created_at).toLocaleString()}</span></div><em class="${businessStatusClass(selectedApplication.status)}">${humanLabel(selectedApplication.status)}</em></section>` : ""}
+        </main>
+        <aside class="recruit-action-panel"><p>READY TO SERVE?</p><h2>${hasActiveApplication ? "Your file is under review." : selected.accepting_applications !== false ? "Start your application." : "Intake is currently closed."}</h2><span>${hasActiveApplication ? "No duplicate application is needed. Track progress from My Applications." : "Applications are tied to the character you select and delivered to the proper reviewing authority."}</span>${hasActiveApplication ? `<button class="secondary" data-jobs-view="applications">View application file</button>` : selected.accepting_applications !== false ? `<button class="recruit-primary" data-open-job-application>Apply for ${escapeHtml(selected.label)}</button>` : `<button disabled>Applications closed</button>`}<small>${applications.length} total application${applications.length === 1 ? "" : "s"} Â· ${activeApplications.length} active</small></aside>
       </div>
-      <details class="jobs-history" ${applications.length ? "" : ""}>
-        <summary><span>My application files</span><strong>${applications.length}</strong></summary>
-        <div class="job-application-list">
-          ${applications.map((item) => renderJobApplicationFile(item, postings)).join("") || `<div class="empty">No department applications submitted yet</div>`}
-        </div>
-      </details>
-    </div>
+      ${state.jobApplyOpen ? `<div class="recruit-application-modal"><section><header><div><p>${escapeHtml(selected.division)}</p><h2>${escapeHtml(selected.label)} application</h2><span>${escapeHtml(selected.badge)}</span></div><button type="button" data-close-job-application>Ã—</button></header><div class="recruit-application-scroll">${renderDepartmentApplicationForm(selected)}</div></section></div>` : ""}
+    </section>
   `;
+}
+
+function renderJobsWorkspace() {
+  const data = state.cache.jobs || {};
+  const postings = data.department_postings || [];
+  const applications = data.department_applications || [];
+  return `<section class="recruit-workspace"><aside class="recruit-sidebar"><div class="recruit-brand"><span>FC</span><div><strong>Faircroft Careers</strong><small>Government Recruitment Service</small></div></div><div class="recruit-nav-label"><span>Opportunity directory</span><small>${postings.filter(x => x.accepting_applications !== false).length} open</small></div><nav>${postings.map(posting => `<button class="${state.jobsView === "openings" && state.jobsTab === posting.key ? "active" : ""}" data-job-posting="${escapeHtml(posting.key)}"><i></i><div><small>${escapeHtml(posting.division)}</small><strong>${escapeHtml(posting.label)}</strong><span>${escapeHtml(posting.badge)}</span></div><em class="${posting.accepting_applications !== false ? "open" : "closed"}">${posting.accepting_applications !== false ? "OPEN" : "CLOSED"}</em></button>`).join("")}</nav><button class="recruit-my-files ${state.jobsView === "applications" ? "active" : ""}" data-jobs-view="applications"><span>${iconSvg.briefcase}</span><div><strong>My applications</strong><small>${applications.length} submitted file${applications.length === 1 ? "" : "s"}</small></div><em>${applications.length}</em></button></aside><main class="recruit-main"><header class="recruit-topbar"><div><p>FC / PUBLIC SERVICE OPPORTUNITIES</p><h1>${state.jobsView === "applications" ? "Application Files" : "Recruitment Board"}</h1></div><div><span><i></i>Recruitment network online</span><button class="secondary" data-refresh-jobs>Refresh</button><button class="primary" data-close-jobs>Exit careers</button></div></header><div class="recruit-content">${renderJobs()}</div></main></section>`;
+}
+
+function bindJobsWorkspace() {
+  bindJobs();
+  $$("[data-job-posting]").forEach(button => button.addEventListener("click", () => { state.jobsTab=button.dataset.jobPosting; state.jobsView="openings"; state.jobApplyOpen=false; render(); }));
+  $$("[data-jobs-view]").forEach(button => button.addEventListener("click", () => { state.jobsView=button.dataset.jobsView; state.jobApplyOpen=false; render(); }));
+  $("[data-open-job-application]")?.addEventListener("click", () => { state.jobApplyOpen=true; render(); });
+  $("[data-close-job-application]")?.addEventListener("click", () => { state.jobApplyOpen=false; render(); });
+  $("[data-refresh-jobs]")?.addEventListener("click", async () => { await loadAppData("jobs"); render(); });
+  $("[data-close-jobs]")?.addEventListener("click", async () => { state.activeApp=null; state.jobApplyOpen=false; await loadSession(); });
 }
 
 function renderDmvWorkspace() {
@@ -2711,6 +3138,8 @@ function bindJobs() {
           body: { ...payload, department_key: form.dataset.departmentKey },
         });
         toast(result.press_pass_awarded ? "Press Pass issued — Press Desk access is active" : result.press_pass_capacity_reached ? "Exam passed — Press Pass capacity is currently full" : "Department application submitted");
+        state.jobApplyOpen = false;
+        state.jobsView = "applications";
         await loadAppData("jobs");
         render();
       } catch (error) {
@@ -3028,6 +3457,174 @@ function renderBank() {
 }
 
 function bindBank() {}
+
+function marketChange(security) {
+  const now = Number(security.price || 0), before = Number(security.previous_price || now);
+  return before ? ((now - before) / before) * 100 : 0;
+}
+
+function renderMarketWorkspace() {
+  const data = state.cache.wallstreet;
+  if (!data) return `<main class="market-workspace"><div class="empty">Opening Ravenhood Marketsâ€¦</div></main>`;
+  const account = data.account;
+  if (!account) return `<main class="market-workspace market-onboarding">
+    <header class="market-topbar"><div class="market-brand"><span>RH</span><div><strong>Ravenhood Markets</strong><small>Faircroft securities exchange</small></div></div><button class="secondary" data-close-market>Exit</button></header>
+    <section class="market-open-account"><div class="market-orbit"><i></i><b>RH</b></div><p class="eyebrow">Investing, rewritten for roleplay</p><h1>Build your Faircroft portfolio.</h1><p>Trade fictional companies, municipal bonds, and high-volatility day-trading securities. Every dollar is settled through an in-game admin handoff.</p><button class="market-primary" data-create-market-account>Create investment account</button><small>No real money, securities, or financial advice. Ravenhood is an RP simulation.</small></section>
+  </main>`;
+  const securities = data.securities || [], holdings = data.holdings || [];
+  const selected = securities.find(x => x.ticker === state.marketTicker) || securities[0] || {};
+  state.marketTicker = selected.ticker || "";
+  const total = Number(data.portfolio_value || 0) + Number(account.cash_balance || 0);
+  const change = marketChange(selected);
+  const stockOptions = securities.map(x => `<option value="${escapeHtml(x.ticker)}">${escapeHtml(x.ticker)} Â· ${escapeHtml(x.name)}</option>`).join("");
+  return `<main class="market-workspace">
+    <header class="market-topbar"><div class="market-brand"><span>RH</span><div><strong>Ravenhood Markets</strong><small>Simulated Faircroft exchange</small></div></div><div class="market-top-actions"><em class="${data.market_open ? "open" : "closed"}">${data.market_open ? "MARKET OPEN" : "MARKET CLOSED"}</em><button class="secondary" data-refresh-market>Refresh</button><button class="secondary" data-close-market>Exit</button></div></header>
+    <div class="market-tape">${securities.map(x => `<button data-market-ticker="${escapeHtml(x.ticker)}"><b>${escapeHtml(x.ticker)}</b><span>${money(x.price)}</span><i class="${marketChange(x) >= 0 ? "up" : "down"}">${marketChange(x) >= 0 ? "+" : ""}${marketChange(x).toFixed(2)}%</i></button>`).join("")}</div>
+    <section class="market-shell">
+      <aside class="market-portfolio"><p class="eyebrow">Total portfolio</p><h1>${money(total)}</h1><div class="market-balance-line"><span>Buying power</span><strong>${money(account.cash_balance)}</strong></div><nav><button class="active">Overview</button><button data-market-dialog="deposit">Deposit funds</button><button data-market-dialog="withdrawal">Withdraw funds</button><button data-market-dialog="transfer">Transfer shares</button></nav><div class="market-admin-note"><strong>In-game settlement required</strong><p>An admin must receive or issue funds in game before giving you a one-time receipt PIN.</p></div></aside>
+      <section class="market-main">
+        <div class="market-security-head"><div><span>${escapeHtml(selected.sector || "Market")}</span><h2>${escapeHtml(selected.name || "Select a security")}</h2><p>${escapeHtml(selected.ticker || "")} Â· ${escapeHtml(humanLabel(selected.security_type || "stock"))}</p></div><div><strong>${money(selected.price)}</strong><em class="${change >= 0 ? "up" : "down"}">${change >= 0 ? "+" : ""}${change.toFixed(2)}%</em></div></div>
+        <div class="market-chart" aria-label="Animated simulated price chart"><i></i><i></i><i></i><i></i><i></i><i></i><span>Simulated RP pricing Â· updates when market programs run</span></div>
+        <div class="market-trade-row"><form data-market-order><input type="hidden" name="ticker" value="${escapeHtml(selected.ticker || "")}"/><label>Order type<select name="side"><option value="buy">Buy</option><option value="sell">Sell</option></select></label><label>Shares<input name="quantity" type="number" min="0.000001" step="0.000001" required placeholder="0.00"/></label><button class="market-primary" ${data.market_open ? "" : "disabled"}>Review order</button></form><div class="market-order-note"><span>Trade fee</span><strong>${Number(data.trade_fee_percent || 0).toFixed(2)}%</strong><small>Fees leave circulation and enter the market holding ledger.</small></div></div>
+        <section class="market-list"><header><div><p class="eyebrow">Market directory</p><h2>Discover securities</h2></div><span>${securities.length} listings</span></header>${securities.map(x => `<button class="market-row ${x.ticker === selected.ticker ? "active" : ""}" data-market-ticker="${escapeHtml(x.ticker)}"><div><b>${escapeHtml(x.ticker)}</b><span>${escapeHtml(x.name)}</span></div><small>${escapeHtml(x.sector)}</small><strong>${money(x.price)}</strong><em class="${marketChange(x) >= 0 ? "up" : "down"}">${marketChange(x).toFixed(2)}%</em></button>`).join("")}</section>
+      </section>
+      <aside class="market-holdings"><header><p class="eyebrow">Your positions</p><h2>Portfolio</h2></header>${holdings.length ? holdings.map(h => `<button data-market-ticker="${escapeHtml(h.ticker)}"><div><b>${escapeHtml(h.ticker)}</b><span>${Number(h.quantity).toLocaleString(undefined,{maximumFractionDigits:6})} shares</span></div><strong>${money(Number(h.quantity)*Number(h.price))}</strong><small>${Number(h.price) >= Number(h.average_cost) ? "+" : ""}${money((Number(h.price)-Number(h.average_cost))*Number(h.quantity))}</small></button>`).join("") : `<div class="empty">Your first position will appear here.</div>`}<section class="market-activity"><h3>Recent activity</h3>${(data.orders || []).slice(0,6).map(o => `<p><span>${escapeHtml(o.side.toUpperCase())} ${escapeHtml(o.ticker)}</span><strong>${money(o.gross_amount)}</strong></p>`).join("") || `<small>No trades yet.</small>`}</section></aside>
+    </section>
+    ${renderMarketDialog(data, stockOptions)}
+  </main>`;
+}
+
+function renderMarketDialog(data, stockOptions) {
+  if (!state.marketDialog) return "";
+  const type = state.marketDialog;
+  if (type === "transfer") return `<div class="market-modal"><form class="market-modal-card" data-market-transfer><button type="button" data-close-market-dialog>Ã—</button><p class="eyebrow">Private securities transfer</p><h2>Send shares</h2><p>Enter the recipient's CIV number or account email. The recipient must already have a Ravenhood account.</p><label>Security<select name="ticker">${stockOptions}</select></label><label>Shares<input name="quantity" type="number" min="0.000001" step="0.000001" required/></label><label>Recipient CIV or email<input name="recipient" required/></label><div class="market-rule"><strong>${Number(data.transfer_fee_percent || 0).toFixed(2)}% transfer fee</strong><span>The fee is removed from your settled cash and held outside the RP economy.</span></div><button class="market-primary">Transfer shares</button></form></div>`;
+  const deposit = type === "deposit";
+  return `<div class="market-modal"><form class="market-modal-card" data-market-cash><button type="button" data-close-market-dialog>Ã—</button><p class="eyebrow">${deposit ? "Fund your account" : "Settle a withdrawal"}</p><h2>${deposit ? "Deposit with an admin" : "Withdraw in game"}</h2><ol><li>Be logged into the Faircroft game server.</li><li>Walk up to an admin and request a stock market ${deposit ? "deposit" : "withdrawal"}.</li><li>${deposit ? "Give the admin the in-game cash first." : "The admin confirms the amount and prepares the in-game payout."}</li><li>The admin issues a one-time four-digit receipt PIN only after confirming the handoff.</li></ol><input type="hidden" name="transaction_type" value="${type}"/><label>Exact amount<input name="amount" type="number" min="0.01" step="0.01" required/></label><label>Four-digit receipt PIN<input name="code" inputmode="numeric" minlength="4" maxlength="4" pattern="[0-9]{4}" required/></label><div class="market-rule warning"><strong>${deposit ? "Do not enter a code before giving the admin the money." : "Submitting removes settled cash from Ravenhood; the admin then completes the in-game payout."}</strong></div><button class="market-primary">Complete ${type}</button></form></div>`;
+}
+
+function bindMarketWorkspace() {
+  $$("[data-market-ticker]").forEach(button => button.addEventListener("click", () => { state.marketTicker = button.dataset.marketTicker; render(); }));
+  $$("[data-market-dialog]").forEach(button => button.addEventListener("click", () => { state.marketDialog = button.dataset.marketDialog; render(); }));
+  $("[data-close-market-dialog]")?.addEventListener("click", () => { state.marketDialog = null; render(); });
+  $("[data-close-market]")?.addEventListener("click", async () => { state.activeApp = null; state.marketDialog = null; await loadSession(); });
+  $("[data-refresh-market]")?.addEventListener("click", async () => { state.cache.wallstreet = await api("/api/wallstreet"); render(); });
+  $("[data-create-market-account]")?.addEventListener("click", async () => { await api("/api/wallstreet/account", {method:"POST", body:JSON.stringify({})}); toast("Ravenhood account opened"); await loadAppData("wallstreet"); render(); });
+  $("[data-market-order]")?.addEventListener("submit", async event => { event.preventDefault(); const body=Object.fromEntries(new FormData(event.currentTarget)); await api("/api/wallstreet/orders",{method:"POST",body:JSON.stringify(body)}); toast("Order executed"); await loadAppData("wallstreet"); render(); });
+  $("[data-market-cash]")?.addEventListener("submit", async event => { event.preventDefault(); const body=Object.fromEntries(new FormData(event.currentTarget)); await api("/api/wallstreet/cash",{method:"POST",body:JSON.stringify(body)}); toast(`${humanLabel(body.transaction_type)} settled`); state.marketDialog=null; await loadAppData("wallstreet"); render(); });
+  $("[data-market-transfer]")?.addEventListener("submit", async event => { event.preventDefault(); const body=Object.fromEntries(new FormData(event.currentTarget)); await api("/api/wallstreet/transfers",{method:"POST",body:JSON.stringify(body)}); toast("Shares transferred"); state.marketDialog=null; await loadAppData("wallstreet"); render(); });
+}
+
+function renderBankWorkspace() {
+  const data = state.cache.bank;
+  if (!data) return `<main class="bank-workspace"><div class="empty">Connecting to Faircroft Financial</div></main>`;
+  const credit = data.credit || {};
+  const userName = state.session?.user?.name || "Faircroft Resident";
+  const identitySuffix = data.identity_id ? escapeHtml(String(data.identity_id).slice(-8).toUpperCase()) : "NOT LINKED";
+  const creditScore = credit.score === null || credit.score === undefined ? "—" : Number(credit.score);
+  const creditProgress = Math.max(0, Math.min(100, Number(credit.progress || 0)));
+  const creditRating = escapeHtml(credit.rating || "Awaiting reputation sync");
+  const refreshedAt = data.balance_synced_at
+    ? escapeHtml(new Date(data.balance_synced_at).toLocaleString())
+    : "Awaiting game-bank update";
+  const syncLabel = data.balance_synced ? "Live connection" : "Synchronization pending";
+  return `
+    <main class="bank-workspace">
+      <header class="bank-workspace-topbar">
+        <div class="bank-workspace-brand">
+          <span class="bank-workspace-mark">FC</span>
+          <div><strong>Faircroft Financial</strong><small>Secure resident banking</small></div>
+        </div>
+        <div class="bank-workspace-actions">
+          <span class="bank-secure-session"><i></i> Protected session</span>
+          <button class="secondary" type="button" data-refresh-bank>Refresh accounts</button>
+          <button class="primary" type="button" data-close-bank>Exit banking</button>
+        </div>
+      </header>
+
+      <section class="bank-dashboard">
+        <header class="bank-welcome">
+          <div>
+            <p class="eyebrow">Personal financial overview</p>
+            <h1>Good ${new Date().getHours() < 12 ? "morning" : new Date().getHours() < 18 ? "afternoon" : "evening"}, ${escapeHtml(userName)}.</h1>
+            <p>Your in-game finances and Faircroft credit profile in one secure workspace.</p>
+          </div>
+          <div class="bank-sync-state ${data.balance_synced ? "is-live" : ""}">
+            <i></i><span><small>Game-bank connection</small><strong>${syncLabel}</strong></span>
+          </div>
+        </header>
+
+        <section class="bank-dashboard-grid">
+          <article class="bank-balance-panel">
+            <div class="bank-panel-heading">
+              <span><small>Primary account</small><strong>Faircroft Game Checking</strong></span>
+              <em>${data.balance_synced ? "AVAILABLE" : "UPDATING"}</em>
+            </div>
+            <div class="bank-balance-amount">
+              <small>Available balance</small>
+              <strong>${data.balance_synced ? money(data.balance) : "Awaiting sync"}</strong>
+            </div>
+            <div class="bank-account-identity">
+              <span><small>Account reference</small><strong>•••• ${identitySuffix}</strong></span>
+              <span><small>Account status</small><strong>${data.balance_synced ? "Current" : "Pending update"}</strong></span>
+              <span><small>Last synchronized</small><strong>${refreshedAt}</strong></span>
+            </div>
+          </article>
+
+          <article class="bank-credit-panel">
+            <div class="bank-panel-heading">
+              <span><small>Faircroft Credit Index</small><strong>In-game credit profile</strong></span>
+              <em class="${credit.synced ? "is-live" : ""}">${credit.synced ? "CURRENT" : "PENDING"}</em>
+            </div>
+            <div class="bank-credit-overview">
+              <div class="bank-credit-gauge" style="--score-progress:${creditProgress}">
+                <div><strong>${creditScore}</strong><small>out of 850</small></div>
+              </div>
+              <div class="bank-credit-summary">
+                <small>Credit standing</small>
+                <strong>${creditRating}</strong>
+                <p>${credit.synced
+                  ? "Calculated from your established in-game financial reputation and synchronized Faircroft records."
+                  : "Your credit profile will appear after the next reputation synchronization."}</p>
+                <div class="bank-credit-range"><span>300</span><i><b style="width:${creditProgress}%"></b></i><span>850</span></div>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <section class="bank-information-row">
+          <article class="bank-account-health">
+            <header><div><p class="eyebrow">Account health</p><h2>Everything at a glance</h2></div><span>${data.balance_synced && credit.synced ? "All systems current" : "Update in progress"}</span></header>
+            <div>
+              <span><i class="${data.balance_synced ? "ok" : ""}"></i><small>Checking account</small><strong>${data.balance_synced ? "Connected to game bank" : "Awaiting authoritative balance"}</strong></span>
+              <span><i class="${credit.synced ? "ok" : ""}"></i><small>Credit monitoring</small><strong>${credit.synced ? "Faircroft Credit Index active" : "Reputation sync pending"}</strong></span>
+              <span><i class="${data.identity_id ? "ok" : ""}"></i><small>Identity connection</small><strong>${data.identity_id ? `Verified •••• ${identitySuffix}` : "Arma identity not linked"}</strong></span>
+            </div>
+          </article>
+
+          <aside class="bank-fcic-notice">
+            <div class="bank-fcic-seal">FCIC</div>
+            <div>
+              <p class="eyebrow">Official coverage notice</p>
+              <h2>Faircroft Citizens Insurance Corporation</h2>
+              <p>Eligible resident deposit accounts are protected under applicable Faircroft financial rules. FCIC coverage applies only to balances recognized by the authoritative in-game banking system.</p>
+              <small>Faircroft Financial is a roleplay financial service. The displayed balance and credit index represent in-game records and have no real-world monetary value.</small>
+            </div>
+          </aside>
+        </section>
+      </section>
+    </main>`;
+}
+
+function bindBankWorkspace() {
+  $("[data-close-bank]")?.addEventListener("click", async () => {
+    state.activeApp = null;
+    await loadSession();
+  });
+  $("[data-refresh-bank]")?.addEventListener("click", async () => {
+    await loadAppData("bank");
+    render();
+  });
+}
 
 function renderCash() {
   return `
@@ -3696,7 +4293,8 @@ function renderBusinessApply(data) {
         <div class="commerce-form-section">
           <div class="commerce-form-index"><b>02</b><span>Ownership</span></div>
           <div class="commerce-form-fields">
-            <label>Responsible owner<input name="owner_name" value="${escapeHtml(state.session.user.name)}" maxlength="120" required /></label>
+            ${characterSelectField(data.characters || [], "character_id", "Responsible owner character")}
+            <label>Responsible owner<input name="owner_name" value="${escapeHtml(data.active_character?.character_name || state.session.user.name)}" maxlength="120" required readonly /></label>
             <label>Operating location<input name="location" maxlength="160" placeholder="Street, district, or property" required /></label>
             <label>Declared startup capital<input name="startup_budget" type="number" min="0" step="0.01" required /></label>
             <label>Planned workforce<input name="planned_employees" type="number" min="1" max="250" value="1" required /></label>
@@ -4437,11 +5035,11 @@ function renderMyFaircroft() {
       <section class="myfc-action-ledger">
         <button data-myfc-tab="fines"><span>Fine balance</span><strong>${money(summary.outstanding_fines)}</strong><small>${dueFines.length} open item${dueFines.length === 1 ? "" : "s"}</small></button>
         <button data-myfc-tab="taxes"><span>Tax balance</span><strong>${money(summary.outstanding_taxes)}</strong><small>${taxAccounts.length} business account${taxAccounts.length === 1 ? "" : "s"}</small></button>
-        <button data-myfc-tab="history"><span>Payment queue</span><strong>${Number(summary.pending_payments || 0)}</strong><small>Awaiting verified game-bank settlement</small></button>
+        <button data-myfc-tab="history"><span>Payment records</span><strong>${Number(summary.verified_direct_payments || 0) + Number(summary.pending_payments || 0)}</strong><small>Verified receipts and settlement history</small></button>
       </section>
       <section class="myfc-notice">
         <span class="myfc-notice-mark">FC</span>
-        <div><strong>Verified payment process</strong><p>Payment requests lock the expected in-game balance. A clerk completes the transaction, and your record changes to paid only after the Arma bank sync confirms the exact balance.</p></div>
+        <div><strong>Direct in-game payment verification</strong><p>Pay the authorized staff member in game first. A developer will issue a four-digit receipt code only after confirming the currency was received. MyFaircroft records the receipt without changing the Arma database.</p></div>
       </section>
     `,
     "court-dates": renderMyFaircroftCourtDates(scheduledCases),
@@ -4497,6 +5095,8 @@ function renderMyFaircroftFines(cases) {
       <header><div><p class="eyebrow">Court obligations</p><h3>Fines & citations</h3></div><span>${cases.length} open</span></header>
       ${cases.map((item) => {
         const pending = paymentState(item);
+        const paidDirect = Number(item.direct_paid_amount || 0);
+        const remaining = Math.max(0, Number(item.fine_amount || 0) - paidDirect);
         const canContest = ["issued", "reviewed", "reduced"].includes(item.status) && !item.payment_batch_status;
         const canPay = item.status !== "contested" && !item.payment_batch_status;
         return `
@@ -4508,10 +5108,10 @@ function renderMyFaircroftFines(cases) {
               <small>Issued by ${escapeHtml(item.officer_name)}${item.judge_name ? ` / Assigned to ${escapeHtml(item.judge_name)}` : ""}</small>
               ${item.kind === "criminal" ? `<small class="sentence-line">RP sentencing standard: ${item.minimum_sentence_minutes}-${item.maximum_sentence_minutes} minutes if convicted</small>` : ""}
             </div>
-            <div class="myfc-ledger-money"><strong>${money(item.fine_amount)}</strong><span>${pending || escapeHtml(item.status)}</span></div>
+            <div class="myfc-ledger-money"><strong>${money(remaining)}</strong><span>${paidDirect > 0 ? `${money(paidDirect)} received · ` : ""}${pending || escapeHtml(item.status)}</span></div>
             <div class="myfc-ledger-actions">
               <button class="secondary" data-contest-case="${item.id}" ${canContest ? "" : "disabled"}>Contest</button>
-              <button class="primary" data-pay-case="${item.id}" ${canPay ? "" : "disabled"}>${pending || "Request payment"}</button>
+              <button class="primary" data-pay-case="${item.id}" data-balance="${remaining}" ${canPay ? "" : "disabled"}>${pending || "Make payment"}</button>
             </div>
           </article>
         `;
@@ -4598,9 +5198,16 @@ function bindMyFaircroft() {
     render();
   }));
   $$("[data-pay-case]").forEach((button) => button.addEventListener("click", async () => {
+    const balance = Number(button.dataset.balance || 0);
+    const amountInput = window.prompt(`Enter the payment amount. Remaining balance: ${money(balance)}`, balance.toFixed(2));
+    if (amountInput === null) return;
+    const amount = Number(amountInput);
+    if (!Number.isFinite(amount) || amount <= 0) { toast("Enter a valid payment amount"); return; }
+    const code = window.prompt("Enter the four-digit receipt code provided by a developer after your in-game payment was received.", "");
+    if (code === null) return;
     try {
-      const result = await api(`/api/my-faircroft/fines/${button.dataset.payCase}/pay`, { method: "POST" });
-      toast(`Payment request ${result.batch_number} sent`);
+      const result = await api(`/api/my-faircroft/fines/${button.dataset.payCase}/pay`, { method: "POST", body: { amount, code: String(code).trim() } });
+      toast(result.paid ? "Payment verified · citation paid in full" : `Payment verified · ${money(result.remaining)} remaining`);
       await loadAppData("my-faircroft");
       render();
     } catch (error) {
@@ -4645,17 +5252,21 @@ function bindMyFaircroft() {
 
 function renderCourt() {
   const data = state.cache.court || {};
+  if (data.resident_view) return renderResidentCourt(data);
   const active = data.active || [];
   const decided = data.decided || [];
   const stats = data.stats || {};
   const petitions = data.petitions || [];
-  const tabs = [["docket", "Active docket"], ["licenses", `Lawyer Licenses (${Number(stats.licenses || 0)})`], ["petitions", `Petitions (${Number(stats.petitions || 0)})`], ["decisions", `Completed docket (${Number(stats.decided || 0)})`], ["standards", "Sentencing"]];
-  if (!tabs.some(([id]) => id === state.courtTab)) state.courtTab = "docket";
-  if (!active.some((item) => Number(item.id) === Number(state.courtSelectedCaseId))) {
-    state.courtSelectedCaseId = active[0]?.id || null;
+  const traffic = active.filter((item) => item.kind === "citation");
+  const criminal = active.filter((item) => item.kind === "criminal");
+  const tabs = [["traffic", `Traffic Violations (${traffic.length})`], ["criminal", `Criminal Charges (${criminal.length})`], ["licenses", `Lawyer Licenses (${Number(stats.licenses || 0)})`], ["petitions", `Petitions (${Number(stats.petitions || 0)})`], ["decisions", `Completed docket (${Number(stats.decided || 0)})`], ["standards", "Sentencing"]];
+  if (!tabs.some(([id]) => id === state.courtTab)) state.courtTab = "traffic";
+  const visibleDocket = state.courtTab === "criminal" ? criminal : traffic;
+  if (["traffic", "criminal"].includes(state.courtTab) && !visibleDocket.some((item) => Number(item.id) === Number(state.courtSelectedCaseId))) {
+    state.courtSelectedCaseId = visibleDocket[0]?.id || null;
   }
-  const content = state.courtTab === "docket"
-    ? renderCourtDocket(active)
+  const content = ["traffic", "criminal"].includes(state.courtTab)
+    ? renderCourtDocket(visibleDocket)
     : state.courtTab === "licenses"
       ? renderCourtLicenses(data.license_applications || [])
     : state.courtTab === "petitions"
@@ -4680,6 +5291,84 @@ function renderCourt() {
       ${content}
     </div>
   `;
+}
+
+function renderResidentCourt(data) {
+  const active = data.active || [], decided = data.decided || [];
+  const traffic = active.filter((item) => item.kind === "citation");
+  const criminal = active.filter((item) => item.kind === "criminal");
+  const tabs = [["traffic", `Traffic Violations (${traffic.length})`], ["criminal", `Criminal Charges (${criminal.length})`], ["decisions", `Completed (${decided.length})`]];
+  if (!tabs.some(([id]) => id === state.courtTab)) state.courtTab = "traffic";
+  const records = state.courtTab === "criminal" ? criminal : state.courtTab === "decisions" ? decided : traffic;
+  return `<div class="court-app court-bench resident-court-view">
+    <header class="court-identity"><div class="court-seal">SF</div><div><p class="eyebrow">State of Faircroft judiciary</p><h3>Resident Court File</h3><p>Every citation and criminal filing assigned to your active character appears here. Payments remain available through MyFaircroft.</p></div><dl><div><dt>Traffic</dt><dd>${traffic.length}</dd></div><div><dt>Criminal</dt><dd>${criminal.length}</dd></div><div><dt>Completed</dt><dd>${decided.length}</dd></div></dl></header>
+    <nav class="court-bench-tabs">${tabs.map(([id,label]) => `<button class="${state.courtTab === id ? "active" : ""}" data-court-tab="${id}">${label}</button>`).join("")}</nav>
+    <section class="resident-court-ledger">${records.map((item) => `<article><div><span>${escapeHtml(item.kind === "criminal" ? "CRIMINAL CHARGE" : "TRAFFIC VIOLATION")}</span><h3>${escapeHtml(item.charge_code)} · ${escapeHtml(item.charge_title)}</h3><p>Case #${item.id} · ${escapeHtml(item.location || "Location not filed")} · Officer ${escapeHtml(item.officer_name || "Faircroft Law Enforcement")}</p></div><dl><div><dt>Status</dt><dd>${escapeHtml(humanLabel(item.status))}</dd></div><div><dt>Court date</dt><dd>${escapeHtml(item.court_date || "Pending")}</dd></div><div><dt>Fine</dt><dd>${money(item.fine_amount)}</dd></div></dl><footer><span>${escapeHtml(item.narrative || "No narrative filed")}</span>${!["paid","dismissed"].includes(item.status) ? `<button class="secondary" data-open-myfaircroft>Open MyFaircroft to pay</button>` : ""}</footer></article>`).join("") || `<div class="empty">No ${state.courtTab === "criminal" ? "criminal charges" : state.courtTab === "decisions" ? "completed court records" : "traffic violations"} for this character.</div>`}</section>
+  </div>`;
+}
+
+function changelogPatchLabel(entry, index) {
+  const title = String(entry?.title || "").replace(/^RP OS\s*/i, "").trim();
+  if (title && title !== String(entry?.version || "")) return title;
+  return index === 0 ? "Current release" : `Release patch ${String(index + 1).padStart(2, "0")}`;
+}
+
+function changelogCount(entry) {
+  return ["added", "changed", "fixed", "removed"].reduce((total, key) => total + (entry?.[key]?.length || 0), 0);
+}
+
+function renderChangelogReleaseGroup(label, items = []) {
+  if (!items.length) return "";
+  const meta = {
+    Added: ["+", "New capabilities introduced in this patch"],
+    Changed: ["~", "Existing systems revised or expanded"],
+    Fixed: ["âœ“", "Reliability and experience corrections"],
+    Removed: ["âˆ’", "Retired or replaced functionality"],
+  }[label] || ["â€¢", "Release notes"];
+  return `<section class="release-change-section ${label.toLowerCase()}"><header><span>${meta[0]}</span><div><p>${escapeHtml(label.toUpperCase())}</p><h2>${escapeHtml(meta[1])}</h2></div><strong>${items.length}</strong></header><div class="release-change-ledger">${items.map((item, index) => `<article><span>${String(index + 1).padStart(2, "0")}</span><p>${escapeHtml(item)}</p></article>`).join("")}</div></section>`;
+}
+
+function renderChangelogWorkspace() {
+  const data = state.cache.changelog || {};
+  const entries = data.entries || [];
+  if (!entries.length) return `<main class="release-workspace"><div class="empty">No release archive is currently available.</div></main>`;
+  state.changelogEntryIndex = Math.max(0, Math.min(Number(state.changelogEntryIndex || 0), entries.length - 1));
+  const selected = entries[state.changelogEntryIndex];
+  const count = changelogCount(selected);
+  const currentVersion = String(data.version || selected.version || "live");
+  return `<main class="release-workspace">
+    <header class="release-topbar">
+      <div class="release-brand"><span>FC</span><div><p>FAIRCROFT RP / RELEASE ARCHIVE</p><h1>System Changelog</h1></div></div>
+      <div class="release-top-actions"><span><i></i>READ-ONLY UPDATE RECORD</span><button class="secondary" type="button" data-refresh-changelog>Refresh archive</button><button class="primary" type="button" data-close-changelog>Return to RP OS</button></div>
+    </header>
+    <div class="release-layout">
+      <aside class="release-sidebar">
+        <div class="release-current"><small>CURRENT BUILD</small><strong>RP OS ${escapeHtml(currentVersion)}</strong><span>${entries.length} published patch record${entries.length === 1 ? "" : "s"}</span></div>
+        <div class="release-nav-heading"><span>Update navigator</span><small>Newest first</small></div>
+        <nav>${entries.map((entry, index) => `<button class="${index === state.changelogEntryIndex ? "active" : ""}" data-changelog-entry="${index}"><i></i><div><small>${escapeHtml(entry.date || "Release date pending")}</small><strong>${escapeHtml(entry.version || "Update")}</strong><span>${escapeHtml(changelogPatchLabel(entry, index))}</span></div><em>${changelogCount(entry)}</em></button>`).join("")}</nav>
+        <div class="release-integrity"><span>${iconSvg.lock}</span><div><strong>Deployment controlled</strong><p>Owners and administrators cannot edit this archive in RP OS. Notes change only through a published software update.</p></div></div>
+      </aside>
+      <section class="release-main">
+        <div class="release-hero">
+          <div><p>PATCH ${String(state.changelogEntryIndex + 1).padStart(2, "0")} / ${String(entries.length).padStart(2, "0")}</p><h2>${escapeHtml(selected.title || `RP OS ${selected.version}`)}</h2><span>Published ${escapeHtml(selected.date || "date unavailable")} Â· ${count} documented change${count === 1 ? "" : "s"}</span></div>
+          <div class="release-version-mark"><small>VERSION</small><strong>${escapeHtml(selected.version || currentVersion)}</strong><i>${state.changelogEntryIndex === 0 ? "LATEST" : "ARCHIVED"}</i></div>
+        </div>
+        <div class="release-summary-strip"><div><span>Added</span><strong>${selected.added?.length || 0}</strong></div><div><span>Changed</span><strong>${selected.changed?.length || 0}</strong></div><div><span>Fixed</span><strong>${selected.fixed?.length || 0}</strong></div><div><span>Removed</span><strong>${selected.removed?.length || 0}</strong></div></div>
+        <div class="release-sections">${renderChangelogReleaseGroup("Added", selected.added)}${renderChangelogReleaseGroup("Changed", selected.changed)}${renderChangelogReleaseGroup("Fixed", selected.fixed)}${renderChangelogReleaseGroup("Removed", selected.removed)}</div>
+        <footer class="release-footer"><div><span>END OF PATCH RECORD</span><strong>${escapeHtml(selected.version || currentVersion)} / ${escapeHtml(selected.date || "")}</strong></div><p>This record is generated from the deployed Faircroft update package.</p></footer>
+      </section>
+    </div>
+  </main>`;
+}
+
+function bindChangelogWorkspace() {
+  $$("[data-changelog-entry]").forEach(button => button.addEventListener("click", () => {
+    state.changelogEntryIndex = Number(button.dataset.changelogEntry || 0);
+    render();
+    document.querySelector(".release-main")?.scrollTo({ top: 0, behavior: "smooth" });
+  }));
+  $("[data-refresh-changelog]")?.addEventListener("click", async () => { await loadAppData("changelog"); render(); });
+  $("[data-close-changelog]")?.addEventListener("click", async () => { state.activeApp = null; await loadSession(); });
 }
 
 function renderCourtLicenses(applications) {
@@ -4791,7 +5480,7 @@ function renderCourtCaseFile(item) {
         <span class="pill ${item.status === "contested" ? "amber" : "red"}">${escapeHtml(item.status)}</span>
       </header>
       <dl class="court-file-meta">
-        <div><dt>Defendant</dt><dd>${escapeHtml(item.civ_name)} <small>CIV ${escapeHtml(item.civ_number)}</small></dd></div>
+        <div><dt>Defendant</dt><dd>${escapeHtml(item.civ_character_name || item.civ_name)} <small>${item.civ_character_name ? `${escapeHtml(item.civ_name)} · ` : ""}CIV ${escapeHtml(item.civ_number)}</small></dd></div>
         <div><dt>Filing officer</dt><dd>${escapeHtml(item.officer_name)}</dd></div>
         <div><dt>Hearing date</dt><dd>${escapeHtml(item.court_date || "Pending")}</dd></div>
         <div><dt>Matter</dt><dd>${criminal ? "Criminal" : "Citation"} / ${escapeHtml(item.severity)}</dd></div>
@@ -4856,6 +5545,12 @@ function bindCourt() {
   }));
   $$("[data-court-select]").forEach((button) => button.addEventListener("click", () => {
     state.courtSelectedCaseId = Number(button.dataset.courtSelect);
+    render();
+  }));
+  $$("[data-open-myfaircroft]").forEach((button) => button.addEventListener("click", async () => {
+    state.activeApp = "my-faircroft";
+    state.myFaircroftTab = "fines";
+    await loadAppData("my-faircroft");
     render();
   }));
   $$("[data-court-disposition]").forEach((select) => select.addEventListener("change", () => {
@@ -5100,6 +5795,7 @@ function renderMdtWorkspace() {
         </div>
       </header>
       ${renderMdtQuickRail()}
+      ${state.session?.system?.ice_restrict_local_data ? `<div class="mdt-immigration-ordinance"><strong>FAIRCROFT LOCAL ORDINANCE</strong><span>Local law enforcement involvement in federal immigration operations is restricted. Continue ordinary NCIC and public-safety duties; immigration enforcement and federal case activity remain with authorized ICE personnel.</span></div>` : ""}
       <div class="mdt-layout">
         <aside class="mdt-nav ${state.mdtNavOpen ? "open" : ""}">
           <div class="mdt-drawer-head"><strong>MDT Menu</strong><button class="icon-action" data-close-mdt-drawers aria-label="Close">x</button></div>
@@ -6469,6 +7165,7 @@ function renderCadReports() {
               <p class="cad-report-narrative">${escapeHtml(report.narrative)}</p>
               ${report.actions_taken ? `<div class="cad-report-note"><strong>Actions taken</strong><p>${escapeHtml(report.actions_taken)}</p></div>` : ""}
               ${report.evidence_links ? `<div class="cad-report-note"><strong>Evidence / clips</strong><p>${escapeHtml(report.evidence_links)}</p></div>` : ""}
+              ${data.can_admin_delete ? `<div class="cad-report-admin-actions"><button class="danger" type="button" data-delete-cad-report="${report.id}" data-report-number="${escapeHtml(report.report_number)}">Delete report</button></div>` : ""}
             </article>
           `).join("") || `<div class="empty">No after-call reports filed yet</div>`}
         </div>
@@ -6689,6 +7386,8 @@ function renderMdtProfileModal() {
               </div>
               <div class="profile-grid compact">
                 ${canViewAccountEmail && person.email ? `<div class="metric"><span>Email</span><strong>${escapeHtml(person.email)}</strong></div>` : ""}
+                <div class="metric citizenship-status"><span>Faircroft Citizenship</span><strong class="${String(person.citizenship_status).toLowerCase() === "valid citizen" ? "valid" : "warning"}">${escapeHtml(person.citizenship_status || "Undocumented")}</strong></div>
+                <div class="metric"><span>Passport</span><strong>${escapeHtml(person.passport_number || "Not issued")}</strong></div>
                 <div class="metric"><span>Roles</span><strong>${escapeHtml((person.roles || []).join(", ") || "civ")}</strong></div>
                 <div class="metric"><span>Car Entry</span><strong>${escapeHtml(person.car_entry_code || "Not filed")}</strong></div>
                 <div class="metric"><span>Bookings</span><strong>${bookings.length}</strong></div>
@@ -6766,6 +7465,10 @@ function renderTicketWriter() {
                   <option value="">Select civilian record</option>
                   ${civilians.map((person) => `<option value="${person.id}" data-name="${escapeHtml(person.name)}"${selectedAttr(person.id, state.mdtSelectedCiv)}>${escapeHtml(person.name)} — CIV ${escapeHtml(person.civ_number || "pending")} — ${escapeHtml(person.license_status || "No license")}</option>`).join("")}
                 </select></label>
+                <label>Character identity<select name="character_id" required data-issue-character>
+                  <option value="">Select civilian first</option>
+                  ${civilians.flatMap((person) => (person.characters || []).map((character) => `<option value="${character.id}" data-civ="${person.id}" ${Number(person.id) === Number(state.mdtSelectedCiv) && character.is_active ? "selected" : ""}>${escapeHtml(character.character_name)}</option>`)).join("")}
+                </select></label>
                 <label>Court appearance<input name="court_date" type="date" value="${defaultCourt}" /></label>
               </div>
             </section>
@@ -6832,6 +7535,10 @@ function renderTicketWriter() {
         <label>${criminalMode ? "Subject civilian" : "Civilian record"}<select name="civ_id" required data-issue-subject>
           <option value="">Select civilian record</option>
           ${civilians.map((person) => `<option value="${person.id}" data-name="${escapeHtml(person.name)}"${selectedAttr(person.id, state.mdtSelectedCiv)}>${escapeHtml(person.name)} - CIV ${escapeHtml(person.civ_number || "pending")} - ${escapeHtml(person.license_status || "No license")}</option>`).join("")}
+        </select></label>
+        <label>Character identity<select name="character_id" required data-issue-character>
+          <option value="">Select civilian first</option>
+          ${civilians.flatMap((person) => (person.characters || []).map((character) => `<option value="${character.id}" data-civ="${person.id}" ${Number(person.id) === Number(state.mdtSelectedCiv) && character.is_active ? "selected" : ""}>${escapeHtml(character.character_name)}</option>`)).join("")}
         </select></label>
         <label>Court date<input name="court_date" type="date" value="${defaultCourt}" /></label>
       </div>
@@ -7910,6 +8617,24 @@ function bindMdtFinders() {
 
 function bindMdt() {
   bindMdtFinders();
+  const issueSubject = $("[data-issue-subject]");
+  const issueCharacter = $("[data-issue-character]");
+  const syncIssueCharacters = () => {
+    if (!issueSubject || !issueCharacter) return;
+    const civId = String(issueSubject.value || "");
+    let firstVisible = null;
+    Array.from(issueCharacter.options).forEach((option, index) => {
+      if (index === 0) return;
+      const visible = String(option.dataset.civ || "") === civId;
+      option.hidden = !visible;
+      option.disabled = !visible;
+      if (visible && !firstVisible) firstVisible = option;
+    });
+    const selectedStillValid = issueCharacter.selectedOptions[0] && !issueCharacter.selectedOptions[0].disabled;
+    if (!selectedStillValid) issueCharacter.value = firstVisible?.value || "";
+  };
+  issueSubject?.addEventListener("change", syncIssueCharacters);
+  syncIssueCharacters();
   $$("[data-mdt-tab]").forEach((button) => button.addEventListener("click", () => {
     state.mdtTab = button.dataset.mdtTab;
     if (button.dataset.cidOpenCase) {
@@ -8810,10 +9535,13 @@ function renderDevWorkspace() {
     campaigns: ["Active Campaigns", "Schedule banners, events, promotions, and entrance bulletins"],
     settlement: ["Settlement Operations", "Suspend licenses and process controlled fine and tax batches"],
     "dmv-settings": ["DMV Settings", "Manage driver credentials, endorsements, and restoration fees"],
+    "court-settings": ["Court Settings", "Secure court-record maintenance and audited resets"],
+    "ice-settings": ["ICE Settings", "Control federal and local immigration information boundaries"],
     "admin-2fa": ["Admin 2FA", "Issue single-use authorization for permanent CAD and Arma enforcement"],
     autopilot: ["Auto Pilot", "Control automated civilian account verification"],
     "system-update": ["System Update", "Publish and control Faircroft limited-service mode"],
     "fnn-settings": ["FNN Settings", "Control newsroom publishing and Press Pass capacity"],
+    "market-settings": ["Stock Market Settings", "Operate Ravenhood pricing, settlement receipts, fees, and RP events"],
     audit: ["Activity Log", "Chronological record of staff actions"],
     settings: ["App Visibility", "Control which application icons appear for users"],
   }[state.devTab] || ["Staff Operations", "Faircroft administrative console"];
@@ -8821,7 +9549,7 @@ function renderDevWorkspace() {
     <aside class="dev-sidebar">
       <div class="dev-brand"><img class="dev-emblem" src="/static/brand/faircroft-emblem.webp" alt="" /><div><strong>Faircroft RP</strong><small>Staff Operations</small></div></div>
       <p class="dev-nav-label">Operations index</p>
-      <nav>${[["dashboard","Command Center"],["intelligence","Game Intelligence"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["campaigns","Active Campaigns"],["settlement","Settlement"],["dmv-settings","DMV Settings"],["admin-2fa","Admin 2FA"],["autopilot","Auto Pilot"],["system-update","System Update"],["fnn-settings","FNN Settings"],["audit","Activity Log"],["settings","Settings"]].map(([id,label], index) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><small>${String(index + 1).padStart(2, "0")}</small><span>${label}</span><i></i></button>`).join("")}</nav>
+      <nav>${[["dashboard","Command Center"],["intelligence","Game Intelligence"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["campaigns","Active Campaigns"],["settlement","Settlement"],["market-settings","Stock Market"],["dmv-settings","DMV Settings"],["court-settings","Court Settings"],["ice-settings","ICE Settings"],["admin-2fa","Admin 2FA"],["autopilot","Auto Pilot"],["system-update","System Update"],["fnn-settings","FNN Settings"],["audit","Activity Log"],["settings","Settings"]].map(([id,label], index) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><small>${String(index + 1).padStart(2, "0")}</small><span>${label}</span><i></i></button>`).join("")}</nav>
       <div class="dev-sidebar-footer"><span class="dev-access-dot"></span><div><strong>Authorized Staff</strong><small>${escapeHtml(state.session?.user?.name || "Staff member")}</small></div></div>
     </aside>
     <main class="dev-main">
@@ -8913,6 +9641,7 @@ function renderDevDmvSettings(dmv) {
   const stats = dmv.stats || {};
   const primaryClasses = classes.filter((item) => item.type === "license" && item.active);
   const endorsements = classes.filter((item) => item.type === "endorsement" && item.active);
+  const vehicleSync = dmv.vehicle_sync || {};
   return `<div class="stack dev-dmv-settings">
     <div class="dev-view-intro"><div><span>FAIRCROFT MOTOR VEHICLE AUTHORITY</span><h2>Credential administration</h2><p>Suspend, revoke, expire, restore, classify, and endorse driver credentials. Every action is audited and delivered to the resident.</p></div><strong>${Number(stats.total || 0)} RECORDS</strong></div>
     <div class="dev-metrics dmv-admin-metrics">
@@ -8921,6 +9650,19 @@ function renderDevDmvSettings(dmv) {
       <div class="dev-metric red-tone"><span>Revoked</span><strong>${Number(stats.revoked || 0)}</strong><small>Withdrawn credentials</small></div>
       <div class="dev-metric"><span>Expired</span><strong>${Number(stats.expired || 0)}</strong><small>Renewal required</small></div>
     </div>
+    <section class="dev-card dmv-vehicle-source-reset">
+      <div>
+        <span>SHS VEHICLE DATABASE MIGRATION</span><h2>Imported vehicle source</h2>
+        <p>Clear vehicle records mirrored from the previous game server, then rebuild the DMV import source from the current SHS FCRPMUSSALO Vehicles database.</p>
+        <dl><div><dt>Imported DMV files</dt><dd>${Number(vehicleSync.imported_dmv_records || 0)}</dd></div><div><dt>Cached source records</dt><dd>${Number(vehicleSync.cached_source_records || 0)}</dd></div><div><dt>Automatic rescan</dt><dd>Within ${Number(vehicleSync.sync_interval_seconds || 120)} seconds</dd></div></dl>
+        <small>Manual Faircroft DMV registrations, driver licenses, insurance on manual vehicles, account links, and court records are preserved. Confirm Railway SFTP points to the new SHS database before running this reset.</small>
+      </div>
+      <form id="devDmvVehicleResetForm">
+        <label>Type <strong>CLEAR IMPORTED GAME VEHICLES</strong> to continue<input name="confirmation" autocomplete="off" spellcheck="false" required /></label>
+        <button class="danger" type="submit">Clear old imported vehicles</button>
+        <output data-dmv-vehicle-reset-status>Vehicle mirror ready</output>
+      </form>
+    </section>
     <section class="dev-card dmv-class-control">
       <div class="dev-card-header"><div><span>CREDENTIAL CATALOG</span><h2>Classes & endorsements</h2><p>Create the classifications that may be assigned to resident licenses.</p></div><button class="secondary" type="button" data-dmv-add-class>Add classification</button></div>
       <form id="devDmvClassesForm"><div class="dmv-class-ledger" data-dmv-class-list>${classes.map((item) => `<div data-dmv-class-row><input name="name" value="${escapeHtml(item.name)}" maxlength="60" required /><select name="type"><option value="license" ${item.type === "license" ? "selected" : ""}>Primary class</option><option value="endorsement" ${item.type === "endorsement" ? "selected" : ""}>Endorsement</option></select><label><input name="active" type="checkbox" ${item.active ? "checked" : ""} /> Active</label><button class="danger" type="button" data-dmv-remove-class>Remove</button></div>`).join("")}</div><button class="primary" type="submit">Save credential catalog</button></form>
@@ -8950,14 +9692,54 @@ function renderDevDmvSettings(dmv) {
   </div>`;
 }
 
+function renderDevIceSettings(ice) {
+  const agents = ice.agents || [];
+  return `<div class="stack dev-ice-settings">
+    <div class="dev-view-intro"><div><span>FAIRCROFT FEDERAL INFORMATION POLICY</span><h2>ICE interagency controls</h2><p>Control whether federal immigration personnel may see local reports, BOLOs, and warrants. NCIC identity, citizenship, DMV, and vehicle safety checks remain available.</p></div><strong>${ice.restrict_local_data ? "RESTRICTED" : "SHARED"}</strong></div>
+    <section class="dev-card ice-policy-card"><div><small>LOCAL ORDINANCE</small><h2>Local involvement restriction</h2><p>${escapeHtml(ice.ordinance_notice || "")}</p></div><form id="devIceSettingsForm"><label class="dev-experience-section"><span><b>INFORMATION BOUNDARY</b><strong>Restrict local reports, BOLOs, and warrants from ICE MDT</strong></span><input type="checkbox" name="restrict_local_data" ${ice.restrict_local_data ? "checked" : ""} /></label><button class="primary">Save federal information policy</button></form></section>
+    <section class="dev-card"><div class="dev-card-header"><div><span>FEDERAL PERSONNEL</span><h2>ICE credential holders</h2></div><strong>${agents.length}</strong></div><div class="ice-agent-ledger">${agents.map((agent) => `<article><div><strong>${escapeHtml(agent.name)}</strong><small>CIV ${escapeHtml(agent.civ_number || "pending")}</small></div><span>${escapeHtml((agent.roles || []).map(humanLabel).join(", "))}</span></article>`).join("") || `<div class="empty">No ICE Agent or ICE Commander roles assigned.</div>`}</div></section>
+  </div>`;
+}
+
+function renderDevCourtSettings(court) {
+  const citationCount = Number(court.citation_count || 0);
+  const criminalCount = Number(court.criminal_count || 0);
+  return `<div class="stack dev-court-settings">
+    <div class="dev-view-intro"><div><span>STATE OF FAIRCROFT JUDICIAL DATA CONTROL</span><h2>Court record maintenance</h2><p>Controlled removal of court records and their dependent petitions, settlement items, and booking packets. Every reset is permanently recorded in the staff audit log.</p></div><strong>DEVELOPER ONLY</strong></div>
+    <div class="dev-grid-2">
+      <section class="dev-card court-wipe-control"><div><span>CIVIL & TRAFFIC</span><h2>Citation records</h2><strong>${citationCount}</strong><p>Deletes every citation case and its connected workflow records. Criminal cases remain intact.</p></div><form data-court-wipe="citation"><label>Typed confirmation<input name="confirmation" autocomplete="off" placeholder="WIPE CITATIONS" required /></label><button class="danger" ${citationCount ? "" : "disabled"}>Wipe citations</button></form></section>
+      <section class="dev-card court-wipe-control critical"><div><span>CRIMINAL DOCKET</span><h2>Criminal charges</h2><strong>${criminalCount}</strong><p>Deletes every criminal case and connected booking, petition, and settlement records. Citations remain intact.</p></div><form data-court-wipe="criminal"><label>Typed confirmation<input name="confirmation" autocomplete="off" placeholder="WIPE CRIMINAL CHARGES" required /></label><button class="danger" ${criminalCount ? "" : "disabled"}>Wipe criminal charges</button></form></section>
+    </div>
+  </div>`;
+}
+
+function renderDevMarketSettings(market, users) {
+  const listings = market.securities || [], codes = market.codes || [], programs = market.programs || [];
+  const tickerOptions = [`<option value="ALL">Entire market</option>`, ...listings.map(x => `<option value="${escapeHtml(x.ticker)}">${escapeHtml(x.ticker)} Â· ${escapeHtml(x.name)}</option>`)].join("");
+  return `<div class="stack dev-market-view">
+    <div class="dev-view-intro"><div><span>RAVENHOOD EXCHANGE CONTROL</span><h2>Market operations</h2><p>Control the fictional Faircroft market, authorize in-game cash handoffs, and stage RP price events.</p></div><strong class="${market.market_open ? "green" : "red"}">${market.market_open ? "MARKET OPEN" : "MARKET CLOSED"}</strong></div>
+    <section class="market-dev-terminal"><header><span></span><b>RAVENHOOD / MARKET CONTROL LOG</b><em>LIVE SIMULATION</em></header><div>${(market.events || []).slice(0,8).map(x => `<p><time>${escapeHtml(String(x.created_at || "").slice(11,19))}</time><strong>${escapeHtml(x.title)}</strong><span>${escapeHtml(x.detail)}</span></p>`).join("") || `<p><time>--:--:--</time><strong>Exchange ready</strong><span>No market events have been staged.</span></p>`}</div></section>
+    <div class="dev-grid-2">
+      <section class="dev-card"><div class="dev-card-header"><div><span>EXCHANGE POLICY</span><h2>Market and fee controls</h2></div><strong>${money(market.holding_balance || 0)} HELD</strong></div><form id="devMarketSettingsForm" class="form-grid"><label class="dev-certify wide"><input name="market_open" type="checkbox" ${market.market_open ? "checked" : ""}/> Market open for resident trading</label><label>Trade fee %<input name="trade_fee_percent" type="number" min="0" max="10" step="0.01" value="${Number(market.trade_fee_percent || 0)}"/></label><label>Transfer fee %<input name="transfer_fee_percent" type="number" min="0" max="25" step="0.01" value="${Number(market.transfer_fee_percent || 0)}"/></label><label class="dev-certify wide"><input name="ai_enabled" type="checkbox" ${market.ai_enabled ? "checked" : ""}/> Allow Gemini market briefing support</label><button class="primary wide">Save exchange policy</button></form><p class="muted small">Collected trade and transfer fees are displayed above and remain outside the active RP economy.</p></section>
+      <section class="dev-card"><div class="dev-card-header"><div><span>PRICE PROGRAM</span><h2>Schedule movement</h2></div><strong>1.00 EXAMPLE</strong></div><form id="devMarketProgramForm" class="form-grid"><label>Security<select name="ticker">${tickerOptions}</select></label><label>RP event<input name="event_name" maxlength="100" required placeholder="Port expansion announcement"/></label><label>Percentage change<input name="percent_change" type="number" min="-95" max="500" step="0.01" required/><small data-market-example>$1.00 becomes $1.00</small></label><label>Duration in minutes<input name="duration_minutes" type="number" min="1" max="10080" value="60" required/></label><button class="primary wide">Launch price program</button></form><div class="market-presets"><button data-market-preset="market_crash">Market crash</button><button data-market-preset="flash_crash">Flash crash</button><button data-market-preset="market_rally">Broad rally</button><button data-market-preset="random_skyrocket">Random skyrocket</button></div></section>
+    </div>
+    <section class="dev-card market-code-authority"><div class="dev-card-header"><div><span>IN-GAME SETTLEMENT RECEIPTS</span><h2>Deposit and withdrawal PINs</h2><p>A PIN verifies a completed roleplay handoff. It never edits the Arma database.</p></div><span class="pill red">NEVER ISSUE EARLY</span></div><div class="dev-grid-2"><form id="devMarketCodeForm" class="form-grid"><label>Resident<select name="target_user_id" required><option value="">Select resident</option>${devUserOptions(users)}</select></label><label>Direction<select name="transaction_type"><option value="deposit">Deposit into Ravenhood</option><option value="withdrawal">Withdraw from Ravenhood</option></select></label><label>Exact amount<input name="amount" type="number" min="0.01" step="0.01" required/></label><label>Expires after<input name="expiry_minutes" type="number" min="5" max="120" value="30"/></label><label class="wide">Required confirmation<input name="confirmation" required placeholder="MONEY RECEIVED or WITHDRAWAL APPROVED"/><small>For a deposit, receive the in-game money first. For a withdrawal, confirm the payout with the resident first.</small></label><button class="primary wide">Issue four-digit receipt</button></form><div>${state.generatedMarketCode ? `<div class="dev-generated-code"><span>${escapeHtml(humanLabel(state.generatedMarketCode.transaction_type))} receipt Â· ${money(state.generatedMarketCode.amount)}</span><strong>${escapeHtml(state.generatedMarketCode.code)}</strong><small>Expires ${new Date(state.generatedMarketCode.expires_at).toLocaleString()}</small></div>` : `<div class="empty">No Ravenhood receipt generated this session</div>`}<div class="dev-code-ledger">${codes.slice(0,30).map(x => `<div><code>â€¢â€¢${escapeHtml(x.code_hint)}</code><span>${escapeHtml(x.target_name)} Â· ${money(x.amount)}<small>Issued by ${escapeHtml(x.created_by_name)}${x.used_by_name ? ` Â· redeemed by ${escapeHtml(x.used_by_name)}` : " Â· not redeemed"}</small></span><strong class="${!x.used_at && !x.revoked_at && new Date(x.expires_at)>new Date() ? "available" : ""}">${x.used_at ? "Redeemed" : x.revoked_at ? "Revoked" : new Date(x.expires_at)<=new Date() ? "Expired" : "Available"}</strong></div>`).join("") || `<div class="empty">No receipts</div>`}</div></div></div></section>
+    <div class="dev-grid-2"><section class="dev-card"><div class="dev-card-header"><div><span>ACTIVE AUTOMATION</span><h2>Price programs</h2></div><strong>${programs.filter(x=>x.status==="active").length} ACTIVE</strong></div><div class="dev-detail-list">${programs.map(x => `<div><strong>${escapeHtml(x.ticker || "ALL")} Â· ${escapeHtml(x.event_name)}</strong><small>${Number(x.percent_change)>=0?"+":""}${Number(x.percent_change).toFixed(2)}% over ${Number(x.duration_minutes)} minutes Â· ${escapeHtml(x.status)}</small></div>`).join("") || `<div class="empty">No programs</div>`}</div></section><section class="dev-card"><div class="dev-card-header"><div><span>GEMINI ANALYST</span><h2>Generate RP market briefing</h2><p>Gemini reads current fictional listings and your scenario, then recommends optional programs. Nothing is applied automatically.</p></div><span class="pill ${market.ai_enabled ? "green" : ""}">${market.ai_enabled ? "enabled" : "disabled"}</span></div><form id="devMarketAiForm" class="form-grid"><label class="wide">RP scenario or market inputs<textarea name="context" maxlength="2000" required placeholder="New mining permit, severe storm, major public contract, political uncertaintyâ€¦"></textarea></label><button class="primary wide" ${market.ai_enabled ? "" : "disabled"}>Generate analyst briefing</button></form>${state.marketAiBriefing ? `<pre class="market-ai-briefing">${escapeHtml(state.marketAiBriefing)}</pre>` : ""}</section></div>
+  </div>`;
+}
+
 function renderDevTools() {
   const data = state.cache["dev-tools"] || {};
   const users = data.users || [], sanctions = data.sanctions || [], warnings = data.warnings || [], logs = data.audit_logs || [], codes = data.unlink_codes || [];
   const metrics = devMetrics(data, warnings);
   if (state.devTab === "anticheat") return renderDevAntiCheat(data.anti_cheat || {});
   if (state.devTab === "dmv-settings") return renderDevDmvSettings(data.dmv_settings || {});
+  if (state.devTab === "court-settings") return renderDevCourtSettings(data.court_settings || {});
+  if (state.devTab === "market-settings") return renderDevMarketSettings(data.market_settings || {}, users);
+  if (state.devTab === "ice-settings") return renderDevIceSettings(data.ice_settings || {});
   if (state.devTab === "admin-2fa") {
     const adminCodes = data.admin_2fa_codes || [];
+    const paymentCodes = data.myfaircroft_payment_codes || [];
     return `<div class="stack dev-ops-view dev-admin-2fa-view">
       <div class="dev-view-intro"><div><span>PRIVILEGED ADMIN AUTHORIZATION</span><h2>Admin 2FA</h2><p>Issue a single-use code for a permanent CAD ban or any Arma ban. CAD timeouts, suspensions, and temporary bans do not consume a code.</p></div><strong>${adminCodes.filter((x) => x.uses_remaining && !x.revoked_at && new Date(x.expires_at) > new Date()).length} ACTIVE</strong></div>
       <div class="dev-grid-2">
@@ -8966,6 +9748,22 @@ function renderDevTools() {
         </section>
         <section class="dev-card dev-record-panel"><div class="dev-card-header"><div><span>AUTHORIZATION LEDGER</span><h2>Recent codes</h2></div><strong>${adminCodes.length}</strong></div><div class="dev-code-ledger">${adminCodes.slice(0,30).map((x) => `<div><code>••••-${escapeHtml(x.code_hint)}</code><span>${escapeHtml(x.created_by_name)}${x.used_by_name ? ` → ${escapeHtml(x.used_by_name)}` : ""}</span><strong class="${x.uses_remaining ? "available" : ""}">${x.revoked_at ? "Revoked" : x.uses_remaining ? "Available" : "Consumed"}</strong></div>`).join("") || `<div class="empty">No Admin 2FA codes issued</div>`}</div></section>
       </div>
+      <section class="dev-card myfc-code-authority">
+        <div class="dev-card-header"><div><span>MYFAIRCROFT RECEIPT VERIFICATION</span><h2>Direct-payment codes</h2><p>Issue a resident-specific four-digit receipt only after the in-game currency has been received. This verifies payment in RP OS and never changes the Arma database.</p></div><span class="pill red">DO NOT ISSUE BEFORE PAYMENT</span></div>
+        <div class="dev-grid-2">
+          <form id="myFaircroftPaymentCodeForm" class="form-grid">
+            <label>Resident<select name="target_user_id" required><option value="">Select resident</option>${devUserOptions(users)}</select></label>
+            <label>Payment received<input name="amount" type="number" min="0.01" max="10000000" step="0.01" required /></label>
+            <label>Code expires after<input name="expiry_minutes" type="number" min="5" max="120" value="30" required /><small>Minutes</small></label>
+            <label class="dev-certify wide"><input type="checkbox" required /> I confirm the in-game currency was received before issuing this code.</label>
+            <button class="primary wide">Issue four-digit receipt code</button>
+          </form>
+          <div>
+            ${state.generatedMyFaircroftCode ? `<div class="dev-generated-code"><span>Give only to ${escapeHtml(state.generatedMyFaircroftCode.target_name)}</span><strong>${escapeHtml(state.generatedMyFaircroftCode.code)}</strong><small>${money(state.generatedMyFaircroftCode.amount)} · expires ${new Date(state.generatedMyFaircroftCode.expires_at).toLocaleString()}</small></div>` : `<div class="empty">No code generated in this session</div>`}
+            <div class="dev-code-ledger myfc-payment-code-ledger">${paymentCodes.map((x) => `<div><code>••${escapeHtml(x.code_hint)}</code><span>${escapeHtml(x.target_user_name)} · ${money(x.authorized_amount)}<small>Issued by ${escapeHtml(x.created_by_name)}${x.used_by_name ? ` · redeemed by ${escapeHtml(x.used_by_name)}${x.citation_id ? ` for case #${x.citation_id}` : ""}` : " · not redeemed"}</small></span><strong class="${!x.used_at && !x.revoked_at && new Date(x.expires_at) > new Date() ? "available" : ""}">${x.used_at ? "Redeemed" : x.revoked_at ? "Revoked" : new Date(x.expires_at) <= new Date() ? "Expired" : "Available"}</strong></div>`).join("") || `<div class="empty">No MyFaircroft receipt codes issued</div>`}</div>
+          </div>
+        </div>
+      </section>
     </div>`;
   }
   if (state.devTab === "intelligence") return renderDevGameIntelligence(data);
@@ -9070,7 +9868,11 @@ function renderDevTools() {
           <div class="dev-metric"><span>Capacity</span><strong>${Number(fnn.press_pass_limit || 0)}</strong><small>Maximum active passes</small></div>
           <div class="dev-metric green-tone"><span>Available</span><strong>${remaining}</strong><small>Automatic passes remaining</small></div>
         </div>
-        <form id="devFnnSettingsForm" class="dev-fnn-limit-form"><label>Maximum Press Passes<input name="press_pass_limit" type="number" min="0" max="500" step="1" value="${Number(fnn.press_pass_limit || 0)}" required /><small>Set 0 to pause automatic Press Pass issuance.</small></label><button class="primary" type="submit">Save FNN capacity</button></form>
+        <form id="devFnnSettingsForm" class="dev-fnn-settings-form">
+          <label>Maximum Press Passes<input name="press_pass_limit" type="number" min="0" max="500" step="1" value="${Number(fnn.press_pass_limit || 0)}" required /><small>Set 0 to pause automatic Press Pass issuance.</small></label>
+          <fieldset class="fnn-autopilot-fieldset"><legend>News Cycle Autopilot</legend><label class="fnn-autopilot-toggle"><span><strong>Automatic editions</strong><small>Generate and publish at both scheduled newsroom cycles.</small></span><input name="autopilot_enabled" type="checkbox" ${fnn.autopilot_enabled ? "checked" : ""} /></label><div><label>Morning edition<input name="morning_time" type="time" value="${escapeHtml(fnn.morning_time || "05:00")}" required /></label><label>Evening edition<input name="evening_time" type="time" value="${escapeHtml(fnn.evening_time || "17:00")}" required /></label><label>Newsroom timezone<input name="timezone" value="${escapeHtml(fnn.timezone || "America/New_York")}" required /></label></div><p>Default cycle: 5:00 AM and 5:00 PM. Last completed run: <strong>${escapeHtml(fnn.last_cycle || "No automatic cycle yet")}</strong></p></fieldset>
+          <button class="primary" type="submit">Save FNN settings</button>
+        </form>
       </section>
       <section class="dev-card fnn-press-directory">
         <header><div><p class="eyebrow">Newsroom credentials</p><h2>Press Team Directory</h2><p>Accounts currently holding the Press role and authorized to use the FNN Press Desk.</p></div><strong>${pressMembers.length} ACTIVE</strong></header>
@@ -9591,7 +10393,90 @@ function devDetailList(items, mapper) {
 function bindDevWorkspace() {
   bindDevTools();
   bindSystem();
+  $("#devMarketSettingsForm")?.addEventListener("submit", async event => { event.preventDefault(); const form=event.currentTarget; try { await api("/api/dev-tools/market/settings", {method:"PATCH",body:{market_open:form.market_open.checked,ai_enabled:form.ai_enabled.checked,trade_fee_percent:form.trade_fee_percent.value,transfer_fee_percent:form.transfer_fee_percent.value}}); toast("Ravenhood policy saved"); await refreshDevTools(); } catch(error){toast(error.message);} });
+  $("#devMarketProgramForm [name='percent_change']")?.addEventListener("input", event => { const output=$("[data-market-example]"); if(output) output.textContent=`$1.00 becomes ${money(1 + Number(event.currentTarget.value || 0)/100)}`; });
+  $("#devMarketProgramForm")?.addEventListener("submit", async event => { event.preventDefault(); try { const result=await api("/api/dev-tools/market/programs",{method:"POST",body:Object.fromEntries(new FormData(event.currentTarget))}); toast(`Price program launched Â· $1 becomes $${Number(result.example_one_dollar).toFixed(4)}`); await refreshDevTools(); } catch(error){toast(error.message);} });
+  $$("[data-market-preset]").forEach(button => button.addEventListener("click", async () => { if(!confirm(`Launch ${humanLabel(button.dataset.marketPreset)} simulation?`)) return; try { await api("/api/dev-tools/market/presets",{method:"POST",body:{preset:button.dataset.marketPreset}}); toast("Market event launched"); await refreshDevTools(); } catch(error){toast(error.message);} }));
+  $("#devMarketCodeForm")?.addEventListener("submit", async event => { event.preventDefault(); try { state.generatedMarketCode=await api("/api/dev-tools/market/codes",{method:"POST",body:Object.fromEntries(new FormData(event.currentTarget))}); toast("Ravenhood receipt PIN issued"); await refreshDevTools(); } catch(error){toast(error.message);} });
+  $("#devMarketAiForm")?.addEventListener("submit", async event => { event.preventDefault(); try { const result=await api("/api/dev-tools/market/ai-briefing",{method:"POST",body:Object.fromEntries(new FormData(event.currentTarget)),timeoutMs:120000}); state.marketAiBriefing=result.briefing; toast("Gemini market briefing complete"); await refreshDevTools(); } catch(error){toast(error.message);} });
+  $("#admin2faCodeForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      state.generatedAdmin2faCode = await api("/api/dev-tools/admin-2fa", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast("Single-use Admin 2FA code generated");
+      await refreshDevTools();
+    } catch (error) { toast(error.message); }
+  });
+  $("#myFaircroftPaymentCodeForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      state.generatedMyFaircroftCode = await api("/api/dev-tools/myfaircroft-payment-codes", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast("MyFaircroft receipt code issued");
+      await refreshDevTools();
+    } catch (error) { toast(error.message); }
+  });
   if (state.devTab === "settlement") bindFineSettlement();
+  $("#devDmvVehicleResetForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const confirmation = String(new FormData(form).get("confirmation") || "").trim();
+    if (confirmation.toUpperCase() !== "CLEAR IMPORTED GAME VEHICLES") {
+      toast("Type the full imported-vehicle reset phrase");
+      return;
+    }
+    if (!window.confirm("Clear all game-imported DMV vehicles and the cached Vehicles source? Manual DMV filings will remain.")) return;
+    const button = form.querySelector('button[type="submit"]');
+    const status = form.querySelector("[data-dmv-vehicle-reset-status]");
+    button.disabled = true;
+    button.textContent = "Clearing old vehicle mirror…";
+    status.textContent = "Removing imported DMV files and cached vehicle snapshots";
+    try {
+      const result = await api("/api/dev-tools/dmv/reset-imported-vehicles", { method: "POST", confirm: false, body: { confirmation } });
+      status.textContent = `${Number(result.cleared_imported_vehicles || 0)} DMV files and ${Number(result.cleared_cached_records || 0)} source records cleared · awaiting SHS rescan`;
+      toast("Old imported vehicle database cleared");
+      form.reset();
+      setTimeout(() => refreshDevTools(), 1200);
+    } catch (error) {
+      status.textContent = error.message;
+      toast(error.message);
+      button.disabled = false;
+      button.textContent = "Clear old imported vehicles";
+    }
+  });
+  $$("[data-delete-cad-report]").forEach((button) => button.addEventListener("click", async () => {
+    const reportNumber = button.dataset.reportNumber || "this report";
+    if (!window.confirm(`Permanently delete after-action report ${reportNumber}? This administrative action will be audited.`)) return;
+    try {
+      await api(`/api/admin/cad-reports/${button.dataset.deleteCadReport}`, { method: "DELETE" });
+      toast(`After-action report ${reportNumber} deleted`);
+      await loadAppData("mdt");
+      render();
+    } catch (error) { toast(error.message); }
+  }));
+  $$("[data-court-wipe]").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const kind = form.dataset.courtWipe;
+    const confirmation = new FormData(form).get("confirmation");
+    const label = kind === "citation" ? "all citation records" : "all criminal charge records";
+    if (!confirm(`Permanently delete ${label} and their dependent workflow data?`)) return;
+    try {
+      const result = await api("/api/dev-tools/court/wipe", { method: "POST", body: { kind, confirmation } });
+      toast(`${result.deleted} ${kind === "citation" ? "citation" : "criminal"} record(s) removed`);
+      await refreshDevTools();
+    } catch (error) { toast(error.message); }
+  }));
+  $("#devIceSettingsForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api("/api/dev-tools/ice-settings", {
+        method: "PATCH",
+        body: { restrict_local_data: Boolean(event.currentTarget.restrict_local_data.checked) },
+      });
+      toast("ICE information policy updated");
+      await refreshDevTools();
+      await loadSession();
+    } catch (error) { toast(error.message); }
+  });
   $("[data-dmv-add-class]")?.addEventListener("click", () => {
     const list = $("[data-dmv-class-list]");
     if (!list) return;
@@ -10184,11 +11069,13 @@ function bindDevTools() {
   });
   $("#devFnnSettingsForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const form = event.currentTarget;
+    const values = new FormData(form);
     await api("/api/dev-tools/fnn-settings", {
       method: "PATCH",
-      body: { press_pass_limit: new FormData(event.currentTarget).get("press_pass_limit") },
+      body: { press_pass_limit: values.get("press_pass_limit"), autopilot_enabled: values.get("autopilot_enabled") === "on", morning_time: values.get("morning_time"), evening_time: values.get("evening_time"), timezone: values.get("timezone") },
     });
-    toast("FNN Press Pass capacity updated");
+    toast("FNN newsroom settings updated");
     await refreshDevTools();
   });
   $$("[data-press-pass-action]").forEach((button) => button.addEventListener("click", async () => {
@@ -10265,7 +11152,7 @@ function bindDevTools() {
 function renderAdminWorkspace() {
   const data = state.cache.admin;
   if (!data) return `<section class="admin-workspace"><div class="empty">Admin workspace loading</div></section>`;
-  if (!["overview", "users"].includes(state.adminTab)) state.adminTab = "overview";
+  if (!["overview", "users", "content"].includes(state.adminTab)) state.adminTab = "overview";
   const users = data.users?.users || [];
   const stats = data.overview?.stats || {};
   const verified = users.filter((user) => user.verified).length;
@@ -10294,6 +11181,8 @@ function renderAdminWorkspace() {
         <span>${user.arma_linked ? "ARMA LINKED" : "LINK REQUIRED"}</span><em>${user.verified ? "VERIFIED" : "REVIEW"}</em>
       </button>`).join("") || `<div class="empty">No resident accounts</div>`}</div>
     </section>`;
+  const content = data.overview?.content || { cad_reports: [], press_reports: [], editions: [] };
+  const contentDesk = `<section class="admin-content-control"><header><div><span>RESTRICTED CONTENT MAINTENANCE</span><h2>Reports and newsroom records</h2><p>Remove a specific record without clearing its entire archive. Every deletion is permanent and written to the staff audit log.</p></div><strong>ADMIN ONLY</strong></header><div class="admin-content-columns"><section><div class="admin-content-heading"><h3>CAD after-action reports</h3><span>${content.cad_reports.length}</span></div>${content.cad_reports.map(x => `<article><div><small>${escapeHtml(x.report_number)} Â· ${new Date(x.created_at).toLocaleString()}</small><strong>${escapeHtml(x.call_type)} Â· ${escapeHtml(x.location || "No location")}</strong><span>${escapeHtml(x.officer_name)} Â· ${escapeHtml(x.disposition)}</span></div><button class="danger" data-admin-delete-cad="${x.id}" data-label="${escapeHtml(x.report_number)}">Delete</button></article>`).join("") || `<div class="empty">No CAD reports</div>`}</section><section><div class="admin-content-heading"><h3>Submitted Press Desk stories</h3><span>${content.press_reports.length}</span></div>${content.press_reports.map(x => `<article><div><small>${escapeHtml(x.report_number)} Â· ${new Date(x.created_at).toLocaleString()}</small><strong>${escapeHtml(x.headline)}</strong><span>${escapeHtml(x.author_name)} Â· ${escapeHtml(humanLabel(x.status))}</span></div><button class="danger" data-admin-delete-press="${x.id}" data-label="${escapeHtml(x.report_number)}">Delete</button></article>`).join("") || `<div class="empty">No submitted stories</div>`}</section></div><section class="admin-published-stories"><div class="admin-content-heading"><h3>Published FNN stories</h3><span>${content.editions.reduce((sum,x)=>sum+(x.stories||[]).length,0)}</span></div>${content.editions.map(edition => (edition.stories || []).map((story,index) => `<article><div><small>${escapeHtml(edition.edition_date)} Â· ${escapeHtml(edition.headline)}</small><strong>${escapeHtml(story.headline || "Untitled story")}</strong><span>${escapeHtml(story.category || "Faircroft")}</span></div><button class="danger" data-admin-delete-fnn="${index}" data-edition-id="${edition.id}">Delete</button></article>`).join("")).join("") || `<div class="empty">No published supporting stories</div>`}</section></section>`;
   return `
     <section class="admin-workspace">
       <aside class="admin-sidebar">
@@ -10302,12 +11191,13 @@ function renderAdminWorkspace() {
         <nav>
           <button class="${state.adminTab === "overview" ? "active" : ""}" data-admin-workspace-tab="overview"><small>01</small><span>Overview</span><i></i></button>
           <button class="${state.adminTab === "users" ? "active" : ""}" data-admin-workspace-tab="users"><small>02</small><span>Accounts</span><i></i></button>
+          <button class="${state.adminTab === "content" ? "active" : ""}" data-admin-workspace-tab="content"><small>03</small><span>Content Control</span><i></i></button>
         </nav>
         <div class="dev-sidebar-footer"><span class="dev-access-dot"></span><div><strong>Authorized Admin</strong><small>${escapeHtml(state.session?.user?.name || "Staff member")}</small></div></div>
       </aside>
       <main class="admin-main">
         <header class="admin-topbar">
-          <div><span>FC / CIVIL ADMINISTRATION</span><h1>${state.adminTab === "users" ? "Account Directory" : "Administration Overview"}</h1><p>${state.adminTab === "users" ? "Search, verify, assign, and maintain resident accounts" : "Identity readiness and account operations"}</p></div>
+          <div><span>FC / CIVIL ADMINISTRATION</span><h1>${state.adminTab === "users" ? "Account Directory" : state.adminTab === "content" ? "Content Control" : "Administration Overview"}</h1><p>${state.adminTab === "users" ? "Search, verify, assign, and maintain resident accounts" : state.adminTab === "content" ? "Audited maintenance for CAD and FNN records" : "Identity readiness and account operations"}</p></div>
           <div class="dev-toolbar"><span class="dev-system-status"><i></i>Registry online</span><button class="secondary" type="button" data-refresh-admin>Sync records</button><button class="primary" type="button" data-close-admin>Exit workspace</button></div>
         </header>
         <div class="admin-content">
@@ -10318,7 +11208,7 @@ function renderAdminWorkspace() {
             <div><span>Arma linked</span><strong>${linked}</strong><small>Connected identities</small></div>
             <div><span>Administrators</span><strong>${ownerCount}</strong><small>Owner accounts</small></div>
           </div>
-          ${state.adminTab === "users" ? `<section class="admin-directory"><header><div><span>RESIDENT REGISTRY</span><h2>Account records</h2></div><strong>${users.length} FILES</strong></header>${renderAdminUsers(users)}</section>` : overview}
+          ${state.adminTab === "users" ? `<section class="admin-directory"><header><div><span>RESIDENT REGISTRY</span><h2>Account records</h2></div><strong>${users.length} FILES</strong></header>${renderAdminUsers(users)}</section>` : state.adminTab === "content" ? contentDesk : overview}
         </div>
       </main>
       ${accountModal}
@@ -10335,6 +11225,18 @@ function bindAdminWorkspace() {
     state.adminTab = button.dataset.adminWorkspaceTab;
     state.adminAccountId = null;
     render();
+  }));
+  $$("[data-admin-delete-cad]").forEach(button => button.addEventListener("click", async () => {
+    if (!confirm(`Permanently delete ${button.dataset.label || "this after-action report"}? This action is audited.`)) return;
+    try { await api(`/api/admin/cad-reports/${button.dataset.adminDeleteCad}`, {method:"DELETE"}); toast("After-action report deleted"); await loadAppData("admin"); render(); } catch(error){toast(error.message);}
+  }));
+  $$("[data-admin-delete-press]").forEach(button => button.addEventListener("click", async () => {
+    if (!confirm(`Permanently delete ${button.dataset.label || "this Press Desk story"}? Gemini will no longer read it.`)) return;
+    try { await api(`/api/admin/press-reports/${button.dataset.adminDeletePress}`, {method:"DELETE"}); toast("Press Desk story deleted"); await loadAppData("admin"); render(); } catch(error){toast(error.message);}
+  }));
+  $$("[data-admin-delete-fnn]").forEach(button => button.addEventListener("click", async () => {
+    if (!confirm("Permanently remove this story from the published FNN edition?")) return;
+    try { await api(`/api/admin/fnn-editions/${button.dataset.editionId}/stories/${button.dataset.adminDeleteFnn}`, {method:"DELETE"}); toast("Published FNN story deleted"); await loadAppData("admin"); render(); } catch(error){toast(error.message);}
   }));
   $("[data-refresh-admin]")?.addEventListener("click", async () => {
     await loadAppData("admin");
@@ -10407,7 +11309,7 @@ function renderSystem() {
   `;
 }
 
-const roleOptions = ["civ", "owner", "admin", "dev", "beta", "press", "indeed_admin", "leo", "judge", "lawyer", "prosecutor", "public_defender", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "business_owner", "business_registrar", "city_hall", "economy_manager"];
+const roleOptions = ["civ", "owner", "admin", "dev", "beta", "press", "indeed_admin", "leo", "judge", "lawyer", "prosecutor", "public_defender", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "ice_agent", "ice_commander", "business_owner", "business_registrar", "city_hall", "economy_manager"];
 
 function adminUserSearchText(user) {
   return [
@@ -11032,7 +11934,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.2.1-game-bank-migration").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.2.2-court-payments").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {
