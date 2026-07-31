@@ -38,8 +38,15 @@
         ,"Added a full-screen Faircroft Careers recruitment workspace with a vacancy directory, department-specific opening briefs, personal application tracking, and focused application dialogs."
         ,"Added an animated FNN live headline ticker sourced from the published lead story, public-safety desk, and supporting newsroom coverage."
         ,"Added FNN News Cycle Autopilot with configurable morning and evening publication times, timezone validation, duplicate-run protection, and an on/off control inside Developer Tools FNN Settings."
+        ,"Added Ravenhood scenario projections with animated defensive, current-path, and growth outlooks calculated from each selected security and the resident's current position."
+        ,"Added verified CIV recipient lookup for securities transfers, including matched resident identity confirmation before shares can be submitted."
+        ,"Added the Faircroft Lottery with three resident entries per day, a Tuesday 11:59 PM Eastern drawing schedule, animated prize-pool presentation, verified entry ledger, and winner notifications."
+        ,"Added a lottery funding ledger sourced from collected MyFaircroft fine receipts, completed settlement fines, and Ravenhood exchange fees, with previous awards deducted to prevent duplicate funding."
+        ,"Added Developer Tools Lottery Settings with drawing controls, daily-entry limits, payout percentages, timezone scheduling, role-based winning weights, role exclusions, supervised drawings, entry review, and fraud flags."
+        ,"Added an active scheduled-movement ledger to Ravenhood Stock Market Settings with affected securities, target percentage, schedule timing, live progress, and immediate stop controls."
       ],
       "changed": [
+        "Rebuilt Ravenhood into a more continuous exchange-floor experience with ambient market motion, animated projection intelligence, verified position delivery, and a persistent workspace exit control.",
         "Established RP OS 0.2.2 as the active development release; additional completed work will be appended to this release entry before publication.",
         "Leaderboards now combine live FCRPMUSSALO bank balances, Thunder Buddies player telemetry, MedicalHud reputation-based credit, and RP OS public-safety records.",
         "Restricted SHS leaderboard ingestion to the authoritative profile/profile/TB/tb_player_database.json player database.",
@@ -65,8 +72,13 @@
         ,"Reworked System Changelog into a guided release-story experience with an animated chapter route, focused Added, Changed, Fixed, and Removed views, release-impact highlights, and progressive disclosure instead of one continuous ledger."
         ,"Restored the Faircroft local-involvement ordinance control directly inside Developer Tools ICE Settings while keeping it synchronized with MDT Settings."
         ,"Upgraded Leaderboards with animated competitive podiums, flame effects for leading placements, rank-progression meters, leader margins, and exact performance needed to advance to the next position."
+        ,"Rebuilt Faircroft Financial as a continuous personal-banking experience with persistent account navigation, checking activity, account actions, synchronized balance history, integrated credit insights, and a restrained institutional banking design."
+        ,"Rebuilt Developer Tools Game Intelligence as a continuous live-economy operations screen with circulation concentration, funded-account coverage, identity-match rates, integrated financial rankings, and streamlined persistence ledgers driven by the FCRPMUSSALO mirror."
+        ,"Changed all newly issued MyFaircroft and Ravenhood four-digit receipt PINs to unassigned bearer codes that permanently record the issuing administrator and first eligible resident who redeems them."
       ],
       "fixed": [
+        "Fixed Ravenhood Gemini market briefings failing before generation when PostgreSQL numeric market prices and volatility values were returned as Decimal objects.",
+        "Stopping an active Ravenhood price movement now cancels every related security program and restores affected prices to their recorded pre-event baselines so normal market operation can resume.",
         "Prevented temporary anti-cheat event and outbox records from contaminating persistent leaderboard rankings.",
         "Added responsive layouts for leaderboard divisions, digital passports, citizenship testing, ICE search, federal case files, and ICE Developer Settings.",
         "Updated the PWA asset cache so RP OS 0.2.2 interfaces and permissions load immediately after deployment."

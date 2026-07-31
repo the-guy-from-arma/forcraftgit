@@ -96,6 +96,7 @@ const state = {
   pressSelectedReportId: null,
   leaderboardTab: "wealth",
   marketTicker: "FNN",
+  marketTransferRecipient: null,
   generatedMarketCode: null,
   iceSearchResults: [],
   iceSelectedSubject: null,
@@ -206,6 +207,7 @@ const tileColors = {
   cash: "linear-gradient(145deg, #f15f79, #7a1e31)",
   bank: "linear-gradient(145deg, #5c9cff, #21497e)",
   wallstreet: "linear-gradient(145deg, #6ef0b0, #075745 58%, #07110e)",
+  lottery: "linear-gradient(145deg, #f7df78, #a25d18 52%, #23124f)",
   restriction: "linear-gradient(145deg, #ff9f5c, #7d281f)",
   treasury: "linear-gradient(145deg, #f8d572, #0f806f)",
   business: "linear-gradient(145deg, #58e6a5, #2457a8)",
@@ -651,6 +653,10 @@ function render() {
     bindMarketWorkspace();
     bindRequiredProfileModals();
     return;
+  }
+  if (state.activeApp === "lottery") {
+    app.innerHTML = renderSystemBanner() + renderLotteryWorkspace() + renderRequiredProfileModals();
+    bindLotteryWorkspace(); bindRequiredProfileModals(); return;
   }
   if (state.activeApp === "changelog") {
     app.innerHTML = renderSystemBanner() + renderChangelogWorkspace() + renderRequiredProfileModals();
@@ -1679,6 +1685,7 @@ function renderPanel(id) {
     leaderboards: "Leaderboards",
     press: "Press Desk",
     citizenship: "Citizenship & Passport",
+    lottery: "Faircroft Lottery",
   };
   const body = {
     profile: renderProfile,
@@ -1708,6 +1715,7 @@ function renderPanel(id) {
     leaderboards: renderLeaderboards,
     press: renderPressDesk,
     citizenship: renderCitizenship,
+    lottery: renderLotteryWorkspace,
   }[id]?.() || `<div class="empty">Module unavailable</div>`;
 
   return `
@@ -1733,6 +1741,7 @@ async function loadAppData(id) {
     properties: () => api("/api/properties"),
     bank: () => api("/api/bank"),
     wallstreet: () => api("/api/wallstreet"),
+    lottery: () => api("/api/lottery"),
     treasury: () => api("/api/treasury"),
     business: () => api("/api/business"),
     messages: () => api("/api/messages"),
@@ -3499,6 +3508,27 @@ function marketChange(security) {
   return before ? ((now - before) / before) * 100 : 0;
 }
 
+function renderLotteryWorkspace() {
+  const data=state.cache.lottery;
+  if(!data)return `<main class="lottery-workspace"><div class="empty">Opening Faircroft Lottery...</div></main>`;
+  const draw=data.draw||{},funding=data.funding||{},entries=data.entries||[],remaining=Number(data.remaining_today||0);
+  const scheduled=draw.scheduled_at?new Date(draw.scheduled_at):null;
+  return `<main class="lottery-workspace">
+    <header class="lottery-header"><div class="lottery-seal"><i>FC</i><span>FAIRCROFT PUBLIC BENEFIT DRAW</span></div><div class="lottery-header-actions"><span><i></i>${data.enabled?"ENTRIES OPEN":"ENTRIES CLOSED"}</span><button data-refresh-lottery>Refresh</button><button class="lottery-exit" data-close-lottery>Exit lottery</button></div></header>
+    <section class="lottery-hero"><div class="lottery-orbits"><i></i><i></i><b>FC</b></div><div><span>NEXT OFFICIAL DRAWING</span><h1>${money(funding.available)}</h1><p>Current Faircroft community prize pool</p><strong>${scheduled?scheduled.toLocaleString(undefined,{weekday:"long",month:"long",day:"numeric",hour:"numeric",minute:"2-digit",timeZone:data.timezone}):"Tuesday · 11:59 PM Eastern"}</strong></div><aside><span>YOUR DAILY ACCESS</span><strong>${remaining}<small> / ${data.daily_limit}</small></strong><p>entries remaining today</p><button data-lottery-enter ${!data.enabled||data.excluded||remaining<=0?"disabled":""}>Enter tonight's pool</button></aside></section>
+    ${data.excluded?`<div class="lottery-policy-alert"><strong>Participation unavailable</strong><span>Your current role is excluded by lottery integrity policy: ${escapeHtml((data.excluded_roles||[]).join(", "))}</span></div>`:""}
+    <section class="lottery-flow"><div><span>POOL COMPOSITION</span><h2>Where the prize originates</h2><p>Faircroft redirects recorded public-service receipts into a transparent weekly benefit drawing.</p></div><dl><div><dt>Collected fine receipts</dt><dd>${money(funding.fines)}</dd></div><div><dt>Ravenhood exchange fees</dt><dd>${money(funding.market_fees)}</dd></div><div><dt>Previous awards</dt><dd>−${money(funding.awarded)}</dd></div></dl></section>
+    <section class="lottery-ledger"><header><div><span>YOUR VERIFIED ENTRIES</span><h2>Drawing ledger</h2></div><strong>${entries.length} CURRENT</strong></header><div>${entries.map((entry,index)=>`<article style="--entry-delay:${index*.06}s"><i>${String(entry.entry_number).padStart(2,"0")}</i><div><strong>FC-${String(entry.id).padStart(7,"0")}</strong><span>${new Date(entry.created_at).toLocaleString()}</span></div><em class="${entry.status}">${entry.fraud_flag?"UNDER REVIEW":escapeHtml(entry.status.toUpperCase())}</em></article>`).join("")||`<div class="empty">Use one of your daily entries to join the next drawing.</div>`}</div></section>
+    ${data.latest_result?`<section class="lottery-last-result"><span>PREVIOUS DRAWING</span><strong>${escapeHtml(data.latest_result.winner_name||"No eligible winner")}</strong><p>${data.latest_result.winner_civ?`CIV ${escapeHtml(data.latest_result.winner_civ)} · `:""}${money(data.latest_result.payout_amount)} authorized</p></section>`:""}
+  </main>`;
+}
+
+function bindLotteryWorkspace(){
+  $("[data-close-lottery]")?.addEventListener("click",async()=>{state.activeApp=null;await loadSession();});
+  $("[data-refresh-lottery]")?.addEventListener("click",async()=>{await loadAppData("lottery");render();});
+  $("[data-lottery-enter]")?.addEventListener("click",async()=>{await api("/api/lottery/entries",{method:"POST",body:"{}"});toast("Official lottery entry recorded");await loadAppData("lottery");render();});
+}
+
 function renderMarketWorkspace() {
   const data=state.cache.wallstreet;
   if(!data)return `<main class="market-workspace"><div class="empty">Opening Ravenhood Markets...</div></main>`;
@@ -3511,7 +3541,11 @@ function renderMarketWorkspace() {
   const points=Array.from({length:18},(_,i)=>{const trend=(change/100)*i*3.2,wave=Math.sin(i*.83+Number(selected.price||0))*chartSeed+Math.cos(i*.31)*chartSeed*.55;return `${(i/17*1000).toFixed(1)},${Math.max(35,Math.min(275,170-wave-trend)).toFixed(1)}`}).join(" ");
   const finalY=points.split(" ").at(-1).split(",")[1],movers=[...securities].sort((a,b)=>Math.abs(marketChange(b))-Math.abs(marketChange(a))).slice(0,5);
   const stockOptions=securities.map(x=>`<option value="${escapeHtml(x.ticker)}">${escapeHtml(x.ticker)} · ${escapeHtml(x.name)}</option>`).join("");
-  return `<main class="market-workspace market-terminal-workspace market-v3">
+  const heldQuantity=Number(selectedHolding?.quantity||0),heldValue=heldQuantity*Number(selected.price||0);
+  const projectionBase=Math.max(-12,Math.min(12,change*2.5));
+  const scenarios=[{label:"Defensive",rate:-7.5},{label:"Current path",rate:projectionBase},{label:"Growth",rate:12.5}];
+  return `<main class="market-workspace market-terminal-workspace market-v3 market-v4">
+    <button class="market-persistent-exit" type="button" data-close-market aria-label="Exit Ravenhood"><span>&larr;</span><b>Exit Ravenhood</b></button>
     <header class="market-topbar"><div class="market-brand"><span>RH</span><div><strong>Ravenhood</strong><small>FAIRCROFT SECURITIES EXCHANGE</small></div></div><div class="market-session"><span>FCX</span><i></i><strong>${data.market_open?"Continuous trading":"Market closed"}</strong></div><div class="market-top-actions"><em class="${data.market_open?"open":"closed"}">${data.market_open?"MARKET OPEN":"MARKET CLOSED"}</em><button class="secondary" data-refresh-market>Sync market</button><button class="market-exit" type="button" data-close-market><span>&larr;</span> Exit Ravenhood</button></div></header>
     <div class="market-tape">${securities.concat(securities).map(x=>`<button data-market-ticker="${escapeHtml(x.ticker)}"><b>${escapeHtml(x.ticker)}</b><span>${money(x.price)}</span><i class="${marketChange(x)>=0?"up":"down"}">${marketChange(x)>=0?"+":""}${marketChange(x).toFixed(2)}%</i></button>`).join("")}</div>
     <section class="market-command">
@@ -3519,6 +3553,7 @@ function renderMarketWorkspace() {
       <section class="market-terminal"><header class="market-instrument-head"><div><span>${escapeHtml(selected.sector||"FAIRCROFT MARKET")} / ${escapeHtml(humanLabel(selected.security_type||"stock"))}</span><h1>${escapeHtml(selected.ticker||"—")}</h1><p>${escapeHtml(selected.name||"Select a security")}</p></div><div><small>LAST TRADE</small><strong>${money(selected.price)}</strong><em class="${change>=0?"up":"down"}">${change>=0?"+":""}${change.toFixed(2)}%</em></div></header><div class="market-quote-strip"><span><small>OPEN</small><strong>${money(Number(selected.previous_price||selected.price||0))}</strong></span><span><small>DAY RANGE</small><strong>${money(Math.max(0,Number(selected.price||0)-chartSeed))} — ${money(Number(selected.price||0)+chartSeed)}</strong></span><span><small>POSITION</small><strong>${selectedHolding?`${Number(selectedHolding.quantity).toLocaleString(undefined,{maximumFractionDigits:4})} shares`:"Not held"}</strong></span><span><small>BUYING POWER</small><strong>${money(account.cash_balance)}</strong></span></div>
         <div class="market-depth-strip"><span><small>BID</small><strong>${money(Math.max(0,Number(selected.price||0)*.9985))}</strong><i class="up">${Math.max(10,Math.round(Number(selected.price||1)*17))}</i></span><span><small>SPREAD</small><strong>${money(Number(selected.price||0)*.003)}</strong><i>FCX</i></span><span><small>ASK</small><strong>${money(Number(selected.price||0)*1.0015)}</strong><i class="down">${Math.max(10,Math.round(Number(selected.price||1)*13))}</i></span><span><small>ORDER FLOW</small><strong>${change>=0?"BUY PRESSURE":"SELL PRESSURE"}</strong><i class="${change>=0?"up":"down"}">${Math.min(99,Math.max(1,Math.round(50+change*4)))}%</i></span></div>
         <div class="market-live-chart ${change>=0?"positive":"negative"}"><div class="market-chart-grid"></div><svg viewBox="0 0 1000 310" preserveAspectRatio="none"><defs><linearGradient id="marketArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".3"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs><polygon points="0,310 ${points} 1000,310" fill="url(#marketArea)"/><polyline points="${points}" fill="none" stroke="currentColor" stroke-width="4" vector-effect="non-scaling-stroke"/><circle cx="1000" cy="${finalY}" r="7" fill="currentColor"/></svg><div class="market-chart-axis"><span>OPEN</span><span>10 AM</span><span>NOON</span><span>2 PM</span><span>NOW</span></div><strong class="market-live-badge"><i></i>LIVE</strong></div>
+        <section class="market-projections"><header><div><span>POSITION OUTLOOK</span><h2>Scenario projection</h2></div><p>Illustrative outcomes from the current ${money(selected.price)} market price. Projections are not guaranteed.</p></header><div>${scenarios.map((scenario,index)=>{const projectedPrice=Number(selected.price||0)*(1+scenario.rate/100),projectedValue=heldQuantity*projectedPrice;return `<article style="--projection-delay:${index*.09}s"><span>${escapeHtml(scenario.label)}</span><strong>${money(projectedPrice)} <small>per share</small></strong><div><i style="width:${Math.max(12,Math.min(94,50+scenario.rate*2.7))}%"></i></div><p><b>${scenario.rate>=0?"+":""}${scenario.rate.toFixed(2)}%</b><em>${heldQuantity?`${money(projectedValue-heldValue)} position impact`:`${money(projectedPrice-Number(selected.price||0))} per-share move`}</em></p></article>`}).join("")}</div></section>
         <section class="market-directory"><header><div><span>FCX LISTED SECURITIES</span><h2>Market directory</h2></div><strong>${securities.length} ACTIVE LISTINGS</strong></header><div class="market-directory-head"><span>Symbol / company</span><span>Sector</span><span>Last price</span><span>Change</span></div><div>${securities.map(x=>`<button class="${x.ticker===selected.ticker?"active":""}" data-market-ticker="${escapeHtml(x.ticker)}"><span><b>${escapeHtml(x.ticker)}</b><small>${escapeHtml(x.name)}</small></span><span>${escapeHtml(x.sector)}</span><strong>${money(x.price)}</strong><em class="${marketChange(x)>=0?"up":"down"}">${marketChange(x)>=0?"+":""}${marketChange(x).toFixed(2)}%</em></button>`).join("")}</div></section></section>
       <aside class="market-trade-dock"><section class="market-order-ticket"><header><div><span>ORDER ENTRY</span><strong>${escapeHtml(selected.ticker||"—")}</strong></div><i class="${data.market_open?"open":""}"></i></header><form data-market-order><input type="hidden" name="ticker" value="${escapeHtml(selected.ticker||"")}"/><label>Action<select name="side"><option value="buy">Buy shares</option><option value="sell">Sell shares</option></select></label><label>Quantity<input name="quantity" type="number" min="0.000001" step="0.000001" required placeholder="0.000000"/></label><dl><div><dt>Market price</dt><dd>${money(selected.price)}</dd></div><div><dt>Commission</dt><dd>${Number(data.trade_fee_percent||0).toFixed(2)}%</dd></div><div><dt>Available cash</dt><dd>${money(account.cash_balance)}</dd></div></dl><button class="market-primary" ${data.market_open?"":"disabled"}>Preview market order</button><small>Orders execute at the displayed Ravenhood market price.</small></form></section><section class="market-position-book"><header><span>POSITION BOOK</span><strong>${holdings.length}</strong></header>${holdings.length?holdings.map(h=>`<button data-market-ticker="${escapeHtml(h.ticker)}"><span><b>${escapeHtml(h.ticker)}</b><small>${Number(h.quantity).toLocaleString(undefined,{maximumFractionDigits:4})} shares</small></span><div><strong>${money(Number(h.quantity)*Number(h.price))}</strong><em class="${Number(h.price)>=Number(h.average_cost)?"up":"down"}">${Number(h.price)>=Number(h.average_cost)?"+":""}${money((Number(h.price)-Number(h.average_cost))*Number(h.quantity))}</em></div></button>`).join(""):`<p>Positions acquired through Ravenhood will appear here.</p>`}</section><section class="market-activity"><header><span>EXECUTION LOG</span></header>${(data.orders||[]).slice(0,6).map(o=>`<p><span><b>${escapeHtml(o.side.toUpperCase())}</b> ${escapeHtml(o.ticker)}</span><strong>${money(o.gross_amount)}</strong></p>`).join("")||`<small>No executions recorded.</small>`}</section></aside>
     </section>${renderMarketDialog(data,stockOptions)}
@@ -3559,21 +3594,43 @@ function renderMarketWorkspaceLegacy() {
 function renderMarketDialog(data, stockOptions) {
   if (!state.marketDialog) return "";
   const type = state.marketDialog;
-  if (type === "transfer") return `<div class="market-modal"><form class="market-modal-card" data-market-transfer><button type="button" data-close-market-dialog>Ã—</button><p class="eyebrow">Private securities transfer</p><h2>Send shares</h2><p>Enter the recipient's CIV number or account email. The recipient must already have a Ravenhood account.</p><label>Security<select name="ticker">${stockOptions}</select></label><label>Shares<input name="quantity" type="number" min="0.000001" step="0.000001" required/></label><label>Recipient CIV or email<input name="recipient" required/></label><div class="market-rule"><strong>${Number(data.transfer_fee_percent || 0).toFixed(2)}% transfer fee</strong><span>The fee is removed from your settled cash and held outside the RP economy.</span></div><button class="market-primary">Transfer shares</button></form></div>`;
+  if (type === "transfer") {
+    const recipient=state.marketTransferRecipient;
+    return `<div class="market-modal market-transfer-modal"><section class="market-modal-card"><button type="button" data-close-market-dialog>&times;</button><p class="eyebrow">Verified position delivery</p><h2>Transfer by CIV</h2><p>Locate the resident by their Faircroft CIV number. Ravenhood shows the matched identity before a position can move.</p>${recipient?`<div class="market-recipient-confirm"><i>FC</i><div><span>CONFIRMED RECIPIENT</span><strong>${escapeHtml(recipient.name)}</strong><small>CIV ${escapeHtml(recipient.civ_number)}</small></div><button type="button" data-change-market-recipient>Change</button></div><form data-market-transfer><input type="hidden" name="recipient_civ_number" value="${escapeHtml(recipient.civ_number)}"/><label>Security<select name="ticker">${stockOptions}</select></label><label>Shares<input name="quantity" type="number" min="0.000001" step="0.000001" required/></label><div class="market-rule"><strong>${Number(data.transfer_fee_percent || 0).toFixed(2)}% transfer fee</strong><span>Review the verified name and CIV above. Transfers cannot be reversed from this screen.</span></div><button class="market-primary">Review transfer to ${escapeHtml(recipient.name)}</button></form>`:`<form class="market-recipient-search" data-market-recipient-search><label>Recipient CIV number<input name="civ" inputmode="numeric" autocomplete="off" placeholder="Enter CIV ID" required/></label><button class="market-primary">Find resident</button></form><div class="market-identity-instructions"><span>01</span><p>Enter the resident's CIV ID.</p><span>02</span><p>Confirm the matched name and identifier.</p><span>03</span><p>Select the security and number of shares.</p></div>`}</section></div>`;
+  }
   const deposit = type === "deposit";
   return `<div class="market-modal"><form class="market-modal-card" data-market-cash><button type="button" data-close-market-dialog>Ã—</button><p class="eyebrow">${deposit ? "Fund your account" : "Settle a withdrawal"}</p><h2>${deposit ? "Deposit with an admin" : "Withdraw in game"}</h2><ol><li>Be logged into the Faircroft game server.</li><li>Walk up to an admin and request a stock market ${deposit ? "deposit" : "withdrawal"}.</li><li>${deposit ? "Give the admin the in-game cash first." : "The admin confirms the amount and prepares the in-game payout."}</li><li>The admin issues a one-time four-digit receipt PIN only after confirming the handoff.</li></ol><input type="hidden" name="transaction_type" value="${type}"/><label>Exact amount<input name="amount" type="number" min="0.01" step="0.01" required/></label><label>Four-digit receipt PIN<input name="code" inputmode="numeric" minlength="4" maxlength="4" pattern="[0-9]{4}" required/></label><div class="market-rule warning"><strong>${deposit ? "Do not enter a code before giving the admin the money." : "Submitting removes settled cash from Ravenhood; the admin then completes the in-game payout."}</strong></div><button class="market-primary">Complete ${type}</button></form></div>`;
 }
 
 function bindMarketWorkspace() {
   $$("[data-market-ticker]").forEach(button => button.addEventListener("click", () => { state.marketTicker = button.dataset.marketTicker; render(); }));
-  $$("[data-market-dialog]").forEach(button => button.addEventListener("click", () => { state.marketDialog = button.dataset.marketDialog; render(); }));
-  $("[data-close-market-dialog]")?.addEventListener("click", () => { state.marketDialog = null; render(); });
-  $("[data-close-market]")?.addEventListener("click", async () => { state.activeApp = null; state.marketDialog = null; await loadSession(); });
+  $$("[data-market-dialog]").forEach(button => button.addEventListener("click", () => { state.marketDialog = button.dataset.marketDialog; state.marketTransferRecipient = null; render(); }));
+  $("[data-close-market-dialog]")?.addEventListener("click", () => { state.marketDialog = null; state.marketTransferRecipient = null; render(); });
+  $("[data-close-market]")?.addEventListener("click", async () => { state.activeApp = null; state.marketDialog = null; state.marketTransferRecipient = null; await loadSession(); });
+  $("[data-market-recipient-search]")?.addEventListener("submit", async event => { event.preventDefault(); const civ=String(new FormData(event.currentTarget).get("civ")||"").trim(); const result=await api(`/api/wallstreet/recipient?civ=${encodeURIComponent(civ)}`); state.marketTransferRecipient=result.recipient; render(); });
+  $("[data-change-market-recipient]")?.addEventListener("click", () => { state.marketTransferRecipient=null; render(); });
   $("[data-refresh-market]")?.addEventListener("click", async () => { state.cache.wallstreet = await api("/api/wallstreet"); render(); });
   $("[data-create-market-account]")?.addEventListener("click", async () => { await api("/api/wallstreet/account", {method:"POST", body:JSON.stringify({})}); toast("Ravenhood account opened"); await loadAppData("wallstreet"); render(); });
   $("[data-market-order]")?.addEventListener("submit", async event => { event.preventDefault(); const body=Object.fromEntries(new FormData(event.currentTarget)); await api("/api/wallstreet/orders",{method:"POST",body:JSON.stringify(body)}); toast("Order executed"); await loadAppData("wallstreet"); render(); });
   $("[data-market-cash]")?.addEventListener("submit", async event => { event.preventDefault(); const body=Object.fromEntries(new FormData(event.currentTarget)); await api("/api/wallstreet/cash",{method:"POST",body:JSON.stringify(body)}); toast(`${humanLabel(body.transaction_type)} settled`); state.marketDialog=null; await loadAppData("wallstreet"); render(); });
-  $("[data-market-transfer]")?.addEventListener("submit", async event => { event.preventDefault(); const body=Object.fromEntries(new FormData(event.currentTarget)); await api("/api/wallstreet/transfers",{method:"POST",body:JSON.stringify(body)}); toast("Shares transferred"); state.marketDialog=null; await loadAppData("wallstreet"); render(); });
+  $("[data-market-transfer]")?.addEventListener("submit", async event => { event.preventDefault(); const body=Object.fromEntries(new FormData(event.currentTarget)); await api("/api/wallstreet/transfers",{method:"POST",body:JSON.stringify(body)}); toast(`Shares transferred to CIV ${body.recipient_civ_number}`); state.marketDialog=null; state.marketTransferRecipient=null; await loadAppData("wallstreet"); render(); });
+}
+
+function renderBankOnlineV2(data, credit, userName, identitySuffix, creditScore, creditProgress, creditRating, refreshedAt, syncLabel) {
+  return `<main class="bank-workspace bank-v2">
+    <header class="bank-workspace-topbar"><div class="bank-workspace-brand"><span class="bank-workspace-mark">FC</span><div><strong>Faircroft Financial</strong><small>Personal banking</small></div></div><nav class="bank-global-nav"><button class="active" data-bank-section="bankChecking">Accounts</button><button data-bank-section="bankActivity">Activity</button><button data-bank-section="bankCredit">Credit</button></nav><div class="bank-workspace-actions"><span class="bank-secure-session"><i></i> Protected session</span><button class="secondary" type="button" data-refresh-bank>Refresh</button><button class="primary" type="button" data-close-bank>Sign out</button></div></header>
+    <section class="bank-dashboard"><header class="bank-welcome"><div><p class="eyebrow">Personal banking</p><h1>Good ${new Date().getHours() < 12 ? "morning" : new Date().getHours() < 18 ? "afternoon" : "evening"}, ${escapeHtml(userName)}.</h1><p>Manage your Faircroft checking and credit profile.</p></div><div class="bank-sync-state ${data.balance_synced ? "is-live" : ""}"><i></i><span><small>Game-bank connection</small><strong>${syncLabel}</strong></span></div></header>
+      <section class="bank-online-shell">
+        <aside class="bank-account-rail"><p>MY ACCOUNTS</p><button class="active" type="button" data-bank-section="bankChecking"><span>CHECKING</span><strong>Faircroft Game Checking</strong><small>•••• ${identitySuffix}</small><em>${data.balance_synced ? money(data.balance) : "Sync pending"}</em></button><button type="button" data-bank-section="bankCredit"><span>CREDIT & INSIGHTS</span><strong>Faircroft Credit Index</strong><small>${credit.synced ? `${creditScore} · ${creditRating}` : "Reputation sync pending"}</small></button><div class="bank-rail-help"><strong>Account support</strong><p>Your Faircroft identity secures this profile.</p><span><i></i>${data.identity_id ? "Identity verified" : "Link required"}</span></div></aside>
+        <div class="bank-online-main">
+          <section class="bank-checking-view" id="bankChecking"><header><div><p>FAIRCROFT GAME CHECKING</p><h2>Available balance</h2></div><span>${data.balance_synced ? "ACCOUNT CURRENT" : "UPDATE PENDING"}</span></header><div class="bank-primary-balance"><strong>${data.balance_synced ? money(data.balance) : "Awaiting sync"}</strong><small>Available now</small></div><nav class="bank-quick-actions"><button type="button" data-refresh-bank><span>↻</span><strong>Refresh balance</strong><small>Request latest sync</small></button><button type="button" data-bank-section="bankActivity"><span>≡</span><strong>Account activity</strong><small>Review banking records</small></button><button type="button" data-bank-section="bankCredit"><span>↗</span><strong>Credit insights</strong><small>Review your score</small></button></nav><div class="bank-account-meta"><span><small>Account number</small><strong>•••• ${identitySuffix}</strong></span><span><small>Account status</small><strong>${data.balance_synced ? "Open and current" : "Synchronization pending"}</strong></span><span><small>Last updated</small><strong>${refreshedAt}</strong></span></div></section>
+          <section class="bank-activity-view" id="bankActivity"><header><div><p>ACCOUNT ACTIVITY</p><h2>Recent banking activity</h2></div><button class="text-button" type="button" data-refresh-bank>Refresh activity</button></header><div class="bank-activity-head"><span>DATE</span><span>DESCRIPTION</span><span>TYPE</span><span>AMOUNT</span></div><article><time>${data.balance_synced_at ? escapeHtml(new Date(data.balance_synced_at).toLocaleDateString()) : "Pending"}</time><div><strong>Authoritative game-bank synchronization</strong><small>Shadow Haven financial network · •••• ${identitySuffix}</small></div><span>Balance update</span><b>${data.balance_synced ? money(data.balance) : "Pending"}</b></article><footer>Only verified Faircroft banking records appear in this activity ledger.</footer></section>
+          <section class="bank-credit-view" id="bankCredit"><header><div><p>FAIRCROFT CREDIT INDEX</p><h2>Your credit profile</h2></div><strong>${credit.synced ? "CURRENT" : "PENDING"}</strong></header><div class="bank-credit-scoreline"><div><small>CURRENT SCORE</small><strong>${creditScore}</strong><span>out of 850</span></div><div><small>CREDIT STANDING</small><strong>${creditRating}</strong><p>${credit.synced ? "Calculated from established in-game financial reputation and synchronized Faircroft records." : "Your profile will appear after the next reputation synchronization."}</p></div></div><div class="bank-credit-track"><span>300</span><i><b style="width:${creditProgress}%"></b></i><span>850</span></div></section>
+          <footer class="bank-legal-footer"><div class="bank-fcic-seal">FCIC</div><div><strong>Faircroft Citizens Insurance Corporation</strong><p>Eligible resident deposit accounts are protected under applicable Faircroft financial rules. Coverage applies only to balances recognized by the authoritative in-game banking system.</p><small>Faircroft Financial services and displayed values represent in-game roleplay records.</small></div></footer>
+        </div>
+      </section>
+    </section>
+  </main>`;
 }
 
 function renderBankWorkspace() {
@@ -3589,6 +3646,8 @@ function renderBankWorkspace() {
     ? escapeHtml(new Date(data.balance_synced_at).toLocaleString())
     : "Awaiting game-bank update";
   const syncLabel = data.balance_synced ? "Live connection" : "Synchronization pending";
+  return renderBankOnlineV2(data, credit, userName, identitySuffix, creditScore, creditProgress, creditRating, refreshedAt, syncLabel);
+  /* Legacy presentation retained temporarily for rollback safety.
   return `
     <main class="bank-workspace">
       <header class="bank-workspace-topbar">
@@ -3674,10 +3733,15 @@ function renderBankWorkspace() {
           </aside>
         </section>
       </section>
-    </main>`;
+    </main>`; */
 }
 
 function bindBankWorkspace() {
+  $$('[data-bank-section]').forEach((button) => button.addEventListener("click", () => {
+    const target = document.getElementById(button.dataset.bankSection || "");
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
+    $$('.bank-global-nav button,.bank-account-rail button').forEach((item) => item.classList.toggle("active", item.dataset.bankSection === button.dataset.bankSection));
+  }));
   $("[data-close-bank]")?.addEventListener("click", async () => {
     state.activeApp = null;
     await loadSession();
@@ -9635,6 +9699,7 @@ function renderDevWorkspace() {
     "system-update": ["System Update", "Publish and control Faircroft limited-service mode"],
     "fnn-settings": ["FNN Settings", "Control newsroom publishing and Press Pass capacity"],
     "market-settings": ["Stock Market Settings", "Operate Ravenhood pricing, settlement receipts, fees, and RP events"],
+    "lottery-settings": ["Lottery Settings", "Govern entries, prize funding, role eligibility, fraud review, and weekly drawings"],
     audit: ["Activity Log", "Chronological record of staff actions"],
     settings: ["App Visibility", "Control which application icons appear for users"],
   }[state.devTab] || ["Staff Operations", "Faircroft administrative console"];
@@ -9642,7 +9707,7 @@ function renderDevWorkspace() {
     <aside class="dev-sidebar">
       <div class="dev-brand"><img class="dev-emblem" src="/static/brand/faircroft-emblem.webp" alt="" /><div><strong>Faircroft RP</strong><small>Staff Operations</small></div></div>
       <p class="dev-nav-label">Operations index</p>
-      <nav>${[["dashboard","Command Center"],["intelligence","Game Intelligence"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["campaigns","Active Campaigns"],["settlement","Settlement"],["market-settings","Stock Market"],["dmv-settings","DMV Settings"],["mdt-settings","MDT Settings"],["court-settings","Court Settings"],["ice-settings","ICE Settings"],["admin-2fa","Admin 2FA"],["autopilot","Auto Pilot"],["system-update","System Update"],["fnn-settings","FNN Settings"],["audit","Activity Log"],["settings","Settings"]].map(([id,label], index) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><small>${String(index + 1).padStart(2, "0")}</small><span>${label}</span><i></i></button>`).join("")}</nav>
+      <nav>${[["dashboard","Command Center"],["intelligence","Game Intelligence"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["campaigns","Active Campaigns"],["settlement","Settlement"],["market-settings","Stock Market"],["lottery-settings","Lottery Settings"],["dmv-settings","DMV Settings"],["mdt-settings","MDT Settings"],["court-settings","Court Settings"],["ice-settings","ICE Settings"],["admin-2fa","Admin 2FA"],["autopilot","Auto Pilot"],["system-update","System Update"],["fnn-settings","FNN Settings"],["audit","Activity Log"],["settings","Settings"]].map(([id,label], index) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><small>${String(index + 1).padStart(2, "0")}</small><span>${label}</span><i></i></button>`).join("")}</nav>
       <div class="dev-sidebar-footer"><span class="dev-access-dot"></span><div><strong>Authorized Staff</strong><small>${escapeHtml(state.session?.user?.name || "Staff member")}</small></div></div>
     </aside>
     <main class="dev-main">
@@ -9829,6 +9894,8 @@ function renderDevCourtSettings(court) {
 
 function renderDevMarketSettings(market, users) {
   const listings = market.securities || [], codes = market.codes || [], programs = market.programs || [];
+  const activePrograms=programs.filter(program=>program.status==="active");
+  const activeMovements=[...new Map(activePrograms.map(program=>[`${program.event_name}|${program.created_at}`,program])).values()];
   const tickerOptions = [`<option value="ALL">Entire market</option>`, ...listings.map(x => `<option value="${escapeHtml(x.ticker)}">${escapeHtml(x.ticker)} Â· ${escapeHtml(x.name)}</option>`)].join("");
   return `<div class="stack dev-market-view">
     <div class="dev-view-intro"><div><span>RAVENHOOD EXCHANGE CONTROL</span><h2>Market operations</h2><p>Control the Faircroft market, authorize in-game cash handoffs, and stage exchange price events.</p></div><strong class="${market.market_open ? "green" : "red"}">${market.market_open ? "MARKET OPEN" : "MARKET CLOSED"}</strong></div>
@@ -9839,6 +9906,16 @@ function renderDevMarketSettings(market, users) {
     </div>
     <section class="dev-card market-code-authority"><div class="dev-card-header"><div><span>IN-GAME SETTLEMENT RECEIPTS</span><h2>Deposit and withdrawal PINs</h2><p>A PIN verifies a completed roleplay handoff. It never edits the Arma database.</p></div><span class="pill red">NEVER ISSUE EARLY</span></div><div class="dev-grid-2"><form id="devMarketCodeForm" class="form-grid"><label>Resident<select name="target_user_id" required><option value="">Select resident</option>${devUserOptions(users)}</select></label><label>Direction<select name="transaction_type"><option value="deposit">Deposit into Ravenhood</option><option value="withdrawal">Withdraw from Ravenhood</option></select></label><label>Exact amount<input name="amount" type="number" min="0.01" step="0.01" required/></label><label>Expires after<input name="expiry_minutes" type="number" min="5" max="120" value="30"/></label><label class="wide">Required confirmation<input name="confirmation" required placeholder="MONEY RECEIVED or WITHDRAWAL APPROVED"/><small>For a deposit, receive the in-game money first. For a withdrawal, confirm the payout with the resident first.</small></label><button class="primary wide">Issue four-digit receipt</button></form><div>${state.generatedMarketCode ? `<div class="dev-generated-code"><span>${escapeHtml(humanLabel(state.generatedMarketCode.transaction_type))} receipt Â· ${money(state.generatedMarketCode.amount)}</span><strong>${escapeHtml(state.generatedMarketCode.code)}</strong><small>Expires ${new Date(state.generatedMarketCode.expires_at).toLocaleString()}</small></div>` : `<div class="empty">No Ravenhood receipt generated this session</div>`}<div class="dev-code-ledger">${codes.slice(0,30).map(x => `<div><code>â€¢â€¢${escapeHtml(x.code_hint)}</code><span>${escapeHtml(x.target_name)} Â· ${money(x.amount)}<small>Issued by ${escapeHtml(x.created_by_name)}${x.used_by_name ? ` Â· redeemed by ${escapeHtml(x.used_by_name)}` : " Â· not redeemed"}</small></span><strong class="${!x.used_at && !x.revoked_at && new Date(x.expires_at)>new Date() ? "available" : ""}">${x.used_at ? "Redeemed" : x.revoked_at ? "Revoked" : new Date(x.expires_at)<=new Date() ? "Expired" : "Available"}</strong></div>`).join("") || `<div class="empty">No receipts</div>`}</div></div></div></section>
     <div class="dev-grid-2"><section class="dev-card"><div class="dev-card-header"><div><span>ACTIVE AUTOMATION</span><h2>Price programs</h2></div><strong>${programs.filter(x=>x.status==="active").length} ACTIVE</strong></div><div class="dev-detail-list">${programs.map(x => `<div><strong>${escapeHtml(x.ticker || "ALL")} Â· ${escapeHtml(x.event_name)}</strong><small>${Number(x.percent_change)>=0?"+":""}${Number(x.percent_change).toFixed(2)}% over ${Number(x.duration_minutes)} minutes Â· ${escapeHtml(x.status)}</small></div>`).join("") || `<div class="empty">No programs</div>`}</div></section><section class="dev-card"><div class="dev-card-header"><div><span>GEMINI ANALYST</span><h2>Generate market briefing</h2><p>Gemini reads current listings and your market scenario, then recommends optional programs. Nothing is applied automatically.</p></div><span class="pill ${market.ai_enabled ? "green" : ""}">${market.ai_enabled ? "enabled" : "disabled"}</span></div><form id="devMarketAiForm" class="form-grid"><label class="wide">Market scenario or operational inputs<textarea name="context" maxlength="2000" required placeholder="New mining permit, severe storm, major public contract, political uncertaintyâ€¦"></textarea></label><button class="primary wide" ${market.ai_enabled ? "" : "disabled"}>Generate analyst briefing</button></form>${state.marketAiBriefing ? `<pre class="market-ai-briefing">${escapeHtml(state.marketAiBriefing)}</pre>` : ""}</section></div>
+    <section class="dev-card market-active-movements"><div class="dev-card-header"><div><span>LIVE PRICE AUTOMATION</span><h2>Active scheduled movements</h2><p>Stop a movement to cancel its remaining schedule and restore every affected security to its pre-event baseline.</p></div><strong>${activeMovements.length} RUNNING</strong></div><div>${activeMovements.map(program=>{const related=activePrograms.filter(item=>item.event_name===program.event_name&&item.created_at===program.created_at);const tickers=related.map(item=>item.ticker).filter(Boolean);const start=new Date(program.starts_at),end=new Date(program.ends_at),progress=Math.max(0,Math.min(100,(Date.now()-start.getTime())/Math.max(1,end.getTime()-start.getTime())*100));return `<article><div class="market-movement-status"><i></i><span>ACTIVE MOVEMENT</span></div><div><strong>${escapeHtml(program.event_name)}</strong><small>${tickers.length>8?`ENTIRE MARKET · ${tickers.length} securities`:escapeHtml(tickers.join(", ")||"Market-wide")}</small></div><div class="market-movement-change ${Number(program.percent_change)>=0?"positive":"negative"}"><strong>${Number(program.percent_change)>=0?"+":""}${Number(program.percent_change).toFixed(2)}%</strong><small>${start.toLocaleString()} → ${end.toLocaleString()}</small></div><div class="market-movement-progress"><i style="width:${progress.toFixed(1)}%"></i></div><button class="danger" type="button" data-market-cancel-program="${program.id}" data-market-program-name="${escapeHtml(program.event_name)}">Stop & restore market</button></article>`}).join("")||`<div class="market-normal-state"><i></i><div><strong>Normal market operation</strong><span>No scheduled price movements are currently changing listed securities.</span></div></div>`}</div></section>
+  </div>`;
+}
+
+function renderDevLotterySettings(lottery){
+  const funding=lottery.funding||{},entries=lottery.entries||[],draws=lottery.draws||[];
+  return `<div class="stack dev-lottery-view"><div class="dev-view-intro"><div><span>FAIRCROFT DRAW CONTROL</span><h2>Lottery Settings</h2><p>Control the weekly benefit draw, review entries, investigate fraud, and govern role-based eligibility.</p></div><strong>${money(funding.available)} AVAILABLE</strong></div>
+    <div class="lottery-dev-funding"><div><span>FINE RECEIPTS</span><strong>${money(funding.fines)}</strong></div><div><span>RAVENHOOD FEES</span><strong>${money(funding.market_fees)}</strong></div><div><span>AWARDED</span><strong>${money(funding.awarded)}</strong></div><div><span>ACTIVE POOL</span><strong>${money(funding.available)}</strong></div></div>
+    <section class="dev-card"><div class="dev-card-header"><div><span>DRAW POLICY</span><h2>Schedule and eligibility engine</h2></div><strong>${lottery.enabled?"OPEN":"PAUSED"}</strong></div><form id="devLotterySettingsForm" class="form-grid"><label class="dev-certify wide"><input name="enabled" type="checkbox" ${lottery.enabled?"checked":""}/> Accept resident lottery entries</label><label>Daily entries per resident<input name="daily_entries" type="number" min="1" max="20" value="${Number(lottery.daily_entries||3)}"/></label><label>Drawing weekday<select name="draw_weekday">${["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].map((day,index)=>`<option value="${index}" ${Number(lottery.draw_weekday)===index?"selected":""}>${day}</option>`).join("")}</select></label><label>Drawing time<input name="draw_time" type="time" value="${escapeHtml(lottery.draw_time||"23:59")}"/></label><label>Timezone<input name="timezone" value="${escapeHtml(lottery.timezone||"America/New_York")}"/></label><label>Payout percentage<input name="payout_percent" type="number" min="1" max="100" step=".01" value="${Number(lottery.payout_percent||100)}"/><small>Percentage of available pool awarded.</small></label><label class="wide">Role winning weights (JSON)<textarea name="role_weights" placeholder='{"beta":1.25,"civ":1}'>${escapeHtml(JSON.stringify(lottery.role_weights||{},null,2))}</textarea><small>1.0 is standard odds; 2.0 doubles an eligible entry's draw weight.</small></label><label class="wide">Excluded roles<input name="excluded_roles" value="${escapeHtml((lottery.excluded_roles||[]).join(", "))}" placeholder="owner, dev, admin"/><small>Comma-separated roles that cannot enter or win.</small></label><button class="primary wide">Save lottery governance</button></form></section>
+    <div class="dev-grid-2"><section class="dev-card"><div class="dev-card-header"><div><span>DRAW OVERSIGHT</span><h2>Drawing history</h2></div><button class="danger" type="button" data-lottery-run-draw>Run supervised draw now</button></div><div class="dev-detail-list">${draws.map(draw=>`<div><strong>${new Date(draw.scheduled_at).toLocaleString()} · ${escapeHtml(draw.status)}</strong><small>${draw.winner_name?`${escapeHtml(draw.winner_name)} · CIV ${escapeHtml(draw.winner_civ)} · ${money(draw.payout_amount)}`:`${money(draw.prize_pool)} pool`}</small></div>`).join("")||`<div class="empty">No drawings recorded</div>`}</div></section><section class="dev-card"><div class="dev-card-header"><div><span>INTEGRITY QUEUE</span><h2>Entry review</h2></div><strong>${entries.filter(x=>x.fraud_flag||x.status==="excluded").length} FLAGGED</strong></div><div class="lottery-review-list">${entries.map(entry=>`<article><div><strong>${escapeHtml(entry.name)} · CIV ${escapeHtml(entry.civ_number)}</strong><small>Entry FC-${String(entry.id).padStart(7,"0")} · ${escapeHtml(entry.entry_date)} · weight ${Number(entry.role_weight).toFixed(2)}×</small></div><span class="${entry.fraud_flag||entry.status==="excluded"?"warning":"valid"}">${entry.fraud_flag?"FLAGGED":escapeHtml(entry.status.toUpperCase())}</span><div><button data-lottery-review="${entry.id}" data-action="${entry.fraud_flag?"clear":"flag"}">${entry.fraud_flag?"Clear flag":"Flag fraud"}</button><button data-lottery-review="${entry.id}" data-action="${entry.status==="excluded"?"restore":"exclude"}">${entry.status==="excluded"?"Restore":"Exclude"}</button></div></article>`).join("")||`<div class="empty">No submitted entries</div>`}</div></section></div>
   </div>`;
 }
 
@@ -9850,6 +9927,7 @@ function renderDevTools() {
   if (state.devTab === "dmv-settings") return renderDevDmvSettings(data.dmv_settings || {});
   if (state.devTab === "court-settings") return renderDevCourtSettings(data.court_settings || {});
   if (state.devTab === "market-settings") return renderDevMarketSettings(data.market_settings || {}, users);
+  if (state.devTab === "lottery-settings") return renderDevLotterySettings(data.lottery_settings || {});
   if (state.devTab === "mdt-settings") return renderDevMdtSettings(data.ice_settings || {});
   if (state.devTab === "ice-settings") return renderDevIceSettings(data.ice_settings || {});
   if (state.devTab === "admin-2fa") {
@@ -10125,7 +10203,11 @@ function renderDevGameIntelligence(data) {
   const categories = intel.categories || [];
   const linkedUsers = (data.users || []).filter((user) => user.arma_linked);
   const totalRecords = Number(sync.records || categories.reduce((sum, item) => sum + Number(item.records || 0), 0));
-  return `<div class="stack game-intel-console">
+  const circulation = Number(economy.currency_in_circulation || 0);
+  const fundedPercent = Number(economy.bank_accounts || 0) ? Math.round((Number(economy.funded_accounts || 0) / Number(economy.bank_accounts || 1)) * 100) : 0;
+  const linkedPercent = Number(economy.bank_accounts || 0) ? Math.round((Number(economy.linked_accounts || 0) / Number(economy.bank_accounts || 1)) * 100) : 0;
+  const largestShare = circulation ? Math.min(100, (Number(economy.largest_balance || 0) / circulation) * 100) : 0;
+  return `<div class="stack game-intel-console game-intel-v2">
     <section class="game-intel-hero">
       <div class="game-intel-hero-copy">
         <span class="dev-topbar-kicker">FCRPMUSSALO / READ-ONLY MIRROR</span>
@@ -10133,6 +10215,11 @@ function renderDevGameIntelligence(data) {
         <div class="game-intel-pulse"><i></i><span>${sync.status === "synced" ? "Mirror online" : "Sync pending"}</span><small>${escapeHtml(sync.last_success_at || "No completed import")}</small></div>
       </div>
       <div class="game-intel-score"><span>INDEXED</span><strong>${totalRecords.toLocaleString()}</strong><small>${categories.length} collections</small></div>
+    </section>
+    <section class="game-economy-pulse">
+      <div class="economy-pulse-copy"><span>LIVE ECONOMY PULSE</span><strong>${money(circulation)}</strong><small>Total currency indexed across ${Number(economy.bank_accounts || 0).toLocaleString()} game-bank accounts</small></div>
+      <div class="economy-distribution"><div><span>Distributed circulation</span><i><b style="width:${100 - largestShare}%"></b></i><strong>${(100 - largestShare).toFixed(1)}%</strong></div><div><span>Largest account concentration</span><i><b class="gold" style="width:${largestShare}%"></b></i><strong>${largestShare.toFixed(1)}%</strong></div></div>
+      <div class="economy-signal"><span><b>${fundedPercent}%</b><small>accounts funded</small></span><span><b>${linkedPercent}%</b><small>identity matched</small></span></div>
     </section>
     <div class="game-intel-statline">
       <article><span>Circulation</span><strong>${money(economy.currency_in_circulation || 0)}</strong><small>All game banks</small></article>
@@ -10512,8 +10599,17 @@ function bindDevWorkspace() {
   $("#devMarketProgramForm [name='percent_change']")?.addEventListener("input", event => { const output=$("[data-market-example]"); if(output) output.textContent=`$1.00 becomes ${money(1 + Number(event.currentTarget.value || 0)/100)}`; });
   $("#devMarketProgramForm")?.addEventListener("submit", async event => { event.preventDefault(); try { const result=await api("/api/dev-tools/market/programs",{method:"POST",body:Object.fromEntries(new FormData(event.currentTarget))}); toast(`Price program launched Â· $1 becomes $${Number(result.example_one_dollar).toFixed(4)}`); await refreshDevTools(); } catch(error){toast(error.message);} });
   $$("[data-market-preset]").forEach(button => button.addEventListener("click", async () => { if(!confirm(`Launch ${humanLabel(button.dataset.marketPreset)} market event?`)) return; try { await api("/api/dev-tools/market/presets",{method:"POST",body:{preset:button.dataset.marketPreset}}); toast("Market event launched"); await refreshDevTools(); } catch(error){toast(error.message);} }));
-  $("#devMarketCodeForm")?.addEventListener("submit", async event => { event.preventDefault(); try { state.generatedMarketCode=await api("/api/dev-tools/market/codes",{method:"POST",body:Object.fromEntries(new FormData(event.currentTarget))}); toast("Ravenhood receipt PIN issued"); await refreshDevTools(); } catch(error){toast(error.message);} });
+  $$("[data-market-cancel-program]").forEach(button=>button.addEventListener("click",async()=>{const name=button.dataset.marketProgramName||"this movement";if(!confirm(`Stop ${name} and restore all affected securities to their pre-movement prices?`))return;button.disabled=true;try{const result=await api(`/api/dev-tools/market/programs/${button.dataset.marketCancelProgram}/cancel`,{method:"PATCH",body:"{}"});toast(`Movement stopped · ${result.restored} price(s) restored`);await refreshDevTools();}catch(error){button.disabled=false;toast(error.message);}}));
+  ["#devMarketCodeForm", "#myFaircroftPaymentCodeForm"].forEach((selector) => {
+    const form = $(selector);
+    const residentField = form?.querySelector('[name="target_user_id"]')?.closest("label");
+    if (residentField) residentField.innerHTML = `<span class="dev-unassigned-pin"><b>UNASSIGNED BEARER PIN</b><small>The first eligible resident to redeem this PIN will be recorded as its recipient.</small></span>`;
+  });
+  $("#devMarketCodeForm")?.addEventListener("submit", async event => { event.preventDefault(); try { state.generatedMarketCode=await api("/api/dev-tools/market/codes",{method:"POST",body:Object.fromEntries(new FormData(event.currentTarget))}); toast("Unassigned Ravenhood receipt PIN issued"); await refreshDevTools(); } catch(error){toast(error.message);} });
   $("#devMarketAiForm")?.addEventListener("submit", async event => { event.preventDefault(); try { const result=await api("/api/dev-tools/market/ai-briefing",{method:"POST",body:Object.fromEntries(new FormData(event.currentTarget)),timeoutMs:120000}); state.marketAiBriefing=result.briefing; toast("Gemini market briefing complete"); await refreshDevTools(); } catch(error){toast(error.message);} });
+  $("#devLotterySettingsForm")?.addEventListener("submit",async event=>{event.preventDefault();const form=event.currentTarget;const body=Object.fromEntries(new FormData(form));body.enabled=form.enabled.checked;try{await api("/api/dev-tools/lottery/settings",{method:"PATCH",body});toast("Lottery governance saved");await refreshDevTools();}catch(error){toast(error.message);}});
+  $$('[data-lottery-review]').forEach(button=>button.addEventListener("click",async()=>{let reason="";if(button.dataset.action==="flag"||button.dataset.action==="exclude")reason=prompt("Document the integrity reason for this action:")||"";if((button.dataset.action==="flag"||button.dataset.action==="exclude")&&!reason)return;try{await api(`/api/dev-tools/lottery/entries/${button.dataset.lotteryReview}/review`,{method:"PATCH",body:{action:button.dataset.action,reason}});toast("Lottery entry review updated");await refreshDevTools();}catch(error){toast(error.message);}}));
+  $("[data-lottery-run-draw]")?.addEventListener("click",async()=>{if(!confirm("Run a supervised lottery drawing now using all eligible entries and the current available pool?"))return;try{await api("/api/dev-tools/lottery/draw",{method:"POST",body:"{}"});toast("Lottery drawing completed");await refreshDevTools();}catch(error){toast(error.message);}});
   $("#admin2faCodeForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {

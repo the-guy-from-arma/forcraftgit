@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v022-leaderboard-heat";
+const CACHE = "faircroft-rp-v022-market-controls";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.2.2-leaderboard-heat",
+  "/static/styles.css?v=0.2.2-bearer-pins",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.2.2-leaderboard-heat",
+  "/static/app.js?v=0.2.2-bearer-pins",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
   "/static/brand/platforms/playstation.svg",

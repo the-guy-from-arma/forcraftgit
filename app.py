@@ -1571,6 +1571,14 @@ SYSTEM_SETTING_DEFAULTS = {
     "market_trade_fee_percent": "0.25",
     "market_holding_balance": "0.00",
     "market_ai_enabled": "1",
+    "lottery_enabled": "1",
+    "lottery_daily_entries": "3",
+    "lottery_draw_weekday": "1",
+    "lottery_draw_time": "23:59",
+    "lottery_timezone": "America/New_York",
+    "lottery_role_weights": "{}",
+    "lottery_excluded_roles": "[]",
+    "lottery_payout_percent": "100.00",
 }
 APP_VISIBILITY_OPTIONS = (
     ("getting-started", "Getting Started"),
@@ -1587,6 +1595,7 @@ APP_VISIBILITY_OPTIONS = (
     ("properties", "Properties"),
     ("bank", "Bank"),
     ("wallstreet", "Ravenhood Markets"),
+    ("lottery", "Faircroft Lottery"),
     ("messages", "Messages"),
     ("changelog", "Changelog"),
     ("contracts", "Contracts"),
@@ -2812,7 +2821,7 @@ def ensure_migrations(db: Database) -> None:
             id SERIAL PRIMARY KEY,
             code_hash TEXT NOT NULL UNIQUE,
             code_hint TEXT NOT NULL,
-            target_user_id INTEGER NOT NULL,
+            target_user_id INTEGER,
             authorized_amount NUMERIC(12,2) NOT NULL,
             created_by INTEGER NOT NULL,
             expires_at TEXT NOT NULL,
@@ -2912,7 +2921,7 @@ def ensure_migrations(db: Database) -> None:
             id SERIAL PRIMARY KEY,
             code_hash TEXT NOT NULL UNIQUE,
             code_hint TEXT NOT NULL,
-            target_user_id INTEGER NOT NULL,
+            target_user_id INTEGER,
             transaction_type TEXT NOT NULL,
             amount NUMERIC(14,2) NOT NULL,
             created_by INTEGER NOT NULL,
@@ -2926,6 +2935,8 @@ def ensure_migrations(db: Database) -> None:
         )
         """
     )
+    db.execute("ALTER TABLE myfaircroft_payment_codes ALTER COLUMN target_user_id DROP NOT NULL")
+    db.execute("ALTER TABLE market_cash_codes ALTER COLUMN target_user_id DROP NOT NULL")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS market_cash_transactions (
@@ -2984,6 +2995,49 @@ def ensure_migrations(db: Database) -> None:
             detail TEXT NOT NULL DEFAULT '',
             created_by INTEGER,
             created_at TEXT NOT NULL
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS lottery_draws (
+            id SERIAL PRIMARY KEY,
+            draw_key TEXT NOT NULL UNIQUE,
+            scheduled_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'scheduled',
+            source_fines NUMERIC(14,2) NOT NULL DEFAULT 0,
+            source_market_fees NUMERIC(14,2) NOT NULL DEFAULT 0,
+            prize_pool NUMERIC(14,2) NOT NULL DEFAULT 0,
+            payout_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+            winning_entry_id INTEGER,
+            winner_user_id INTEGER,
+            completed_at TEXT,
+            reviewed_by INTEGER,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (winner_user_id) REFERENCES users(id) ON DELETE SET NULL,
+            FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS lottery_entries (
+            id SERIAL PRIMARY KEY,
+            draw_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            entry_date TEXT NOT NULL,
+            entry_number INTEGER NOT NULL,
+            role_weight NUMERIC(8,4) NOT NULL DEFAULT 1,
+            status TEXT NOT NULL DEFAULT 'eligible',
+            fraud_flag INTEGER NOT NULL DEFAULT 0,
+            fraud_reason TEXT NOT NULL DEFAULT '',
+            reviewed_by INTEGER,
+            reviewed_at TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE(user_id, entry_date, entry_number),
+            FOREIGN KEY (draw_id) REFERENCES lottery_draws(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL
         )
         """
     )
@@ -3661,6 +3715,15 @@ def get_system_settings(db: Database) -> dict[str, Any]:
             raise ValueError
     except (TypeError, ValueError, json.JSONDecodeError):
         dmv_license_classes = json.loads(SYSTEM_SETTING_DEFAULTS["dmv_license_classes"])
+    try:
+        lottery_role_weights = json.loads(str(raw.get("lottery_role_weights") or "{}"))
+        lottery_role_weights = {str(k).strip().lower(): max(0.0, min(10.0, float(v))) for k, v in lottery_role_weights.items()}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        lottery_role_weights = {}
+    try:
+        lottery_excluded_roles = [str(role).strip().lower() for role in json.loads(str(raw.get("lottery_excluded_roles") or "[]")) if str(role).strip()]
+    except (TypeError, json.JSONDecodeError):
+        lottery_excluded_roles = []
     return {
         "autopilot_verify_enabled": str(raw.get("autopilot_verify_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "autopilot_verify_minutes": minutes,
@@ -3701,6 +3764,14 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "market_trade_fee_percent": max(0.0, min(10.0, float(raw.get("market_trade_fee_percent") or 0.25))),
         "market_holding_balance": max(0.0, float(raw.get("market_holding_balance") or 0)),
         "market_ai_enabled": str(raw.get("market_ai_enabled") or "1") in ("1", "true", "True", "yes", "on"),
+        "lottery_enabled": str(raw.get("lottery_enabled") or "1") in ("1", "true", "True", "yes", "on"),
+        "lottery_daily_entries": max(1, min(20, int(raw.get("lottery_daily_entries") or 3))),
+        "lottery_draw_weekday": max(0, min(6, int(raw.get("lottery_draw_weekday") or 1))),
+        "lottery_draw_time": str(raw.get("lottery_draw_time") or "23:59")[:5],
+        "lottery_timezone": str(raw.get("lottery_timezone") or "America/New_York")[:80],
+        "lottery_role_weights": lottery_role_weights,
+        "lottery_excluded_roles": lottery_excluded_roles,
+        "lottery_payout_percent": max(1.0, min(100.0, float(raw.get("lottery_payout_percent") or 100))),
         "dmv_license_classes": dmv_license_classes,
         "app_visibility": app_visibility,
     }
@@ -3717,6 +3788,68 @@ def set_system_setting(db: Database, key: str, value: str) -> None:
         """,
         (key, value, now_iso()),
     )
+
+
+def lottery_funding_snapshot(db: Database, settings: dict[str, Any] | None = None) -> dict[str, float]:
+    settings = settings or get_system_settings(db)
+    direct = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM myfaircroft_direct_payments")
+    settled = one(db, "SELECT COALESCE(SUM(fine_amount),0) AS total FROM fine_settlement_items WHERE status='paid'")
+    awarded = one(db, "SELECT COALESCE(SUM(payout_amount),0) AS total FROM lottery_draws WHERE status='completed'")
+    fines = float(direct["total"] or 0) + float(settled["total"] or 0)
+    market = float(settings["market_holding_balance"] or 0)
+    paid = float(awarded["total"] or 0)
+    return {"fines": round(fines, 2), "market_fees": round(market, 2), "awarded": round(paid, 2), "available": round(max(0.0, fines + market - paid), 2)}
+
+
+def lottery_next_draw_at(settings: dict[str, Any], after: dt.datetime | None = None) -> dt.datetime:
+    zone = ZoneInfo(settings["lottery_timezone"])
+    current = (after or utcnow()).astimezone(zone)
+    hour, minute = [int(part) for part in settings["lottery_draw_time"].split(":", 1)]
+    days = (settings["lottery_draw_weekday"] - current.weekday()) % 7
+    candidate = (current + dt.timedelta(days=days)).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate <= current:
+        candidate += dt.timedelta(days=7)
+    return candidate
+
+
+def ensure_lottery_draw(db: Database, settings: dict[str, Any] | None = None) -> DbRow:
+    settings = settings or get_system_settings(db)
+    scheduled = lottery_next_draw_at(settings)
+    key = scheduled.strftime("%Y-%m-%dT%H:%M%z")
+    db.execute("""INSERT INTO lottery_draws (draw_key,scheduled_at,status,created_at) VALUES (?,?, 'scheduled',?) ON CONFLICT(draw_key) DO NOTHING""", (key, scheduled.astimezone(dt.timezone.utc).isoformat(), now_iso()))
+    return one(db, "SELECT * FROM lottery_draws WHERE draw_key=?", (key,))
+
+
+def run_due_lottery_draws(db: Database) -> None:
+    settings = get_system_settings(db)
+    if not settings["lottery_enabled"]:
+        return
+    for draw in all_rows(db, "SELECT * FROM lottery_draws WHERE status='scheduled' AND scheduled_at<=? ORDER BY scheduled_at", (now_iso(),)):
+        entries = all_rows(db, "SELECT * FROM lottery_entries WHERE draw_id=? AND status='eligible' AND fraud_flag=0 ORDER BY id", (draw["id"],))
+        funding = lottery_funding_snapshot(db, settings)
+        winner = None
+        if entries and funding["available"] > 0:
+            weights = [max(1, int(float(entry["role_weight"] or 1) * 100)) for entry in entries]
+            pick = secrets.randbelow(sum(weights))
+            for entry, weight in zip(entries, weights):
+                if pick < weight:
+                    winner = entry; break
+                pick -= weight
+        payout = round(funding["available"] * settings["lottery_payout_percent"] / 100, 2) if winner else 0
+        db.execute("""UPDATE lottery_draws SET status='completed',source_fines=?,source_market_fees=?,prize_pool=?,payout_amount=?,winning_entry_id=?,winner_user_id=?,completed_at=? WHERE id=? AND status='scheduled'""", (funding["fines"], funding["market_fees"], funding["available"], payout, winner["id"] if winner else None, winner["user_id"] if winner else None, now_iso(), draw["id"]))
+        if winner:
+            add_message(db, winner["user_id"], "Faircroft Lottery Winner", f"Your CIV entry was selected in the Faircroft Lottery. Prize authorization: ${payout:,.2f}. A developer will coordinate the verified in-game settlement.")
+    ensure_lottery_draw(db, settings)
+
+
+def lottery_worker() -> None:
+    while True:
+        try:
+            with conn() as db:
+                run_due_lottery_draws(db)
+        except Exception as exc:
+            print(f"Lottery scheduler error: {exc}")
+        time.sleep(30)
 
 
 def auto_verify_stats(db: Database, settings: dict[str, Any] | None = None) -> dict[str, int]:
@@ -4603,6 +4736,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         ("business", "Business", "store", business_enabled, False),
         ("properties", "PROPERTIES", "home", False, True),
         ("bank", "BANK", "bank", verified, False),
+        ("lottery", "LOTTERY", "trophy", verified, False),
         ("messages", "Messages", "message", verified, False),
         ("changelog", "Changelog", "scroll", True, False),
     ]
@@ -5714,8 +5848,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_wallstreet_cash(db, user)
                 elif path == "/api/wallstreet/orders" and method == "POST":
                     self.api_wallstreet_order(db, user)
+                elif path == "/api/wallstreet/recipient" and method == "GET":
+                    self.api_wallstreet_recipient(db, user, query)
                 elif path == "/api/wallstreet/transfers" and method == "POST":
                     self.api_wallstreet_transfer(db, user)
+                elif path == "/api/lottery" and method == "GET":
+                    self.api_lottery(db, user)
+                elif path == "/api/lottery/entries" and method == "POST":
+                    self.api_lottery_entry(db, user)
                 elif path == "/api/bank/collect" and method == "POST":
                     self.api_collect_bank(db, user)
                 elif path == "/api/bank/treasury-adjust" and method == "POST":
@@ -5904,10 +6044,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_market_settings(db, user)
                 elif path == "/api/dev-tools/market/programs" and method == "POST":
                     self.api_dev_market_program(db, user)
+                elif path.startswith("/api/dev-tools/market/programs/") and path.endswith("/cancel") and method == "PATCH":
+                    self.api_dev_market_program_cancel(db, user, self.path_int(path, 4))
                 elif path == "/api/dev-tools/market/presets" and method == "POST":
                     self.api_dev_market_preset(db, user)
                 elif path == "/api/dev-tools/market/ai-briefing" and method == "POST":
                     self.api_dev_market_ai_briefing(db, user)
+                elif path == "/api/dev-tools/lottery/settings" and method == "PATCH":
+                    self.api_dev_lottery_settings(db, user)
+                elif path.startswith("/api/dev-tools/lottery/entries/") and path.endswith("/review") and method == "PATCH":
+                    self.api_dev_lottery_entry_review(db, user, self.path_int(path, 4))
+                elif path == "/api/dev-tools/lottery/draw" and method == "POST":
+                    self.api_dev_lottery_draw(db, user)
                 elif path == "/api/dev-tools/sanctions" and method == "POST":
                     self.api_dev_create_sanction(db, user)
                 elif path.startswith("/api/dev-tools/sanctions/") and path.endswith("/revoke") and method == "POST":
@@ -8268,7 +8416,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if tx_type not in ("deposit", "withdrawal") or amount <= 0 or len(raw_code) != 4:
             self.error(400, "Transaction type, positive amount, and four-digit receipt code are required."); return
         code_hash = hashlib.sha256(raw_code.encode("utf-8")).hexdigest()
-        code = one(db, """SELECT * FROM market_cash_codes WHERE code_hash=? AND target_user_id=? AND transaction_type=?
+        code = one(db, """SELECT * FROM market_cash_codes WHERE code_hash=? AND (target_user_id IS NULL OR target_user_id=?) AND transaction_type=?
             AND amount=? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?""", (code_hash, user["id"], tx_type, amount, now_iso()))
         if not code:
             self.error(400, "Receipt code is invalid, expired, used, or authorized for a different amount."); return
@@ -8278,7 +8426,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         new_balance = balance + amount if tx_type == "deposit" else balance - amount
         ts = now_iso()
         db.execute("UPDATE market_accounts SET cash_balance=?, updated_at=? WHERE id=?", (round(new_balance, 2), ts, account["id"]))
-        db.execute("UPDATE market_cash_codes SET used_by=?, used_at=? WHERE id=?", (user["id"], ts, code["id"]))
+        db.execute("UPDATE market_cash_codes SET target_user_id=COALESCE(target_user_id,?), used_by=?, used_at=? WHERE id=? AND used_at IS NULL", (user["id"], user["id"], ts, code["id"]))
         db.execute("INSERT INTO market_cash_transactions (account_id, code_id, transaction_type, amount, processed_by, created_at) VALUES (?, ?, ?, ?, ?, ?)", (account["id"], code["id"], tx_type, amount, code["created_by"], ts))
         self.send_json(200, {"ok": True, "balance": round(new_balance, 2), "transaction_type": tx_type, "amount": amount})
 
@@ -8316,17 +8464,31 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         set_system_setting(db, "market_holding_balance", str(round(settings["market_holding_balance"] + fee, 2)))
         self.send_json(201, {"ok": True, "gross": gross, "fee": fee})
 
+    def api_wallstreet_recipient(self, db: Database, user: DbRow | None, query: dict[str, list[str]]) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        civ_number = str((query.get("civ") or [""])[0]).strip()
+        if not civ_number:
+            self.error(400, "Enter a CIV number."); return
+        target_user = one(db, "SELECT id, name, civ_number FROM users WHERE civ_number=?", (civ_number,))
+        if not target_user or target_user["id"] == user["id"]:
+            self.error(404, "No eligible Ravenhood recipient was found for that CIV number."); return
+        if not one(db, "SELECT id FROM market_accounts WHERE user_id=?", (target_user["id"],)):
+            self.error(409, "That resident must create a Ravenhood account before receiving positions."); return
+        self.send_json(200, {"recipient": {"name": target_user["name"], "civ_number": target_user["civ_number"], "market_account": True}})
+
     def api_wallstreet_transfer(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
         if err:
             self.error(403 if user else 401, err); return
-        payload = self.read_json(); recipient = str(payload.get("recipient") or "").strip(); ticker = str(payload.get("ticker") or "").upper().strip()
+        payload = self.read_json(); recipient = str(payload.get("recipient_civ_number") or "").strip(); ticker = str(payload.get("ticker") or "").upper().strip()
         try: quantity = round(float(payload.get("quantity") or 0), 6)
         except (TypeError, ValueError): quantity = 0
-        sender = one(db, "SELECT * FROM market_accounts WHERE user_id=?", (user["id"],)); target_user = one(db, "SELECT * FROM users WHERE LOWER(email)=LOWER(?) OR civ_number=?", (recipient, recipient))
+        sender = one(db, "SELECT * FROM market_accounts WHERE user_id=?", (user["id"],)); target_user = one(db, "SELECT * FROM users WHERE civ_number=?", (recipient,))
         security = one(db, "SELECT * FROM market_securities WHERE ticker=?", (ticker,))
         if not sender or not target_user or target_user["id"] == user["id"] or not security or quantity <= 0:
-            self.error(400, "Valid recipient CIV/email, ticker, and quantity are required."); return
+            self.error(400, "A confirmed recipient CIV, ticker, and quantity are required."); return
         target = one(db, "SELECT * FROM market_accounts WHERE user_id=?", (target_user["id"],))
         if not target: self.error(409, "Recipient must create a Ravenhood account first."); return
         holding = one(db, "SELECT * FROM market_holdings WHERE account_id=? AND security_id=?", (sender["id"], security["id"]))
@@ -8340,6 +8502,40 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("INSERT INTO market_transfers (from_account_id, to_account_id, security_id, quantity, fee_amount, created_at) VALUES (?, ?, ?, ?, ?, ?)", (sender["id"], target["id"], security["id"], quantity, fee, now_iso()))
         set_system_setting(db, "market_holding_balance", str(round(settings["market_holding_balance"] + fee, 2)))
         self.send_json(201, {"ok": True, "fee": fee})
+
+    def api_lottery(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        settings = get_system_settings(db); run_due_lottery_draws(db); draw = ensure_lottery_draw(db, settings)
+        roles = roles_for(user); excluded = sorted(set(roles) & set(settings["lottery_excluded_roles"]))
+        weight = max([settings["lottery_role_weights"].get(role, 1.0) for role in roles] or [1.0])
+        today = utcnow().astimezone(ZoneInfo(settings["lottery_timezone"])).date().isoformat()
+        entries = all_rows(db, "SELECT * FROM lottery_entries WHERE draw_id=? AND user_id=? ORDER BY created_at DESC", (draw["id"], user["id"]))
+        today_count = sum(1 for entry in entries if entry["entry_date"] == today)
+        funding = lottery_funding_snapshot(db, settings)
+        latest = one(db, """SELECT d.*,u.name AS winner_name,u.civ_number AS winner_civ FROM lottery_draws d LEFT JOIN users u ON u.id=d.winner_user_id WHERE d.status='completed' ORDER BY d.completed_at DESC LIMIT 1""")
+        self.send_json(200, {"enabled": settings["lottery_enabled"], "draw": dict(draw), "funding": funding, "entries": [dict(row) for row in entries], "entries_today": today_count, "daily_limit": settings["lottery_daily_entries"], "remaining_today": max(0, settings["lottery_daily_entries"]-today_count), "role_weight": weight, "excluded": bool(excluded), "excluded_roles": excluded, "latest_result": dict(latest) if latest else None, "timezone": settings["lottery_timezone"]})
+
+    def api_lottery_entry(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        settings = get_system_settings(db)
+        if not settings["lottery_enabled"]:
+            self.error(409, "Lottery entries are currently closed."); return
+        roles = roles_for(user); excluded = sorted(set(roles) & set(settings["lottery_excluded_roles"]))
+        if excluded:
+            self.error(403, "This account is excluded from lottery participation by role policy."); return
+        draw = ensure_lottery_draw(db, settings); today = utcnow().astimezone(ZoneInfo(settings["lottery_timezone"])).date().isoformat()
+        count = int(one(db, "SELECT COUNT(*) AS count FROM lottery_entries WHERE user_id=? AND entry_date=?", (user["id"], today))["count"] or 0)
+        if count >= settings["lottery_daily_entries"]:
+            self.error(409, "All daily lottery entries have already been submitted."); return
+        weight = max([settings["lottery_role_weights"].get(role, 1.0) for role in roles] or [1.0])
+        db.execute("INSERT INTO lottery_entries (draw_id,user_id,entry_date,entry_number,role_weight,created_at) VALUES (?,?,?,?,?,?)", (draw["id"], user["id"], today, count+1, weight, now_iso()))
+        self.send_json(201, {"ok": True, "entry_number": count+1, "remaining_today": settings["lottery_daily_entries"]-count-1})
 
     def api_bank(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -9785,13 +9981,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             db,
             """
             SELECT * FROM myfaircroft_payment_codes
-            WHERE code_hash = ? AND target_user_id = ? AND used_at IS NULL
+            WHERE code_hash = ? AND (target_user_id IS NULL OR target_user_id = ?) AND used_at IS NULL
               AND revoked_at IS NULL AND expires_at > ?
             """,
             (code_hash, user["id"], now_iso()),
         )
         if not payment_code:
-            self.error(403, "Receipt code is invalid, expired, already used, or belongs to another resident")
+            self.error(403, "Receipt code is invalid, expired, already used, or assigned to another resident")
             return
         authorized = round(float(payment_code["authorized_amount"] or 0), 2)
         if authorized != amount:
@@ -9805,8 +10001,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             (case_id, user["id"], payment_code["id"], amount, payment_code["created_by"], ts),
         )
         db.execute(
-            "UPDATE myfaircroft_payment_codes SET used_by = ?, used_at = ?, citation_id = ? WHERE id = ? AND used_at IS NULL",
-            (user["id"], ts, case_id, payment_code["id"]),
+            "UPDATE myfaircroft_payment_codes SET target_user_id = COALESCE(target_user_id, ?), used_by = ?, used_at = ?, citation_id = ? WHERE id = ? AND used_at IS NULL",
+            (user["id"], user["id"], ts, case_id, payment_code["id"]),
         )
         new_remaining = round(max(0, remaining - amount), 2)
         if new_remaining <= 0:
@@ -12582,11 +12778,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             """
             SELECT c.id, c.code_hint, c.authorized_amount, c.expires_at, c.used_at,
                    c.revoked_at, c.created_at, c.citation_id,
-                   creator.name AS created_by_name, target.name AS target_user_name,
+                   creator.name AS created_by_name, COALESCE(target.name, 'Unassigned bearer PIN') AS target_user_name,
                    target.civ_number AS target_civ_number, used.name AS used_by_name
             FROM myfaircroft_payment_codes c
             JOIN users creator ON creator.id = c.created_by
-            JOIN users target ON target.id = c.target_user_id
+            LEFT JOIN users target ON target.id = c.target_user_id
             LEFT JOIN users used ON used.id = c.used_by
             ORDER BY c.created_at DESC LIMIT 200
             """,
@@ -12921,9 +13117,22 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "programs": [dict(row) for row in all_rows(db, "SELECT p.*, s.ticker FROM market_price_programs p LEFT JOIN market_securities s ON s.id=p.security_id ORDER BY p.created_at DESC LIMIT 50")],
                     "events": [dict(row) for row in all_rows(db, "SELECT * FROM market_events ORDER BY created_at DESC LIMIT 50")],
                     "codes": [dict(row) for row in all_rows(db, """SELECT c.id,c.code_hint,c.target_user_id,c.transaction_type,c.amount,c.expires_at,c.used_at,c.revoked_at,c.created_at,
-                        target.name AS target_name,creator.name AS created_by_name,used.name AS used_by_name
-                        FROM market_cash_codes c JOIN users target ON target.id=c.target_user_id JOIN users creator ON creator.id=c.created_by
+                        COALESCE(target.name, 'Unassigned bearer PIN') AS target_name,creator.name AS created_by_name,used.name AS used_by_name
+                        FROM market_cash_codes c LEFT JOIN users target ON target.id=c.target_user_id JOIN users creator ON creator.id=c.created_by
                         LEFT JOIN users used ON used.id=c.used_by ORDER BY c.created_at DESC LIMIT 100""")],
+                },
+                "lottery_settings": {
+                    "enabled": system_settings["lottery_enabled"],
+                    "daily_entries": system_settings["lottery_daily_entries"],
+                    "draw_weekday": system_settings["lottery_draw_weekday"],
+                    "draw_time": system_settings["lottery_draw_time"],
+                    "timezone": system_settings["lottery_timezone"],
+                    "payout_percent": system_settings["lottery_payout_percent"],
+                    "role_weights": system_settings["lottery_role_weights"],
+                    "excluded_roles": system_settings["lottery_excluded_roles"],
+                    "funding": lottery_funding_snapshot(db, system_settings),
+                    "draws": [dict(row) for row in all_rows(db, """SELECT d.*,u.name AS winner_name,u.civ_number AS winner_civ FROM lottery_draws d LEFT JOIN users u ON u.id=d.winner_user_id ORDER BY d.scheduled_at DESC LIMIT 30""")],
+                    "entries": [dict(row) for row in all_rows(db, """SELECT e.*,u.name,u.civ_number,u.roles FROM lottery_entries e JOIN users u ON u.id=e.user_id ORDER BY e.created_at DESC LIMIT 250""")],
                 },
             },
         )
@@ -13272,17 +13481,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403 if user else 401, err); return
         payload = self.read_json()
         try:
-            target_user_id = int(payload.get("target_user_id")); amount = round(float(payload.get("amount") or 0), 2)
+            target_user_id = None
+            amount = round(float(payload.get("amount") or 0), 2)
             expiry = max(5, min(int(payload.get("expiry_minutes") or 30), 120))
         except (TypeError, ValueError):
-            self.error(400, "Target, amount, and expiry are required."); return
+            self.error(400, "Amount and expiry are required."); return
         tx_type = str(payload.get("transaction_type") or "").lower()
         confirmation = str(payload.get("confirmation") or "").strip().upper()
         required = "MONEY RECEIVED" if tx_type == "deposit" else "WITHDRAWAL APPROVED"
         if tx_type not in ("deposit", "withdrawal") or amount <= 0 or confirmation != required:
             self.error(400, f"Confirm {required} only after the in-game handoff is complete."); return
-        if not one(db, "SELECT id FROM users WHERE id=?", (target_user_id,)):
-            self.error(404, "Resident not found."); return
         raw_code = ""; code_hash = ""
         for _ in range(30):
             raw_code = f"{secrets.randbelow(10000):04d}"; code_hash = hashlib.sha256(raw_code.encode("utf-8")).hexdigest()
@@ -13325,6 +13533,28 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("INSERT INTO market_events (event_type, title, detail, created_by, created_at) VALUES ('program', ?, ?, ?, ?)", (name, f"{ticker}: {percent:+.2f}% over {duration} minutes", user["id"], start.isoformat()))
         self.send_json(201, {"ok": True, "example_one_dollar": round(1 * (1 + percent / 100), 4), "ends_at": end.isoformat()})
 
+    def api_dev_market_program_cancel(self, db: Database, user: DbRow | None, program_id: int | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        program = one(db, "SELECT * FROM market_price_programs WHERE id=?", (program_id,)) if program_id else None
+        if not program:
+            self.error(404, "Market movement not found."); return
+        if program["status"] != "active":
+            self.error(409, "That market movement is no longer active."); return
+        related = all_rows(db, "SELECT * FROM market_price_programs WHERE status='active' AND event_name=? AND created_at=? ORDER BY id", (program["event_name"], program["created_at"]))
+        restored = 0
+        for item in related:
+            if item.get("security_id"):
+                security = one(db, "SELECT price FROM market_securities WHERE id=?", (item["security_id"],))
+                if security:
+                    db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?", (max(0.01, float(item["start_price"] or security["price"])), now_iso(), item["security_id"]))
+                    restored += 1
+            db.execute("UPDATE market_price_programs SET status='cancelled' WHERE id=?", (item["id"],))
+        db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('program_cancelled',?,?,?,?)", (f"Stopped: {program['event_name']}", f"Restored {restored} security price(s) to their pre-movement baseline.", user["id"], now_iso()))
+        add_admin_audit(db, int(user["id"]), "market.program.cancelled", details={"program_id": program_id, "event_name": program["event_name"], "restored": restored})
+        self.send_json(200, {"ok": True, "cancelled": len(related), "restored": restored})
+
     def api_dev_market_preset(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
         if err:
@@ -13352,10 +13582,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not GEMINI_API_KEY or not get_system_settings(db)["market_ai_enabled"]:
             self.error(409, "Gemini market briefings are not configured or are disabled."); return
         context = str(self.read_json().get("context") or "Routine Faircroft market session").strip()[:2000]
-        listings = [dict(row) for row in all_rows(db, "SELECT ticker,name,security_type,sector,price,previous_price,volatility FROM market_securities WHERE active=1 ORDER BY ticker")]
+        listings = [
+            {
+                **dict(row),
+                "price": float(row["price"] or 0),
+                "previous_price": float(row["previous_price"] or 0),
+                "volatility": float(row["volatility"] or 0),
+            }
+            for row in all_rows(db, "SELECT ticker,name,security_type,sector,price,previous_price,volatility FROM market_securities WHERE active=1 ORDER BY ticker")
+        ]
         prompt = ("You are the analyst for Ravenhood Markets, Faircroft's in-world stock exchange. Produce a concise market operations briefing. "
                   "Do not claim this is real financial advice. Recommend at most three OPTIONAL RP price programs with ticker, percent_change, duration_minutes, and rationale. "
-                  f"STAFF SCENARIO:\n{context}\nLISTINGS:\n{json.dumps(listings, separators=(',', ':'))}")
+                  f"STAFF SCENARIO:\n{context}\nLISTINGS:\n{json.dumps(listings, separators=(',', ':'), default=str)}")
         body = {"contents":[{"role":"user","parts":[{"text":prompt}]}],"generationConfig":{"temperature":0.55,"maxOutputTokens":1800}}
         endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{FNN_GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
         request = urllib.request.Request(endpoint,data=json.dumps(body).encode("utf-8"),headers={"Content-Type":"application/json"},method="POST")
@@ -13367,6 +13605,54 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('ai_briefing','Gemini market briefing',?,?,?)", (briefing,user["id"],now_iso()))
         self.send_json(200, {"ok": True, "briefing": briefing})
 
+    def api_dev_lottery_settings(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        payload = self.read_json()
+        try:
+            daily_entries = max(1, min(20, int(payload.get("daily_entries") or 3)))
+            payout_percent = max(1.0, min(100.0, float(payload.get("payout_percent") or 100)))
+            draw_weekday = max(0, min(6, int(payload.get("draw_weekday") or 1)))
+            ZoneInfo(str(payload.get("timezone") or "America/New_York"))
+            if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", str(payload.get("draw_time") or "")):
+                raise ValueError
+            role_weights = json.loads(str(payload.get("role_weights") or "{}"))
+            excluded_roles = [item.strip().lower() for item in str(payload.get("excluded_roles") or "").split(",") if item.strip()]
+            cleaned_weights = {str(k).strip().lower(): max(0.0, min(10.0, float(v))) for k, v in role_weights.items()}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            self.error(400, "Lottery settings contain an invalid schedule, timezone, or role policy."); return
+        for key, value in {
+            "lottery_enabled": "1" if payload.get("enabled") else "0",
+            "lottery_daily_entries": str(daily_entries), "lottery_draw_weekday": str(draw_weekday),
+            "lottery_draw_time": str(payload.get("draw_time")), "lottery_timezone": str(payload.get("timezone"))[:80],
+            "lottery_payout_percent": str(payout_percent), "lottery_role_weights": json.dumps(cleaned_weights),
+            "lottery_excluded_roles": json.dumps(excluded_roles),
+        }.items(): set_system_setting(db, key, value)
+        ensure_lottery_draw(db, get_system_settings(db))
+        self.send_json(200, {"ok": True})
+
+    def api_dev_lottery_entry_review(self, db: Database, user: DbRow | None, entry_id: int | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        if not entry_id or not one(db, "SELECT id FROM lottery_entries WHERE id=?", (entry_id,)):
+            self.error(404, "Lottery entry not found."); return
+        payload = self.read_json(); action = str(payload.get("action") or "").lower(); reason = str(payload.get("reason") or "").strip()[:300]
+        if action not in ("flag", "clear", "exclude", "restore"):
+            self.error(400, "Unsupported lottery review action."); return
+        flagged = 1 if action == "flag" else 0; status = "excluded" if action == "exclude" else "eligible"
+        db.execute("UPDATE lottery_entries SET fraud_flag=?,fraud_reason=?,status=?,reviewed_by=?,reviewed_at=? WHERE id=?", (flagged, reason if flagged or status == "excluded" else "", status, user["id"], now_iso(), entry_id))
+        self.send_json(200, {"ok": True})
+
+    def api_dev_lottery_draw(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        draw = ensure_lottery_draw(db); db.execute("UPDATE lottery_draws SET scheduled_at=? WHERE id=? AND status='scheduled'", (now_iso(), draw["id"]))
+        run_due_lottery_draws(db)
+        self.send_json(200, {"ok": True})
+
     def api_dev_generate_myfaircroft_payment_code(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
         if err:
@@ -13375,16 +13661,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         assert user is not None
         payload = self.read_json()
         try:
-            target_user_id = int(payload.get("target_user_id"))
+            target_user_id = None
             amount = round(float(payload.get("amount") or 0), 2)
             expiry_minutes = max(5, min(int(payload.get("expiry_minutes") or 30), 120))
         except (TypeError, ValueError):
-            self.error(400, "Select a resident and enter a valid amount and expiry")
+            self.error(400, "Enter a valid amount and expiry")
             return
-        target = one(db, "SELECT id, name, civ_number FROM users WHERE id = ?", (target_user_id,))
-        if not target:
-            self.error(404, "Resident account not found")
-            return
+        target = None
         if amount <= 0 or amount > 10000000:
             self.error(400, "Authorized payment amount must be between $0.01 and $10,000,000")
             return
@@ -13409,7 +13692,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         self.send_json(201, {
             "ok": True, "code": raw_code, "amount": amount,
-            "target_name": target["name"], "expires_at": expires_at.isoformat(),
+            "target_name": target["name"] if target else "Any eligible resident", "unassigned": target is None, "expires_at": expires_at.isoformat(),
         })
 
     def api_dev_account(self, db: Database, user: DbRow | None, target_id: int) -> None:
@@ -15224,6 +15507,7 @@ def main() -> None:
         name="fnn-daily-generation",
         daemon=True,
     ).start()
+    threading.Thread(target=lottery_worker, name="faircroft-lottery", daemon=True).start()
     port = int(os.environ.get("PORT", "8080"))
     host = os.environ.get("HOST", "0.0.0.0")
     server = ThreadingHTTPServer((host, port), RoleplayHandler)
