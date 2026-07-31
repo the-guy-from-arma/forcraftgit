@@ -855,6 +855,20 @@ textarea:focus {
   font-size: 13px;
 }
 
+.phone-screen > .home-stack {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-bottom: max(52px, calc(env(safe-area-inset-bottom) + 46px));
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.phone-screen > .home-stack::-webkit-scrollbar {
+  display: none;
+}
+
 .dev-emergency-link-reset {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(320px, .85fr);
@@ -16913,7 +16927,7 @@ textarea:focus {
     min-height: 0;
     overflow-x: hidden;
     overflow-y: auto;
-    padding-bottom: 34px;
+    padding-bottom: max(58px, calc(env(safe-area-inset-bottom) + 50px));
     overscroll-behavior: contain;
     scrollbar-width: none;
   }

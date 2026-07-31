@@ -75,6 +75,7 @@
         ,"Replaced the basic vertically stacked changelog cards with responsive desktop navigation and a mobile horizontal patch selector."
         ,"Fixed long job advertisements and application questionnaires stretching one continuous page by opening each packet in an overflow-safe application dialog."
         ,"Fixed PostgreSQL startup and Leaderboards failures caused by literal SQL wildcard patterns being interpreted as unsupported Psycopg placeholders."
+        ,"Fixed the home-screen application grid being clipped beneath the RP OS footer by adding a dedicated scroll region and device-safe bottom clearance."
       ]
     },
     {
