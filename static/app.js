@@ -100,6 +100,7 @@ const state = {
   generatedMarketCode: null,
   iceSearchResults: [],
   iceSelectedSubject: null,
+  iceTab: "operations",
   businessTab: "apply",
   businessReviewFilter: "active",
   businessLicensePage: 1,
@@ -1020,7 +1021,6 @@ function renderHome() {
         </div>
         <button class="icon-action" data-logout aria-label="Sign out">${iconSvg.logout}</button>
       </header>
-      <div class="user-chip"><span class="user-dot ${locked ? "" : "ok"}"></span>${locked ? "Waiting on verification" : "Verified"} · CIV ${escapeHtml(user.civ_number || "pending")} · ${escapeHtml(user.roles.join(", "))}</div>
       ${state.session?.sanction?.type === "timeout" ? `
         <div class="home-alert restriction-alert">
           ${iconSvg.lock}
@@ -1572,6 +1572,26 @@ function renderLeaderboards() {
   const activeGroup = config.group;
   const leader = rows[0] || null;
   const challengers = rows.slice(1, 3);
+  const generatedTime = escapeHtml(data.generated_at ? new Date(data.generated_at).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}) : "syncing");
+  const personalProgress = personal ? leaderboardProgress(boardKey, rows, personalIndex) : null;
+  return `<div class="leaderboard-command leaderboard-v7 ${config.accent}">
+    <header class="lb7-masthead"><div class="lb7-live"><i></i>LIVE SEASON</div><div><span>FAIRCROFT RANKED NETWORK</span><h2>${escapeHtml(config.label)}</h2><p>Every verified session can change the field. Return, compete, and take your place.</p></div><aside><strong>${rows.length}</strong><span>eligible contenders<small>Updated ${generatedTime}</small></span></aside><div class="lb7-scan"></div></header>
+    <nav class="lb7-divisions">${Object.entries(groups).map(([key,label])=>`<button type="button" class="${activeGroup===key?"active":""}" data-leaderboard-group="${key}"><span>${escapeHtml(label)}</span></button>`).join("")}</nav>
+    <nav class="lb7-categories">${Object.entries(LEADERBOARD_CONFIG).filter(([,item])=>item.group===activeGroup).map(([key,item])=>`<button type="button" class="${boardKey===key?"active":""}" data-leaderboard-tab="${key}"><small>${escapeHtml(item.kicker)}</small><strong>${escapeHtml(item.label)}</strong></button>`).join("")}</nav>
+    ${data.current_user_excluded ? `<aside class="lb7-staff-note"><i>${iconSvg.shield}</i><div><strong>Staff observer mode</strong><span>Your staff role keeps you out of public competition. Economy records and authorized Developer Tools intelligence remain unchanged.</span></div></aside>` : ""}
+    ${leader ? `<main class="lb7-arena">
+      <section class="lb7-title-fight">
+        <div class="lb7-energy"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="lb7-champion-mark"><span>01</span><small>CURRENT CHAMPION</small></div>
+        <div class="lb7-champion"><p>${leader.online?"LIVE IN SERVER":"TITLE HOLDER"}</p><h1>${escapeHtml(leader.name||"Unknown player")}</h1><span>${leaderboardIdentity(leader).replace(/^ Â· /,"")}</span><strong>${escapeHtml(leaderboardMetric(boardKey,leader))}</strong><em>${escapeHtml(leaderboardDetail(boardKey,leader))}</em></div>
+        <div class="lb7-defense"><span>LEAD TO DEFEND</span><strong>${rows[1]?escapeHtml(leaderboardAdvanceMetric(boardKey,leaderGap)):"UNCONTESTED"}</strong><i><b></b></i><small>${rows[1]?`${escapeHtml(rows[1].name||"The field")} is hunting the crown.`:"The field is waiting for a challenger."}</small></div>
+      </section>
+      <section class="lb7-chase-line"><header><span>THE HUNT</span><strong>Closest challengers</strong><small>Positions move whenever authoritative records synchronize.</small></header>${challengers.map((item,index)=>{const absolute=index+1;const progress=leaderboardProgress(boardKey,rows,absolute);return `<article><span>0${absolute+1}</span><div><small>${item.online?"ONLINE · APPLYING PRESSURE":"VERIFIED CONTENDER"}</small><strong>${escapeHtml(item.name||"Unknown player")}</strong><em>${leaderboardIdentity(item).replace(/^ Â· /,"")}</em></div><b>${escapeHtml(leaderboardMetric(boardKey,item))}</b><footer><span>${escapeHtml(progress.label)}</span><i><b style="--advance:${progress.percent}%"></b></i></footer></article>`}).join("")}</section>
+      ${personal&&!data.current_user_excluded?`<section class="lb7-return-hook"><div><span>YOUR LIVE POSITION</span><strong>#${personal.rank}</strong></div><div><h3>${escapeHtml(personal.name||"Resident")}</h3><p>${escapeHtml(personalProgress.label)}</p></div><b>${escapeHtml(leaderboardMetric(boardKey,personal))}</b><aside><span>NEXT PUSH</span><i><b style="--advance:${personalProgress.percent}%"></b></i><small>Come back after your next verified session to see the chase update.</small></aside></section>`:""}
+      <section class="lb7-rank-stream"><header><div><span>LIVE FIELD</span><h3>The climb never stops.</h3></div><p>Know the exact distance to your next position.</p></header>${rows.map((item,index)=>{const progress=leaderboardProgress(boardKey,rows,index);return `<article class="${personal&&String(item.rank)===String(personal.rank)?"is-you":""}" style="--row:${index}"><span>${String(item.rank).padStart(2,"0")}</span><div><strong>${escapeHtml(item.name||"Unknown player")}${item.online?`<i>LIVE</i>`:""}</strong><small>${leaderboardIdentity(item).replace(/^ Â· /,"")}</small></div><b>${escapeHtml(leaderboardMetric(boardKey,item))}</b><aside><span>${escapeHtml(progress.label)}</span><i><b style="--advance:${progress.percent}%"></b></i></aside></article>`}).join("")}</section>
+    </main>`:`<section class="leaderboard-empty"><span>${iconSvg.trophy}</span><h3>The season is waiting</h3><p>Be the first eligible player to post a verified score.</p></section>`}
+    <footer class="lb7-source"><span><i></i>AUTHORITATIVE LIVE SOURCE</span><strong>${escapeHtml(data.sources?.[boardKey]||"Faircroft synchronized records")}</strong><p>${Number(data.summary?.staff_excluded||0)} staff observer${Number(data.summary?.staff_excluded||0)===1?"":"s"} excluded from public competition only.</p></footer>
+  </div>`;
   return `<div class="leaderboard-command leaderboard-v5 leaderboard-v6 ${config.accent}">
     <header class="lb5-header"><div><span>FAIRCROFT COMPETITIVE NETWORK</span><h2>${escapeHtml(config.label)}</h2><p>${escapeHtml(config.unit)} · verified live standings</p></div><aside><i></i><strong>${rows.length}</strong><span>ranked players<small>${escapeHtml(data.generated_at ? new Date(data.generated_at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}) : "syncing")}</small></span></aside></header>
     <div class="lb5-nav"><nav>${Object.entries(groups).map(([key,label])=>`<button type="button" class="${activeGroup===key?"active":""}" data-leaderboard-group="${key}">${escapeHtml(label)}</button>`).join("")}</nav><nav>${Object.entries(LEADERBOARD_CONFIG).filter(([,item])=>item.group===activeGroup).map(([key,item])=>`<button type="button" class="${boardKey===key?"active":""}" data-leaderboard-tab="${key}">${escapeHtml(item.label)}</button>`).join("")}</nav></div>
@@ -2056,10 +2076,23 @@ function renderIceWorkspace() {
   const data = state.cache["ice-mdt"] || {};
   const results = state.iceSearchResults || [];
   const restricted = Boolean(data.local_data_restricted);
-  return `<section class="ice-workspace">
-    <header class="ice-topbar"><div class="ice-brand"><span>${iconSvg.federal}</span><div><small>FAIRCROFT FEDERAL IMMIGRATION SERVICE</small><h1>ICE Mobile Data Terminal</h1></div></div><div><button class="secondary" data-refresh-ice>Refresh</button><button class="primary" data-close-ice>Exit</button></div></header>
+  const applications = data.applications || [];
+  let activeTab = state.iceTab || "operations";
+  if (activeTab === "applications" && !data.can_command) activeTab = "operations";
+  return `<section class="ice-workspace ice-view-${activeTab}">
+    <header class="ice-topbar"><div class="ice-brand"><img src="/static/brand/faircroft-emblem.webp" alt="Faircroft" /><div><small>STATE OF FAIRCROFT · FEDERAL OPERATIONS</small><h1>Immigration & Customs Command</h1><p>Federal Mobile Data Terminal · ICE Secure Network</p></div></div><div class="ice-session"><span>FEDERAL SESSION ACTIVE</span><button class="secondary" data-refresh-ice>Synchronize</button><button class="primary" data-close-ice>Exit terminal</button></div></header>
     <div class="ice-ordinance ${restricted ? "restricted" : "shared"}"><strong>${restricted ? "LOCAL DATA RESTRICTION ACTIVE" : "INTERAGENCY SHARING AUTHORIZED"}</strong><p>${escapeHtml(data.ordinance_notice || "")}</p></div>
+    <nav class="ice-workspace-tabs" aria-label="ICE terminal modules">
+      <button type="button" data-ice-tab="operations" class="${activeTab === "operations" ? "active" : ""}"><small>01</small><span>Command Overview</span></button>
+      <button type="button" data-ice-tab="identity" class="${activeTab === "identity" ? "active" : ""}"><small>02</small><span>Identity Intelligence</span></button>
+      <button type="button" data-ice-tab="cases" class="${activeTab === "cases" ? "active" : ""}"><small>03</small><span>Case Operations</span></button>
+      <button type="button" data-ice-tab="detainers" class="${activeTab === "detainers" ? "active" : ""}"><small>04</small><span>Detainers</span></button>
+      <button type="button" data-ice-tab="fluck" class="${activeTab === "fluck" ? "active" : ""}"><small>05</small><span>FLUCK Camera Search</span><em>SOON</em></button>
+      ${data.can_command ? `<button type="button" data-ice-tab="applications" class="${activeTab === "applications" ? "active" : ""}"><small>06</small><span>Command Applications</span><b>${Number(data.stats?.applications_pending || 0)}</b></button>` : ""}
+    </nav>
     <main>
+      ${activeTab === "fluck" ? `<section class="ice-fluck-module"><div class="ice-fluck-radar"><i></i><i></i><i></i><span>FC</span></div><div class="ice-fluck-copy"><small>FEDERAL LOCATION & UNIFIED CAMERA KNOWLEDGE</small><h2>FLUCK Camera Search</h2><p>A future federal intelligence surface for plate observations, corridor history, location confidence, time-window review, and fully audited investigative queries.</p><div class="ice-fluck-capabilities"><span>Plate observation network</span><span>Federal corridor history</span><span>Time-window intelligence</span><span>Audited agency queries</span></div><strong>COMING SOON · FEDERAL LAW ENFORCEMENT</strong><button type="button" disabled>Camera network is not yet operational</button></div></section>` : ""}
+      ${activeTab === "applications" ? `<section class="ice-applications-desk"><header><div><small>ICE COMMAND / RECRUITMENT</small><h2>Applicant qualification queue</h2><p>Only perfect qualification files reach command review for interview, training, and appointment.</p></div><strong>${applications.filter((item) => !["approved", "denied", "closed"].includes(item.status)).length} active</strong></header><div class="ice-application-ledger">${applications.map((item) => `<article><div class="ice-application-identity"><span>${escapeHtml(item.application_number)}</span><h3>${escapeHtml(item.character_name || item.applicant_name)}</h3><p>${escapeHtml(item.applicant_name)} · CIV ${escapeHtml(item.applicant_civ_number || "pending")}</p></div><div class="ice-qualification-score"><small>QUALIFICATION</small><strong>${Number(item.qualification?.score || 0)}<em>/20</em></strong><span>${escapeHtml(humanLabel(item.status))}</span></div><details><summary>Review submitted answers</summary><div>${(item.qualification?.answers || []).map((answer) => `<p><strong>${escapeHtml(answer.question)}</strong><span>${escapeHtml(answer.answer)}</span></p>`).join("")}</div></details><div class="ice-application-actions">${!["approved", "denied", "closed"].includes(item.status) ? `<button type="button" class="secondary" data-ice-application-action="review" data-ice-application-id="${item.id}">Open review</button><button type="button" class="secondary" data-ice-application-action="interview" data-ice-application-id="${item.id}">Interview & training</button><button type="button" class="primary" data-ice-application-action="approve" data-ice-application-id="${item.id}">Appoint ICE Agent</button><button type="button" class="danger" data-ice-application-action="deny" data-ice-application-id="${item.id}">Deny</button>` : `<span>Reviewed by ${escapeHtml(item.reviewer_name || "ICE Command")}</span>`}</div></article>`).join("") || `<div class="empty">No qualified ICE Agent applications are awaiting command review.</div>`}</div></section>` : `
       <section class="ice-command-strip"><div><span>Valid citizens</span><strong>${Number(data.stats?.valid_citizens || 0)}</strong></div><div><span>Undocumented</span><strong>${Number(data.stats?.undocumented || 0)}</strong></div><div><span>Open federal cases</span><strong>${Number(data.stats?.open_cases || 0)}</strong></div></section>
       <section class="ice-search-panel"><header><div><small>NCIC / CITIZENSHIP REGISTRY</small><h2>Status verification</h2></div></header><form id="iceSearchForm"><input name="q" minlength="2" required placeholder="Search name, CIV, or Faircroft passport" /><button class="primary">Run federal check</button></form>
         <div class="ice-search-results">${results.map((person) => `<button type="button" data-ice-subject="${person.id}"><span><strong>${escapeHtml(person.name)}</strong><small>CIV ${escapeHtml(person.civ_number || "pending")} · ${escapeHtml(person.passport_number || "No passport")}</small></span><b class="${String(person.citizenship_status).toLowerCase() === "valid citizen" ? "valid" : "warning"}">${escapeHtml(person.citizenship_status)}</b></button>`).join("") || `<div class="empty">Run a federal identity check to review citizenship status.</div>`}</div>
@@ -2068,6 +2101,7 @@ function renderIceWorkspace() {
         <div class="ice-case-ledger"><header><small>FEDERAL CASE LEDGER</small><h2>Immigration operations</h2></header>${(data.cases || []).map((item) => `<article><span>${escapeHtml(item.case_number)}</span><div><strong>${escapeHtml(item.subject_name)}</strong><small>${escapeHtml(item.case_type)} · ${escapeHtml(item.citizenship_status || "Undocumented")}</small></div><b>${escapeHtml(item.status)}</b>${data.can_command ? `<button class="secondary" data-ice-case="${item.id}">Update</button>` : ""}</article>`).join("") || `<div class="empty">No federal immigration cases filed.</div>`}</div>
         <form id="iceCaseForm" class="ice-case-form"><small>NEW FEDERAL CASE</small><h2>Open status investigation</h2><input type="hidden" name="subject_user_id" value="${state.iceSelectedSubject?.id || ""}" /><label>Subject<input value="${escapeHtml(state.iceSelectedSubject?.name || "Select from federal search")}" readonly /></label><label>Case type<select name="case_type"><option>Status Review</option><option>Immigration Detainer</option><option>Removal Proceeding</option><option>Citizenship Fraud Review</option></select></label><label>Priority<select name="priority"><option>standard</option><option>elevated</option><option>critical</option></select></label><label>Location<input name="location" maxlength="240" /></label><label>Federal narrative<textarea name="narrative" minlength="10" maxlength="5000" required></textarea></label><button class="primary" ${state.iceSelectedSubject ? "" : "disabled"}>Open ICE case</button></form>
       </section>
+      `}
     </main>
   </section>`;
 }
@@ -2087,6 +2121,22 @@ function bindIceWorkspace() {
   $$("[data-ice-subject]").forEach((button) => button.addEventListener("click", () => {
     state.iceSelectedSubject = state.iceSearchResults.find((person) => String(person.id) === String(button.dataset.iceSubject)) || null;
     render();
+  }));
+  $$('[data-ice-tab]').forEach((button) => button.addEventListener('click', () => {
+    state.iceTab = button.dataset.iceTab;
+    render();
+  }));
+  $$('[data-ice-application-action]').forEach((button) => button.addEventListener('click', async () => {
+    const action = button.dataset.iceApplicationAction;
+    const prompts = { review: 'Open this application for command review?', interview: 'Advance this candidate to interview and training?', approve: 'Appoint this candidate and grant the ICE Agent role?', deny: 'Deny this ICE Agent application?' };
+    if (!confirm(prompts[action] || 'Update this application?')) return;
+    const reviewer_notes = prompt('ICE Commander notes (optional)', '') || '';
+    try {
+      await api(`/api/ice/applications/${button.dataset.iceApplicationId}`, { method: 'PATCH', body: { action, reviewer_notes } });
+      toast(action === 'approve' ? 'ICE Agent role granted' : 'ICE application updated');
+      state.cache['ice-mdt'] = await api('/api/ice/overview');
+      render();
+    } catch (error) { toast(error.message); }
   }));
   $("#iceCaseForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -2937,7 +2987,7 @@ function parseDepartmentApplicationStatement(statement) {
   if (!statement || typeof statement !== "string" || !statement.trim().startsWith("{")) return null;
   try {
     const parsed = JSON.parse(statement);
-    return ["law_enforcement_application", "bar_exam_application", "press_exam_application"].includes(parsed?.type) ? parsed : null;
+    return ["law_enforcement_application", "bar_exam_application", "press_exam_application", "ice_exam_application"].includes(parsed?.type) ? parsed : null;
   } catch {
     return null;
   }
@@ -3008,13 +3058,14 @@ function renderDepartmentApplicationField(field, posting) {
 
 function renderDepartmentApplicationForm(posting) {
   const characterField = characterSelectField(state.cache.jobs?.characters || [], "character_id", "Applicant character");
-  if (["bar_exam", "press_exam"].includes(posting.form_type)) {
+  if (["bar_exam", "press_exam", "ice_exam"].includes(posting.form_type)) {
     const isPressExam = posting.form_type === "press_exam";
+    const isIceExam = posting.form_type === "ice_exam";
     const examQuestions = state.cache.jobs?.exam_questions?.[posting.exam_key || "judicial"] || [];
     return `
-      <form class="department-application-form bar-exam-form ${isPressExam ? "press-pass-form" : ""}" data-department-key="${escapeHtml(posting.key)}">
+      <form class="department-application-form bar-exam-form ${isPressExam ? "press-pass-form" : ""} ${isIceExam ? "ice-agent-exam-form" : ""}" data-department-key="${escapeHtml(posting.key)}">
         <div class="application-form-head">
-          <div><p class="eyebrow">${isPressExam ? "Faircroft News Now" : "Faircroft Bar Association"}</p><h3>${isPressExam ? "Press Pass Examination" : "Bar Exam"}</h3><p class="muted small">Answer all ${examQuestions.length} questions. ${isPressExam ? "Eight correct answers are required for Press Pass eligibility." : "Your score is delivered privately to the review team."}</p></div>
+          <div><p class="eyebrow">${isPressExam ? "Faircroft News Now" : isIceExam ? "Faircroft Immigration & Customs Enforcement" : "Faircroft Bar Association"}</p><h3>${isPressExam ? "Press Pass Examination" : isIceExam ? "ICE Agent Qualification" : "Bar Exam"}</h3><p class="muted small">Answer all ${examQuestions.length} questions. ${isPressExam ? "Eight correct answers are required for Press Pass eligibility." : isIceExam ? "A perfect 20/20 result is required before your file enters the ICE Command interview and training process." : "Your score is delivered privately to the review team."}</p></div>
           <span class="pill ${isPressExam ? "red" : "amber"}">${examQuestions.length} Questions</span>
         </div>
         <div class="bar-applicant-grid">
@@ -3035,7 +3086,7 @@ function renderDepartmentApplicationForm(posting) {
             </fieldset>
           `).join("")}
         </div>
-        <button class="primary" type="submit">${isPressExam ? "Submit Press Pass Exam" : "Submit Bar Exam for review"}</button>
+        <button class="primary" type="submit">${isPressExam ? "Submit Press Pass Exam" : isIceExam ? "Submit ICE qualification" : "Submit Bar Exam for review"}</button>
       </form>
     `;
   }
@@ -3688,7 +3739,45 @@ function renderBankOnlineV2(data, credit, userName, identitySuffix, creditScore,
   const scoreValue = Number(credit.score || 0);
   const nextCreditLevel = scoreValue < 580 ? 580 : scoreValue < 670 ? 670 : scoreValue < 740 ? 740 : scoreValue < 800 ? 800 : 850;
   const pointsToNext = Math.max(0, nextCreditLevel - scoreValue);
-  return `<main class="bank-workspace bank-v3">
+  return `<main class="bank-workspace bank-v4">
+    <header class="bank-v4-topbar">
+      <button class="bank-v4-brand" type="button" data-bank-section="bankChecking"><span>FC</span><div><strong>Faircroft Financial</strong><small>Personal banking</small></div></button>
+      <nav><button class="active" data-bank-section="bankChecking">Accounts</button><button data-bank-section="bankActivity">Activity</button><button data-bank-section="bankCredit">Credit</button></nav>
+      <div class="bank-v4-session"><span><i></i>Protected session</span><button type="button" data-refresh-bank>Sync</button><button type="button" data-close-bank>Sign out</button></div>
+    </header>
+    <div class="bank-v4-shell">
+      <aside class="bank-v4-rail">
+        <p>MY FAIRCROFT</p>
+        <button class="active" type="button" data-bank-section="bankChecking"><span>Checking</span><strong>Faircroft Game Checking</strong><small>&bull;&bull;&bull;&bull; ${identitySuffix}</small><b>${availableBalance}</b></button>
+        <button type="button" data-bank-section="bankCredit"><span>Credit intelligence</span><strong>${credit.synced ? creditRating : "Awaiting sync"}</strong><small>${credit.synced ? `${creditScore} Faircroft Credit Index` : "Reputation network pending"}</small></button>
+        <div class="bank-v4-rail-links"><button type="button" data-bank-section="bankActivity">Account activity <span>&rsaquo;</span></button><button type="button" data-refresh-bank>Refresh accounts <span>&rsaquo;</span></button></div>
+        <footer><i></i><div><strong>${data.identity_id ? "Identity verified" : "Link required"}</strong><small>Account ending ${identitySuffix}</small></div></footer>
+      </aside>
+      <section class="bank-v4-content">
+        <header class="bank-v4-greeting"><div><p>PERSONAL BANKING</p><h1>Good ${new Date().getHours() < 12 ? "morning" : new Date().getHours() < 18 ? "afternoon" : "evening"}, ${escapeHtml(userName)}.</h1><span>Here is your current Faircroft financial position.</span></div><aside><i></i><span><small>GAME-BANK CONNECTION</small><strong>${syncLabel}</strong><em>${refreshedAt}</em></span></aside></header>
+        <section class="bank-v4-account" id="bankChecking">
+          <div class="bank-v4-balance-panel">
+            <header><div><p>FAIRCROFT GAME CHECKING</p><h2>Primary checking</h2></div><span>${data.balance_synced ? "Available" : "Pending"}</span></header>
+            <div class="bank-v4-balance"><small>Available balance</small><strong>${availableBalance}</strong><p>${data.balance_synced ? "Available through the connected Shadow Haven banking network." : "Your authoritative game-bank balance has not arrived yet."}</p></div>
+            <nav class="bank-v4-money-actions"><button type="button" data-refresh-bank><i>&#8635;</i><span><strong>Refresh balance</strong><small>Request latest sync</small></span></button><button type="button" data-bank-section="bankActivity"><i>&#8801;</i><span><strong>View activity</strong><small>Review account record</small></span></button><button type="button" data-bank-section="bankCredit"><i>&#8599;</i><span><strong>Credit profile</strong><small>See your standing</small></span></button></nav>
+            <footer><span><small>ACCOUNT NUMBER</small><strong>&bull;&bull;&bull;&bull; ${identitySuffix}</strong></span><span><small>STATUS</small><strong>${data.balance_synced ? "Open and current" : "Synchronization pending"}</strong></span><span><small>LAST UPDATED</small><strong>${refreshedAt}</strong></span></footer>
+          </div>
+          <aside class="bank-v4-card-panel">
+            <div><p>FAIRCROFT DEBIT</p><span>Connected to primary checking</span></div>
+            <article class="bank-v3-card bank-v4-card"><header><span>FC</span><small>FAIRCROFT FINANCIAL<br>PRIVATE CLIENT</small><i></i></header><div class="bank-v3-chip"><i></i><i></i><i></i></div><strong>&bull;&bull;&bull;&bull; &nbsp; &bull;&bull;&bull;&bull; &nbsp; ${identitySuffix.slice(0,4)} &nbsp; ${identitySuffix.slice(-4)}</strong><footer><span><small>RESIDENT</small><b>${escapeHtml(userName)}</b></span><span><small>STATUS</small><b>${data.balance_synced ? "ACTIVE" : "PENDING"}</b></span></footer></article>
+            <footer><span><i></i>Digital card active</span><button type="button" data-bank-section="bankActivity">Card details &rsaquo;</button></footer>
+          </aside>
+        </section>
+        <section class="bank-v4-lower">
+          <section class="bank-v4-activity" id="bankActivity"><header><div><p>RECENT ACTIVITY</p><h2>Latest account event</h2></div><button type="button" data-refresh-bank>Refresh</button></header><div class="bank-v4-activity-row"><time>${data.balance_synced_at ? escapeHtml(new Date(data.balance_synced_at).toLocaleDateString()) : "Pending"}</time><i>&#8635;</i><div><strong>Authoritative balance synchronized</strong><small>Shadow Haven financial network &middot; &bull;&bull;&bull;&bull; ${identitySuffix}</small></div><span>Balance update</span><b>${availableBalance}</b></div><footer>Only verified game-bank records appear in your Faircroft activity.</footer></section>
+          <aside class="bank-v4-credit-summary" id="bankCredit"><header><p>FAIRCROFT CREDIT INDEX</p><span>${credit.synced ? "Current" : "Pending"}</span></header><div><strong>${creditScore}</strong><span><b>${creditRating}</b><small>${credit.synced && pointsToNext ? `${pointsToNext} points to your next credit tier` : credit.synced ? "Highest tracked tier reached" : "Waiting for reputation sync"}</small></span></div><div class="bank-v4-credit-track"><i style="width:${creditProgress}%"></i></div><footer><span>300</span><span>850</span></footer><button type="button" data-bank-section="bankCredit">Review credit profile &rsaquo;</button></aside>
+        </section>
+        <section class="bank-v4-credit-detail"><div><p>FINANCIAL WELLNESS</p><h2>Make your standing easier to understand.</h2><span>${credit.synced ? "Your credit profile is calculated from synchronized financial reputation and verified Faircroft records." : "Your credit profile will activate after the next verified reputation snapshot."}</span></div><dl><div><dt>Liquidity</dt><dd>${data.balance_synced ? "Available" : "Unverified"}</dd></div><div><dt>Account security</dt><dd>${data.identity_id ? "Identity confirmed" : "Action required"}</dd></div><div><dt>Credit trajectory</dt><dd>${creditRating}</dd></div></dl></section>
+      </section>
+    </div>
+    <footer class="bank-v4-assurance"><span class="bank-v4-seal">FC</span><div><strong>Faircroft Citizens Insurance Corporation</strong><p>Eligible resident deposit relationships are protected under applicable Faircroft financial rules and authoritative game-bank records.</p></div><span><i></i>Account protected</span></footer>
+  </main>`;
+  return `<main class="bank-workspace bank-v4">
     <header class="bank-workspace-topbar bank-v3-topbar"><div class="bank-workspace-brand"><span class="bank-workspace-mark"><b>F</b><i>C</i></span><div><strong>Faircroft Financial</strong><small>Private resident banking</small></div></div><nav class="bank-global-nav"><button class="active" data-bank-section="bankChecking">Overview</button><button data-bank-section="bankActivity">Activity</button><button data-bank-section="bankCredit">Credit intelligence</button></nav><div class="bank-workspace-actions"><span class="bank-secure-session"><i></i> Vault session active</span><button class="secondary" type="button" data-refresh-bank>Sync</button><button class="primary" type="button" data-close-bank>Exit bank</button></div></header>
     <section class="bank-v3-canvas">
       <header class="bank-v3-welcome"><div><p>FAIRCROFT PRIVATE CLIENT</p><h1>Good ${new Date().getHours() < 12 ? "morning" : new Date().getHours() < 18 ? "afternoon" : "evening"},<br><strong>${escapeHtml(userName)}.</strong></h1><span>Your game economy, identity, and financial standing—one protected relationship.</span></div><aside><i></i><span><small>LIVE FINANCIAL LINK</small><strong>${syncLabel}</strong><em>${refreshedAt}</em></span></aside></header>
@@ -3841,16 +3930,17 @@ function bindBankWorkspace() {
   $$('[data-bank-section]').forEach((button) => button.addEventListener("click", () => {
     const target = document.getElementById(button.dataset.bankSection || "");
     target?.scrollIntoView({ behavior: "smooth", block: "start" });
-    $$('.bank-global-nav button,.bank-account-rail button').forEach((item) => item.classList.toggle("active", item.dataset.bankSection === button.dataset.bankSection));
+    $$('.bank-global-nav button,.bank-account-rail button,.bank-v4-topbar nav button,.bank-v4-rail > button').forEach((item) => item.classList.toggle("active", item.dataset.bankSection === button.dataset.bankSection));
   }));
   $("[data-close-bank]")?.addEventListener("click", async () => {
     state.activeApp = null;
     await loadSession();
   });
-  $("[data-refresh-bank]")?.addEventListener("click", async () => {
+  $$('[data-refresh-bank]').forEach((button) => button.addEventListener("click", async () => {
+    button.disabled = true;
     await loadAppData("bank");
     render();
-  });
+  }));
 }
 
 function renderCash() {
@@ -5369,9 +5459,9 @@ function renderMyFaircroftTaxes(accounts) {
         return `
           <article class="myfc-ledger-row tax">
             <div class="myfc-ledger-code"><strong>TAX</strong><small>${escapeHtml(item.license_number)}</small></div>
-            <div class="myfc-ledger-main"><h4>${escapeHtml(item.business_name)}</h4><p>${item.assessments} unpaid assessment${item.assessments === 1 ? "" : "s"}</p><small>${pending ? `Payment request ${escapeHtml(item.payment_batch_number || "")}` : "Eligible for verified game-bank settlement"}</small></div>
+            <div class="myfc-ledger-main"><h4>${escapeHtml(item.business_name)}</h4><p>${item.assessments} issued tax bill${item.assessments === 1 ? "" : "s"}</p><small>${pending ? `Legacy payment request ${escapeHtml(item.payment_batch_number || "")}` : "Pay staff in game, then enter the four-digit receipt PIN"}</small></div>
             <div class="myfc-ledger-money"><strong>${money(item.amount)}</strong><span>${pending || "Due"}</span></div>
-            <div class="myfc-ledger-actions"><button class="primary" data-pay-tax="${item.business_id}" ${pending ? "disabled" : ""}>${pending || "Request payment"}</button></div>
+            <div class="myfc-ledger-actions"><button class="primary" data-pay-tax="${item.business_id}" ${pending ? "disabled" : ""}>${pending || "Pay tax bill"}</button></div>
           </article>
         `;
       }).join("") || `<div class="empty">No unpaid business taxes</div>`}
@@ -5471,9 +5561,11 @@ function bindMyFaircroft() {
     }
   }));
   $$("[data-pay-tax]").forEach((button) => button.addEventListener("click", async () => {
+    const code = window.prompt("Enter the four-digit receipt PIN provided after staff confirms your in-game tax payment.", "");
+    if (code === null) return;
     try {
-      const result = await api(`/api/my-faircroft/taxes/${button.dataset.payTax}/pay`, { method: "POST" });
-      toast(`Tax payment request ${result.batch_number} sent`);
+      const result = await api(`/api/my-faircroft/taxes/${button.dataset.payTax}/pay`, { method: "POST", body: { code: String(code).trim() } });
+      toast(`${money(result.amount)} tax payment verified · lottery fund updated`);
       await loadAppData("my-faircroft");
       render();
     } catch (error) {
@@ -5563,6 +5655,22 @@ function changelogCount(entry) {
   return ["added", "changed", "fixed", "removed"].reduce((total, key) => total + (entry?.[key]?.length || 0), 0);
 }
 
+function consolidatedChangelogEntries(source = []) {
+  const releases = new Map();
+  source.forEach((entry) => {
+    const key = String(entry.version || entry.title || entry.date || "update").trim().toLowerCase();
+    if (!releases.has(key)) releases.set(key, { ...entry, added: [], changed: [], fixed: [], removed: [] });
+    const release = releases.get(key);
+    ["added", "changed", "fixed", "removed"].forEach((category) => {
+      const combined = [...(release[category] || []), ...(entry[category] || [])];
+      release[category] = [...new Set(combined.map((item) => String(item).trim()).filter(Boolean))];
+    });
+    release.date ||= entry.date;
+    release.title ||= entry.title;
+  });
+  return Array.from(releases.values());
+}
+
 function renderChangelogReleaseGroup(label, items = []) {
   if (!items.length) return "";
   const meta = {
@@ -5576,7 +5684,7 @@ function renderChangelogReleaseGroup(label, items = []) {
 
 function renderChangelogWorkspace() {
   const data = state.cache.changelog || {};
-  const entries = data.entries || [];
+  const entries = consolidatedChangelogEntries(data.entries || []);
   if (!entries.length) return `<main class="release-workspace"><div class="empty">No release archive is currently available.</div></main>`;
   state.changelogEntryIndex = Math.max(0, Math.min(Number(state.changelogEntryIndex || 0), entries.length - 1));
   const selected = entries[state.changelogEntryIndex];
@@ -5970,7 +6078,10 @@ function bindMdtLegacy() {
       toast(error.message);
     }
   });
-  $("#ticketForm")?.addEventListener("submit", async (event) => {
+  const ticketForm = $("#ticketForm");
+  ticketForm?.querySelector("[data-issue-subject]")?.addEventListener("change", () => syncIssueCharacter(ticketForm));
+  syncIssueCharacter(ticketForm);
+  ticketForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
       const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
@@ -7174,7 +7285,31 @@ function syncCidWarrantSubject(form) {
 }
 
 function getMdtCivilians() {
-  return state.cache.mdt?.reports?.civilians || state.cache.mdt?.cid?.civilians || state.cache.mdt?.charges?.civilians || [];
+  return state.cache.mdt?.charges?.civilians || state.cache.mdt?.reports?.civilians || state.cache.mdt?.cid?.civilians || [];
+}
+
+function syncIssueCharacter(form) {
+  const civilian = form?.querySelector("[data-issue-subject]");
+  const character = form?.querySelector("[data-issue-character]");
+  if (!civilian || !character) return;
+  const civId = String(civilian.value || "");
+  const candidates = Array.from(character.options).filter((option) => option.dataset.civ === civId);
+  Array.from(character.options).forEach((option, index) => {
+    if (!index) return;
+    const matches = Boolean(civId) && option.dataset.civ === civId;
+    option.hidden = !matches;
+    option.disabled = !matches;
+  });
+  const currentMatches = candidates.some((option) => option.value === character.value);
+  if (!currentMatches) {
+    const preferred = candidates.find((option) => option.dataset.active === "true") || (candidates.length === 1 ? candidates[0] : null);
+    character.value = preferred?.value || "";
+  }
+  character.options[0].textContent = !civId
+    ? "Select civilian first"
+    : candidates.length
+      ? (character.value ? "Character selected" : "Select character identity")
+      : "No active character identities";
 }
 
 function syncCadReportCiv(form) {
@@ -7724,7 +7859,7 @@ function renderTicketWriter() {
                 </select></label>
                 <label>Character identity<select name="character_id" required data-issue-character>
                   <option value="">Select civilian first</option>
-                  ${civilians.flatMap((person) => (person.characters || []).map((character) => `<option value="${character.id}" data-civ="${person.id}" ${Number(person.id) === Number(state.mdtSelectedCiv) && character.is_active ? "selected" : ""}>${escapeHtml(character.character_name)}</option>`)).join("")}
+                  ${civilians.flatMap((person) => (person.characters || []).map((character) => `<option value="${character.id}" data-civ="${person.id}" data-active="${character.is_active ? "true" : "false"}" ${Number(person.id) === Number(state.mdtSelectedCiv) && character.is_active ? "selected" : ""}>${escapeHtml(character.character_name)}</option>`)).join("")}
                 </select></label>
                 <label>Court appearance<input name="court_date" type="date" value="${defaultCourt}" /></label>
               </div>
@@ -7795,7 +7930,7 @@ function renderTicketWriter() {
         </select></label>
         <label>Character identity<select name="character_id" required data-issue-character>
           <option value="">Select civilian first</option>
-          ${civilians.flatMap((person) => (person.characters || []).map((character) => `<option value="${character.id}" data-civ="${person.id}" ${Number(person.id) === Number(state.mdtSelectedCiv) && character.is_active ? "selected" : ""}>${escapeHtml(character.character_name)}</option>`)).join("")}
+          ${civilians.flatMap((person) => (person.characters || []).map((character) => `<option value="${character.id}" data-civ="${person.id}" data-active="${character.is_active ? "true" : "false"}" ${Number(person.id) === Number(state.mdtSelectedCiv) && character.is_active ? "selected" : ""}>${escapeHtml(character.character_name)}</option>`)).join("")}
         </select></label>
         <label>Court date<input name="court_date" type="date" value="${defaultCourt}" /></label>
       </div>
@@ -9332,7 +9467,10 @@ function bindMdt() {
       toast(error.message);
     }
   });
-  $("#ticketForm")?.addEventListener("submit", async (event) => {
+  const activeTicketForm = $("#ticketForm");
+  activeTicketForm?.querySelector("[data-issue-subject]")?.addEventListener("change", () => syncIssueCharacter(activeTicketForm));
+  syncIssueCharacter(activeTicketForm);
+  activeTicketForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
       const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
@@ -10005,7 +10143,7 @@ function renderDevMarketSettings(market, users) {
       <section class="dev-card"><div class="dev-card-header"><div><span>EXCHANGE POLICY</span><h2>Market and fee controls</h2></div><strong>${money(market.holding_balance || 0)} HELD</strong></div><form id="devMarketSettingsForm" class="form-grid"><label class="dev-certify wide"><input name="market_open" type="checkbox" ${market.market_open ? "checked" : ""}/> Market open for resident trading</label><label>Trade fee %<input name="trade_fee_percent" type="number" min="0" max="10" step="0.01" value="${Number(market.trade_fee_percent || 0)}"/></label><label>Transfer fee %<input name="transfer_fee_percent" type="number" min="0" max="25" step="0.01" value="${Number(market.transfer_fee_percent || 0)}"/></label><label class="dev-certify wide"><input name="ai_enabled" type="checkbox" ${market.ai_enabled ? "checked" : ""}/> Allow Gemini market briefing support</label><button class="primary wide">Save exchange policy</button></form><p class="muted small">Collected trade and transfer fees are displayed above and remain outside the active RP economy.</p></section>
       <section class="dev-card"><div class="dev-card-header"><div><span>PRICE PROGRAM</span><h2>Schedule movement</h2></div><strong>1.00 EXAMPLE</strong></div><form id="devMarketProgramForm" class="form-grid"><label>Security<select name="ticker">${tickerOptions}</select></label><label>RP event<input name="event_name" maxlength="100" required placeholder="Port expansion announcement"/></label><label>Percentage change<input name="percent_change" type="number" min="-95" max="500" step="0.01" required/><small data-market-example>$1.00 becomes $1.00</small></label><label>Duration in minutes<input name="duration_minutes" type="number" min="1" max="10080" value="60" required/></label><button class="primary wide">Launch price program</button></form><div class="market-presets"><button data-market-preset="market_crash">Market crash</button><button data-market-preset="flash_crash">Flash crash</button><button data-market-preset="market_rally">Broad rally</button><button data-market-preset="random_skyrocket">Random skyrocket</button></div></section>
     </div>
-    <section class="dev-card market-code-authority"><div class="dev-card-header"><div><span>IN-GAME SETTLEMENT RECEIPTS</span><h2>Deposit and withdrawal PINs</h2><p>A PIN verifies a completed roleplay handoff. It never edits the Arma database.</p></div><span class="pill red">NEVER ISSUE EARLY</span></div><div class="dev-grid-2"><form id="devMarketCodeForm" class="form-grid"><label>Resident<select name="target_user_id" required><option value="">Select resident</option>${devUserOptions(users)}</select></label><label>Direction<select name="transaction_type"><option value="deposit">Deposit into Ravenhood</option><option value="withdrawal">Withdraw from Ravenhood</option></select></label><label>Exact amount<input name="amount" type="number" min="0.01" step="0.01" required/></label><label>Expires after<input name="expiry_minutes" type="number" min="5" max="120" value="30"/></label><label class="wide">Required confirmation<input name="confirmation" required placeholder="MONEY RECEIVED or WITHDRAWAL APPROVED"/><small>For a deposit, receive the in-game money first. For a withdrawal, confirm the payout with the resident first.</small></label><button class="primary wide">Issue four-digit receipt</button></form><div>${state.generatedMarketCode ? `<div class="dev-generated-code"><span>${escapeHtml(humanLabel(state.generatedMarketCode.transaction_type))} receipt Â· ${money(state.generatedMarketCode.amount)}</span><strong>${escapeHtml(state.generatedMarketCode.code)}</strong><small>Expires ${new Date(state.generatedMarketCode.expires_at).toLocaleString()}</small></div>` : `<div class="empty">No Ravenhood receipt generated this session</div>`}<div class="dev-code-ledger">${codes.slice(0,30).map(x => `<div><code>â€¢â€¢${escapeHtml(x.code_hint)}</code><span>${escapeHtml(x.target_name)} Â· ${money(x.amount)}<small>Issued by ${escapeHtml(x.created_by_name)}${x.used_by_name ? ` Â· redeemed by ${escapeHtml(x.used_by_name)}` : " Â· not redeemed"}</small></span><strong class="${!x.used_at && !x.revoked_at && new Date(x.expires_at)>new Date() ? "available" : ""}">${x.used_at ? "Redeemed" : x.revoked_at ? "Revoked" : new Date(x.expires_at)<=new Date() ? "Expired" : "Available"}</strong></div>`).join("") || `<div class="empty">No receipts</div>`}</div></div></div></section>
+    <section class="dev-card market-code-authority"><div class="dev-card-header"><div><span>UNIVERSAL IN-GAME RECEIPTS</span><h2>Four-digit bearer PINs</h2><p>A PIN verifies one completed handoff. It has no preset amount, is not assigned to a resident, and can be redeemed once for MyFaircroft or Ravenhood.</p></div><span class="pill red">NEVER ISSUE EARLY</span></div><div class="dev-grid-2"><form id="devMarketCodeForm" class="form-grid"><label>Resident<select name="target_user_id"><option value="">Unassigned bearer PIN</option></select></label><label>Handoff direction<select name="transaction_type"><option value="deposit">Funds received from resident</option><option value="withdrawal">Payout approved for resident</option></select></label><label>Expires after<input name="expiry_minutes" type="number" min="5" max="120" value="30"/></label><label class="wide">Required confirmation<input name="confirmation" required placeholder="MONEY RECEIVED or WITHDRAWAL APPROVED"/><small>Confirm the in-game handoff first. The resident chooses the actual amount when redeeming the one-time PIN.</small></label><button class="primary wide">Issue universal four-digit PIN</button></form><div>${state.generatedMarketCode ? `<div class="dev-generated-code"><span>Unassigned ${escapeHtml(humanLabel(state.generatedMarketCode.transaction_type))} bearer receipt</span><strong>${escapeHtml(state.generatedMarketCode.code)}</strong><small>Expires ${new Date(state.generatedMarketCode.expires_at).toLocaleString()}</small></div>` : `<div class="empty">No universal receipt generated this session</div>`}<div class="dev-code-ledger">${codes.slice(0,30).map(x => `<div><code>••${escapeHtml(x.code_hint)}</code><span>${escapeHtml(x.target_name || "Unassigned bearer PIN")}<small>Issued by ${escapeHtml(x.created_by_name)}${x.used_by_name ? ` · redeemed by ${escapeHtml(x.used_by_name)}` : " · not redeemed"}</small></span><strong class="${!x.used_at && !x.revoked_at && new Date(x.expires_at)>new Date() ? "available" : ""}">${x.used_at ? "Redeemed" : x.revoked_at ? "Revoked" : new Date(x.expires_at)<=new Date() ? "Expired" : "Available"}</strong></div>`).join("") || `<div class="empty">No receipts</div>`}</div></div></div></section>
     <div class="dev-grid-2"><section class="dev-card"><div class="dev-card-header"><div><span>ACTIVE AUTOMATION</span><h2>Price programs</h2></div><strong>${programs.filter(x=>x.status==="active").length} ACTIVE</strong></div><div class="dev-detail-list">${programs.map(x => `<div><strong>${escapeHtml(x.ticker || "ALL")} Â· ${escapeHtml(x.event_name)}</strong><small>${Number(x.percent_change)>=0?"+":""}${Number(x.percent_change).toFixed(2)}% over ${Number(x.duration_minutes)} minutes Â· ${escapeHtml(x.status)}</small></div>`).join("") || `<div class="empty">No programs</div>`}</div></section><section class="dev-card"><div class="dev-card-header"><div><span>GEMINI ANALYST</span><h2>Generate market briefing</h2><p>Gemini reads current listings and your market scenario, then recommends optional programs. Nothing is applied automatically.</p></div><span class="pill ${market.ai_enabled ? "green" : ""}">${market.ai_enabled ? "enabled" : "disabled"}</span></div><form id="devMarketAiForm" class="form-grid"><label class="wide">Market scenario or operational inputs<textarea name="context" maxlength="2000" required placeholder="New mining permit, severe storm, major public contract, political uncertaintyâ€¦"></textarea></label><button class="primary wide" ${market.ai_enabled ? "" : "disabled"}>Generate analyst briefing</button></form>${state.marketAiBriefing ? `<pre class="market-ai-briefing">${escapeHtml(state.marketAiBriefing)}</pre>` : ""}</section></div>
     <section class="dev-card market-active-movements"><div class="dev-card-header"><div><span>LIVE PRICE AUTOMATION</span><h2>Active scheduled movements</h2><p>Stop a movement to cancel its remaining schedule and restore every affected security to its pre-event baseline.</p></div><strong>${activeMovements.length} RUNNING</strong></div><div>${activeMovements.map(program=>{const related=activePrograms.filter(item=>item.event_name===program.event_name&&item.created_at===program.created_at);const tickers=related.map(item=>item.ticker).filter(Boolean);const start=new Date(program.starts_at),end=new Date(program.ends_at),progress=Math.max(0,Math.min(100,(Date.now()-start.getTime())/Math.max(1,end.getTime()-start.getTime())*100));return `<article><div class="market-movement-status"><i></i><span>ACTIVE MOVEMENT</span></div><div><strong>${escapeHtml(program.event_name)}</strong><small>${tickers.length>8?`ENTIRE MARKET · ${tickers.length} securities`:escapeHtml(tickers.join(", ")||"Market-wide")}</small></div><div class="market-movement-change ${Number(program.percent_change)>=0?"positive":"negative"}"><strong>${Number(program.percent_change)>=0?"+":""}${Number(program.percent_change).toFixed(2)}%</strong><small>${start.toLocaleString()} → ${end.toLocaleString()}</small></div><div class="market-movement-progress"><i style="width:${progress.toFixed(1)}%"></i></div><button class="danger" type="button" data-market-cancel-program="${program.id}" data-market-program-name="${escapeHtml(program.event_name)}">Stop & restore market</button></article>`}).join("")||`<div class="market-normal-state"><i></i><div><strong>Normal market operation</strong><span>No scheduled price movements are currently changing listed securities.</span></div></div>`}</div></section>
   </div>`;
@@ -10066,18 +10204,17 @@ function renderDevTools() {
         <section class="dev-card dev-record-panel"><div class="dev-card-header"><div><span>AUTHORIZATION LEDGER</span><h2>Recent codes</h2></div><strong>${adminCodes.length}</strong></div><div class="dev-code-ledger">${adminCodes.slice(0,30).map((x) => `<div><code>••••-${escapeHtml(x.code_hint)}</code><span>${escapeHtml(x.created_by_name)}${x.used_by_name ? ` → ${escapeHtml(x.used_by_name)}` : ""}</span><strong class="${x.uses_remaining ? "available" : ""}">${x.revoked_at ? "Revoked" : x.uses_remaining ? "Available" : "Consumed"}</strong></div>`).join("") || `<div class="empty">No Admin 2FA codes issued</div>`}</div></section>
       </div>
       <section class="dev-card myfc-code-authority">
-        <div class="dev-card-header"><div><span>MYFAIRCROFT RECEIPT VERIFICATION</span><h2>Direct-payment codes</h2><p>Issue a resident-specific four-digit receipt only after the in-game currency has been received. This verifies payment in RP OS and never changes the Arma database.</p></div><span class="pill red">DO NOT ISSUE BEFORE PAYMENT</span></div>
+        <div class="dev-card-header"><div><span>UNIVERSAL RECEIPT VERIFICATION</span><h2>Unassigned four-digit PIN</h2><p>Issue one amount-free bearer PIN after the in-game handoff. The first resident to redeem it is recorded, and it works once in either MyFaircroft or Ravenhood.</p></div><span class="pill red">DO NOT ISSUE BEFORE HANDOFF</span></div>
         <div class="dev-grid-2">
           <form id="myFaircroftPaymentCodeForm" class="form-grid">
-            <label>Resident<select name="target_user_id" required><option value="">Select resident</option>${devUserOptions(users)}</select></label>
-            <label>Payment received<input name="amount" type="number" min="0.01" max="10000000" step="0.01" required /></label>
+            <label><span class="dev-unassigned-pin"><b>UNASSIGNED BEARER PIN</b><small>The first eligible resident to redeem this PIN will be recorded as its recipient.</small></span></label>
             <label>Code expires after<input name="expiry_minutes" type="number" min="5" max="120" value="30" required /><small>Minutes</small></label>
-            <label class="dev-certify wide"><input type="checkbox" required /> I confirm the in-game currency was received before issuing this code.</label>
-            <button class="primary wide">Issue four-digit receipt code</button>
+            <label class="dev-certify wide"><input type="checkbox" required /> I confirm the in-game handoff was completed before issuing this bearer PIN.</label>
+            <button class="primary wide">Issue universal four-digit PIN</button>
           </form>
           <div>
-            ${state.generatedMyFaircroftCode ? `<div class="dev-generated-code"><span>Give only to ${escapeHtml(state.generatedMyFaircroftCode.target_name)}</span><strong>${escapeHtml(state.generatedMyFaircroftCode.code)}</strong><small>${money(state.generatedMyFaircroftCode.amount)} · expires ${new Date(state.generatedMyFaircroftCode.expires_at).toLocaleString()}</small></div>` : `<div class="empty">No code generated in this session</div>`}
-            <div class="dev-code-ledger myfc-payment-code-ledger">${paymentCodes.map((x) => `<div><code>••${escapeHtml(x.code_hint)}</code><span>${escapeHtml(x.target_user_name)} · ${money(x.authorized_amount)}<small>Issued by ${escapeHtml(x.created_by_name)}${x.used_by_name ? ` · redeemed by ${escapeHtml(x.used_by_name)}${x.citation_id ? ` for case #${x.citation_id}` : ""}` : " · not redeemed"}</small></span><strong class="${!x.used_at && !x.revoked_at && new Date(x.expires_at) > new Date() ? "available" : ""}">${x.used_at ? "Redeemed" : x.revoked_at ? "Revoked" : new Date(x.expires_at) <= new Date() ? "Expired" : "Available"}</strong></div>`).join("") || `<div class="empty">No MyFaircroft receipt codes issued</div>`}</div>
+            ${state.generatedMyFaircroftCode ? `<div class="dev-generated-code"><span>Unassigned bearer PIN · shown once</span><strong>${escapeHtml(state.generatedMyFaircroftCode.code)}</strong><small>Expires ${new Date(state.generatedMyFaircroftCode.expires_at).toLocaleString()}</small></div>` : `<div class="empty">No PIN generated in this session</div>`}
+            <div class="dev-code-ledger myfc-payment-code-ledger">${paymentCodes.map((x) => `<div><code>••${escapeHtml(x.code_hint)}</code><span>${escapeHtml(x.target_user_name)}<small>Issued by ${escapeHtml(x.created_by_name)}${x.used_by_name ? ` · redeemed by ${escapeHtml(x.used_by_name)}${x.citation_id ? ` for case #${x.citation_id}` : ""}` : " · not redeemed"}</small></span><strong class="${!x.used_at && !x.revoked_at && new Date(x.expires_at) > new Date() ? "available" : ""}">${x.used_at ? "Redeemed" : x.revoked_at ? "Revoked" : new Date(x.expires_at) <= new Date() ? "Expired" : "Available"}</strong></div>`).join("") || `<div class="empty">No universal receipt PINs issued</div>`}</div>
           </div>
         </div>
       </section>
@@ -10729,6 +10866,8 @@ function bindDevWorkspace() {
     const form = $(selector);
     const residentField = form?.querySelector('[name="target_user_id"]')?.closest("label");
     if (residentField) residentField.innerHTML = `<span class="dev-unassigned-pin"><b>UNASSIGNED BEARER PIN</b><small>The first eligible resident to redeem this PIN will be recorded as its recipient.</small></span>`;
+    const amountField = form?.querySelector('[name="amount"]')?.closest("label");
+    if (amountField) amountField.remove();
   });
   $("#devMarketCodeForm")?.addEventListener("submit", async event => { event.preventDefault(); try { state.generatedMarketCode=await api("/api/dev-tools/market/codes",{method:"POST",body:Object.fromEntries(new FormData(event.currentTarget))}); toast("Unassigned Ravenhood receipt PIN issued"); await refreshDevTools(); } catch(error){toast(error.message);} });
   $("#devMarketAiForm")?.addEventListener("submit", async event => { event.preventDefault(); try { const result=await api("/api/dev-tools/market/ai-briefing",{method:"POST",body:Object.fromEntries(new FormData(event.currentTarget)),timeoutMs:120000}); state.marketAiBriefing=result.briefing; toast("Gemini market briefing complete"); await refreshDevTools(); } catch(error){toast(error.message);} });
@@ -10948,9 +11087,14 @@ function bindDevWorkspace() {
 }
 
 async function refreshDevTools() {
+  const pageScrollY = window.scrollY;
   await loadAppData("dev-tools");
   if (state.devTab === "settlement") state.cache["fine-settlement"] = await api("/api/fine-settlement");
   render();
+  requestAnimationFrame(() => {
+    const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    window.scrollTo({ top: Math.min(pageScrollY, maxScroll), left: 0, behavior: "instant" });
+  });
 }
 
 function renderAntiCheatModal(data, uid) {
@@ -11098,7 +11242,7 @@ function renderFineSettlement(embedded = false) {
             ${(license.accrued_weeks || 0) < 1 ? `<small>Next accrual: ${new Date(license.tax_available_at).toLocaleString()}</small>` : ""}
           </article>`).join("") || `<div class="empty">No linked registered business licenses.</div>`}
       </section>
-      <section class="profile-link-card">
+      <section class="profile-link-card tax-legacy-batches" hidden>
         <div class="row"><div><p class="eyebrow">Business revenue</p><h3>Eligible accumulated taxes</h3><p class="muted small">Assessments tally by registered business. Only linked owners with sufficient synced game funds appear.</p></div><strong>${taxReady.length}</strong></div>
         <form id="tax-batch-form" class="stack">
           ${taxReady.map((tax) => `
@@ -11109,7 +11253,7 @@ function renderFineSettlement(embedded = false) {
           ${taxReady.length ? `<label>Batch notes<textarea name="notes" rows="3" placeholder="Tax order or processing notes"></textarea></label><button type="submit">Create locked tax batch</button>` : ""}
         </form>
       </section>
-      <section class="stack">
+      <section class="stack tax-legacy-batches" hidden>
         <div class="row"><h3>Business tax batches</h3><span class="pill">${taxBatches.length}</span></div>
         ${taxBatches.map((batch) => `
           <article class="profile-link-card">
@@ -11120,6 +11264,7 @@ function renderFineSettlement(embedded = false) {
             ${["awaiting_codex", "needs_review"].includes(batch.status) ? `<button type="button" data-tax-verify="${batch.id}">Verify synced tax balances</button>` : ""}
           </article>`).join("") || `<div class="empty">No business tax settlement batches.</div>`}
       </section>
+      <section class="profile-link-card tax-issuance-flow"><div><p class="eyebrow">Resident payment route</p><h3>Issue the bill. MyFaircroft handles payment.</h3><p class="muted">Once issued, the business owner receives a notification and the full balance appears under MyFaircroft → Taxes. Staff collects the in-game payment, then provides one unused four-digit receipt PIN. Verification closes the bill and adds the tax receipt to the Faircroft Lottery fund.</p></div><ol><li><strong>01 · Issue</strong><span>Assess accrued tax above.</span></li><li><strong>02 · Notify</strong><span>The bill appears in MyFaircroft.</span></li><li><strong>03 · Verify</strong><span>The resident enters the receipt PIN.</span></li><li><strong>04 · Fund</strong><span>Paid taxes grow the lottery pool.</span></li></ol></section>
       </div>
       ${state.fineSettlementPrompt ? `<section class="profile-link-card"><h3>Codex processing request</h3><textarea id="fine-codex-prompt" rows="8" readonly>${escapeHtml(state.fineSettlementPrompt)}</textarea><button type="button" data-copy-fine-prompt>Copy for Codex</button></section>` : ""}
     </div>`;
@@ -11668,7 +11813,7 @@ function renderSystem() {
   `;
 }
 
-const roleOptions = ["civ", "owner", "admin", "dev", "beta", "press", "indeed_admin", "leo", "judge", "lawyer", "prosecutor", "public_defender", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "ice_agent", "ice_commander", "business_owner", "business_registrar", "city_hall", "economy_manager"];
+const roleOptions = ["civ", "staff", "owner", "admin", "dev", "beta", "press", "indeed_admin", "leo", "judge", "lawyer", "prosecutor", "public_defender", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "ice_agent", "ice_commander", "business_owner", "business_registrar", "city_hall", "economy_manager"];
 
 function adminUserSearchText(user) {
   return [
@@ -11707,7 +11852,7 @@ function renderDepartmentApplicationPacket(item) {
   }
   return `
     <details class="admin-application-packet">
-      <summary>${packet.type === "bar_exam_application" ? `Bar Exam · Internal score ${escapeHtml(packet.score)}/${escapeHtml(packet.total)}` : packet.type === "press_exam_application" ? `Press Pass Exam · Internal score ${escapeHtml(packet.score)}/${escapeHtml(packet.total)}` : "Application packet"}</summary>
+      <summary>${packet.type === "bar_exam_application" ? `Bar Exam · Internal score ${escapeHtml(packet.score)}/${escapeHtml(packet.total)}` : packet.type === "press_exam_application" ? `Press Pass Exam · Internal score ${escapeHtml(packet.score)}/${escapeHtml(packet.total)}` : packet.type === "ice_exam_application" ? `ICE Qualification · Internal score ${escapeHtml(packet.score)}/${escapeHtml(packet.total)}` : "Application packet"}</summary>
       <div class="admin-packet-answers">
         ${packet.answers.map((answer) => `
           <div>

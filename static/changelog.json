@@ -6,6 +6,11 @@
       "version": "0.2.2",
       "title": "RP OS 0.2.2",
       "added": [
+        "Added ICE Agent recruitment to Faircroft Careers with a 20-question multiple-choice federal-service qualification, a mandatory internal 20/20 advancement threshold, and character-specific application records.",
+        "Added an ICE Commander Applications desk inside ICE MDT for qualification review, interview and training advancement, command denial, and final appointment that automatically grants the ICE Agent role and notifies the candidate.",
+        "Added an independent ICE Agent application-intake switch in Developer Tools so federal recruiting can open or close without affecting any other Faircroft job posting.",
+        "Added a permission-neutral Staff role that excludes assigned accounts from every public Leaderboard category while preserving their economy balances, telemetry, Developer Tools records, and operational totals.",
+        "Opened Leaderboards and Ravenhood Wallstreet to every verified Faircroft resident while retaining exchange policy, pricing automation, receipt issuance, and administrative controls exclusively inside Developer Tools.",
         "Added a once-per-news-cycle FNN Top Story assignment in the Press Desk, with an exclusive newsroom checkbox, visible reservation status, Gemini lead-story prioritization, conflict protection, and automatic release only after a successful manual or scheduled edition publication.",
         "Added audited manual lottery funding inside Developer Tools Lottery Settings, including immediate prize-pool updates, required funding reasons, issuing-developer attribution, timestamps, and a permanent adjustment ledger.",
         "Added a full-screen Faircroft Leaderboards application with 27 synchronized rankings across Wealth and Credit, Activity, Combat, Public Safety, and Community divisions.",
@@ -48,6 +53,18 @@
         ,"Added an active scheduled-movement ledger to Ravenhood Stock Market Settings with affected securities, target percentage, schedule timing, live progress, and immediate stop controls."
       ],
       "changed": [
+        "Simplified business taxes into an issued-bill workflow: staff assesses the tax, residents receive a MyFaircroft notice, and payment is completed directly from the Taxes tab with a verified four-digit receipt PIN instead of a confusing settlement batch.",
+        "Added verified business-tax receipts to the Faircroft Lottery public-service funding pool with resident notification and permanent payment auditing.",
+        "Rebuilt ICE MDT as a branded Faircroft federal operations terminal with dedicated Command Overview, Identity Intelligence, Case Operations, Detainers, and Command Applications navigation while preserving the local-ordinance data restriction.",
+        "Added a branded FLUCK Camera Search intelligence module with an animated federal network preview and a clearly locked Coming Soon state for federal law enforcement.",
+        "Integrated the official Faircroft emblem throughout the citizen passport cover, issuing header, document seal, security watermark, holographic validation mark, and live-registry authentication treatment.",
+        "Rebuilt Faircroft Careers as an animated public-service recruitment campaign with cinematic department mastheads, live opportunity navigation, connected selection journeys, stronger career storytelling, prominent application actions, and responsive candidate files without the former boxed administrative layout.",
+        "Removed the verified-status, CIV-number, and role-list strip from the RP OS home header while preserving all underlying identity permissions and account data.",
+        "Unified new MyFaircroft and Ravenhood four-digit receipts as unassigned, amount-free bearer PINs that can be redeemed once in either system, record the first redeeming resident, and are consumed across both ledgers to prevent reuse.",
+        "Reimagined Leaderboards as a live Faircroft competitive season with a kinetic championship stage, animated title defense, closest-challenger pressure, personal return goals, exact next-rank progress, live status signals, and a continuous contender climb designed to reward daily competition.",
+        "Rebuilt Faircroft Financial around a familiar consumer-banking flow with a dedicated account rail, compact greeting, primary checking workspace, integrated debit card, verified activity ledger, credit progress, financial wellness detail, and responsive mobile navigation without the previous oversized split-grid presentation.",
+        "Changed the Windows desktop release endpoint from a GitHub browser redirect to an authenticated Faircroft-hosted attachment response, keeping Beta members on Faircroft while directly downloading Faircroft-RP-Desktop-Setup.exe.",
+        "Corrected the MDT citation subject workflow so selecting a civilian immediately loads that account's active character identities, automatically chooses the active or sole character, and requires an explicit choice only when multiple valid characters exist.",
         "Reimagined Leaderboards as an open championship arena with circular rank stages, an animated podium track, floating verified scores, integrated live-position intelligence, and a continuous standings field without card or widget containers.",
         "Replaced the oversized linear Leaderboards page with a responsive competitive-network dashboard featuring a compact live header, swipeable championship podium, personal chase intelligence, advancement meters, and dense mobile-first standings.",
         "Rebuilt Ravenhood around selectable Day, Week, Month, and Year market views for every security, with animated recorded and projected paths, range-specific timelines, a continuous borderless ticker tape, and streamlined trading rails.",
@@ -90,6 +107,12 @@
         ,"Changed all newly issued MyFaircroft and Ravenhood four-digit receipt PINs to unassigned bearer codes that permanently record the issuing administrator and first eligible resident who redeems them."
       ],
       "fixed": [
+        "Consolidated duplicate changelog records that shared the same release version so RP OS 0.2.2 appears once while preserving every unique release note.",
+        "Replaced boxed changelog overview widgets with a connected Roadmap-style release route, animated milestone chapters, continuous editorial change ledgers, and responsive release navigation.",
+        "Reworked the FNN New Story Brief into a wide responsive newsroom intake workspace, eliminating its cramped nested scrollbar while retaining every source, verification, context, quotation, and Top Story field.",
+        "Removed the competing fixed-height scroll container from desktop Developer Tools so the workspace follows the document, no empty page opens beneath it, and Save or Sync preserves the operator's position.",
+        "Enforced server-side four-digit PIN verification before any direct MyFaircroft fine payment can be recorded or a citation can move to paid status.",
+        "Removed the unnecessary authorized-amount field from four-digit PIN issuance; residents now enter the actual fine payment, Ravenhood deposit, or Ravenhood withdrawal amount only when redeeming the receipt.",
         "Fixed Ravenhood's persistent interaction controller so Market Overview, Deposit, Withdrawal, Transfer, ticker selection, time ranges, refresh, and both Exit controls remain functional after every workspace redraw.",
         "Fixed Ravenhood Gemini market briefings failing before generation when PostgreSQL numeric market prices and volatility values were returned as Decimal objects.",
         "Stopping an active Ravenhood price movement now cancels every related security program and restores affected prices to their recorded pre-event baselines so normal market operation can resume.",

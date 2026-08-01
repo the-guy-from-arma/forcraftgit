@@ -1436,10 +1436,33 @@ PRESS_PASS_EXAM_QUESTIONS = (
     ("A reporter may invent facts because Gemini will improve the story later.", ("True", "False"), "B"),
     ("Press RP should inform the community while respecting scene safety, court status, and server rules.", ("True", "False"), "A"),
 )
+ICE_AGENT_EXAM_QUESTIONS = (
+    ("What is an ICE Agent's first responsibility during an immigration contact?", ("Establish scene safety, identify yourself, and explain the lawful purpose of the contact", "Immediately seize every device", "Skip identification and begin questioning", "Publish the subject's identity"), "A"),
+    ("Which record should be used to confirm a person's Faircroft citizenship status?", ("Unverified radio traffic", "The citizenship registry and NCIC identity return", "A social-media rumor", "A vehicle color alone"), "B"),
+    ("A person has no passport record. What is the correct next step?", ("Assume guilt", "Document the status discrepancy and conduct a lawful status review", "Issue unrelated criminal charges", "Delete the identity record"), "B"),
+    ("What must an immigration detainer include?", ("A documented legal basis, subject identity, and case reference", "Only an agent nickname", "A blank narrative", "An unrelated traffic citation"), "A"),
+    ("When local-involvement restrictions are active, ICE personnel may still use:", ("Restricted local case narratives", "NCIC identity and officer-safety information", "Sealed local reports", "Unrelated private messages"), "B"),
+    ("An ICE Agent receives conflicting identity information. The agent should:", ("Choose the most convenient answer", "Record the conflict and verify it through authoritative sources", "Alter the source record", "Ignore the discrepancy"), "B"),
+    ("What is required before opening an immigration case?", ("A detailed factual narrative and identified subject", "A rumor with no subject", "Permission from another applicant", "A press headline"), "A"),
+    ("How should an agent treat a detained person?", ("Professionally, safely, and according to server and agency procedure", "As automatically convicted", "Without documenting custody", "As a source of public entertainment"), "A"),
+    ("Which action best preserves evidence integrity?", ("Document source, time, handling, and relevant case number", "Rename evidence without notes", "Share it publicly", "Destroy duplicate records without authorization"), "A"),
+    ("A commander issues a lawful direction during an operation. An agent should:", ("Follow it unless it creates an immediate safety or rules violation, then report the concern", "Ignore every command", "Argue over open radio", "Change the case disposition secretly"), "A"),
+    ("ICE access may be used to search friends without an operational reason.", ("True", "False"), "B"),
+    ("Citizenship status alone proves that a person committed a criminal offense.", ("True", "False"), "B"),
+    ("An agent should separate verified facts from allegations in a case narrative.", ("True", "False"), "A"),
+    ("If a subject needs urgent medical care, scene personnel should prioritize medical safety.", ("True", "False"), "A"),
+    ("An ICE Agent may fabricate probable cause to improve an investigation.", ("True", "False"), "B"),
+    ("What should radio traffic during an operation be?", ("Clear, concise, and limited to operationally relevant information", "Filled with private unrelated details", "Anonymous and undocumented", "Intentionally misleading"), "A"),
+    ("When a case is referred or closed, the agent should:", ("Record the disposition and supporting facts", "Leave the status open forever", "Delete the subject", "Remove the case number"), "A"),
+    ("A subject disputes an immigration finding. What is the professional response?", ("Document the dispute and explain the applicable review process", "Threaten the subject", "Refuse to record it", "Change their unrelated bank record"), "A"),
+    ("Which conduct is a conflict of interest?", ("Using ICE authority to benefit a personal associate", "Requesting command review", "Writing an accurate report", "Preserving an audit trail"), "A"),
+    ("ICE roleplay should remain grounded in documented facts, lawful procedure, proportional action, and server rules.", ("True", "False"), "A"),
+)
 BAR_EXAM_BANKS = {
     "judicial": JUDICIAL_CERTIFICATION_QUESTIONS,
     "defense": DEFENSE_ATTORNEY_EXAM_QUESTIONS,
     "press": PRESS_PASS_EXAM_QUESTIONS,
+    "ice": ICE_AGENT_EXAM_QUESTIONS,
 }
 
 DRIVER_EXAM_QUESTIONS = (
@@ -1529,6 +1552,19 @@ DEPARTMENT_POSTINGS = (
         "badge": "Earn Your FNN Press Pass",
         "schedule": "Investigate community stories, interview participants, document events, and submit detailed source briefs for future FNN editions.",
         "requirements": "Complete the 10-question Press RP examination and demonstrate accurate sourcing, ethical reporting, and scene awareness.",
+    },
+    {
+        "key": "ice_agent",
+        "label": "ICE Agent Recruitment",
+        "division": "Faircroft Immigration & Customs Enforcement",
+        "role_key": "ice_agent",
+        "role_label": "ICE Agent",
+        "form_type": "ice_exam",
+        "exam_key": "ice",
+        "command_roles": ("ice_commander",),
+        "badge": "Federal Agent Candidate",
+        "schedule": "Citizenship verification, federal status investigations, detainers, case documentation, and immigration operations.",
+        "requirements": "Complete the 20-question ICE qualification assessment with a perfect result to enter the interview and training process.",
     },
 )
 SYSTEM_SETTING_DEFAULTS = {
@@ -1704,8 +1740,9 @@ def clean_bar_exam_application(payload: dict[str, Any], posting: dict[str, Any],
             "answer": f"{selected}. {options[option_index]}",
         })
     score_percent = round(correct * 100 / len(questions))
+    record_type = "press_exam_application" if posting.get("form_type") == "press_exam" else "ice_exam_application" if posting.get("form_type") == "ice_exam" else "bar_exam_application"
     record = {
-        "type": "press_exam_application" if posting.get("form_type") == "press_exam" else "bar_exam_application",
+        "type": record_type,
         "version": 1,
         "posting_key": posting["key"],
         "posting_label": posting["label"],
@@ -1721,7 +1758,7 @@ def clean_bar_exam_application(payload: dict[str, Any], posting: dict[str, Any],
     message = (
         f"Applicant: {applicant_name} / CIV {user.get('civ_number') or 'pending'}\n"
         f"Discord: {discord_name}\n"
-        f"{'Press Pass Exam' if posting.get('form_type') == 'press_exam' else 'Bar Exam'} score: {correct}/{len(questions)} ({score_percent}%)"
+        f"{'Press Pass Exam' if posting.get('form_type') == 'press_exam' else 'ICE Agent Qualification' if posting.get('form_type') == 'ice_exam' else 'Bar Exam'} score: {correct}/{len(questions)} ({score_percent}%)"
     )
     return json.dumps(record, ensure_ascii=False), message
 
@@ -2857,6 +2894,23 @@ def ensure_migrations(db: Database) -> None:
     )
     db.execute(
         """
+        CREATE TABLE IF NOT EXISTS myfaircroft_tax_payments (
+            id SERIAL PRIMARY KEY,
+            business_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            code_id INTEGER NOT NULL UNIQUE,
+            amount NUMERIC(12,2) NOT NULL,
+            received_by INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (business_id) REFERENCES businesses(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (code_id) REFERENCES myfaircroft_payment_codes(id) ON DELETE CASCADE,
+            FOREIGN KEY (received_by) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute(
+        """
         CREATE TABLE IF NOT EXISTS market_accounts (
             id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL UNIQUE,
@@ -3810,13 +3864,16 @@ def lottery_funding_snapshot(db: Database, settings: dict[str, Any] | None = Non
     settings = settings or get_system_settings(db)
     direct = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM myfaircroft_direct_payments")
     settled = one(db, "SELECT COALESCE(SUM(fine_amount),0) AS total FROM fine_settlement_items WHERE status='paid'")
+    taxes = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM myfaircroft_tax_payments")
     awarded = one(db, "SELECT COALESCE(SUM(payout_amount),0) AS total FROM lottery_draws WHERE status='completed'")
     manual = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM lottery_fund_adjustments")
     fines = float(direct["total"] or 0) + float(settled["total"] or 0)
+    tax_receipts = float(taxes["total"] or 0)
     market = float(settings["market_holding_balance"] or 0)
     paid = float(awarded["total"] or 0)
     manual_total = float(manual["total"] or 0)
-    return {"fines": round(fines, 2), "market_fees": round(market, 2), "manual": round(manual_total, 2), "awarded": round(paid, 2), "available": round(max(0.0, fines + market + manual_total - paid), 2)}
+    public_receipts = fines + tax_receipts
+    return {"fines": round(public_receipts, 2), "taxes": round(tax_receipts, 2), "market_fees": round(market, 2), "manual": round(manual_total, 2), "awarded": round(paid, 2), "available": round(max(0.0, public_receipts + market + manual_total - paid), 2)}
 
 
 def lottery_next_draw_at(settings: dict[str, Any], after: dt.datetime | None = None) -> dt.datetime:
@@ -4763,6 +4820,8 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         ("properties", "PROPERTIES", "home", False, True),
         ("bank", "BANK", "bank", verified, False),
         ("lottery", "LOTTERY", "trophy", verified, False),
+        ("leaderboards", "Leaderboards", "trophy", verified, False),
+        ("wallstreet", "WALLSTREET", "trending", verified, False),
         ("messages", "Messages", "message", verified, False),
         ("changelog", "Changelog", "scroll", True, False),
     ]
@@ -4787,8 +4846,6 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
     if has_any(user, "owner", "admin"):
         apps.append({"id": "admin", "label": "Admin", "icon": "settings", "enabled": True, "hidden": False})
     if has_any(user, "owner", "dev"):
-        apps.append({"id": "leaderboards", "label": "Leaderboards", "icon": "trophy", "enabled": True, "coming_soon": False, "hidden": False})
-        apps.append({"id": "wallstreet", "label": "WALLSTREET", "icon": "trending", "enabled": True, "coming_soon": False, "hidden": False})
         apps.append({"id": "dev-tools", "label": "Dev Tools", "icon": "code", "enabled": True, "hidden": False})
     if has_any(user, "beta"):
         apps.append({"id": "beta-tasks", "label": "Beta Tasks", "icon": "target", "enabled": True, "hidden": False})
@@ -5817,6 +5874,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_ice_create_case(db, user)
                 elif path.startswith("/api/ice/cases/") and method == "PATCH":
                     self.api_ice_update_case(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/ice/applications/") and method == "PATCH":
+                    self.api_ice_review_application(db, user, self.path_int(path, 3))
                 elif path == "/api/fnn/generate" and method == "POST":
                     self.api_generate_fnn(user)
                 elif path == "/api/press/reports" and method == "GET":
@@ -6540,6 +6599,37 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "undocumented": int(one(db, "SELECT COUNT(*) AS count FROM users u WHERE NOT EXISTS (SELECT 1 FROM citizenship_records c WHERE c.user_id = u.id AND LOWER(c.citizenship_status) = 'valid citizen')")["count"]),
             "open_cases": sum(1 for item in cases if item["status"] in ("open", "detained")),
         }
+        can_command = has_any(user, "ice_commander")
+        applications: list[dict[str, Any]] = []
+        if can_command:
+            application_rows = all_rows(
+                db,
+                """
+                SELECT a.*, applicant.name AS applicant_name, applicant.civ_number AS applicant_civ_number,
+                       character.character_name, reviewer.name AS reviewer_name
+                FROM department_applications a
+                JOIN users applicant ON applicant.id = a.user_id
+                LEFT JOIN user_characters character ON character.id = a.character_id
+                LEFT JOIN users reviewer ON reviewer.id = a.reviewed_by
+                WHERE a.department_key = 'ice_agent'
+                ORDER BY CASE a.status WHEN 'submitted' THEN 0 WHEN 'under_review' THEN 1 WHEN 'interview_requested' THEN 2 ELSE 3 END,
+                         a.updated_at DESC
+                LIMIT 150
+                """,
+            )
+            for row in application_rows:
+                item = dict(row)
+                try:
+                    packet = json.loads(item.get("statement") or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    packet = {}
+                item["qualification"] = {
+                    "score": int(packet.get("score") or 0),
+                    "total": int(packet.get("total") or 20),
+                    "answers": packet.get("answers") if isinstance(packet.get("answers"), list) else [],
+                }
+                applications.append(item)
+            stats["applications_pending"] = sum(1 for item in applications if item["status"] in ("submitted", "under_review", "interview_requested"))
         self.send_json(
             200,
             {
@@ -6547,7 +6637,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "stats": stats,
                 "local_data_restricted": settings["ice_restrict_local_data"],
                 "ordinance_notice": "Faircroft Local Ordinance restricts local police involvement with federal immigration operations. NCIC identity and safety checks remain available; local reports, BOLOs, and warrants are withheld when the restriction is active.",
-                "can_command": has_any(user, "ice_commander"),
+                "can_command": can_command,
+                "applications": applications,
             },
         )
 
@@ -6644,8 +6735,67 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         self.send_json(200, {"ok": True})
 
+    def api_ice_review_application(self, db: Database, user: DbRow | None, application_id: int) -> None:
+        err = ice_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        if not has_any(user, "ice_commander"):
+            self.error(403, "ICE Commander authorization required")
+            return
+        application = one(db, "SELECT * FROM department_applications WHERE id = ? AND department_key = 'ice_agent'", (application_id,))
+        if not application:
+            self.error(404, "ICE application not found")
+            return
+        payload = self.read_json()
+        action = str(payload.get("action") or "").strip().lower()
+        status_map = {"review": "under_review", "interview": "interview_requested", "approve": "approved", "deny": "denied"}
+        if action not in status_map:
+            self.error(400, "Choose review, interview, approve, or deny")
+            return
+        try:
+            exam = json.loads(application.get("statement") or "{}")
+            score = int(exam.get("score") or 0)
+            total = int(exam.get("total") or 20)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            self.error(409, "This application does not contain a valid ICE qualification result")
+            return
+        if action in ("interview", "approve") and (score != 20 or total != 20):
+            self.error(409, "Only a perfect 20/20 qualification result may advance")
+            return
+        notes = str(payload.get("reviewer_notes") or "").strip()[:1500]
+        status = status_map[action]
+        ts = now_iso()
+        db.execute(
+            "UPDATE department_applications SET status = ?, reviewed_by = ?, reviewer_notes = ?, updated_at = ? WHERE id = ?",
+            (status, user["id"], notes, ts, application_id),
+        )
+        if action == "approve":
+            applicant = one(db, "SELECT * FROM users WHERE id = ?", (application["user_id"],))
+            if applicant:
+                updated_roles = sorted(set([*roles_for(applicant), "ice_agent"]))
+                db.execute(
+                    "UPDATE users SET verified = 1, roles = ?, primary_agency = ? WHERE id = ?",
+                    (json.dumps(updated_roles), "Faircroft Immigration & Customs Enforcement", application["user_id"]),
+                )
+        subject_map = {
+            "review": "ICE application under command review",
+            "interview": "ICE interview and training invitation",
+            "approve": "ICE Agent appointment approved",
+            "deny": "ICE application decision",
+        }
+        body_map = {
+            "review": "ICE Command has opened your application for review.",
+            "interview": "Your perfect qualification result has advanced to the ICE interview and training process.",
+            "approve": "ICE Command approved your appointment. The ICE Agent role and ICE MDT access are now active.",
+            "deny": "ICE Command did not advance your application.",
+        }
+        body = body_map[action] + (f"\n\nCommander notes: {notes}" if notes else "")
+        add_message(db, application["user_id"], subject_map[action], body, user["id"])
+        self.send_json(200, {"ok": True, "status": status, "role_granted": action == "approve"})
+
     def api_leaderboards(self, db: Database, user: DbRow | None) -> None:
-        err = developer_required(user)
+        err = verified_required(user)
         if err:
             self.error(403 if user else 401, err)
             return
@@ -6659,6 +6809,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 return max(0, int(float(value or 0)))
             except (TypeError, ValueError):
                 return 0
+
+        # The staff role is deliberately permission-neutral. It only removes the
+        # account from public competition; authoritative economy and telemetry
+        # records remain unchanged for Developer Tools and operational totals.
+        staff_user_ids = {
+            int(account["id"])
+            for account in all_rows(db, "SELECT id, roles FROM users")
+            if "staff" in roles_for(account)
+        }
+
+        def eligible(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return [item for item in items if not item.get("user_id") or int(item["user_id"]) not in staff_user_ids]
 
         telemetry_rows = all_rows(
             db,
@@ -6685,6 +6847,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             roles_text = str(row.get("roles") or "").lower()
             telemetry.append(
                 {
+                    "user_id": int(row["user_id"]) if row.get("user_id") else None,
                     "uid": str(row.get("uid") or ""),
                     "name": str(row.get("player_name") or row.get("resident_name") or "Unknown player"),
                     "resident_name": str(row.get("resident_name") or ""),
@@ -6978,6 +7141,27 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "fire_hours": [item for item in telemetry if any(role in item["roles"] for role in ("fire", "ems"))],
             "civ_hours": [item for item in telemetry if "civ" in item["roles"]],
         }
+        telemetry = eligible(telemetry)
+        wealth = eligible(wealth)
+        bank_growth = eligible(bank_growth)
+        credit = eligible(credit)
+        credit_improvement = eligible(credit_improvement)
+        reputation = eligible(reputation)
+        current_sessions = eligible(current_sessions)
+        monthly_activity = eligible(monthly_activity)
+        vehicle_owners = eligible(vehicle_owners)
+        citations_received = eligible(citations_received)
+        citations_issued = eligible(citations_issued)
+        arrests = eligible(arrests)
+        most_wanted = eligible(most_wanted)
+        court_victories = eligible(court_victories)
+        reports_submitted = eligible(reports_submitted)
+        press_submitted = eligible(press_submitted)
+        community_veterans = eligible(community_veterans)
+        clean_drivers = eligible(clean_drivers)
+        public_safety = eligible(public_safety)
+        role_time = {key: eligible(items) for key, items in role_time.items()}
+        current_user_excluded = int(user["id"]) in staff_user_ids
         self.send_json(
             200,
             {
@@ -6987,7 +7171,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "online_players": sum(1 for item in telemetry if item["online"]),
                     "synced_balances": len(wealth),
                     "synced_credit_profiles": len(credit),
+                    "staff_excluded": len(staff_user_ids),
                 },
+                "current_user_excluded": current_user_excluded,
                 "boards": {
                     "wealth": ranked(wealth, "balance"),
                     "bank_growth": ranked([item for item in bank_growth if item["growth"] > 0], "growth"),
@@ -8302,7 +8488,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 self.error(400, str(exc))
                 return
-        elif posting.get("form_type") in ("bar_exam", "press_exam"):
+        elif posting.get("form_type") in ("bar_exam", "press_exam", "ice_exam"):
             try:
                 statement, message_body = clean_bar_exam_application(payload, posting, user)
             except ValueError as exc:
@@ -8337,6 +8523,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         ).fetchone()
         press_pass_awarded = False
         press_pass_capacity_reached = False
+        ice_qualified = False
         if posting.get("form_type") == "press_exam":
             exam_record = json.loads(statement)
             if int(exam_record.get("score") or 0) >= 8:
@@ -8359,13 +8546,30 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     press_pass_awarded = True
                 else:
                     press_pass_capacity_reached = True
-        if not press_pass_awarded:
+        if posting.get("form_type") == "ice_exam":
+            exam_record = json.loads(statement)
+            ice_qualified = int(exam_record.get("score") or 0) == 20 and int(exam_record.get("total") or 0) == 20
+            if ice_qualified:
+                db.execute(
+                    "UPDATE department_applications SET reviewer_notes = ?, updated_at = ? WHERE id = ?",
+                    ("Qualification passed 20/20. Awaiting ICE Command interview and training review.", ts, created["id"]),
+                )
+            else:
+                db.execute(
+                    "UPDATE department_applications SET status = 'denied', reviewer_notes = ?, updated_at = ? WHERE id = ?",
+                    ("Qualification threshold not met. Application was not forwarded to ICE Command.", ts, created["id"]),
+                )
+        if not press_pass_awarded and posting.get("form_type") != "ice_exam":
             add_message(db, user["id"], "Department application submitted", f"Your {posting['label']} application {created['application_number']} was submitted for review.")
         if press_pass_awarded:
             add_message(db, user["id"], "FNN Press Pass issued", "You passed the FNN examination. Your Press Pass was issued automatically and Press Desk access is now active.")
         elif press_pass_capacity_reached:
             add_message(db, user["id"], "FNN Press Pass waitlisted", "You passed the FNN examination, but the current Press Pass limit has been reached. Your result remains on file for newsroom review.")
-        recipient_roles = posting_command_roles(posting)
+        elif posting.get("form_type") == "ice_exam" and ice_qualified:
+            add_message(db, user["id"], "ICE qualification passed", "You earned a perfect 20/20 result. Your application has entered the ICE Command interview and training review queue.")
+        elif posting.get("form_type") == "ice_exam":
+            add_message(db, user["id"], "ICE qualification not advanced", "Your ICE Agent application did not meet the perfect qualification threshold and was not forwarded to command.")
+        recipient_roles = ("ice_commander",) if posting.get("form_type") == "ice_exam" else posting_command_roles(posting)
         recipient_patterns = tuple(f"%{role}%" for role in recipient_roles)
         staff = all_rows(
             db,
@@ -8373,6 +8577,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             recipient_patterns,
         )
         for row in staff:
+            if posting.get("form_type") == "ice_exam" and not ice_qualified:
+                continue
             if row["id"] != user["id"]:
                 add_message(
                     db,
@@ -8437,13 +8643,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "transfer_fee_percent": settings["market_transfer_fee_percent"], "trade_fee_percent": settings["market_trade_fee_percent"]}
 
     def api_wallstreet(self, db: Database, user: DbRow | None) -> None:
-        err = developer_required(user)
+        err = verified_required(user)
         if err:
             self.error(403 if user else 401, err); return
         self.send_json(200, self.market_payload(db, user))
 
     def api_wallstreet_create_account(self, db: Database, user: DbRow | None) -> None:
-        err = developer_required(user)
+        err = verified_required(user)
         if err:
             self.error(403 if user else 401, err); return
         db.execute("""INSERT INTO market_accounts (user_id, cash_balance, status, created_at, updated_at)
@@ -8451,7 +8657,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(201, {"ok": True})
 
     def api_wallstreet_cash(self, db: Database, user: DbRow | None) -> None:
-        err = developer_required(user)
+        err = verified_required(user)
         if err:
             self.error(403 if user else 401, err); return
         account = one(db, "SELECT * FROM market_accounts WHERE user_id = ?", (user["id"],))
@@ -8464,10 +8670,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if tx_type not in ("deposit", "withdrawal") or amount <= 0 or len(raw_code) != 4:
             self.error(400, "Transaction type, positive amount, and four-digit receipt code are required."); return
         code_hash = hashlib.sha256(raw_code.encode("utf-8")).hexdigest()
-        code = one(db, """SELECT * FROM market_cash_codes WHERE code_hash=? AND (target_user_id IS NULL OR target_user_id=?) AND transaction_type=?
-            AND amount=? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?""", (code_hash, user["id"], tx_type, amount, now_iso()))
+        code = one(db, """SELECT * FROM market_cash_codes WHERE code_hash=? AND (target_user_id IS NULL OR target_user_id=?)
+            AND transaction_type IN (?, 'universal') AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?""",
+            (code_hash, user["id"], tx_type, now_iso()))
         if not code:
-            self.error(400, "Receipt code is invalid, expired, used, or authorized for a different amount."); return
+            legacy = one(db, """SELECT * FROM myfaircroft_payment_codes WHERE code_hash=? AND (target_user_id IS NULL OR target_user_id=?)
+                AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?""", (code_hash, user["id"], now_iso()))
+            if legacy:
+                db.execute("""INSERT INTO market_cash_codes
+                    (code_hash, code_hint, target_user_id, transaction_type, amount, created_by, expires_at, created_at)
+                    VALUES (?, ?, ?, 'universal', 0, ?, ?, ?) ON CONFLICT(code_hash) DO NOTHING""",
+                    (code_hash, legacy["code_hint"], legacy.get("target_user_id"), legacy["created_by"], legacy["expires_at"], legacy["created_at"]))
+                code = one(db, "SELECT * FROM market_cash_codes WHERE code_hash=? AND used_at IS NULL AND revoked_at IS NULL", (code_hash,))
+        if not code:
+            self.error(400, "Receipt code is invalid, expired, or already used."); return
         balance = float(account["cash_balance"] or 0)
         if tx_type == "withdrawal" and balance < amount:
             self.error(409, "Insufficient settled cash. Sell holdings before requesting this withdrawal."); return
@@ -8475,11 +8691,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         ts = now_iso()
         db.execute("UPDATE market_accounts SET cash_balance=?, updated_at=? WHERE id=?", (round(new_balance, 2), ts, account["id"]))
         db.execute("UPDATE market_cash_codes SET target_user_id=COALESCE(target_user_id,?), used_by=?, used_at=? WHERE id=? AND used_at IS NULL", (user["id"], user["id"], ts, code["id"]))
+        db.execute("UPDATE myfaircroft_payment_codes SET target_user_id=COALESCE(target_user_id,?), used_by=?, used_at=? WHERE code_hash=? AND used_at IS NULL", (user["id"], user["id"], ts, code_hash))
         db.execute("INSERT INTO market_cash_transactions (account_id, code_id, transaction_type, amount, processed_by, created_at) VALUES (?, ?, ?, ?, ?, ?)", (account["id"], code["id"], tx_type, amount, code["created_by"], ts))
         self.send_json(200, {"ok": True, "balance": round(new_balance, 2), "transaction_type": tx_type, "amount": amount})
 
     def api_wallstreet_order(self, db: Database, user: DbRow | None) -> None:
-        err = developer_required(user)
+        err = verified_required(user)
         if err:
             self.error(403 if user else 401, err); return
         settings = get_system_settings(db)
@@ -8513,7 +8730,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(201, {"ok": True, "gross": gross, "fee": fee})
 
     def api_wallstreet_recipient(self, db: Database, user: DbRow | None, query: dict[str, list[str]]) -> None:
-        err = developer_required(user)
+        err = verified_required(user)
         if err:
             self.error(403 if user else 401, err); return
         civ_number = str((query.get("civ") or [""])[0]).strip()
@@ -8527,7 +8744,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"recipient": {"name": target_user["name"], "civ_number": target_user["civ_number"], "market_account": True}})
 
     def api_wallstreet_transfer(self, db: Database, user: DbRow | None) -> None:
-        err = developer_required(user)
+        err = verified_required(user)
         if err:
             self.error(403 if user else 401, err); return
         payload = self.read_json(); recipient = str(payload.get("recipient_civ_number") or "").strip(); ticker = str(payload.get("ticker") or "").upper().strip()
@@ -9834,7 +10051,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             (business_id, amount, period_label, str(payload.get("notes") or "").strip()[:1200], user["id"], assessed_at.isoformat()),
         ).fetchone()
         db.execute("UPDATE businesses SET tax_last_assessed_at = ?, updated_at = ? WHERE id = ?", (period_end.isoformat(), assessed_at.isoformat(), business_id))
-        add_message(db, business["owner_id"], "Business tax assessed", f"{business['business_name']} received a {amount:.2f} tax assessment for {period_label}.", user["id"])
+        add_message(db, business["owner_id"], "Tax bill ready in MyFaircroft", f"{business['business_name']} received a ${amount:,.2f} tax bill for {period_label}. Open MyFaircroft → Taxes to review and pay it with a verified four-digit receipt PIN.", user["id"])
         add_admin_audit(db, int(user["id"]), "business.tax.assessed", int(business["owner_id"]), {"business_id": business_id, "amount": amount, "period": period_label})
         self.send_json(201, {"ok": True, "id": int(created["id"])})
 
@@ -10035,11 +10252,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             (code_hash, user["id"], now_iso()),
         )
         if not payment_code:
-            self.error(403, "Receipt code is invalid, expired, already used, or assigned to another resident")
-            return
-        authorized = round(float(payment_code["authorized_amount"] or 0), 2)
-        if authorized != amount:
-            self.error(409, f"This receipt code verifies ${authorized:,.2f}; enter that exact amount")
+            legacy = one(db, """SELECT * FROM market_cash_codes WHERE code_hash=? AND (target_user_id IS NULL OR target_user_id=?)
+                AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?""", (code_hash, user["id"], now_iso()))
+            if legacy:
+                db.execute("""INSERT INTO myfaircroft_payment_codes
+                    (code_hash, code_hint, target_user_id, authorized_amount, created_by, expires_at, created_at)
+                    VALUES (?, ?, ?, 0, ?, ?, ?) ON CONFLICT(code_hash) DO NOTHING""",
+                    (code_hash, legacy["code_hint"], legacy.get("target_user_id"), legacy["created_by"], legacy["expires_at"], legacy["created_at"]))
+                payment_code = one(db, "SELECT * FROM myfaircroft_payment_codes WHERE code_hash=? AND used_at IS NULL AND revoked_at IS NULL", (code_hash,))
+        if not payment_code:
+            self.error(403, "A valid unused four-digit receipt PIN is required before this fine can be paid")
             return
         ts = now_iso()
         db.execute(
@@ -10052,6 +10274,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "UPDATE myfaircroft_payment_codes SET target_user_id = COALESCE(target_user_id, ?), used_by = ?, used_at = ?, citation_id = ? WHERE id = ? AND used_at IS NULL",
             (user["id"], user["id"], ts, case_id, payment_code["id"]),
         )
+        db.execute("UPDATE market_cash_codes SET target_user_id=COALESCE(target_user_id,?), used_by=?, used_at=? WHERE code_hash=? AND used_at IS NULL", (user["id"], user["id"], ts, code_hash))
         new_remaining = round(max(0, remaining - amount), 2)
         if new_remaining <= 0:
             db.execute(
@@ -10131,6 +10354,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not user:
             self.error(401, "Authentication required")
             return
+        payload = self.read_json()
+        raw_code = str(payload.get("code") or "").strip()
+        if len(raw_code) != 4 or not raw_code.isdigit():
+            self.error(400, "Enter the four-digit MyFaircroft receipt code")
+            return
         existing = one(
             db,
             """
@@ -10165,6 +10393,40 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(404, "No unpaid tax balance was found for this business")
             return
         amount = round(float(account["tax_amount"]), 2)
+        code_hash = hashlib.sha256(raw_code.encode("utf-8")).hexdigest()
+        payment_code = one(
+            db,
+            """SELECT * FROM myfaircroft_payment_codes
+               WHERE code_hash = ? AND target_user_id IS NULL AND used_at IS NULL
+                 AND revoked_at IS NULL AND expires_at > ?""",
+            (code_hash, now_iso()),
+        )
+        if not payment_code:
+            self.error(403, "A valid unused four-digit receipt PIN is required before this tax bill can be paid")
+            return
+        ts = now_iso()
+        db.execute(
+            """INSERT INTO myfaircroft_tax_payments
+               (business_id, user_id, code_id, amount, received_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (business_id, user["id"], payment_code["id"], amount, payment_code["created_by"], ts),
+        )
+        db.execute(
+            """UPDATE myfaircroft_payment_codes
+               SET target_user_id = ?, used_by = ?, used_at = ?
+               WHERE id = ? AND used_at IS NULL""",
+            (user["id"], user["id"], ts, payment_code["id"]),
+        )
+        db.execute(
+            """UPDATE business_tax_assessments
+               SET status = 'paid', settled_at = ?
+               WHERE business_id = ? AND status = 'unpaid' AND settlement_batch_id IS NULL""",
+            (ts, business_id),
+        )
+        add_message(db, user["id"], "Faircroft tax payment verified", f"Your {account['business_name']} tax bill of ${amount:,.2f} was paid and recorded. This public receipt has been added to the Faircroft Lottery fund.", payment_code["created_by"])
+        add_admin_audit(db, int(user["id"]), "myfaircroft.tax.payment_redeemed", int(user["id"]), {"business_id": business_id, "amount": amount, "code_hint": payment_code["code_hint"], "issued_by": payment_code["created_by"]})
+        self.send_json(200, {"ok": True, "amount": amount, "paid": True})
+        return
         if not account.get("identity_id") or account.get("balance") is None:
             self.error(409, "Link your Arma account and wait for a synced game-bank balance before paying")
             return
@@ -12551,7 +12813,46 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not package_url:
             self.error(503, f"The Faircroft {platform} package is not currently available.")
             return
-        self.send_redirect(package_url)
+        parsed_package = urlparse(package_url)
+        if parsed_package.scheme not in ("http", "https"):
+            self.error(503, "The configured Faircroft application package location is invalid.")
+            return
+        filename = "Faircroft-RP-Desktop-Setup.exe" if platform == "windows" else "Faircroft-RP.apk"
+        content_type = "application/vnd.microsoft.portable-executable" if platform == "windows" else "application/vnd.android.package-archive"
+        request = urllib.request.Request(
+            package_url,
+            headers={
+                "User-Agent": "Faircroft-RP-Release-Delivery/0.2.2",
+                "Accept": "application/octet-stream,*/*",
+            },
+        )
+        try:
+            upstream = urllib.request.urlopen(request, timeout=120)
+        except urllib.error.HTTPError as exc:
+            self.error(502, f"The Faircroft {platform} release server returned HTTP {exc.code}.")
+            return
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            self.error(502, f"The Faircroft {platform} package could not be retrieved: {str(exc)[:180]}")
+            return
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Cache-Control", "private, no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            content_length = upstream.headers.get("Content-Length")
+            if content_length and content_length.isdigit():
+                self.send_header("Content-Length", content_length)
+            self.end_headers()
+            while True:
+                chunk = upstream.read(1024 * 256)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            upstream.close()
 
     def api_download_access(self, user: DbRow | None) -> None:
         if not user:
@@ -13554,24 +13855,29 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         payload = self.read_json()
         try:
             target_user_id = None
-            amount = round(float(payload.get("amount") or 0), 2)
             expiry = max(5, min(int(payload.get("expiry_minutes") or 30), 120))
         except (TypeError, ValueError):
-            self.error(400, "Amount and expiry are required."); return
+            self.error(400, "Enter a valid expiry window."); return
         tx_type = str(payload.get("transaction_type") or "").lower()
         confirmation = str(payload.get("confirmation") or "").strip().upper()
         required = "MONEY RECEIVED" if tx_type == "deposit" else "WITHDRAWAL APPROVED"
-        if tx_type not in ("deposit", "withdrawal") or amount <= 0 or confirmation != required:
+        if tx_type not in ("deposit", "withdrawal") or confirmation != required:
             self.error(400, f"Confirm {required} only after the in-game handoff is complete."); return
         raw_code = ""; code_hash = ""
         for _ in range(30):
             raw_code = f"{secrets.randbelow(10000):04d}"; code_hash = hashlib.sha256(raw_code.encode("utf-8")).hexdigest()
-            if not one(db, "SELECT id FROM market_cash_codes WHERE code_hash=? AND used_at IS NULL AND revoked_at IS NULL", (code_hash,)): break
+            market_match = one(db, "SELECT id FROM market_cash_codes WHERE code_hash=? AND used_at IS NULL AND revoked_at IS NULL", (code_hash,))
+            myfc_match = one(db, "SELECT id FROM myfaircroft_payment_codes WHERE code_hash=? AND used_at IS NULL AND revoked_at IS NULL", (code_hash,))
+            if not market_match and not myfc_match: break
         created = utcnow(); expires = created + dt.timedelta(minutes=expiry)
         db.execute("""INSERT INTO market_cash_codes (code_hash, code_hint, target_user_id, transaction_type, amount, created_by, expires_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", (code_hash, raw_code[-2:], target_user_id, tx_type, amount, user["id"], expires.isoformat(), created.isoformat()))
-        add_admin_audit(db, int(user["id"]), f"market.{tx_type}.code_created", target_user_id, {"amount": amount, "expires_at": expires.isoformat()})
-        self.send_json(201, {"ok": True, "code": raw_code, "amount": amount, "transaction_type": tx_type, "expires_at": expires.isoformat()})
+            VALUES (?, ?, ?, ?, 0, ?, ?, ?)""", (code_hash, raw_code[-2:], target_user_id, tx_type, user["id"], expires.isoformat(), created.isoformat()))
+        db.execute("""INSERT INTO myfaircroft_payment_codes
+            (code_hash, code_hint, target_user_id, authorized_amount, created_by, expires_at, created_at)
+            VALUES (?, ?, NULL, 0, ?, ?, ?) ON CONFLICT(code_hash) DO NOTHING""",
+            (code_hash, raw_code[-2:], user["id"], expires.isoformat(), created.isoformat()))
+        add_admin_audit(db, int(user["id"]), f"market.{tx_type}.code_created", target_user_id, {"expires_at": expires.isoformat(), "unassigned": True, "amount_bound": False})
+        self.send_json(201, {"ok": True, "code": raw_code, "transaction_type": tx_type, "unassigned": True, "expires_at": expires.isoformat()})
 
     def api_dev_market_settings(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
@@ -13753,21 +14059,19 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         payload = self.read_json()
         try:
             target_user_id = None
-            amount = round(float(payload.get("amount") or 0), 2)
             expiry_minutes = max(5, min(int(payload.get("expiry_minutes") or 30), 120))
         except (TypeError, ValueError):
-            self.error(400, "Enter a valid amount and expiry")
+            self.error(400, "Enter a valid expiry window")
             return
         target = None
-        if amount <= 0 or amount > 10000000:
-            self.error(400, "Authorized payment amount must be between $0.01 and $10,000,000")
-            return
         raw_code = ""
         code_hash = ""
         for _ in range(30):
             raw_code = f"{secrets.randbelow(10000):04d}"
             code_hash = hashlib.sha256(raw_code.encode("utf-8")).hexdigest()
-            if not one(db, "SELECT id FROM myfaircroft_payment_codes WHERE code_hash = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?", (code_hash, now_iso())):
+            myfc_match = one(db, "SELECT id FROM myfaircroft_payment_codes WHERE code_hash = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?", (code_hash, now_iso()))
+            market_match = one(db, "SELECT id FROM market_cash_codes WHERE code_hash = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?", (code_hash, now_iso()))
+            if not myfc_match and not market_match:
                 break
         created_at = utcnow()
         expires_at = created_at + dt.timedelta(minutes=expiry_minutes)
@@ -13775,14 +14079,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             """INSERT INTO myfaircroft_payment_codes
                (code_hash, code_hint, target_user_id, authorized_amount, created_by, expires_at, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (code_hash, raw_code[-2:], target_user_id, amount, user["id"], expires_at.isoformat(), created_at.isoformat()),
+            (code_hash, raw_code[-2:], target_user_id, 0, user["id"], expires_at.isoformat(), created_at.isoformat()),
         )
+        db.execute("""INSERT INTO market_cash_codes
+            (code_hash, code_hint, target_user_id, transaction_type, amount, created_by, expires_at, created_at)
+            VALUES (?, ?, NULL, 'universal', 0, ?, ?, ?) ON CONFLICT(code_hash) DO NOTHING""",
+            (code_hash, raw_code[-2:], user["id"], expires_at.isoformat(), created_at.isoformat()))
         add_admin_audit(
             db, int(user["id"]), "myfaircroft.payment_code.created", target_user_id,
-            {"amount": amount, "expires_at": expires_at.isoformat(), "notice": "Issued only after in-game payment received"},
+            {"expires_at": expires_at.isoformat(), "notice": "Unassigned bearer receipt issued after in-game handoff", "amount_bound": False},
         )
         self.send_json(201, {
-            "ok": True, "code": raw_code, "amount": amount,
+            "ok": True, "code": raw_code,
             "target_name": target["name"] if target else "Any eligible resident", "unassigned": target is None, "expires_at": expires_at.isoformat(),
         })
 
@@ -15378,7 +15686,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         posting = next((item for item in DEPARTMENT_POSTINGS if item["key"] == application["department_key"]), {})
         is_bar_exam = posting.get("form_type") == "bar_exam"
         is_press_exam = posting.get("form_type") == "press_exam"
+        is_ice_exam = posting.get("form_type") == "ice_exam"
         is_legal_application = application["department_key"] in ("lawyer", "prosecutor", "public_defender")
+        if is_ice_exam and not has_any(user, "ice_commander"):
+            self.error(403, "ICE applications are reviewed exclusively through ICE Commander MDT")
+            return
         if has_any(user, "judge") and not has_any(user, "owner", "admin", INDEED_ADMIN_ROLE) and not is_legal_application:
             self.error(403, "Judges may only review legal office and certification applications")
             return
