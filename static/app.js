@@ -33,6 +33,7 @@ const state = {
   armaLinkPromptDismissed: false,
   dmvComplianceDismissed: false,
   generatedDevCode: null,
+  generatedMarketPromo: null,
   generatedAdmin2faCode: null,
   fineSettlementCode: null,
   taxSettlementCode: null,
@@ -43,6 +44,8 @@ const state = {
   devTab: "dashboard",
   devAccount: null,
   devLinkedSearch: "",
+  gameIntelDirectory: "linked",
+  gameIntelSearch: "",
   devAntiCheatUid: null,
   devAntiCheatSearch: "",
   devAntiCheatPage: 1,
@@ -810,7 +813,18 @@ function renderCallsignRequiredModal() {
 
 function renderRequiredProfileModals() {
   if (state.session?.sanction?.type === "timeout") return "";
-  return renderLegacyCharacterAssignmentModal() || renderDmvActionNoticeModal() || renderSystemSplash() || renderPressPassNoticeModal() || renderCarEntryRequiredModal() || renderArmaLinkRequiredModal() || renderDmvComplianceModal() || renderBetaInviteModal();
+  return renderLegacyCharacterAssignmentModal() || renderDmvActionNoticeModal() || renderSettlementNoticeModal() || renderSystemSplash() || renderPressPassNoticeModal() || renderCarEntryRequiredModal() || renderArmaLinkRequiredModal() || renderDmvComplianceModal() || renderBetaInviteModal();
+}
+
+function renderSettlementNoticeModal() {
+  const notice = state.session?.settlement_notice;
+  if (!notice) return "";
+  const label = notice.notice_type === "warrant" ? "WARRANT ENFORCEMENT WARNING" : notice.notice_type === "revocation" ? "LICENSE REVOCATION WARNING" : "LICENSE SUSPENSION WARNING";
+  return `<div class="modal-backdrop settlement-notice-backdrop"><section class="mdt-modal settlement-notice-modal ${escapeHtml(notice.notice_type)}" role="dialog" aria-modal="true" aria-label="Outstanding fine notice">
+    <header><div class="settlement-notice-seal">FC</div><div><p class="eyebrow">STATE OF FAIRCROFT · SETTLEMENT AUTHORITY</p><h2>${escapeHtml(notice.subject)}</h2></div></header>
+    <div class="settlement-notice-body"><strong>${escapeHtml(label)}</strong><p>${escapeHtml(notice.body)}</p><dl><div><dt>Outstanding filings</dt><dd>${Number(notice.outstanding_count || 0)}</dd></div><div><dt>Recorded balance</dt><dd>${money(notice.outstanding_total)}</dd></div><div><dt>Issued</dt><dd>${notice.created_at ? new Date(notice.created_at).toLocaleString() : "Official notice"}</dd></div></dl><aside><b>Payment verification</b><span>Pay authorized staff in game first. Staff may provide the four-digit receipt PIN only after receiving payment.</span></aside></div>
+    <button class="primary" type="button" data-acknowledge-settlement-notice="${notice.id}">Acknowledge official notice</button>
+  </section></div>`;
 }
 
 function renderLegacyCharacterAssignmentModal() {
@@ -942,6 +956,14 @@ function bindRequiredProfileModals() {
   $("[data-acknowledge-dmv-action]")?.addEventListener("click", async () => {
     try {
       await api("/api/dmv/action-notice/acknowledge", { method: "POST", body: {} });
+      await loadSession();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $("[data-acknowledge-settlement-notice]")?.addEventListener("click", async (event) => {
+    try {
+      await api("/api/settlement-notice/acknowledge", { method: "POST", body: { notice_id: Number(event.currentTarget.dataset.acknowledgeSettlementNotice) } });
       await loadSession();
     } catch (error) {
       toast(error.message);
@@ -1574,6 +1596,51 @@ function renderLeaderboards() {
   const challengers = rows.slice(1, 3);
   const generatedTime = escapeHtml(data.generated_at ? new Date(data.generated_at).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}) : "syncing");
   const personalProgress = personal ? leaderboardProgress(boardKey, rows, personalIndex) : null;
+  const rankTier = (rank) => rank === 1 ? ["CROWN", "crown"] : rank <= 3 ? ["APEX", "apex"] : rank <= 10 ? ["DIAMOND", "diamond"] : rank <= 20 ? ["PLATINUM", "platinum"] : ["CONTENDER", "contender"];
+  const playerBadge = (item) => String(item?.name || "FC").split(/\s+/).map((part) => part[0] || "").join("").slice(0, 2).toUpperCase();
+  return `<div class="leaderboard-command leaderboard-v8 ${config.accent}">
+    <header class="lb8-season-hud">
+      <div class="lb8-brand-lockup"><span class="lb8-fc-mark">FC</span><div><small>FAIRCROFT COMPETITIVE</small><strong>RANKED ARENA</strong></div></div>
+      <div class="lb8-season-title"><span>SEASON 02 // LIVE CIRCUIT</span><h2>${escapeHtml(config.label)}</h2><p>${escapeHtml(config.unit)}</p></div>
+      <div class="lb8-network"><i></i><span>RANKINGS LIVE</span><strong>${rows.length}</strong><small>COMPETITORS</small></div>
+    </header>
+    <div class="lb8-rank-nav">
+      <nav class="lb8-divisions">${Object.entries(groups).map(([key,label])=>`<button type="button" class="${activeGroup===key?"active":""}" data-leaderboard-group="${key}"><span>${escapeHtml(label)}</span></button>`).join("")}</nav>
+      <nav class="lb8-events">${Object.entries(LEADERBOARD_CONFIG).filter(([,item])=>item.group===activeGroup).map(([key,item],index)=>`<button type="button" class="${boardKey===key?"active":""}" data-leaderboard-tab="${key}"><small>${String(index+1).padStart(2,"0")}</small><span>${escapeHtml(item.label)}</span></button>`).join("")}</nav>
+    </div>
+    ${data.current_user_excluded ? `<aside class="lb8-observer"><span>${iconSvg.shield}</span><div><strong>OBSERVER ACCESS</strong><small>Staff accounts can watch the live field but do not occupy public ranks.</small></div><b>NON-COMPETING</b></aside>` : ""}
+    ${leader ? `<main class="lb8-arena">
+      <section class="lb8-podium-zone">
+        <header><div><small>LIVE CHAMPIONSHIP FIELD</small><h3>THE TOP THREE</h3></div><p>Verified records update the arena automatically.</p></header>
+        <div class="lb8-stage">
+          ${[podium[1],podium[0],podium[2]].filter(Boolean).map((item,visualIndex)=>{const index=Number(item.rank)-1;const progress=leaderboardProgress(boardKey,rows,index);const tier=rankTier(Number(item.rank));return `<article class="lb8-podium-player rank-${item.rank}">
+            <div class="lb8-player-orbit"><i></i><span>${escapeHtml(playerBadge(item))}</span><b>${String(item.rank).padStart(2,"0")}</b></div>
+            <div class="lb8-player-state">${item.online?`<i></i> ONLINE NOW`:`VERIFIED CONTENDER`}</div>
+            <h4>${escapeHtml(item.name||"Unknown player")}</h4>
+            <p>${leaderboardIdentity(item).replace(/^ Ã‚Â· /,"")}</p>
+            <strong>${escapeHtml(leaderboardMetric(boardKey,item))}</strong>
+            <div class="lb8-tier ${tier[1]}"><span>${tier[0]}</span><small>${escapeHtml(progress.label)}</small></div>
+            <div class="lb8-stage-light"></div>
+          </article>`}).join("")}
+        </div>
+      </section>
+      <section class="lb8-player-track ${data.current_user_excluded?"observer":""}">
+        ${personal&&!data.current_user_excluded?`<div class="lb8-you-badge"><span>YOUR RANK</span><strong>#${personal.rank}</strong></div><div><small>CURRENT POSITION</small><h3>${escapeHtml(personal.name||"Resident")}</h3><p>${escapeHtml(personalProgress.label)}</p></div><strong>${escapeHtml(leaderboardMetric(boardKey,personal))}</strong><aside><span>NEXT RANK PROGRESS</span><i><b style="--advance:${personalProgress.percent}%"></b></i><small>Return after your next verified session to track the climb.</small></aside>`:`<div class="lb8-spectator-copy"><small>LIVE FIELD INTELLIGENCE</small><h3>${rows.length} eligible competitors</h3><p>Staff observation never changes economy records or Developer Tools totals.</p></div>`}
+      </section>
+      <section class="lb8-ladder">
+        <header><div><small>GLOBAL STANDINGS</small><h3>RANKED LADDER</h3></div><div class="lb8-sync"><i></i><span>LAST SYNC</span><strong>${generatedTime}</strong></div></header>
+        <div class="lb8-table-head"><span>RANK</span><span>COMPETITOR</span><span>DIVISION</span><span>SCORE</span><span>ADVANCEMENT</span></div>
+        <div class="lb8-rows">${rows.map((item,index)=>{const progress=leaderboardProgress(boardKey,rows,index);const tier=rankTier(Number(item.rank));return `<article class="${personal&&String(item.rank)===String(personal.rank)?"is-you":""} ${item.online?"is-live":""}" style="--row:${index}">
+          <div class="lb8-row-rank"><span>${String(item.rank).padStart(2,"0")}</span>${Number(item.rank)<=3?`<i>◆</i>`:""}</div>
+          <div class="lb8-row-player"><span>${escapeHtml(playerBadge(item))}</span><div><strong>${escapeHtml(item.name||"Unknown player")}${item.online?`<i>LIVE</i>`:""}</strong><small>${leaderboardIdentity(item).replace(/^ Ã‚Â· /,"")}</small></div></div>
+          <div class="lb8-row-tier ${tier[1]}"><i></i><span>${tier[0]}</span></div>
+          <div class="lb8-row-score"><strong>${escapeHtml(leaderboardMetric(boardKey,item))}</strong><small>${escapeHtml(leaderboardDetail(boardKey,item))}</small></div>
+          <div class="lb8-row-progress"><span>${escapeHtml(progress.label)}</span><i><b style="--advance:${progress.percent}%"></b></i></div>
+        </article>`}).join("")}</div>
+      </section>
+    </main>`:`<section class="lb8-empty"><span>${iconSvg.trophy}</span><h3>ARENA AWAITING DATA</h3><p>The first eligible verified score will open this ranked event.</p></section>`}
+    <footer class="lb8-source"><div><i></i><span>AUTHORITATIVE RANKED SOURCE</span><strong>${escapeHtml(data.sources?.[boardKey]||"Faircroft synchronized records")}</strong></div><p>${Number(data.summary?.staff_excluded||0)} staff observer${Number(data.summary?.staff_excluded||0)===1?"":"s"} excluded from competition only.</p></footer>
+  </div>`;
   return `<div class="leaderboard-command leaderboard-v7 ${config.accent}">
     <header class="lb7-masthead"><div class="lb7-live"><i></i>LIVE SEASON</div><div><span>FAIRCROFT RANKED NETWORK</span><h2>${escapeHtml(config.label)}</h2><p>Every verified session can change the field. Return, compete, and take your place.</p></div><aside><strong>${rows.length}</strong><span>eligible contenders<small>Updated ${generatedTime}</small></span></aside><div class="lb7-scan"></div></header>
     <nav class="lb7-divisions">${Object.entries(groups).map(([key,label])=>`<button type="button" class="${activeGroup===key?"active":""}" data-leaderboard-group="${key}"><span>${escapeHtml(label)}</span></button>`).join("")}</nav>
@@ -3600,6 +3667,7 @@ function renderLotteryWorkspace() {
   const drawLabel=scheduled?scheduled.toLocaleString(undefined,{weekday:"long",month:"long",day:"numeric",hour:"numeric",minute:"2-digit",timeZone:data.timezone}):"Tuesday · 11:59 PM Eastern";
   const until=Math.max(0,(scheduled?.getTime()||Date.now())-Date.now()),days=Math.floor(until/86400000),hours=Math.floor(until%86400000/3600000),minutes=Math.floor(until%3600000/60000);
   const prize=Number(funding.available||0),prizeHeadline=prize>0?money(prize):"POOL BUILDING";
+  const revealedPrizes=data.latest_special_prizes||[];
   const ticketNumber = entries[0] ? `FC-${String(entries[0].id).padStart(7,"0")}` : `FC-${String(state.session?.user?.civ_number || "000000").padStart(7,"0")}`;
   return `<main class="lottery-workspace lottery-v4">
     <header class="lottery-v4-header"><div class="lottery-v4-brand"><i>FC</i><span><strong>Faircroft Lottery</strong><small>OFFICIAL RESIDENT DRAW</small></span></div><div class="lottery-v4-draw-status"><i></i><span><small>${data.enabled?"ENTRY WINDOW LIVE":"ENTRY WINDOW PAUSED"}</small><strong>${escapeHtml(drawLabel)}</strong></span></div><nav><button data-refresh-lottery>Sync drawing</button><button data-close-lottery>Exit lottery</button></nav></header>
@@ -3612,11 +3680,13 @@ function renderLotteryWorkspace() {
     </section>
     ${data.excluded?`<div class="lottery-policy-alert"><strong>Participation unavailable</strong><span>Excluded roles: ${escapeHtml((data.excluded_roles||[]).join(", "))}</span></div>`:""}
     <div class="lottery-v4-tape"><span>NEXT DRAW <b>${escapeHtml(drawLabel)}</b></span><span>AVAILABLE POOL <b>${prizeHeadline}</b></span><span>YOUR VERIFIED ENTRIES <b>${entries.length}</b></span><span>DAILY CHANCES <b>${data.daily_limit}</b></span></div>
+    ${revealedPrizes.length?`<section class="lottery-v5-bonus revealed"><div class="lottery-v5-lock"><i></i><span>OFFICIAL SURPRISE REVEAL</span><strong>The winning entry unlocked more.</strong><p>This bonus remained completely confidential until the drawing was completed and the winner was recorded.</p></div><div class="lottery-v5-reveal"><span>LATEST BONUS PRIZE</span>${revealedPrizes.map(prize=>`<article><small>${escapeHtml(prize.provider.toUpperCase())}</small><strong>${escapeHtml(prize.prize_name)}</strong><p>${escapeHtml(prize.display_value||"")}${Number(prize.quantity||1)>1?` · ${Number(prize.quantity)} awarded`:""}</p></article>`).join("")}</div></section>`:""}
     <section class="lottery-v4-story"><header><span>FROM ENTRY TO WINNER</span><h2>A drawing you can follow.</h2><p>Every chance is attached to a verified resident record from entry through final award.</p></header><ol><li><span>01</span><div><strong>Claim a chance</strong><p>Use up to ${data.daily_limit} complimentary verified entries each day.</p></div></li><li><span>02</span><div><strong>The pool grows</strong><p>Eligible receipts and exchange contributions build the official prize.</p></div></li><li><span>03</span><div><strong>The chamber selects</strong><p>Eligible entries enter the scheduled Faircroft drawing.</p></div></li><li><span>04</span><div><strong>The winner is recorded</strong><p>The award is permanently associated with the winning CIV identity.</p></div></li></ol></section>
     <section class="lottery-v4-record">
       <div class="lottery-v4-entries"><header><div><span>YOUR OFFICIAL RECORD</span><h2>Drawing chances</h2></div><strong>${entries.length} VERIFIED</strong></header>${entries.length?`<div class="lottery-v4-entry-track">${entries.map((entry,index)=>`<article style="--entry:${index}"><span>${String(entry.entry_number).padStart(2,"0")}</span><div><strong>FC-${String(entry.id).padStart(7,"0")}</strong><small>${new Date(entry.created_at).toLocaleString()}</small></div><em class="${entry.status}">${entry.fraud_flag?"UNDER REVIEW":escapeHtml(entry.status.toUpperCase())}</em></article>`).join("")}</div>`:`<div class="lottery-v4-empty"><span>01</span><div><strong>The record begins with your first chance.</strong><p>Issue an entry above and its permanent drawing number will appear here.</p></div></div>`}</div>
       <aside class="lottery-v4-pool-story"><span>WHERE THE PRIZE COMES FROM</span><h2>Faircroft returns value to residents.</h2><p>The weekly pool grows from recorded public-service receipts, exchange contributions, and authorized community allocations.</p><div><span><small>PUBLIC-SERVICE RECEIPTS</small><strong>${money(funding.fines)}</strong></span><span><small>EXCHANGE CONTRIBUTIONS</small><strong>${money(funding.market_fees)}</strong></span><span><small>AUTHORIZED ALLOCATIONS</small><strong>${money(funding.manual)}</strong></span><span><small>AWARDS PAID</small><strong>${money(funding.awarded)}</strong></span></div>${data.latest_result?`<footer><small>LATEST OFFICIAL WINNER</small><strong>${escapeHtml(data.latest_result.winner_name||"No eligible winner")}</strong><span>${money(data.latest_result.payout_amount)} authorized</span></footer>`:`<footer><small>WINNER SPOTLIGHT</small><strong>The chamber is waiting.</strong><span>Completed drawing results will appear here.</span></footer>`}</aside>
     </section>
+    <section class="lottery-v5-quickdraw"><div><span>NEXT GAME FROM FAIRCROFT LOTTERY</span><h2>QUICK<br>DRAW</h2><p>Faster rounds. New number action. More reasons to check back between weekly drawings.</p></div><aside><i>COMING SOON</i><strong>RAPID DRAW NETWORK</strong><span>Development lane locked</span></aside></section>
   </main>`;
   return `<main class="lottery-workspace lottery-v2 lottery-v3">
     <header class="lottery-header"><div class="lottery-seal"><i>FC</i><div><strong>FAIRCROFT LOTTERY</strong><span>OFFICIAL COMMUNITY DRAW</span></div></div><nav class="lottery-header-actions"><span><i></i>${data.enabled?"ENTRIES OPEN":"ENTRIES CLOSED"}</span><button data-refresh-lottery>Refresh draw</button><button class="lottery-exit" data-close-lottery>Return to RP OS</button></nav></header>
@@ -3653,7 +3723,7 @@ function renderMarketWorkspace() {
   const scenarios=[{label:"Defensive",rate:-7.5},{label:"Current path",rate:projectionBase},{label:"Growth",rate:12.5}];
   return `<main class="market-workspace market-terminal-workspace market-v3 market-v4 market-v5">
     <button class="market-persistent-exit" type="button" data-close-market aria-label="Exit Ravenhood"><span>&larr;</span><b>Exit Ravenhood</b></button>
-    <header class="market-topbar"><div class="market-brand"><span>RH</span><div><strong>Ravenhood</strong><small>FAIRCROFT SECURITIES EXCHANGE</small></div></div><div class="market-session"><span>FCX</span><i></i><strong>${data.market_open?"Continuous trading":"Market closed"}</strong></div><div class="market-top-actions"><em class="${data.market_open?"open":"closed"}">${data.market_open?"MARKET OPEN":"MARKET CLOSED"}</em><button class="secondary" data-refresh-market>Sync market</button><button class="market-exit" type="button" data-close-market><span>&larr;</span> Exit Ravenhood</button></div></header>
+    <header class="market-topbar"><div class="market-brand"><span>RH</span><div><strong>Ravenhood</strong><small>FAIRCROFT SECURITIES EXCHANGE</small></div></div><div class="market-session"><span>FCX</span><i></i><strong>${data.market_open?"Continuous trading":"Market closed"}</strong></div><div class="market-top-actions"><em class="${data.market_open?"open":"closed"}">${data.market_open?"MARKET OPEN":"MARKET CLOSED"}</em><button class="secondary" data-market-dialog="promo">Redeem promo</button><button class="secondary" data-refresh-market>Sync market</button><button class="market-exit" type="button" data-close-market><span>&larr;</span> Exit Ravenhood</button></div></header>
     <div class="market-tape">${securities.concat(securities).map(x=>`<button data-market-ticker="${escapeHtml(x.ticker)}"><b>${escapeHtml(x.ticker)}</b><span>${money(x.price)}</span><i class="${marketChange(x)>=0?"up":"down"}">${marketChange(x)>=0?"+":""}${marketChange(x).toFixed(2)}%</i></button>`).join("")}</div>
     <section class="market-command">
       <aside class="market-rail"><div class="market-account-summary"><span>NET LIQUIDATION VALUE</span><strong>${money(total)}</strong><small>${money(invested)} invested</small><i><b style="width:${allocation.toFixed(1)}%"></b></i></div><nav><button type="button" class="active" data-market-overview><i>${iconSvg.trending}</i><span>Market overview</span></button><button type="button" data-market-dialog="deposit"><i>+</i><span>Deposit funds</span></button><button type="button" data-market-dialog="withdrawal"><i>−</i><span>Withdraw funds</span></button><button type="button" data-market-dialog="transfer"><i>→</i><span>Transfer positions</span></button></nav><section class="market-movers"><header><span>MARKET PULSE</span><strong>Top movers</strong></header>${movers.map(x=>`<button type="button" data-market-ticker="${escapeHtml(x.ticker)}"><b>${escapeHtml(x.ticker)}</b><span>${money(x.price)}</span><em class="${marketChange(x)>=0?"up":"down"}">${marketChange(x)>=0?"+":""}${marketChange(x).toFixed(2)}%</em></button>`).join("")}</section><div class="market-admin-note"><strong>SECURE SETTLEMENT</strong><p>Cash movements require an authorized in-game handoff and a one-time Ravenhood receipt.</p></div></aside>
@@ -3673,7 +3743,8 @@ function renderMarketWorkspaceLegacy() {
   const account = data.account;
   if (!account) return `<main class="market-workspace market-onboarding">
     <header class="market-topbar"><div class="market-brand"><span>RH</span><div><strong>Ravenhood Markets</strong><small>Faircroft securities exchange</small></div></div><button class="secondary" data-close-market>Exit</button></header>
-    <section class="market-open-account"><div class="market-orbit"><i></i><b>RH</b></div><p class="eyebrow">The Faircroft investment network</p><h1>Build your Faircroft portfolio.</h1><p>Trade listed companies, municipal bonds, and high-volatility day-trading securities. Every dollar is settled through an authorized in-game cash handoff.</p><button class="market-primary" data-create-market-account>Create investment account</button><small>Ravenhood account activity is governed by Faircroft exchange policy and settlement controls.</small></section>
+    <section class="market-open-account"><div class="market-orbit"><i></i><b>RH</b></div><p class="eyebrow">The Faircroft investment network</p><h1>Build your Faircroft portfolio.</h1><p>Trade listed companies, municipal bonds, and high-volatility day-trading securities. Every dollar is settled through an authorized in-game cash handoff.</p><div class="market-onboarding-actions"><button class="market-primary" data-create-market-account>Create investment account</button><button class="secondary" data-market-dialog="promo">Redeem a promotional code</button></div><small>Ravenhood account activity is governed by Faircroft exchange policy and settlement controls.</small></section>
+    ${renderMarketDialog(data, "")}
   </main>`;
   const securities = data.securities || [], holdings = data.holdings || [];
   const selected = securities.find(x => x.ticker === state.marketTicker) || securities[0] || {};
@@ -3685,7 +3756,7 @@ function renderMarketWorkspaceLegacy() {
     <header class="market-topbar"><div class="market-brand"><span>RH</span><div><strong>Ravenhood Markets</strong><small>Faircroft securities exchange</small></div></div><div class="market-top-actions"><em class="${data.market_open ? "open" : "closed"}">${data.market_open ? "MARKET OPEN" : "MARKET CLOSED"}</em><button class="secondary" data-refresh-market>Refresh</button><button class="secondary" data-close-market>Exit</button></div></header>
     <div class="market-tape">${securities.map(x => `<button data-market-ticker="${escapeHtml(x.ticker)}"><b>${escapeHtml(x.ticker)}</b><span>${money(x.price)}</span><i class="${marketChange(x) >= 0 ? "up" : "down"}">${marketChange(x) >= 0 ? "+" : ""}${marketChange(x).toFixed(2)}%</i></button>`).join("")}</div>
     <section class="market-shell">
-      <aside class="market-portfolio"><p class="eyebrow">Total portfolio</p><h1>${money(total)}</h1><div class="market-balance-line"><span>Buying power</span><strong>${money(account.cash_balance)}</strong></div><nav><button class="active">Overview</button><button data-market-dialog="deposit">Deposit funds</button><button data-market-dialog="withdrawal">Withdraw funds</button><button data-market-dialog="transfer">Transfer shares</button></nav><div class="market-admin-note"><strong>In-game settlement required</strong><p>An admin must receive or issue funds in game before giving you a one-time receipt PIN.</p></div></aside>
+      <aside class="market-portfolio"><p class="eyebrow">Total portfolio</p><h1>${money(total)}</h1><div class="market-balance-line"><span>Buying power</span><strong>${money(account.cash_balance)}</strong></div><nav><button class="active">Overview</button><button data-market-dialog="deposit">Deposit funds</button><button data-market-dialog="withdrawal">Withdraw funds</button><button data-market-dialog="transfer">Transfer shares</button><button data-market-dialog="promo">Redeem promo</button></nav><div class="market-admin-note"><strong>In-game settlement required</strong><p>An admin must receive or issue funds in game before giving you a one-time receipt PIN.</p></div></aside>
       <section class="market-main">
         <div class="market-security-head"><div><span>${escapeHtml(selected.sector || "Market")}</span><h2>${escapeHtml(selected.name || "Select a security")}</h2><p>${escapeHtml(selected.ticker || "")} Â· ${escapeHtml(humanLabel(selected.security_type || "stock"))}</p></div><div><strong>${money(selected.price)}</strong><em class="${change >= 0 ? "up" : "down"}">${change >= 0 ? "+" : ""}${change.toFixed(2)}%</em></div></div>
         <div class="market-chart" aria-label="Animated Ravenhood price chart"><i></i><i></i><i></i><i></i><i></i><i></i><span>Live Ravenhood pricing Â· updates when market programs run</span></div>
@@ -3705,6 +3776,7 @@ function renderMarketDialog(data, stockOptions) {
     const recipient=state.marketTransferRecipient;
     return `<div class="market-modal market-transfer-modal"><section class="market-modal-card"><button type="button" data-close-market-dialog>&times;</button><p class="eyebrow">Verified position delivery</p><h2>Transfer by CIV</h2><p>Locate the resident by their Faircroft CIV number. Ravenhood shows the matched identity before a position can move.</p>${recipient?`<div class="market-recipient-confirm"><i>FC</i><div><span>CONFIRMED RECIPIENT</span><strong>${escapeHtml(recipient.name)}</strong><small>CIV ${escapeHtml(recipient.civ_number)}</small></div><button type="button" data-change-market-recipient>Change</button></div><form data-market-transfer><input type="hidden" name="recipient_civ_number" value="${escapeHtml(recipient.civ_number)}"/><label>Security<select name="ticker">${stockOptions}</select></label><label>Shares<input name="quantity" type="number" min="0.000001" step="0.000001" required/></label><div class="market-rule"><strong>${Number(data.transfer_fee_percent || 0).toFixed(2)}% transfer fee</strong><span>Review the verified name and CIV above. Transfers cannot be reversed from this screen.</span></div><button class="market-primary">Review transfer to ${escapeHtml(recipient.name)}</button></form>`:`<form class="market-recipient-search" data-market-recipient-search><label>Recipient CIV number<input name="civ" inputmode="numeric" autocomplete="off" placeholder="Enter CIV ID" required/></label><button class="market-primary">Find resident</button></form><div class="market-identity-instructions"><span>01</span><p>Enter the resident's CIV ID.</p><span>02</span><p>Confirm the matched name and identifier.</p><span>03</span><p>Select the security and number of shares.</p></div>`}</section></div>`;
   }
+  if (type === "promo") return `<div class="market-modal market-promo-modal"><form class="market-modal-card" data-market-promo><button type="button" data-close-market-dialog>&times;</button><p class="eyebrow">Ravenhood member rewards</p><h2>Redeem a promotion</h2><p>Enter a valid campaign code to receive buying power, free shares, or a randomized starter portfolio. Each campaign may be claimed once per resident.</p><label>Promotional code<input name="code" autocomplete="off" maxlength="32" placeholder="FCX-XXXX-XXXX" required /></label><div class="market-rule"><strong>Rewards enter your Ravenhood account immediately.</strong><span>If you have not opened an account yet, Ravenhood creates it when the code is accepted.</span></div><button class="market-primary">Redeem into my portfolio</button></form></div>`;
   const deposit = type === "deposit";
   return `<div class="market-modal"><form class="market-modal-card" data-market-cash><button type="button" data-close-market-dialog>Ã—</button><p class="eyebrow">${deposit ? "Fund your account" : "Settle a withdrawal"}</p><h2>${deposit ? "Deposit with an admin" : "Withdraw in game"}</h2><ol><li>Be logged into the Faircroft game server.</li><li>Walk up to an admin and request a stock market ${deposit ? "deposit" : "withdrawal"}.</li><li>${deposit ? "Give the admin the in-game cash first." : "The admin confirms the amount and prepares the in-game payout."}</li><li>The admin issues a one-time four-digit receipt PIN only after confirming the handoff.</li></ol><input type="hidden" name="transaction_type" value="${type}"/><label>Exact amount<input name="amount" type="number" min="0.01" step="0.01" required/></label><label>Four-digit receipt PIN<input name="code" inputmode="numeric" minlength="4" maxlength="4" pattern="[0-9]{4}" required/></label><div class="market-rule warning"><strong>${deposit ? "Do not enter a code before giving the admin the money." : "Submitting removes settled cash from Ravenhood; the admin then completes the in-game payout."}</strong></div><button class="market-primary">Complete ${type}</button></form></div>`;
 }
@@ -3732,6 +3804,7 @@ function bindMarketWorkspace() {
   $("[data-market-order]")?.addEventListener("submit", async event => { event.preventDefault(); const body=Object.fromEntries(new FormData(event.currentTarget)); await api("/api/wallstreet/orders",{method:"POST",body:JSON.stringify(body)}); toast("Order executed"); await loadAppData("wallstreet"); render(); });
   $("[data-market-cash]")?.addEventListener("submit", async event => { event.preventDefault(); const body=Object.fromEntries(new FormData(event.currentTarget)); await api("/api/wallstreet/cash",{method:"POST",body:JSON.stringify(body)}); toast(`${humanLabel(body.transaction_type)} settled`); state.marketDialog=null; await loadAppData("wallstreet"); render(); });
   $("[data-market-transfer]")?.addEventListener("submit", async event => { event.preventDefault(); const body=Object.fromEntries(new FormData(event.currentTarget)); await api("/api/wallstreet/transfers",{method:"POST",body:JSON.stringify(body)}); toast(`Shares transferred to CIV ${body.recipient_civ_number}`); state.marketDialog=null; state.marketTransferRecipient=null; await loadAppData("wallstreet"); render(); });
+  $("[data-market-promo]")?.addEventListener("submit", async event => { event.preventDefault(); const result=await api("/api/wallstreet/promotions/redeem",{method:"POST",body:JSON.stringify(Object.fromEntries(new FormData(event.currentTarget)))}); toast(`${result.campaign_name}: ${result.reward_summary}`); state.marketDialog=null; await loadAppData("wallstreet"); render(); });
 }
 
 function renderBankOnlineV2(data, credit, userName, identitySuffix, creditScore, creditProgress, creditRating, refreshedAt, syncLabel) {
@@ -5595,9 +5668,12 @@ function renderCourt() {
   const decided = data.decided || [];
   const stats = data.stats || {};
   const petitions = data.petitions || [];
-  const traffic = active.filter((item) => item.kind === "citation");
+  const isParking = (item) => item.kind === "citation" && [item.category, item.severity, item.charge_title].some((value) => String(value || "").toLowerCase().includes("parking"));
+  const parking = [...active, ...decided].filter(isParking);
+  const traffic = active.filter((item) => item.kind === "citation" && !isParking(item));
   const criminal = active.filter((item) => item.kind === "criminal");
-  const tabs = [["traffic", `Traffic Violations (${traffic.length})`], ["criminal", `Criminal Charges (${criminal.length})`], ["licenses", `Lawyer Licenses (${Number(stats.licenses || 0)})`], ["petitions", `Petitions (${Number(stats.petitions || 0)})`], ["decisions", `Completed docket (${Number(stats.decided || 0)})`], ["standards", "Sentencing"]];
+  const completed = decided.filter((item) => !isParking(item));
+  const tabs = [["traffic", `Traffic Violations (${traffic.length})`], ["parking", `Parking Tickets (${parking.length})`], ["criminal", `Criminal Charges (${criminal.length})`], ["licenses", `Lawyer Licenses (${Number(stats.licenses || 0)})`], ["petitions", `Petitions (${Number(stats.petitions || 0)})`], ["decisions", `Completed docket (${completed.length})`], ["standards", "Sentencing"]];
   if (!tabs.some(([id]) => id === state.courtTab)) state.courtTab = "traffic";
   const visibleDocket = state.courtTab === "criminal" ? criminal : traffic;
   if (["traffic", "criminal"].includes(state.courtTab) && !visibleDocket.some((item) => Number(item.id) === Number(state.courtSelectedCaseId))) {
@@ -5605,12 +5681,14 @@ function renderCourt() {
   }
   const content = ["traffic", "criminal"].includes(state.courtTab)
     ? renderCourtDocket(visibleDocket)
+    : state.courtTab === "parking"
+      ? renderParkingCourtLedger(parking, false)
     : state.courtTab === "licenses"
       ? renderCourtLicenses(data.license_applications || [])
     : state.courtTab === "petitions"
       ? renderCourtPetitions(petitions)
       : state.courtTab === "decisions"
-        ? renderCourtDecisions(decided)
+        ? renderCourtDecisions(completed)
         : renderCourtStandards(data.standards || []);
   return `
     <div class="court-app court-bench">
@@ -5631,16 +5709,27 @@ function renderCourt() {
   `;
 }
 
+function renderParkingCourtLedger(records, residentView = false) {
+  return `<section class="resident-court-ledger parking-court-ledger">
+    <header class="parking-ledger-heading"><div><p class="eyebrow">Faircroft parking ordinance</p><h2>Parking Ticket Registry</h2><p>Parking violations are automatically entered as guilty and delivered directly to the cited resident. No judicial hearing is required.</p></div><span>${records.length} FILED</span></header>
+    ${records.map((item) => `<article><div><span>AUTOMATIC PARKING DISPOSITION</span><h3>${escapeHtml(item.charge_code)} · ${escapeHtml(item.charge_title)}</h3><p>Case #${item.id} · ${escapeHtml(item.location || "Location not filed")} · Officer ${escapeHtml(item.officer_name || "Faircroft Law Enforcement")}</p></div><dl><div><dt>Finding</dt><dd>Guilty</dd></div><div><dt>Filed</dt><dd>${item.created_at ? new Date(item.created_at).toLocaleDateString() : "Filed"}</dd></div><div><dt>Fine</dt><dd>${money(item.fine_amount)}</dd></div></dl><footer><span>${escapeHtml(item.narrative || "Parking violation filed")}</span>${residentView && item.status !== "paid" ? `<button class="secondary" data-open-myfaircroft>Open MyFaircroft to pay</button>` : ""}</footer></article>`).join("") || `<div class="empty">No parking tickets are filed for this record.</div>`}
+  </section>`;
+}
+
 function renderResidentCourt(data) {
   const active = data.active || [], decided = data.decided || [];
-  const traffic = active.filter((item) => item.kind === "citation");
+  const isParking = (item) => item.kind === "citation" && [item.category, item.severity, item.charge_title].some((value) => String(value || "").toLowerCase().includes("parking"));
+  const parking = [...active, ...decided].filter(isParking);
+  const traffic = active.filter((item) => item.kind === "citation" && !isParking(item));
   const criminal = active.filter((item) => item.kind === "criminal");
-  const tabs = [["traffic", `Traffic Violations (${traffic.length})`], ["criminal", `Criminal Charges (${criminal.length})`], ["decisions", `Completed (${decided.length})`]];
+  const completed = decided.filter((item) => !isParking(item));
+  const tabs = [["traffic", `Traffic Violations (${traffic.length})`], ["parking", `Parking Tickets (${parking.length})`], ["criminal", `Criminal Charges (${criminal.length})`], ["decisions", `Completed (${completed.length})`]];
   if (!tabs.some(([id]) => id === state.courtTab)) state.courtTab = "traffic";
-  const records = state.courtTab === "criminal" ? criminal : state.courtTab === "decisions" ? decided : traffic;
-  return `<div class="court-app court-bench resident-court-view">
+  const records = state.courtTab === "criminal" ? criminal : state.courtTab === "decisions" ? completed : traffic;
+  return `<div class="court-app court-bench resident-court-view court-tab-${state.courtTab}">
     <header class="court-identity"><div class="court-seal">SF</div><div><p class="eyebrow">State of Faircroft judiciary</p><h3>Resident Court File</h3><p>Every citation and criminal filing assigned to your active character appears here. Payments remain available through MyFaircroft.</p></div><dl><div><dt>Traffic</dt><dd>${traffic.length}</dd></div><div><dt>Criminal</dt><dd>${criminal.length}</dd></div><div><dt>Completed</dt><dd>${decided.length}</dd></div></dl></header>
     <nav class="court-bench-tabs">${tabs.map(([id,label]) => `<button class="${state.courtTab === id ? "active" : ""}" data-court-tab="${id}">${label}</button>`).join("")}</nav>
+    ${state.courtTab === "parking" ? renderParkingCourtLedger(parking, true) : ""}
     <section class="resident-court-ledger">${records.map((item) => `<article><div><span>${escapeHtml(item.kind === "criminal" ? "CRIMINAL CHARGE" : "TRAFFIC VIOLATION")}</span><h3>${escapeHtml(item.charge_code)} · ${escapeHtml(item.charge_title)}</h3><p>Case #${item.id} · ${escapeHtml(item.location || "Location not filed")} · Officer ${escapeHtml(item.officer_name || "Faircroft Law Enforcement")}</p></div><dl><div><dt>Status</dt><dd>${escapeHtml(humanLabel(item.status))}</dd></div><div><dt>Court date</dt><dd>${escapeHtml(item.court_date || "Pending")}</dd></div><div><dt>Fine</dt><dd>${money(item.fine_amount)}</dd></div></dl><footer><span>${escapeHtml(item.narrative || "No narrative filed")}</span>${!["paid","dismissed"].includes(item.status) ? `<button class="secondary" data-open-myfaircroft>Open MyFaircroft to pay</button>` : ""}</footer></article>`).join("") || `<div class="empty">No ${state.courtTab === "criminal" ? "criminal charges" : state.courtTab === "decisions" ? "completed court records" : "traffic violations"} for this character.</div>`}</section>
   </div>`;
 }
@@ -9922,6 +10011,7 @@ function devRuleOptions() {
 function renderDevWorkspace() {
   const activeTab = {
     dashboard: ["Operations Overview", "Current account-linking and enforcement status"],
+    accounts: ["Account Management", "Search, verify, secure, and maintain every resident account"],
     enforcement: ["Enforcement Cases", "File, review, and revoke player sanctions"],
     warnings: ["Internal Notes", "Staff-only account history and observations"],
     linking: ["Account Linking", "Linked identities, recent claims, and unlink authorization"],
@@ -9946,7 +10036,7 @@ function renderDevWorkspace() {
     <aside class="dev-sidebar">
       <div class="dev-brand"><img class="dev-emblem" src="/static/brand/faircroft-emblem.webp" alt="" /><div><strong>Faircroft RP</strong><small>Staff Operations</small></div></div>
       <p class="dev-nav-label">Operations index</p>
-      <nav>${[["dashboard","Command Center"],["intelligence","Game Intelligence"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["campaigns","Active Campaigns"],["settlement","Settlement"],["market-settings","Stock Market"],["lottery-settings","Lottery Settings"],["dmv-settings","DMV Settings"],["mdt-settings","MDT Settings"],["court-settings","Court Settings"],["ice-settings","ICE Settings"],["admin-2fa","Admin 2FA"],["autopilot","Auto Pilot"],["system-update","System Update"],["fnn-settings","FNN Settings"],["audit","Activity Log"],["settings","Settings"]].map(([id,label], index) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><small>${String(index + 1).padStart(2, "0")}</small><span>${label}</span><i></i></button>`).join("")}</nav>
+      <nav>${[["dashboard","Command Center"],["accounts","Account Management"],["intelligence","Game Intelligence"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["campaigns","Active Campaigns"],["settlement","Settlement"],["market-settings","Stock Market"],["lottery-settings","Lottery Settings"],["dmv-settings","DMV Settings"],["mdt-settings","MDT Settings"],["court-settings","Court Settings"],["ice-settings","ICE Settings"],["admin-2fa","Admin 2FA"],["autopilot","Auto Pilot"],["system-update","System Update"],["fnn-settings","FNN Settings"],["audit","Activity Log"],["settings","Settings"]].map(([id,label], index) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><small>${String(index + 1).padStart(2, "0")}</small><span>${label}</span><i></i></button>`).join("")}</nav>
       <div class="dev-sidebar-footer"><span class="dev-access-dot"></span><div><strong>Authorized Staff</strong><small>${escapeHtml(state.session?.user?.name || "Staff member")}</small></div></div>
     </aside>
     <main class="dev-main">
@@ -9954,6 +10044,7 @@ function renderDevWorkspace() {
       <div class="dev-content">${renderDevTools()}</div>
     </main>
     ${state.devAccount ? renderDevAccountModal(state.devAccount) : ""}
+    ${state.devTab === "accounts" && state.adminAccountId ? renderAdminAccountModal((state.cache["dev-tools"]?.users || []).find((account) => String(account.id) === String(state.adminAccountId)), { developerMode: true }) : ""}
     ${state.devAntiCheatUid ? renderAntiCheatModal(state.cache["dev-tools"]?.anti_cheat || {}, state.devAntiCheatUid) : ""}
   </section>`;
 }
@@ -10137,6 +10228,7 @@ function renderDevMarketSettings(market, users) {
   const activeMovements=[...new Map(activePrograms.map(program=>[`${program.event_name}|${program.created_at}`,program])).values()];
   const tickerOptions = [`<option value="ALL">Entire market</option>`, ...listings.map(x => `<option value="${escapeHtml(x.ticker)}">${escapeHtml(x.ticker)} Â· ${escapeHtml(x.name)}</option>`)].join("");
   return `<div class="stack dev-market-view">
+    <section class="dev-card market-automation-control"><div class="dev-card-header"><div><span>VOLATILITY ENGINE</span><h2>Continuous market automation</h2><p>Creates short, mixed price movement across active listings. Gemini can independently read the exchange and apply constrained, audited adjustments on its own cycle.</p></div><strong class="${market.autopilot_enabled ? "green" : "amber"}">${market.autopilot_enabled ? "RUNNING" : "PAUSED"}</strong></div><form id="devMarketAutomationForm" class="form-grid"><label class="dev-certify wide"><input name="autopilot_enabled" type="checkbox" ${market.autopilot_enabled ? "checked" : ""}/> Run recurring volatile market cycles</label><label>Cycle interval<input name="autopilot_interval_minutes" type="number" min="1" max="60" value="${Number(market.autopilot_interval_minutes || 5)}"/><small>Minutes between movement cycles.</small></label><label>Maximum volatility<input name="volatility_percent" type="number" min="0.1" max="15" step="0.1" value="${Number(market.volatility_percent || 3.5)}"/><small>Controls the bounded size of gains and losses.</small></label><label class="dev-certify wide"><input name="gemini_autopilot_enabled" type="checkbox" ${market.gemini_autopilot_enabled ? "checked" : ""} ${market.gemini_configured ? "" : "disabled"}/> Allow Gemini to read the exchange and apply automatic adjustments</label><label>Gemini interval<input name="gemini_interval_minutes" type="number" min="15" max="1440" value="${Number(market.gemini_interval_minutes || 60)}"/><small>Minutes between AI market reviews.</small></label><div class="market-automation-status"><span>LAST VOLATILITY CYCLE<b>${market.autopilot_last_tick ? new Date(market.autopilot_last_tick).toLocaleString() : "Not run"}</b></span><span>LAST GEMINI REVIEW<b>${market.gemini_last_tick ? new Date(market.gemini_last_tick).toLocaleString() : "Not run"}</b></span></div><button class="secondary" type="button" data-market-volatility-cycle>Run volatility cycle now</button><button class="primary">Save automation</button></form></section>
     <div class="dev-view-intro"><div><span>RAVENHOOD EXCHANGE CONTROL</span><h2>Market operations</h2><p>Control the Faircroft market, authorize in-game cash handoffs, and stage exchange price events.</p></div><strong class="${market.market_open ? "green" : "red"}">${market.market_open ? "MARKET OPEN" : "MARKET CLOSED"}</strong></div>
     <section class="market-dev-terminal"><header><span></span><b>RAVENHOOD / MARKET CONTROL LOG</b><em>LIVE EXCHANGE</em></header><div>${(market.events || []).slice(0,8).map(x => `<p><time>${escapeHtml(String(x.created_at || "").slice(11,19))}</time><strong>${escapeHtml(x.title)}</strong><span>${escapeHtml(x.detail)}</span></p>`).join("") || `<p><time>--:--:--</time><strong>Exchange ready</strong><span>No market events have been staged.</span></p>`}</div></section>
     <div class="dev-grid-2">
@@ -10150,10 +10242,11 @@ function renderDevMarketSettings(market, users) {
 }
 
 function renderDevLotterySettings(lottery){
-  const funding=lottery.funding||{},entries=lottery.entries||[],draws=lottery.draws||[],adjustments=lottery.fund_adjustments||[];
+  const funding=lottery.funding||{},entries=lottery.entries||[],draws=lottery.draws||[],adjustments=lottery.fund_adjustments||[],prizes=lottery.special_prizes||[];
   return `<div class="stack dev-lottery-view"><div class="dev-view-intro"><div><span>FAIRCROFT DRAW CONTROL</span><h2>Lottery Settings</h2><p>Control the weekly benefit draw, review entries, investigate fraud, and govern role-based eligibility.</p></div><strong>${money(funding.available)} AVAILABLE</strong></div>
     <div class="lottery-dev-funding"><div><span>FINE RECEIPTS</span><strong>${money(funding.fines)}</strong></div><div><span>RAVENHOOD FEES</span><strong>${money(funding.market_fees)}</strong></div><div><span>MANUAL FUNDING</span><strong>${money(funding.manual)}</strong></div><div><span>AWARDED</span><strong>${money(funding.awarded)}</strong></div><div><span>ACTIVE POOL</span><strong>${money(funding.available)}</strong></div></div>
     <section class="dev-card lottery-fund-authority"><div class="dev-card-header"><div><span>PRIZE FUND AUTHORITY</span><h2>Add funds to the lottery</h2><p>Manual additions immediately increase the available drawing pool and are permanently attributed to the issuing developer.</p></div><strong>AUDITED</strong></div><div class="dev-grid-2"><form id="devLotteryFundsForm" class="form-grid"><label>Amount to add<input name="amount" type="number" min="0.01" max="1000000000" step="0.01" required placeholder="0.00"/></label><label class="wide">Funding reason<textarea name="reason" minlength="5" maxlength="300" required placeholder="Community event allocation, authorized prize increase, or other documented RP source"></textarea></label><button class="primary wide">Authorize lottery funding</button></form><div class="dev-detail-list">${adjustments.map(item=>`<div><strong>+${money(item.amount)} · ${escapeHtml(item.created_by_name)}</strong><small>${escapeHtml(item.reason)} · ${new Date(item.created_at).toLocaleString()}</small></div>`).join("")||`<div class="empty">No manual lottery funding has been issued.</div>`}</div></div></section>
+    <section class="dev-card lottery-special-prize-control"><div class="dev-card-header"><div><span>SEALED BONUS VAULT</span><h2>Special drawing prizes</h2><p>Add platform gift cards and custom prizes. Active details remain invisible to residents until the drawing completes.</p></div><strong>${prizes.filter(item=>item.status==="active").reduce((total,item)=>total+Number(item.quantity||1),0)} SEALED</strong></div><div class="dev-grid-2"><form id="devLotteryPrizeForm" class="form-grid"><label>Prize name<input name="prize_name" maxlength="120" required placeholder="Steam Gift Card"/></label><label>Provider<select name="provider"><option value="steam">Steam</option><option value="xbox">Xbox</option><option value="playstation">PlayStation</option><option value="discord">Discord</option><option value="faircroft">Faircroft</option><option value="other">Other</option></select></label><label>Prize type<select name="prize_type"><option value="gift_card">Gift card</option><option value="digital_code">Digital code</option><option value="membership">Membership</option><option value="merchandise">Merchandise</option><option value="custom">Custom prize</option></select></label><label>Display value<input name="display_value" maxlength="80" placeholder="$25.00 or 3 months"/></label><label>Quantity<input name="quantity" type="number" min="1" max="100" value="1"/></label><label>Sponsor<input name="sponsor" maxlength="120" placeholder="Faircroft Community"/></label><label class="wide">Private fulfillment notes<textarea name="fulfillment_notes" maxlength="1000" placeholder="Code location, purchasing developer, delivery requirements, or redemption instructions. Never shown before the draw."></textarea></label><button class="primary wide">Seal prize for next drawing</button></form><div class="lottery-prize-vault">${prizes.map(item=>`<article class="${escapeHtml(item.status)}"><div><span>${escapeHtml(item.provider.toUpperCase())}</span><strong>${escapeHtml(item.prize_name)}${Number(item.quantity||1)>1?` ×${Number(item.quantity)}`:""}</strong><small>${escapeHtml(item.display_value||"Value not published")} · ${escapeHtml(item.status.toUpperCase())} · added by ${escapeHtml(item.created_by_name)}</small>${item.winner_name?`<em>Awarded to ${escapeHtml(item.winner_name)}</em>`:""}</div>${item.status!=="awarded"?`<aside><button type="button" data-lottery-prize-action="${item.status==="active"?"disable":"restore"}" data-prize-id="${item.id}">${item.status==="active"?"Remove from draw":"Return to draw"}</button><button class="danger" type="button" data-lottery-prize-action="delete" data-prize-id="${item.id}">Delete</button></aside>`:""}</article>`).join("")||`<div class="empty">The special-prize vault is empty.</div>`}</div></div></section>
     <section class="dev-card"><div class="dev-card-header"><div><span>DRAW POLICY</span><h2>Schedule and eligibility engine</h2></div><strong>${lottery.enabled?"OPEN":"PAUSED"}</strong></div><form id="devLotterySettingsForm" class="form-grid"><label class="dev-certify wide"><input name="enabled" type="checkbox" ${lottery.enabled?"checked":""}/> Accept resident lottery entries</label><label>Daily entries per resident<input name="daily_entries" type="number" min="1" max="20" value="${Number(lottery.daily_entries||3)}"/></label><label>Drawing weekday<select name="draw_weekday">${["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].map((day,index)=>`<option value="${index}" ${Number(lottery.draw_weekday)===index?"selected":""}>${day}</option>`).join("")}</select></label><label>Drawing time<input name="draw_time" type="time" value="${escapeHtml(lottery.draw_time||"23:59")}"/></label><label>Timezone<input name="timezone" value="${escapeHtml(lottery.timezone||"America/New_York")}"/></label><label>Payout percentage<input name="payout_percent" type="number" min="1" max="100" step=".01" value="${Number(lottery.payout_percent||100)}"/><small>Percentage of available pool awarded.</small></label><label class="wide">Role winning weights (JSON)<textarea name="role_weights" placeholder='{"beta":1.25,"civ":1}'>${escapeHtml(JSON.stringify(lottery.role_weights||{},null,2))}</textarea><small>1.0 is standard odds; 2.0 doubles an eligible entry's draw weight.</small></label><label class="wide">Excluded roles<input name="excluded_roles" value="${escapeHtml((lottery.excluded_roles||[]).join(", "))}" placeholder="owner, dev, admin"/><small>Comma-separated roles that cannot enter or win.</small></label><button class="primary wide">Save lottery governance</button></form></section>
     <div class="dev-grid-2"><section class="dev-card"><div class="dev-card-header"><div><span>DRAW OVERSIGHT</span><h2>Drawing history</h2></div><button class="danger" type="button" data-lottery-run-draw>Run supervised draw now</button></div><div class="dev-detail-list">${draws.map(draw=>`<div><strong>${new Date(draw.scheduled_at).toLocaleString()} · ${escapeHtml(draw.status)}</strong><small>${draw.winner_name?`${escapeHtml(draw.winner_name)} · CIV ${escapeHtml(draw.winner_civ)} · ${money(draw.payout_amount)}`:`${money(draw.prize_pool)} pool`}</small></div>`).join("")||`<div class="empty">No drawings recorded</div>`}</div></section><section class="dev-card"><div class="dev-card-header"><div><span>INTEGRITY QUEUE</span><h2>Entry review</h2></div><strong>${entries.filter(x=>x.fraud_flag||x.status==="excluded").length} FLAGGED</strong></div><div class="lottery-review-list">${entries.map(entry=>`<article><div><strong>${escapeHtml(entry.name)} · CIV ${escapeHtml(entry.civ_number)}</strong><small>Entry FC-${String(entry.id).padStart(7,"0")} · ${escapeHtml(entry.entry_date)} · weight ${Number(entry.role_weight).toFixed(2)}×</small></div><span class="${entry.fraud_flag||entry.status==="excluded"?"warning":"valid"}">${entry.fraud_flag?"FLAGGED":escapeHtml(entry.status.toUpperCase())}</span><div><button data-lottery-review="${entry.id}" data-action="${entry.fraud_flag?"clear":"flag"}">${entry.fraud_flag?"Clear flag":"Flag fraud"}</button><button data-lottery-review="${entry.id}" data-action="${entry.status==="excluded"?"restore":"exclude"}">${entry.status==="excluded"?"Restore":"Exclude"}</button></div></article>`).join("")||`<div class="empty">No submitted entries</div>`}</div></section></div>
   </div>`;
@@ -10185,6 +10278,10 @@ function renderDevTools() {
   const data = state.cache["dev-tools"] || {};
   const users = data.users || [], sanctions = data.sanctions || [], warnings = data.warnings || [], logs = data.audit_logs || [], codes = data.unlink_codes || [];
   const metrics = devMetrics(data, warnings);
+  if (state.devTab === "accounts") return `<div class="stack dev-ops-view dev-account-management-view">
+    <div class="dev-view-intro"><div><span>RESIDENT ACCOUNT AUTHORITY</span><h2>Account management</h2><p>The complete administrative account directory is mirrored here for developers. Verify residents, assign roles, recover passwords, apply account enforcement, and maintain sign-in identities.</p></div><strong>${users.length} FILES</strong></div>
+    <section class="dev-card dev-account-directory"><div class="dev-card-header"><div><span>CONTROLLED RESIDENT REGISTRY</span><h2>Search every account</h2></div><span class="pill green">LIVE DIRECTORY</span></div>${renderAdminUsers(users)}</section>
+  </div>`;
   if (state.devTab === "anticheat") return renderDevAntiCheat(data.anti_cheat || {});
   if (state.devTab === "dmv-settings") return renderDevDmvSettings(data.dmv_settings || {});
   if (state.devTab === "court-settings") return renderDevCourtSettings(data.court_settings || {});
@@ -10245,6 +10342,9 @@ function renderDevTools() {
   if (state.devTab === "linking") return `<div class="stack dev-ops-view dev-linking-view"><div class="dev-view-intro"><div><span>IDENTITY CONTROL</span><h2>Account-link registry</h2><p>Review verified identity claims and issue tightly scoped unlink authorization.</p></div><strong>${users.filter((x) => x.arma_linked).length} LINKED</strong></div>${metrics}<div class="dev-grid-2"><section class="dev-card dev-access-panel"><p class="eyebrow">Secure unlink authorization</p><h2>One-time developer code</h2><p class="muted">Single-purpose credentials for supervised identity maintenance.</p><form id="devCodeForm" class="form-grid"><label>Validity window<input name="expiry_minutes" type="number" min="5" max="1440" value="30" required /><small>Minutes until automatic expiration</small></label><button class="primary">Generate authorization</button></form>${state.generatedDevCode ? `<div class="dev-generated-code"><span>Shown once</span><strong>${escapeHtml(state.generatedDevCode.code)}</strong><small>Expires ${escapeHtml(state.generatedDevCode.expires_at)}</small></div>` : ""}<div class="dev-code-ledger">${codes.slice(0,12).map((x) => `<div><code>••••-${escapeHtml(x.code_hint)}</code><span>${escapeHtml(x.created_by_name)}</span><strong class="${x.uses_remaining ? "available" : ""}">${x.uses_remaining ? "Available" : "Consumed"}</strong></div>`).join("") || `<div class="empty">No authorization codes issued</div>`}</div></section><section class="dev-card dev-record-panel"><div class="dev-card-header"><div><span>RECENT CLAIMS</span><h2>Identity activity</h2></div></div>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card dev-linked-registry"><div class="dev-card-header"><div><span>VERIFIED DIRECTORY</span><h2>Linked accounts</h2></div><strong>${users.filter((x) => x.arma_linked).length}</strong></div>${devLinkedAccounts(users)}</section></div>`;
   if (state.devTab === "campaigns") {
     const experience = data.experience || {};
+    const market = data.market_settings || {};
+    const promotions = market.promotions || [];
+    const redemptions = market.promotion_redemptions || [];
     return `<div class="stack dev-campaigns-view">
       <div class="dev-view-intro"><div><span>COMMUNITY BROADCAST CONTROL</span><h2>Active campaigns</h2><p>Promote communities, gangs, events, operational notices, and rule changes for a controlled period.</p></div><strong>${Number(Boolean(experience.system_banner_enabled)) + Number(Boolean(experience.splash_enabled))} LIVE</strong></div>
       <form id="devExperienceForm" class="dev-campaign-grid">
@@ -10265,6 +10365,24 @@ function renderDevTools() {
         </section>
         <div class="dev-campaign-publish"><div><strong>Campaign changes affect all eligible users</strong><span>The publishing developer will preview the splash on their next fresh entrance, not immediately.</span></div><button class="primary" type="submit">Publish campaign schedule</button></div>
       </form>
+      <section class="dev-card dev-promo-command">
+        <header><div><span>RAVENHOOD ACQUISITION</span><h2>Portfolio promotional codes</h2><p>Launch controlled resident rewards for buying power, a selected security, or a randomized starter portfolio.</p></div><strong>${promotions.filter(x=>x.active).length} ACTIVE</strong></header>
+        <form id="devMarketPromoForm" class="dev-promo-form">
+          <label>Campaign name<input name="campaign_name" maxlength="120" placeholder="New resident portfolio launch" required /></label>
+          <label>Custom code (optional)<input name="custom_code" maxlength="32" placeholder="Generated automatically when blank" /></label>
+          <label>Reward<select name="reward_type" data-promo-reward-type><option value="cash">Ravenhood buying power</option><option value="stock">Selected free stock</option><option value="random_bundle">Random starter portfolio</option></select></label>
+          <label data-promo-cash>Buying power<input name="cash_amount" type="number" min="0.01" step="0.01" value="5000" /></label>
+          <label data-promo-stock hidden>Security<select name="ticker">${(market.securities||[]).filter(x=>x.active).map(x=>`<option value="${escapeHtml(x.ticker)}">${escapeHtml(x.ticker)} · ${escapeHtml(x.name)}</option>`).join("")}</select></label>
+          <label data-promo-shares hidden>Shares per security<input name="share_quantity" type="number" min="0.000001" step="0.000001" value="1" /></label>
+          <label data-promo-bundle hidden>Starter portfolio size<select name="bundle_size"><option value="3">3 random stocks</option><option value="5">5 random stocks</option><option value="9">9 random stocks</option></select></label>
+          <label>Redemption inventory<input name="max_redemptions" type="number" min="1" max="100000" value="100" required /></label>
+          <label>Expires after days<input name="expiry_days" type="number" min="1" max="365" value="30" required /></label>
+          <button class="primary" type="submit">Generate promotional code</button>
+        </form>
+        ${state.generatedMarketPromo ? `<div class="dev-generated-code"><span>COPY THIS CODE NOW · SHOWN ONCE</span><strong>${escapeHtml(state.generatedMarketPromo.code)}</strong><small>${escapeHtml(state.generatedMarketPromo.campaign_name)} · expires ${escapeHtml(state.generatedMarketPromo.expires_at)}</small></div>` : ""}
+        <div class="dev-promo-ledger"><div class="dev-promo-ledger-head"><span>Campaign</span><span>Reward</span><span>Claims</span><span>Control</span></div>${promotions.map(p=>`<article><span><strong>${escapeHtml(p.campaign_name)}</strong><small>••••-${escapeHtml(p.code_hint)} · ${escapeHtml(p.created_by_name)}</small></span><span>${p.reward_type==="cash"?money(p.cash_amount):p.reward_type==="stock"?`${Number(p.share_quantity)} ${escapeHtml(p.ticker||"")}`:`${p.bundle_size} random stocks × ${Number(p.share_quantity)}`}</span><span><strong>${Number(p.redemption_count)}/${Number(p.max_redemptions)}</strong><small>expires ${escapeHtml(String(p.expires_at||"Never").slice(0,10))}</small></span><button class="${p.active?"danger":"secondary"}" data-market-promo-status="${p.id}" data-active="${p.active?0:1}">${p.active?"Pause":"Resume"}</button></article>`).join("")||`<div class="empty">No Ravenhood promotions issued.</div>`}</div>
+        <footer class="dev-promo-redemptions"><strong>Recent redemptions</strong>${redemptions.slice(0,12).map(r=>`<span><b>${escapeHtml(r.name)} · CIV ${escapeHtml(r.civ_number||"")}</b><em>${escapeHtml(r.reward_summary)}</em><small>${escapeHtml(r.campaign_name)} · ${escapeHtml(r.redeemed_at)}</small></span>`).join("")||`<small>No codes redeemed yet.</small>`}</footer>
+      </section>
     </div>`;
   }
   if (state.devTab === "settlement") {
@@ -10464,6 +10582,14 @@ function renderDevGameIntelligence(data) {
   const topUnlinked = economy.top_unlinked_accounts || [];
   const categories = intel.categories || [];
   const linkedUsers = (data.users || []).filter((user) => user.arma_linked);
+  const insights = economy.insights || {};
+  const linkedDirectory = economy.linked_directory || [];
+  const unlinkedDirectory = economy.unlinked_directory || [];
+  const directoryMode = state.gameIntelDirectory === "unlinked" ? "unlinked" : "linked";
+  const directoryQuery = String(state.gameIntelSearch || "").trim().toLowerCase();
+  const directorySource = directoryMode === "linked" ? linkedDirectory : unlinkedDirectory;
+  const directoryRows = directorySource.filter((account) => !directoryQuery || [account.account_name, account.email, account.civ_number, account.identity_id, account.player_name]
+    .some((value) => String(value || "").toLowerCase().includes(directoryQuery)));
   const totalRecords = Number(sync.records || categories.reduce((sum, item) => sum + Number(item.records || 0), 0));
   const circulation = Number(economy.currency_in_circulation || 0);
   const fundedPercent = Number(economy.bank_accounts || 0) ? Math.round((Number(economy.funded_accounts || 0) / Number(economy.bank_accounts || 1)) * 100) : 0;
@@ -10495,6 +10621,14 @@ function renderDevGameIntelligence(data) {
       <article><span>Access</span><strong>Read only</strong><small>Protected source</small></article>
       <article><span>Snapshot</span><strong>Live</strong><small>${escapeHtml(economy.last_synced_at || "Pending")}</small></article>
     </div>
+    <section class="game-intel-insights" aria-label="Economy intelligence">
+      <header><span>ECONOMY INTELLIGENCE</span><strong>Circulation profile</strong><small>Derived from the current synchronized banking snapshot</small></header>
+      <div><article><span>Economy phase</span><strong>${escapeHtml(insights.phase || "Awaiting data")}</strong><i style="--intel-meter:${Number(insights.maturity_score || 0)}%"><b></b></i></article>
+      <article><span>Expansion outlook</span><strong>${escapeHtml(insights.expansion_outlook || "Pending")}</strong><small>Current circulation posture</small></article>
+      <article><span>Median account</span><strong>${money(insights.median_balance || 0)}</strong><small>Middle synchronized balance</small></article>
+      <article><span>High-value accounts</span><strong>${Number(insights.millionaire_accounts || 0).toLocaleString()}</strong><small>Balances at or above $1M</small></article>
+      <article><span>Distribution</span><strong>${Number(insights.distribution_score || 0).toFixed(1)}</strong><small>Spread across funded identities</small></article></div>
+    </section>
     <div class="game-intel-rankings">
       <section class="dev-card game-intel-rank-card linked">
         <div class="dev-card-header"><div><span>VERIFIED ECONOMY</span><h2>Top 10 linked</h2></div><strong>${topLinked.length}</strong></div>
@@ -10517,7 +10651,7 @@ function renderDevGameIntelligence(data) {
           <strong>${Number(item.records || 0).toLocaleString()}</strong>
         </article>`).join("") || `<div class="empty">Collections will appear after Railway completes its first SFTP index.</div>`}</div>
       </section>
-      <section class="dev-card game-intel-directory">
+      <section class="dev-card game-intel-directory game-intel-directory-legacy">
         <div class="dev-card-header"><div><span>IDENTITY DIRECTORY</span><h2>Investigate linked account</h2></div><strong>${linkedUsers.length}</strong></div>
         <div class="game-intel-accounts">${linkedUsers.map((user) => `<button data-dev-account="${user.id}">
           <span class="game-intel-avatar">${escapeHtml((user.name || "?").slice(0, 1).toUpperCase())}</span>
@@ -10526,6 +10660,11 @@ function renderDevGameIntelligence(data) {
         </button>`).join("") || `<div class="empty">No linked accounts are available.</div>`}</div>
       </section>
     </div>
+    <section class="dev-card game-intel-directory game-intel-directory-v3">
+      <div class="dev-card-header"><div><span>ACCOUNT DIRECTORY</span><h2>Identity & balance records</h2></div><strong>${directorySource.length}</strong></div>
+      <div class="game-intel-directory-tools"><div><button class="${directoryMode === "linked" ? "active" : ""}" type="button" data-game-intel-directory="linked">Linked <b>${linkedDirectory.length}</b></button><button class="${directoryMode === "unlinked" ? "active" : ""}" type="button" data-game-intel-directory="unlinked">Not linked <b>${unlinkedDirectory.length}</b></button></div><input id="gameIntelSearch" type="search" value="${escapeHtml(state.gameIntelSearch || "")}" placeholder="Search name, CIV, email or identity" /></div>
+      <div class="game-intel-account-ledger">${directoryRows.map((account) => `<button type="button" data-dev-account="${account.account_id}"><span class="game-intel-avatar">${escapeHtml((account.account_name || "?").slice(0, 1).toUpperCase())}</span><div><strong>${escapeHtml(account.account_name || "Faircroft account")}</strong><small>CIV ${escapeHtml(account.civ_number || "pending")} · ${escapeHtml(account.email || "No email")}</small></div><span class="game-intel-link-state ${directoryMode}"><b>${directoryMode === "linked" ? "LINKED" : "NOT LINKED"}</b><small>${escapeHtml(account.player_name || account.identity_id || `${Number(account.character_count || 0)} character records`)}</small></span><strong class="game-intel-linked-balance">${directoryMode === "linked" ? money(account.balance || 0) : "—"}<small>${directoryMode === "linked" ? "SYNCED BALANCE" : "NO GAME BALANCE"}</small></strong><i>OPEN FILE</i></button>`).join("") || `<div class="empty">No ${directoryMode === "linked" ? "linked" : "unlinked"} accounts match this search.</div>`}</div>
+    </section>
   </div>`;
 }
 
@@ -10858,6 +10997,8 @@ function bindDevWorkspace() {
   bindDevTools();
   bindSystem();
   $("#devMarketSettingsForm")?.addEventListener("submit", async event => { event.preventDefault(); const form=event.currentTarget; try { await api("/api/dev-tools/market/settings", {method:"PATCH",body:{market_open:form.market_open.checked,ai_enabled:form.ai_enabled.checked,trade_fee_percent:form.trade_fee_percent.value,transfer_fee_percent:form.transfer_fee_percent.value}}); toast("Ravenhood policy saved"); await refreshDevTools(); } catch(error){toast(error.message);} });
+  $("#devMarketAutomationForm")?.addEventListener("submit", async event => { event.preventDefault(); const form=event.currentTarget; try { await api("/api/dev-tools/market/settings", {method:"PATCH",body:{autopilot_enabled:form.autopilot_enabled.checked,autopilot_interval_minutes:form.autopilot_interval_minutes.value,volatility_percent:form.volatility_percent.value,gemini_autopilot_enabled:form.gemini_autopilot_enabled.checked,gemini_interval_minutes:form.gemini_interval_minutes.value}}); toast("Market automation saved"); await refreshDevTools(); } catch(error){toast(error.message);} });
+  $("[data-market-volatility-cycle]")?.addEventListener("click", async event => { if(!confirm("Run a mixed volatility cycle across every active Ravenhood listing now?")) return; event.currentTarget.disabled=true; try { const result=await api("/api/dev-tools/market/volatility-cycle",{method:"POST",body:"{}"}); toast(`Volatility cycle complete · ${result.updated} listings moved`); await refreshDevTools(); } catch(error){event.currentTarget.disabled=false;toast(error.message);} });
   $("#devMarketProgramForm [name='percent_change']")?.addEventListener("input", event => { const output=$("[data-market-example]"); if(output) output.textContent=`$1.00 becomes ${money(1 + Number(event.currentTarget.value || 0)/100)}`; });
   $("#devMarketProgramForm")?.addEventListener("submit", async event => { event.preventDefault(); try { const result=await api("/api/dev-tools/market/programs",{method:"POST",body:Object.fromEntries(new FormData(event.currentTarget))}); toast(`Price program launched Â· $1 becomes $${Number(result.example_one_dollar).toFixed(4)}`); await refreshDevTools(); } catch(error){toast(error.message);} });
   $$("[data-market-preset]").forEach(button => button.addEventListener("click", async () => { if(!confirm(`Launch ${humanLabel(button.dataset.marketPreset)} market event?`)) return; try { await api("/api/dev-tools/market/presets",{method:"POST",body:{preset:button.dataset.marketPreset}}); toast("Market event launched"); await refreshDevTools(); } catch(error){toast(error.message);} }));
@@ -10873,6 +11014,8 @@ function bindDevWorkspace() {
   $("#devMarketAiForm")?.addEventListener("submit", async event => { event.preventDefault(); try { const result=await api("/api/dev-tools/market/ai-briefing",{method:"POST",body:Object.fromEntries(new FormData(event.currentTarget)),timeoutMs:120000}); state.marketAiBriefing=result.briefing; toast("Gemini market briefing complete"); await refreshDevTools(); } catch(error){toast(error.message);} });
   $("#devLotterySettingsForm")?.addEventListener("submit",async event=>{event.preventDefault();const form=event.currentTarget;const body=Object.fromEntries(new FormData(form));body.enabled=form.enabled.checked;try{await api("/api/dev-tools/lottery/settings",{method:"PATCH",body});toast("Lottery governance saved");await refreshDevTools();}catch(error){toast(error.message);}});
   $("#devLotteryFundsForm")?.addEventListener("submit",async event=>{event.preventDefault();const form=event.currentTarget;const body=Object.fromEntries(new FormData(form));if(!confirm(`Add ${money(Number(body.amount||0))} to the active Faircroft Lottery prize fund?`))return;try{await api("/api/dev-tools/lottery/funds",{method:"POST",body});toast(`${money(Number(body.amount||0))} added to the lottery fund`);await refreshDevTools();}catch(error){toast(error.message);}});
+  $("#devLotteryPrizeForm")?.addEventListener("submit",async event=>{event.preventDefault();const body=Object.fromEntries(new FormData(event.currentTarget));try{await api("/api/dev-tools/lottery/prizes",{method:"POST",body});toast("Special prize sealed for the next drawing");await refreshDevTools();}catch(error){toast(error.message);}});
+  $$('[data-lottery-prize-action]').forEach(button=>button.addEventListener("click",async()=>{const action=button.dataset.lotteryPrizeAction;if(action==="delete"&&!confirm("Permanently delete this unawarded special prize?"))return;try{await api(`/api/dev-tools/lottery/prizes/${button.dataset.prizeId}`,{method:"PATCH",body:{action}});toast("Special-prize vault updated");await refreshDevTools();}catch(error){toast(error.message);}}));
   $$('[data-lottery-review]').forEach(button=>button.addEventListener("click",async()=>{let reason="";if(button.dataset.action==="flag"||button.dataset.action==="exclude")reason=prompt("Document the integrity reason for this action:")||"";if((button.dataset.action==="flag"||button.dataset.action==="exclude")&&!reason)return;try{await api(`/api/dev-tools/lottery/entries/${button.dataset.lotteryReview}/review`,{method:"PATCH",body:{action:button.dataset.action,reason}});toast("Lottery entry review updated");await refreshDevTools();}catch(error){toast(error.message);}}));
   $("[data-lottery-run-draw]")?.addEventListener("click",async()=>{if(!confirm("Run a supervised lottery drawing now using all eligible entries and the current available pool?"))return;try{await api("/api/dev-tools/lottery/draw",{method:"POST",body:"{}"});toast("Lottery drawing completed");await refreshDevTools();}catch(error){toast(error.message);}});
   $("#admin2faCodeForm")?.addEventListener("submit", async (event) => {
@@ -11006,6 +11149,7 @@ function bindDevWorkspace() {
   });
   $$("[data-dev-tab], [data-dev-go]").forEach((button) => button.addEventListener("click", async () => {
     state.devTab = button.dataset.devTab || button.dataset.devGo;
+    if (state.devTab !== "accounts") state.adminAccountId = null;
     if (state.devTab === "settlement") {
       try {
         state.cache["fine-settlement"] = await api("/api/fine-settlement");
@@ -11166,6 +11310,17 @@ function renderFineSettlement(embedded = false) {
   const batches = data.batches || [];
   const taxReady = data.tax_ready || [];
   const taxBatches = data.tax_batches || [];
+  const accounts = data.outstanding_accounts || [];
+  const history = data.notice_history || [];
+  return `<div class="settlement-command ${embedded ? "dev-settlement-embedded" : ""}">
+    <section class="settlement-command-hero"><div><p class="eyebrow">FAIRCROFT SETTLEMENT AUTHORITY</p><h2>Outstanding Fine Command</h2><p>Review every unpaid filing, deliver official escalation notices, and direct residents to verified four-digit receipt payment in MyFaircroft.</p></div><dl><div><dt>Residents</dt><dd>${accounts.length}</dd></div><div><dt>Open filings</dt><dd>${Number(data.outstanding_count || 0)}</dd></div><div><dt>Outstanding</dt><dd>${money(data.outstanding_total)}</dd></div></dl></section>
+    <nav class="court-tabs"><button class="${state.settlementTab === "fines" ? "active" : ""}" data-settlement-tab="fines">Fine notices</button><button class="${state.settlementTab === "taxes" ? "active" : ""}" data-settlement-tab="taxes">Tax billing</button></nav>
+    ${state.settlementTab === "taxes" ? `<section class="settlement-tax-ledger"><header><p class="eyebrow">REGISTERED LICENSES</p><h3>Issue accrued tax bills</h3><p>Bills go directly to MyFaircroft. Residents complete payment with a four-digit receipt PIN after staff receives the funds in game.</p></header>${(data.tax_licenses || []).map((license) => `<article><div><strong>${escapeHtml(license.business_name)}</strong><span>${escapeHtml(license.license_number)} · ${escapeHtml(license.owner_name)}</span></div><dl><div><dt>Weekly</dt><dd>${money(license.weekly_tax)}</dd></div><div><dt>Unpaid</dt><dd>${money(license.unpaid_tax)}</dd></div></dl><form data-issue-license-tax="${license.id}" class="inline-form"><input name="notes" placeholder="Optional billing note" /><button ${(license.accrued_weeks || 0) < 1 ? "disabled" : ""}>Issue ${money(license.accrued_tax || 0)}</button></form></article>`).join("") || `<div class="empty">No registered business tax bills are ready.</div>`}</section>` : `<div class="settlement-command-grid">
+      <form id="settlement-notice-form" class="settlement-notice-composer"><header><p class="eyebrow">OFFICIAL DELIVERY</p><h3>Send a next-login warning</h3><p>The notice remains on the resident screen until acknowledged and is also preserved in Messages.</p></header><fieldset><legend>Escalation preset</legend><label><input type="radio" name="notice_type" value="suspension" checked /><span><b>License suspension</b><small>Warn that driving privileges may be suspended.</small></span></label><label><input type="radio" name="notice_type" value="revocation" /><span><b>License revocation</b><small>Warn that the driving credential may be revoked.</small></span></label><label><input type="radio" name="notice_type" value="warrant" /><span><b>Warrant enforcement</b><small>Warn of an arrest warrant for failure to pay.</small></span></label></fieldset><label>Official note<textarea name="custom_note" rows="3" placeholder="Optional case-specific instruction"></textarea></label><div class="settlement-send-actions"><button type="submit" name="recipient_mode" value="individual">Notify selected residents</button><button type="submit" class="warning" name="recipient_mode" value="bulk">Notify every outstanding account</button></div><aside><b>Verified payment only</b><span>The old server-pause/Codex deduction workflow is retired. Staff receives payment in game, then issues the resident an unassigned four-digit receipt PIN.</span></aside></form>
+      <section class="settlement-resident-ledger"><header><div><p class="eyebrow">CURRENT OBLIGATIONS</p><h3>Resident settlement tally</h3></div><span>${accounts.length} ACCOUNTS</span></header>${accounts.map((account) => `<label><input type="checkbox" name="settlement_user_ids" value="${account.user_id}" /><span><strong>${escapeHtml(account.name)}</strong><small>CIV ${escapeHtml(account.civ_number || "pending")} · ${escapeHtml(account.license_status)}</small></span><dl><div><dt>Filings</dt><dd>${account.outstanding_count}</dd></div><div><dt>Balance</dt><dd>${money(account.outstanding_total)}</dd></div></dl></label>`).join("") || `<div class="empty">No outstanding fines are recorded.</div>`}</section>
+    </div><section class="settlement-notice-history"><header><p class="eyebrow">DELIVERY LEDGER</p><h3>Recent official notices</h3></header>${history.slice(0, 20).map((notice) => `<article><span class="${notice.acknowledged_at ? "acknowledged" : "pending"}"></span><div><strong>${escapeHtml(notice.recipient_name)}</strong><small>CIV ${escapeHtml(notice.civ_number || "pending")} · ${escapeHtml(humanLabel(notice.notice_type))}</small></div><p>${notice.acknowledged_at ? `Acknowledged ${new Date(notice.acknowledged_at).toLocaleString()}` : "Awaiting acknowledgment"}</p><small>Issued by ${escapeHtml(notice.created_by_name)} · ${new Date(notice.created_at).toLocaleString()}</small></article>`).join("") || `<div class="empty">No settlement warnings have been delivered.</div>`}</section>`}
+  </div>`;
+  /* Legacy batch renderer retained below for migration history only; execution routes return HTTP 410. */
   return `
     <div class="stack ${embedded ? "dev-settlement-embedded" : ""}">
       ${embedded ? "" : `<section class="profile-hero">
@@ -11316,6 +11471,32 @@ function bindFineSettlement() {
     }
     render();
   }));
+  $$('[data-game-intel-directory]').forEach((button) => button.addEventListener('click', () => {
+    state.gameIntelDirectory = button.dataset.gameIntelDirectory;
+    state.gameIntelSearch = "";
+    render();
+  }));
+  $('#gameIntelSearch')?.addEventListener('input', (event) => {
+    state.gameIntelSearch = event.currentTarget.value;
+    render();
+    const input = $('#gameIntelSearch');
+    if (input) {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+  });
+  $("#settlement-notice-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const recipient_mode = event.submitter?.value || "individual";
+    const user_ids = $$(`input[name="settlement_user_ids"]:checked`).map((input) => Number(input.value));
+    if (recipient_mode === "individual" && !user_ids.length) return toast("Select at least one resident account");
+    if (recipient_mode === "bulk" && !window.confirm("Send this official warning to every resident with outstanding fines?")) return;
+    const result = await api("/api/fine-settlement/notices", { method: "POST", body: { recipient_mode, user_ids, notice_type: form.notice_type.value, custom_note: form.custom_note.value } });
+    toast(`${result.recipient_count} settlement notice${result.recipient_count === 1 ? "" : "s"} queued for next login`);
+    state.cache["fine-settlement"] = await api("/api/fine-settlement");
+    render();
+  });
   $("#devLinkedSearch")?.addEventListener("input", (event) => {
     state.devLinkedSearch = event.currentTarget.value;
     render();
@@ -11491,6 +11672,11 @@ function bindDevTools() {
     toast("Individual application statuses updated");
     await refreshDevTools();
   });
+  const promoReward = $("[data-promo-reward-type]");
+  const syncPromoFields = () => { const type=promoReward?.value; if($("[data-promo-cash]")) $("[data-promo-cash]").hidden=type!=="cash"; if($("[data-promo-stock]")) $("[data-promo-stock]").hidden=type!=="stock"; if($("[data-promo-shares]")) $("[data-promo-shares]").hidden=!(["stock","random_bundle"].includes(type)); if($("[data-promo-bundle]")) $("[data-promo-bundle]").hidden=type!=="random_bundle"; };
+  promoReward?.addEventListener("change", syncPromoFields); syncPromoFields();
+  $("#devMarketPromoForm")?.addEventListener("submit", async event => { event.preventDefault(); try { state.generatedMarketPromo=await api("/api/dev-tools/market/promotions",{method:"POST",body:Object.fromEntries(new FormData(event.currentTarget))}); toast("Ravenhood promotional code issued"); await refreshDevTools(); } catch(error){toast(error.message);} });
+  $$('[data-market-promo-status]').forEach(button=>button.addEventListener('click',async()=>{try{await api(`/api/dev-tools/market/promotions/${button.dataset.marketPromoStatus}`,{method:'PATCH',body:{active:button.dataset.active==='1'}});toast("Promotion status updated");await refreshDevTools();}catch(error){toast(error.message);}}));
   $("#devEmergencyUnlinkAllForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -11652,6 +11838,7 @@ function bindDevTools() {
       await refreshDevTools();
     } catch (error) { toast(error.message); }
   }));
+  bindAdmin();
 }
 
 function renderAdminWorkspace() {
@@ -12056,7 +12243,7 @@ function renderAdminUsers(users) {
   `;
 }
 
-function renderAdminAccountModal(user) {
+function renderAdminAccountModal(user, { developerMode = false } = {}) {
   if (!user) {
     return "";
   }
@@ -12099,7 +12286,10 @@ function renderAdminAccountModal(user) {
               ${nameChange.locked ? `<label class="check-row"><input type="checkbox" name="unlock_name_changes" /> Unlock name changes</label>` : `<p class="muted small">Name changes are currently open.</p>`}
             </div>
             <div class="role-grid">
-              ${roleOptions.map((role) => `<label class="check-row"><input type="checkbox" name="roles" value="${role}" ${user.roles.includes(role) ? "checked" : ""} /> ${role.replaceAll("_", " ")}</label>`).join("")}
+              ${roleOptions.map((role) => {
+                const ownerLocked = role === "dev" && !can("owner");
+                return `<label class="check-row ${ownerLocked ? "role-owner-locked" : ""}" ${ownerLocked ? `title="Only an owner can grant or remove Developer access"` : ""}>${ownerLocked && user.roles.includes(role) ? `<input type="hidden" name="roles" value="dev" />` : ""}<input type="checkbox" name="roles" value="${role}" ${user.roles.includes(role) ? "checked" : ""} ${ownerLocked ? "disabled" : ""} /> ${role.replaceAll("_", " ")}${ownerLocked ? `<small>Owner controlled</small>` : ""}</label>`;
+              }).join("")}
             </div>
             <button class="primary" type="submit">Save account</button>
           </form>
@@ -12112,6 +12302,16 @@ function renderAdminAccountModal(user) {
             <label>Confirm password<input name="confirm_password" type="password" minlength="6" autocomplete="new-password" required /></label>
             <button class="secondary" type="submit">Reset password</button>
           </form>
+          ${developerMode ? `<form class="dev-email-reset-form form-grid account-section ${state.adminAccountSection === "security" ? "" : "search-hidden"}" data-user-id="${user.id}">
+            <div>
+              <p class="eyebrow">Developer identity maintenance</p>
+              <h3>Reset sign-in email</h3>
+              <p class="muted small">Replace the email used to sign in. The address must be unique, and the change is permanently recorded in the staff audit log.</p>
+            </div>
+            <label>New email address<input name="email" type="email" maxlength="254" value="${escapeHtml(user.email || "")}" autocomplete="off" required /></label>
+            <label>Confirm email address<input name="confirm_email" type="email" maxlength="254" autocomplete="off" required /></label>
+            <button class="warning" type="submit">Reset account email</button>
+          </form>` : ""}
           ${canDeleteAccount ? `
             <section class="account-section danger-zone ${state.adminAccountSection === "security" ? "" : "search-hidden"}">
               <div>
@@ -12245,6 +12445,8 @@ function applyAdminUserSearch() {
 }
 
 function bindAdmin() {
+  const accountWorkspace = state.activeApp === "dev-tools" ? "dev-tools" : "admin";
+  const refreshAccountWorkspace = () => loadAppData(accountWorkspace);
   const searchInput = $("[data-admin-account-search]");
   searchInput?.addEventListener("input", (event) => {
     state.adminSearch = event.currentTarget.value;
@@ -12330,7 +12532,7 @@ function bindAdmin() {
         },
       });
       toast("User saved");
-      await loadAppData("admin");
+      await refreshAccountWorkspace();
       await loadSession();
     } catch (error) {
       toast(error.message);
@@ -12352,7 +12554,27 @@ function bindAdmin() {
       });
       form.reset();
       toast("Password reset");
-      await loadAppData("admin");
+      await refreshAccountWorkspace();
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+  $$(".dev-email-reset-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const formData = new FormData(form);
+    const email = String(formData.get("email") || "").trim().toLowerCase();
+    const confirmation = String(formData.get("confirm_email") || "").trim().toLowerCase();
+    if (email !== confirmation) {
+      toast("Email addresses do not match");
+      return;
+    }
+    if (!window.confirm(`Reset this account's sign-in email to ${email}?`)) return;
+    try {
+      await api(`/api/dev-tools/accounts/${form.dataset.userId}/email`, { method: "PATCH", body: { email } });
+      toast("Account email reset and audit entry recorded");
+      await refreshAccountWorkspace();
+      await loadSession();
       render();
     } catch (error) {
       toast(error.message);
@@ -12371,7 +12593,7 @@ function bindAdmin() {
         body: Object.fromEntries(formData.entries()),
       });
       toast(`${label} applied · ${result.report_number}`);
-      await loadAppData("admin");
+      await refreshAccountWorkspace();
       await loadSession();
       render();
     } catch (error) {
@@ -12385,7 +12607,7 @@ function bindAdmin() {
       await api(`/api/admin/users/${button.dataset.deleteAdminUser}`, { method: "DELETE" });
       state.adminAccountId = null;
       toast("Account deleted");
-      await loadAppData("admin");
+      await refreshAccountWorkspace();
       await loadSession();
     } catch (error) {
       toast(error.message);
@@ -12438,7 +12660,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.2.2-court-payments").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.2.2-market-promotions").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {

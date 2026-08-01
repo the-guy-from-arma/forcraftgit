@@ -6,6 +6,20 @@
       "version": "0.2.2",
       "title": "RP OS 0.2.2",
       "added": [
+        "Added Developer Tools Ravenhood promotional campaigns under Active Campaigns, with generated or custom codes, expiration windows, redemption inventories, pause and resume controls, and a permanent claimant audit ledger.",
+        "Added resident Ravenhood promotional redemption for exchange buying power, a selected free security, or unique randomized starter portfolios containing 3, 5, or 9 active stocks, with automatic account creation and one claim per campaign.",
+        "Added Ravenhood continuous market automation with configurable short-cycle volatility, bounded mixed gains and losses, automatic protection for developer-scheduled price programs, and a manual Volatility Cycle event control.",
+        "Added optional Gemini exchange autopilot that reads current listings and recent market events, applies constrained audited adjustments on a configurable interval, and records every AI-directed movement in the market control log.",
+        "Added complete linked and unlinked Faircroft account directories to Game Intelligence with live search, identity status, character counts, synchronized game-bank balances, and direct access to each full player intelligence record.",
+        "Added an internal economy-intelligence profile with circulation phase, expansion outlook, median synchronized balance, high-value account count, and distribution scoring derived from the live economy snapshot.",
+        "Added a dedicated Parking Tickets division in Judge Court Operations and Resident Court Files, separating parking enforcement from traffic and criminal dockets.",
+        "Added automatic guilty disposition for parking violations at issuance, with direct resident delivery, no judge assignment or hearing date, and immediate MyFaircroft payment availability.",
+        "Added a Developer Tools Settlement notification command with live resident, filing, and outstanding-balance tallies plus individual or bulk next-login delivery.",
+        "Added persistent Faircroft settlement warnings for driver-license suspension, driver-license revocation, and arrest-warrant escalation, with resident acknowledgment and a permanent delivery ledger.",
+        "Added a complete Account Management directory inside Developer Tools that mirrors the existing Admin account controls for verification, roles, agency assignment, name-change recovery, password resets, RP OS/CAD enforcement, Arma enforcement, and authorized account deletion without removing the Admin workspace.",
+        "Added developer-only sign-in email resets with normalized validation, duplicate-address protection, explicit confirmation, resident notification, and permanent staff audit records.",
+        "Added a Developer Tools Lottery special-prize vault for Steam, Xbox, PlayStation, Discord, Faircroft, and custom rewards with quantities, sponsors, private fulfillment instructions, activation controls, winner assignment, and permanent auditing.",
+        "Added a Faircroft Lottery Quick Draw development preview marked Coming Soon for future rapid drawing rounds.",
         "Added ICE Agent recruitment to Faircroft Careers with a 20-question multiple-choice federal-service qualification, a mandatory internal 20/20 advancement threshold, and character-specific application records.",
         "Added an ICE Commander Applications desk inside ICE MDT for qualification review, interview and training advancement, command denial, and final appointment that automatically grants the ICE Agent role and notifies the candidate.",
         "Added an independent ICE Agent application-intake switch in Developer Tools so federal recruiting can open or close without affecting any other Faircroft job posting.",
@@ -53,6 +67,13 @@
         ,"Added an active scheduled-movement ledger to Ravenhood Stock Market Settings with affected securities, target percentage, schedule timing, live progress, and immediate stop controls."
       ],
       "changed": [
+        "Expanded Stock Market Settings with independent volatility and Gemini automation controls, cycle timing, intensity limits, last-run status, and immediate developer execution while retaining manual overrides.",
+        "Expanded Game Intelligence beyond its top-ten summaries while preserving the existing dashboard design, making every account and balance investigable from the same workspace.",
+        "Restricted Developer role assignment and removal to owners only across Admin and Developer Tools account management, with server-side enforcement, a visibly locked control for non-owner staff, and permanent audit records for every change.",
+        "Changed fine settlement into a resident notification and verified-payment workflow that preserves MyFaircroft four-digit receipt PIN verification after staff receives payment in game.",
+        "Kept every active lottery special prize completely confidential from residents until the drawing completes; the winner then receives the revealed prize and fulfillment notification while the public result records the official bonus award.",
+        "Reshaped the Faircroft Lottery into a more continuous live draw floor with a connected prize chamber, physical entry ticket, flowing drawing story, post-draw surprise reveal, and cinematic Quick Draw preview instead of stacked dashboard widgets.",
+        "Rebuilt Leaderboards as a true competitive gaming arena with a live season HUD, animated three-player podium, crown, apex, diamond, platinum, and contender divisions, player emblems, online markers, personal rank progression, advancement targets, and a dense global ladder optimized for daily competition.",
         "Simplified business taxes into an issued-bill workflow: staff assesses the tax, residents receive a MyFaircroft notice, and payment is completed directly from the Taxes tab with a verified four-digit receipt PIN instead of a confusing settlement batch.",
         "Added verified business-tax receipts to the Faircroft Lottery public-service funding pool with resident notification and permanent payment auditing.",
         "Rebuilt ICE MDT as a branded Faircroft federal operations terminal with dedicated Command Overview, Identity Intelligence, Case Operations, Detainers, and Command Applications navigation while preserving the local-ordinance data restriction.",
@@ -340,6 +361,7 @@
         "Restored the Indeed job icon and protected public job access from unrelated visibility settings."
       ],
       "removed": [
+        "Retired the exposed server-pause, forced bank deduction, locked settlement batch, and Approve for Codex workflow from fine and tax settlement controls.",
         "Removed State Police and Metro Police from public recruitment."
       ]
     },

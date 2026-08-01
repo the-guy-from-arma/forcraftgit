@@ -1027,10 +1027,13 @@ def shadowhaven_persistence_sync_worker() -> None:
 
 def roles_for(user: DbRow) -> list[str]:
     raw = user.get("roles", "[]")
-    try:
-        roles = json.loads(raw or "[]")
-    except json.JSONDecodeError:
-        roles = []
+    if isinstance(raw, list):
+        roles = raw
+    else:
+        try:
+            roles = json.loads(raw or "[]")
+        except (TypeError, json.JSONDecodeError):
+            roles = []
     normalized = [normalize_role(role) for role in roles]
     return sorted(set(["civ", *[role for role in normalized if role]]))
 
@@ -1607,6 +1610,13 @@ SYSTEM_SETTING_DEFAULTS = {
     "market_trade_fee_percent": "0.25",
     "market_holding_balance": "0.00",
     "market_ai_enabled": "1",
+    "market_autopilot_enabled": "0",
+    "market_autopilot_interval_minutes": "5",
+    "market_volatility_percent": "3.50",
+    "market_autopilot_last_tick": "",
+    "market_gemini_autopilot_enabled": "0",
+    "market_gemini_interval_minutes": "60",
+    "market_gemini_last_tick": "",
     "lottery_enabled": "1",
     "lottery_daily_entries": "3",
     "lottery_draw_weekday": "1",
@@ -3055,6 +3065,45 @@ def ensure_migrations(db: Database) -> None:
     )
     db.execute(
         """
+        CREATE TABLE IF NOT EXISTS market_promo_codes (
+            id SERIAL PRIMARY KEY,
+            campaign_name TEXT NOT NULL,
+            code_hash TEXT NOT NULL UNIQUE,
+            code_hint TEXT NOT NULL,
+            reward_type TEXT NOT NULL,
+            cash_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+            security_id INTEGER,
+            share_quantity NUMERIC(18,6) NOT NULL DEFAULT 0,
+            bundle_size INTEGER NOT NULL DEFAULT 0,
+            max_redemptions INTEGER NOT NULL DEFAULT 1,
+            redemption_count INTEGER NOT NULL DEFAULT 0,
+            expires_at TEXT,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_by INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (security_id) REFERENCES market_securities(id) ON DELETE SET NULL,
+            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS market_promo_redemptions (
+            id SERIAL PRIMARY KEY,
+            promo_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            account_id INTEGER NOT NULL,
+            reward_summary TEXT NOT NULL,
+            redeemed_at TEXT NOT NULL,
+            UNIQUE(promo_id, user_id),
+            FOREIGN KEY (promo_id) REFERENCES market_promo_codes(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (account_id) REFERENCES market_accounts(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute(
+        """
         CREATE TABLE IF NOT EXISTS lottery_draws (
             id SERIAL PRIMARY KEY,
             draw_key TEXT NOT NULL UNIQUE,
@@ -3104,6 +3153,29 @@ def ensure_migrations(db: Database) -> None:
             reason TEXT NOT NULL,
             created_by INTEGER NOT NULL,
             created_at TEXT NOT NULL,
+            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS lottery_special_prizes (
+            id SERIAL PRIMARY KEY,
+            prize_name TEXT NOT NULL,
+            prize_type TEXT NOT NULL DEFAULT 'gift_card',
+            provider TEXT NOT NULL DEFAULT 'other',
+            display_value TEXT NOT NULL DEFAULT '',
+            quantity INTEGER NOT NULL DEFAULT 1,
+            sponsor TEXT NOT NULL DEFAULT '',
+            fulfillment_notes TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'active',
+            draw_id INTEGER,
+            winner_user_id INTEGER,
+            created_by INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            awarded_at TEXT,
+            FOREIGN KEY (draw_id) REFERENCES lottery_draws(id) ON DELETE SET NULL,
+            FOREIGN KEY (winner_user_id) REFERENCES users(id) ON DELETE SET NULL,
             FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT
         )
         """
@@ -3393,6 +3465,25 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE dmv_records ADD COLUMN IF NOT EXISTS action_notice_pending INTEGER NOT NULL DEFAULT 0")
     db.execute("ALTER TABLE dmv_records ADD COLUMN IF NOT EXISTS action_notice_reason TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE dmv_records ADD COLUMN IF NOT EXISTS action_notice_at TEXT")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS settlement_notices (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            notice_type TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            body TEXT NOT NULL,
+            outstanding_count INTEGER NOT NULL DEFAULT 0,
+            outstanding_total NUMERIC(12,2) NOT NULL DEFAULT 0,
+            created_by INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            acknowledged_at TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS settlement_notices_pending_idx ON settlement_notices (user_id, acknowledged_at, created_at)")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS court_record_requests (
@@ -3832,6 +3923,13 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "market_trade_fee_percent": max(0.0, min(10.0, float(raw.get("market_trade_fee_percent") or 0.25))),
         "market_holding_balance": max(0.0, float(raw.get("market_holding_balance") or 0)),
         "market_ai_enabled": str(raw.get("market_ai_enabled") or "1") in ("1", "true", "True", "yes", "on"),
+        "market_autopilot_enabled": str(raw.get("market_autopilot_enabled") or "0") in ("1", "true", "True", "yes", "on"),
+        "market_autopilot_interval_minutes": max(1, min(60, int(raw.get("market_autopilot_interval_minutes") or 5))),
+        "market_volatility_percent": max(0.1, min(15.0, float(raw.get("market_volatility_percent") or 3.5))),
+        "market_autopilot_last_tick": str(raw.get("market_autopilot_last_tick") or "")[:80],
+        "market_gemini_autopilot_enabled": str(raw.get("market_gemini_autopilot_enabled") or "0") in ("1", "true", "True", "yes", "on"),
+        "market_gemini_interval_minutes": max(15, min(1440, int(raw.get("market_gemini_interval_minutes") or 60))),
+        "market_gemini_last_tick": str(raw.get("market_gemini_last_tick") or "")[:80],
         "lottery_enabled": str(raw.get("lottery_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "lottery_daily_entries": max(1, min(20, int(raw.get("lottery_daily_entries") or 3))),
         "lottery_draw_weekday": max(0, min(6, int(raw.get("lottery_draw_weekday") or 1))),
@@ -3876,6 +3974,95 @@ def lottery_funding_snapshot(db: Database, settings: dict[str, Any] | None = Non
     return {"fines": round(public_receipts, 2), "taxes": round(tax_receipts, 2), "market_fees": round(market, 2), "manual": round(manual_total, 2), "awarded": round(paid, 2), "available": round(max(0.0, public_receipts + market + manual_total - paid), 2)}
 
 
+def market_volatility_cycle(db: Database, amplitude: float, source: str = "autopilot", actor_id: int | None = None) -> dict[str, Any]:
+    securities = all_rows(db, """SELECT id,ticker,price,volatility,security_type FROM market_securities s
+        WHERE active=1 AND NOT EXISTS (SELECT 1 FROM market_price_programs p WHERE p.security_id=s.id AND p.status='active') ORDER BY ticker""")
+    if not securities:
+        return {"updated": 0, "average_change": 0.0}
+    broad_bias = ((secrets.randbelow(20001) - 10000) / 10000.0) * amplitude * 0.35
+    changes: list[float] = []
+    for security in securities:
+        security_factor = max(0.45, min(1.8, float(security.get("volatility") or 1.0)))
+        if str(security.get("security_type") or "").lower() == "bond":
+            security_factor *= 0.28
+        independent = ((secrets.randbelow(20001) - 10000) / 10000.0) * amplitude * security_factor
+        percent = max(-15.0, min(15.0, broad_bias + independent))
+        old_price = float(security.get("price") or 0)
+        new_price = max(0.01, round(old_price * (1 + percent / 100.0), 4))
+        db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?", (new_price, now_iso(), security["id"]))
+        changes.append(percent)
+    average = sum(changes) / len(changes)
+    db.execute(
+        "INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES (?,?,?,?,?)",
+        ("volatility_cycle", "Volatility cycle", f"{len(changes)} listings moved; exchange average {average:+.2f}% with mixed gains and losses.", actor_id, now_iso()),
+    )
+    return {"updated": len(changes), "average_change": round(average, 2)}
+
+
+def market_gemini_adjustment_cycle(db: Database) -> dict[str, Any]:
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
+    listings = [
+        {"ticker": row["ticker"], "name": row["name"], "sector": row["sector"], "type": row["security_type"], "price": float(row["price"] or 0), "previous_price": float(row["previous_price"] or 0)}
+        for row in all_rows(db, "SELECT ticker,name,sector,security_type,price,previous_price FROM market_securities WHERE active=1 ORDER BY ticker")
+    ]
+    recent = [dict(row) for row in all_rows(db, "SELECT event_type,title,detail,created_at FROM market_events ORDER BY id DESC LIMIT 20")]
+    prompt = (
+        "You operate the fictional Faircroft Ravenhood exchange. Read the current listings and recent market events, then return ONLY valid JSON as an array "
+        "of 1 to 5 adjustments. Each object must contain ticker, percent_change, and rationale. Use both gains and losses when appropriate. "
+        "Keep every percent_change between -8 and +8 and avoid repeating identical moves. No markdown.\n"
+        f"LISTINGS={json.dumps(listings, separators=(',', ':'))}\nRECENT_EVENTS={json.dumps(recent, separators=(',', ':'), default=str)}"
+    )
+    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.8, "maxOutputTokens": 1600, "responseMimeType": "application/json"}}
+    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{FNN_GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    request = urllib.request.Request(endpoint, data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(request, timeout=90) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    raw_text = str(result["candidates"][0]["content"]["parts"][0]["text"]).strip()
+    raw_text = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_text, flags=re.I)
+    adjustments = json.loads(raw_text)
+    if not isinstance(adjustments, list):
+        raise ValueError("Gemini market response was not an adjustment list")
+    applied: list[dict[str, Any]] = []
+    for item in adjustments[:5]:
+        if not isinstance(item, dict):
+            continue
+        ticker = str(item.get("ticker") or "").upper().strip()[:12]
+        security = one(db, """SELECT id,price FROM market_securities s WHERE active=1 AND ticker=?
+            AND NOT EXISTS (SELECT 1 FROM market_price_programs p WHERE p.security_id=s.id AND p.status='active')""", (ticker,))
+        if not security:
+            continue
+        percent = max(-8.0, min(8.0, float(item.get("percent_change") or 0)))
+        old_price = float(security["price"] or 0)
+        new_price = max(0.01, round(old_price * (1 + percent / 100.0), 4))
+        db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?", (new_price, now_iso(), security["id"]))
+        applied.append({"ticker": ticker, "percent_change": round(percent, 2), "rationale": str(item.get("rationale") or "Market conditions")[:240]})
+    detail = "; ".join(f"{item['ticker']} {item['percent_change']:+.2f}% — {item['rationale']}" for item in applied)
+    db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('ai_adjustment','Gemini market adjustment',?,NULL,?)", (detail or "No eligible adjustments returned.", now_iso()))
+    return {"updated": len(applied), "adjustments": applied}
+
+
+def market_automation_worker() -> None:
+    while True:
+        try:
+            with conn() as db:
+                settings = get_system_settings(db)
+                current = utcnow()
+                if settings["market_autopilot_enabled"]:
+                    last = parse_iso(settings["market_autopilot_last_tick"]) if settings["market_autopilot_last_tick"] else None
+                    if not last or (current - last).total_seconds() >= settings["market_autopilot_interval_minutes"] * 60:
+                        market_volatility_cycle(db, settings["market_volatility_percent"])
+                        set_system_setting(db, "market_autopilot_last_tick", current.isoformat())
+                if settings["market_gemini_autopilot_enabled"] and settings["market_ai_enabled"] and GEMINI_API_KEY:
+                    last_ai = parse_iso(settings["market_gemini_last_tick"]) if settings["market_gemini_last_tick"] else None
+                    if not last_ai or (current - last_ai).total_seconds() >= settings["market_gemini_interval_minutes"] * 60:
+                        market_gemini_adjustment_cycle(db)
+                        set_system_setting(db, "market_gemini_last_tick", current.isoformat())
+        except Exception as exc:
+            print(f"Market automation error: {type(exc).__name__}: {exc}")
+        time.sleep(15)
+
+
 def lottery_next_draw_at(settings: dict[str, Any], after: dt.datetime | None = None) -> dt.datetime:
     zone = ZoneInfo(settings["lottery_timezone"])
     current = (after or utcnow()).astimezone(zone)
@@ -3914,6 +4101,11 @@ def run_due_lottery_draws(db: Database) -> None:
         db.execute("""UPDATE lottery_draws SET status='completed',source_fines=?,source_market_fees=?,prize_pool=?,payout_amount=?,winning_entry_id=?,winner_user_id=?,completed_at=? WHERE id=? AND status='scheduled'""", (funding["fines"], funding["market_fees"], funding["available"], payout, winner["id"] if winner else None, winner["user_id"] if winner else None, now_iso(), draw["id"]))
         if winner:
             add_message(db, winner["user_id"], "Faircroft Lottery Winner", f"Your CIV entry was selected in the Faircroft Lottery. Prize authorization: ${payout:,.2f}. A developer will coordinate the verified in-game settlement.")
+            surprise_prizes = all_rows(db, "SELECT * FROM lottery_special_prizes WHERE status='active' ORDER BY id")
+            if surprise_prizes:
+                db.execute("UPDATE lottery_special_prizes SET status='awarded',draw_id=?,winner_user_id=?,awarded_at=? WHERE status='active'", (draw["id"], winner["user_id"], now_iso()))
+                prize_summary = ", ".join(f"{row['prize_name']} x{int(row['quantity'] or 1)}" for row in surprise_prizes)
+                add_message(db, winner["user_id"], "Faircroft Lottery Surprise Prize", f"The sealed bonus attached to your winning entry has been revealed: {prize_summary}. A developer will contact you with verified fulfillment instructions.")
     ensure_lottery_draw(db, settings)
 
 
@@ -4544,6 +4736,14 @@ def admin_required(user: DbRow | None) -> str | None:
         return "Authentication required"
     if not has_any(user, "owner", "admin"):
         return "Owner or admin access required"
+    return None
+
+
+def account_management_required(user: DbRow | None) -> str | None:
+    if not user:
+        return "Authentication required"
+    if not has_any(user, "owner", "admin", "dev"):
+        return "Owner, admin, or developer access required"
     return None
 
 
@@ -5546,6 +5746,13 @@ def human_request_type(value: Any) -> str:
 
 
 ACTIVE_CASE_STATUSES = ("issued", "contested", "reviewed", "reduced", "continued")
+
+
+def is_parking_charge(charge: DbRow | dict[str, Any]) -> bool:
+    category = str(charge.get("category") or "").strip().lower()
+    severity = str(charge.get("severity") or "").strip().lower()
+    title = str(charge.get("title") or charge.get("charge_title") or "").strip().lower()
+    return "parking" in category or "parking" in severity or "parking" in title
 CLOSED_CASE_STATUSES = ("paid", "dismissed", "closed")
 COURT_DISPOSITIONS = ("under_review", "continued", "liable", "guilty", "plea_agreement", "not_guilty", "dismissed")
 CONVICTION_DISPOSITIONS = ("guilty", "plea_agreement")
@@ -5944,6 +6151,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_wallstreet_recipient(db, user, query)
                 elif path == "/api/wallstreet/transfers" and method == "POST":
                     self.api_wallstreet_transfer(db, user)
+                elif path == "/api/wallstreet/promotions/redeem" and method == "POST":
+                    self.api_wallstreet_redeem_promo(db, user)
                 elif path == "/api/lottery" and method == "GET":
                     self.api_lottery(db, user)
                 elif path == "/api/lottery/entries" and method == "POST":
@@ -6116,6 +6325,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_create_beta_task(db, user)
                 elif path.startswith("/api/dev-tools/beta-tasks/") and method == "PATCH":
                     self.api_dev_update_beta_task(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/dev-tools/accounts/") and path.endswith("/email") and method == "PATCH":
+                    self.api_dev_reset_account_email(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/dev-tools/accounts/") and method == "GET":
                     self.api_dev_account(db, user, self.path_int(path, 3))
                 elif path == "/api/dev-tools/unlink-codes" and method == "POST":
@@ -6140,12 +6351,22 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_market_program_cancel(db, user, self.path_int(path, 4))
                 elif path == "/api/dev-tools/market/presets" and method == "POST":
                     self.api_dev_market_preset(db, user)
+                elif path == "/api/dev-tools/market/volatility-cycle" and method == "POST":
+                    self.api_dev_market_volatility_cycle(db, user)
                 elif path == "/api/dev-tools/market/ai-briefing" and method == "POST":
                     self.api_dev_market_ai_briefing(db, user)
+                elif path == "/api/dev-tools/market/promotions" and method == "POST":
+                    self.api_dev_market_promotion(db, user)
+                elif path.startswith("/api/dev-tools/market/promotions/") and method == "PATCH":
+                    self.api_dev_market_promotion_status(db, user, self.path_int(path, 4))
                 elif path == "/api/dev-tools/lottery/settings" and method == "PATCH":
                     self.api_dev_lottery_settings(db, user)
                 elif path == "/api/dev-tools/lottery/funds" and method == "POST":
                     self.api_dev_lottery_funds(db, user)
+                elif path == "/api/dev-tools/lottery/prizes" and method == "POST":
+                    self.api_dev_lottery_prize_create(db, user)
+                elif path.startswith("/api/dev-tools/lottery/prizes/") and method == "PATCH":
+                    self.api_dev_lottery_prize_update(db, user, self.path_int(path, 4))
                 elif path.startswith("/api/dev-tools/lottery/entries/") and path.endswith("/review") and method == "PATCH":
                     self.api_dev_lottery_entry_review(db, user, self.path_int(path, 4))
                 elif path == "/api/dev-tools/lottery/draw" and method == "POST":
@@ -6180,26 +6401,30 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_press_pass_acknowledge(db, user)
                 elif path == "/api/dmv/action-notice/acknowledge" and method == "POST":
                     self.api_dmv_action_notice_acknowledge(db, user)
+                elif path == "/api/settlement-notice/acknowledge" and method == "POST":
+                    self.api_settlement_notice_acknowledge(db, user)
                 elif path == "/api/fine-settlement" and method == "GET":
                     self.api_fine_settlement(db, user)
+                elif path == "/api/fine-settlement/notices" and method == "POST":
+                    self.api_create_settlement_notices(db, user)
                 elif path == "/api/fine-settlement/batches" and method == "POST":
-                    self.api_create_fine_settlement_batch(db, user)
+                    self.error(410, "Legacy forced settlement batches are retired. Use MyFaircroft receipt PIN verification.")
                 elif path.startswith("/api/fine-settlement/batches/") and path.endswith("/code") and method == "POST":
-                    self.api_fine_settlement_code(db, user, self.path_int(path, 3))
+                    self.error(410, "Legacy forced settlement processing is retired. Use MyFaircroft receipt PIN verification.")
                 elif path.startswith("/api/fine-settlement/batches/") and path.endswith("/suspend-licenses") and method == "POST":
-                    self.api_suspend_fine_batch_licenses(db, user, self.path_int(path, 3))
+                    self.error(410, "Legacy forced settlement processing is retired. Use settlement notices instead.")
                 elif path.startswith("/api/fine-settlement/batches/") and path.endswith("/approve") and method == "POST":
-                    self.api_approve_fine_settlement(db, user, self.path_int(path, 3))
+                    self.error(410, "Legacy forced settlement processing is retired. Use MyFaircroft receipt PIN verification.")
                 elif path.startswith("/api/fine-settlement/batches/") and path.endswith("/complete") and method == "POST":
-                    self.api_complete_fine_settlement(db, user, self.path_int(path, 3))
+                    self.error(410, "Legacy forced settlement processing is retired. Use MyFaircroft receipt PIN verification.")
                 elif path == "/api/fine-settlement/tax-batches" and method == "POST":
-                    self.api_create_tax_settlement_batch(db, user)
+                    self.error(410, "Legacy tax batches are retired. Issue the tax bill for MyFaircroft payment.")
                 elif path.startswith("/api/fine-settlement/tax-batches/") and path.endswith("/code") and method == "POST":
-                    self.api_tax_settlement_code(db, user, self.path_int(path, 3))
+                    self.error(410, "Legacy tax batches are retired. Use MyFaircroft receipt PIN verification.")
                 elif path.startswith("/api/fine-settlement/tax-batches/") and path.endswith("/approve") and method == "POST":
-                    self.api_approve_tax_settlement(db, user, self.path_int(path, 3))
+                    self.error(410, "Legacy tax batches are retired. Use MyFaircroft receipt PIN verification.")
                 elif path.startswith("/api/fine-settlement/tax-batches/") and path.endswith("/complete") and method == "POST":
-                    self.api_complete_tax_settlement(db, user, self.path_int(path, 3))
+                    self.error(410, "Legacy tax batches are retired. Use MyFaircroft receipt PIN verification.")
                 elif path == "/api/admin/overview" and method == "GET":
                     self.api_admin_overview(db, user)
                 elif path == "/api/admin/users" and method == "GET":
@@ -6356,6 +6581,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                WHERE user_id = ? AND action_notice_pending <> 0""",
             (user["id"],),
         )
+        settlement_notice = one(
+            db,
+            """SELECT id, notice_type, subject, body, outstanding_count, outstanding_total, created_at
+               FROM settlement_notices
+               WHERE user_id = ? AND acknowledged_at IS NULL
+               ORDER BY created_at, id LIMIT 1""",
+            (user["id"],),
+        )
         beta_response = one(
             db,
             "SELECT response FROM beta_program_responses WHERE user_id = ? AND campaign_id = ?",
@@ -6415,6 +6648,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "vehicles": [dict(row) for row in vehicle_compliance],
                 },
                 "dmv_action_notice": dict(dmv_action_notice) if dmv_action_notice else None,
+                "settlement_notice": dict(settlement_notice) if settlement_notice else None,
                 "sanction": (
                     {
                         "type": block["sanction_type"],
@@ -8623,6 +8857,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         orders: list[DbRow] = []
         cash_log: list[DbRow] = []
         transfers: list[DbRow] = []
+        promo_redemptions: list[DbRow] = []
         if account:
             holdings = all_rows(db, """SELECT h.*, s.ticker, s.name, s.price, s.previous_price, s.security_type
                 FROM market_holdings h JOIN market_securities s ON s.id = h.security_id
@@ -8636,9 +8871,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 JOIN market_accounts fa ON fa.id=t.from_account_id JOIN users fu ON fu.id=fa.user_id
                 JOIN market_accounts ta ON ta.id=t.to_account_id JOIN users tu ON tu.id=ta.user_id
                 WHERE t.from_account_id=? OR t.to_account_id=? ORDER BY t.created_at DESC LIMIT 30""", (account["id"], account["id"]))
+            promo_redemptions = all_rows(db, """SELECT r.reward_summary,r.redeemed_at,p.campaign_name
+                FROM market_promo_redemptions r JOIN market_promo_codes p ON p.id=r.promo_id
+                WHERE r.account_id=? ORDER BY r.redeemed_at DESC LIMIT 20""", (account["id"],))
         portfolio_value = sum(float(row["quantity"]) * float(row["price"]) for row in holdings)
         return {"account": dict(account) if account else None, "securities": [dict(x) for x in securities], "holdings": [dict(x) for x in holdings],
                 "orders": [dict(x) for x in orders], "cash_transactions": [dict(x) for x in cash_log], "transfers": [dict(x) for x in transfers],
+                "promo_redemptions": [dict(x) for x in promo_redemptions],
                 "portfolio_value": round(portfolio_value, 2), "market_open": settings["market_open"],
                 "transfer_fee_percent": settings["market_transfer_fee_percent"], "trade_fee_percent": settings["market_trade_fee_percent"]}
 
@@ -8768,6 +9007,56 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         set_system_setting(db, "market_holding_balance", str(round(settings["market_holding_balance"] + fee, 2)))
         self.send_json(201, {"ok": True, "fee": fee})
 
+    def api_wallstreet_redeem_promo(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        raw_code = str(self.read_json().get("code") or "").upper().strip().replace(" ", "")
+        if len(raw_code) < 6:
+            self.error(400, "Enter a valid Ravenhood promotional code."); return
+        promo = one(db, """SELECT p.*,s.ticker,s.name AS security_name FROM market_promo_codes p
+            LEFT JOIN market_securities s ON s.id=p.security_id WHERE p.code_hash=? AND p.active=1""",
+            (hashlib.sha256(raw_code.encode("utf-8")).hexdigest(),))
+        if not promo or (promo.get("expires_at") and promo["expires_at"] <= now_iso()):
+            self.error(404, "This promotional code is invalid or no longer active."); return
+        if int(promo["redemption_count"] or 0) >= int(promo["max_redemptions"] or 0):
+            self.error(409, "This promotional campaign has reached its redemption limit."); return
+        if one(db, "SELECT id FROM market_promo_redemptions WHERE promo_id=? AND user_id=?", (promo["id"], user["id"])):
+            self.error(409, "You have already redeemed this campaign."); return
+        ts = now_iso()
+        db.execute("""INSERT INTO market_accounts (user_id,cash_balance,status,created_at,updated_at)
+            VALUES (?,0,'active',?,?) ON CONFLICT(user_id) DO NOTHING""", (user["id"], ts, ts))
+        account = one(db, "SELECT * FROM market_accounts WHERE user_id=?", (user["id"],))
+        reward_type = str(promo["reward_type"]); summary = ""
+        if reward_type == "cash":
+            amount = round(float(promo["cash_amount"] or 0), 2)
+            db.execute("UPDATE market_accounts SET cash_balance=cash_balance+?,updated_at=? WHERE id=?", (amount, ts, account["id"]))
+            summary = f"${amount:,.2f} Ravenhood buying power"
+        else:
+            securities: list[DbRow]
+            if reward_type == "stock":
+                securities = [one(db, "SELECT * FROM market_securities WHERE id=? AND active=1", (promo["security_id"],))]
+                securities = [row for row in securities if row]
+            else:
+                pool = all_rows(db, "SELECT * FROM market_securities WHERE active=1 AND security_type='stock' ORDER BY ticker")
+                securities = []
+                for _ in range(min(int(promo["bundle_size"] or 0), len(pool))):
+                    picked = pool.pop(secrets.randbelow(len(pool))); securities.append(picked)
+            if not securities:
+                self.error(409, "The securities assigned to this campaign are unavailable."); return
+            quantity = round(float(promo["share_quantity"] or 1), 6)
+            for security in securities:
+                db.execute("""INSERT INTO market_holdings (account_id,security_id,quantity,average_cost) VALUES (?,?,?,0)
+                    ON CONFLICT(account_id,security_id) DO UPDATE SET quantity=market_holdings.quantity+excluded.quantity""",
+                    (account["id"], security["id"], quantity))
+            summary = ", ".join(f"{quantity:g} {security['ticker']}" for security in securities)
+        db.execute("""INSERT INTO market_promo_redemptions (promo_id,user_id,account_id,reward_summary,redeemed_at)
+            VALUES (?,?,?,?,?)""", (promo["id"], user["id"], account["id"], summary, ts))
+        db.execute("UPDATE market_promo_codes SET redemption_count=redemption_count+1 WHERE id=?", (promo["id"],))
+        add_admin_audit(db, int(user["id"]), "market.promotion.redeemed", int(user["id"]), {"campaign": promo["campaign_name"], "reward": summary})
+        self.send_json(200, {"ok": True, "campaign_name": promo["campaign_name"], "reward_summary": summary})
+
     def api_lottery(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
         if err:
@@ -8781,7 +9070,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         today_count = sum(1 for entry in entries if entry["entry_date"] == today)
         funding = lottery_funding_snapshot(db, settings)
         latest = one(db, """SELECT d.*,u.name AS winner_name,u.civ_number AS winner_civ FROM lottery_draws d LEFT JOIN users u ON u.id=d.winner_user_id WHERE d.status='completed' ORDER BY d.completed_at DESC LIMIT 1""")
-        self.send_json(200, {"enabled": settings["lottery_enabled"], "draw": dict(draw), "funding": funding, "entries": [dict(row) for row in entries], "entries_today": today_count, "daily_limit": settings["lottery_daily_entries"], "remaining_today": max(0, settings["lottery_daily_entries"]-today_count), "role_weight": weight, "excluded": bool(excluded), "excluded_roles": excluded, "latest_result": dict(latest) if latest else None, "timezone": settings["lottery_timezone"]})
+        latest_prizes = [dict(row) for row in all_rows(db, "SELECT prize_name,prize_type,provider,display_value,quantity,sponsor FROM lottery_special_prizes WHERE draw_id=? AND status='awarded' ORDER BY id", (latest["id"],))] if latest else []
+        self.send_json(200, {"enabled": settings["lottery_enabled"], "draw": dict(draw), "funding": funding, "entries": [dict(row) for row in entries], "entries_today": today_count, "daily_limit": settings["lottery_daily_entries"], "remaining_today": max(0, settings["lottery_daily_entries"]-today_count), "role_weight": weight, "excluded": bool(excluded), "excluded_roles": excluded, "latest_result": dict(latest) if latest else None, "latest_special_prizes": latest_prizes, "timezone": settings["lottery_timezone"]})
 
     def api_lottery_entry(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -11264,7 +11554,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         presiding_judge = pick_presiding_judge(db, int(civ["id"]))
         ts = now_iso()
         citation_ids: list[int] = []
+        parking_ids: list[int] = []
         for charge in charges:
+            parking = is_parking_charge(charge)
             created = db.execute(
                 """
                 INSERT INTO citations
@@ -11277,7 +11569,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     civ["id"],
                     subject_character["id"],
                     user["id"],
-                    presiding_judge["id"] if presiding_judge else None,
+                    None if parking else (presiding_judge["id"] if presiding_judge else None),
                     charge["id"],
                     charge["code"],
                     charge["title"],
@@ -11294,27 +11586,41 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     ts,
                 ),
             ).fetchone()
-            citation_ids.append(int(created["id"]))
+            created_id = int(created["id"])
+            citation_ids.append(created_id)
+            if parking:
+                parking_ids.append(created_id)
+                db.execute(
+                    """UPDATE citations
+                       SET status = 'closed', disposition = 'guilty', final_result = 'guilty',
+                           judgment_notes = 'Automatic parking disposition under Faircroft parking ordinance.',
+                           decided_at = ?, court_date = NULL, updated_at = ?
+                       WHERE id = ?""",
+                    (ts, ts, created_id),
+                )
         citation_id = citation_ids[0]
         total_fines = sum(float(charge["fine_amount"]) for charge in charges)
         charge_summary = ", ".join(f"{charge['code']} - {charge['title']}" for charge in charges)
+        standard_count = len(citation_ids) - len(parking_ids)
         add_message(
             db,
             civ["id"],
             f"New traffic stop citations ({len(charges)})",
-            f"{user['name']} issued {charge_summary}. Total fines: ${total_fines:,.2f}. Open MyFaircroft to pay or contest each filing.",
+            f"{user['name']} issued {charge_summary}. Total fines: ${total_fines:,.2f}. "
+            + (f"{len(parking_ids)} parking ticket(s) were automatically entered as guilty and sent directly to your Faircroft record. " if parking_ids else "")
+            + "Open MyFaircroft to review and pay your filings.",
             user["id"],
         )
-        add_message(db, user["id"], "Officer traffic stop filed", f"{len(citation_ids)} citation case(s) were filed against {civ['name']} and routed to the Court docket.", user["id"])
-        if presiding_judge:
+        add_message(db, user["id"], "Officer traffic stop filed", f"{standard_count} traffic case(s) were routed to Court and {len(parking_ids)} parking ticket(s) were automatically adjudicated for {civ['name']}.", user["id"])
+        if presiding_judge and standard_count:
             add_message(
                 db,
                 presiding_judge["id"],
                 "Traffic stop cases assigned",
-                f"Cases {', '.join(f'#{case_id}' for case_id in citation_ids)} were assigned to you. Defendant: {civ['name']}. Officer: {user['name']}.",
+                f"Cases {', '.join(f'#{case_id}' for case_id in citation_ids if case_id not in parking_ids)} were assigned to you. Defendant: {civ['name']}. Officer: {user['name']}.",
                 user["id"],
             )
-        self.send_json(201, {"ok": True, "citation_id": citation_id, "citation_ids": citation_ids, "citation_count": len(citation_ids), "court_date": court_date, "judge_id": presiding_judge["id"] if presiding_judge else None})
+        self.send_json(201, {"ok": True, "citation_id": citation_id, "citation_ids": citation_ids, "parking_ids": parking_ids, "citation_count": len(citation_ids), "court_date": court_date, "judge_id": presiding_judge["id"] if presiding_judge and standard_count else None})
 
     def api_mdt_bookings(self, db: Database, user: DbRow | None) -> None:
         err = leo_required(user)
@@ -13007,18 +13313,33 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err)
             return
-        users = all_rows(
+        user_rows = all_rows(
             db,
             """
-            SELECT u.id, u.civ_number, u.name, u.email, u.verified, u.roles, u.arma_id, u.created_at,
-                   u.press_pass_status, u.press_pass_reason, u.press_pass_action_at,
-                   CASE WHEN l.id IS NULL THEN 0 ELSE 1 END AS arma_linked,
-                   l.identity_id AS linked_arma_id, l.linked_at
+            SELECT u.*, l.identity_id AS linked_arma_id, l.linked_at AS arma_linked_at
             FROM users u
             LEFT JOIN arma_account_links l ON l.user_id = u.id
-            ORDER BY u.name, u.id LIMIT 500
+            ORDER BY u.verified ASC, u.created_at DESC LIMIT 500
             """,
         )
+        users = []
+        for row in user_rows:
+            item = public_user(row)
+            item["arma_id"] = row.get("linked_arma_id")
+            item["arma_linked"] = bool(row.get("linked_arma_id"))
+            item["arma_linked_at"] = row.get("arma_linked_at")
+            item["press_pass_status"] = row.get("press_pass_status") or "active"
+            item["press_pass_reason"] = row.get("press_pass_reason") or ""
+            item["press_pass_action_at"] = row.get("press_pass_action_at")
+            item["presence_seconds_today"] = presence_seconds(db, row["id"])
+            item["name_change"] = name_change_status(db, int(row["id"]))
+            count = one(db, "SELECT COUNT(*) AS count FROM user_characters WHERE user_id = ?", (row["id"],))
+            active = one(db, "SELECT character_name FROM user_characters WHERE user_id = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1", (row["id"],))
+            item["character_count"] = int(count["count"] if count else 0)
+            item["active_character_name"] = active["character_name"] if active else row["name"]
+            restriction = active_admin_account_restriction(db, int(row["id"]))
+            item["admin_restriction"] = dict(restriction) if restriction else None
+            users.append(item)
         press_members = [dict(account) for account in users if has_any(account, "press")]
         fnn_cad_reports = all_rows(db, """SELECT r.*, o.name AS officer_name
             FROM cad_after_call_reports r JOIN users o ON o.id=r.officer_id
@@ -13317,6 +13638,51 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             LIMIT 10
             """,
         )
+        intelligence_linked_accounts = all_rows(
+            db,
+            """
+            SELECT u.id AS account_id, u.name AS account_name, u.email, u.civ_number,
+                   l.identity_id, l.player_name, l.linked_at,
+                   COALESCE(b.balance, 0) AS balance, b.synced_at,
+                   (SELECT COUNT(*) FROM user_characters c WHERE c.user_id = u.id) AS character_count
+            FROM users u
+            JOIN arma_account_links l ON l.user_id = u.id
+            LEFT JOIN arma_game_bank_balances b ON b.identity_id = l.identity_id
+            ORDER BY COALESCE(b.balance, 0) DESC, u.name
+            """,
+        )
+        intelligence_unlinked_accounts = all_rows(
+            db,
+            """
+            SELECT u.id AS account_id, u.name AS account_name, u.email, u.civ_number,
+                   0 AS balance,
+                   (SELECT COUNT(*) FROM user_characters c WHERE c.user_id = u.id) AS character_count
+            FROM users u
+            WHERE NOT EXISTS (
+                SELECT 1 FROM arma_account_links l WHERE l.user_id = u.id
+            )
+            ORDER BY u.name
+            """,
+        )
+        bank_balances = [float(row.get("balance") or 0) for row in all_rows(db, "SELECT balance FROM arma_game_bank_balances ORDER BY balance")]
+        circulation_value = float(bank_economy.get("currency_in_circulation") or 0)
+        economy_scale_position = max(0.0, min(100.0, (circulation_value / 20_000_000_000) * 100.0))
+        funded_count = int(bank_economy.get("funded_accounts") or 0)
+        millionaire_count = sum(1 for balance in bank_balances if balance >= 1_000_000)
+        median_balance = 0.0
+        if bank_balances:
+            midpoint = len(bank_balances) // 2
+            median_balance = bank_balances[midpoint] if len(bank_balances) % 2 else (bank_balances[midpoint - 1] + bank_balances[midpoint]) / 2
+        if economy_scale_position < 5:
+            economy_phase, expansion_outlook = "Foundation", "Wide open"
+        elif economy_scale_position < 20:
+            economy_phase, expansion_outlook = "Growing", "Strong"
+        elif economy_scale_position < 45:
+            economy_phase, expansion_outlook = "Established", "Healthy"
+        elif economy_scale_position < 75:
+            economy_phase, expansion_outlook = "High velocity", "Measured"
+        else:
+            economy_phase, expansion_outlook = "Mature", "Tight"
         if bank_category and int(bank_category.get("records") or 0):
             persistence_categories.insert(0, {
                 "category": "Banks",
@@ -13405,6 +13771,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                         "source": "FCRPMUSSALO/Banks",
                         "top_linked_accounts": [dict(row) for row in wealthiest_linked_accounts],
                         "top_unlinked_accounts": [dict(row) for row in wealthiest_unlinked_accounts],
+                        "linked_directory": [dict(row) for row in intelligence_linked_accounts],
+                        "unlinked_directory": [dict(row) for row in intelligence_unlinked_accounts],
+                        "insights": {
+                            "phase": economy_phase,
+                            "expansion_outlook": expansion_outlook,
+                            "maturity_score": round(economy_scale_position, 1),
+                            "median_balance": median_balance,
+                            "millionaire_accounts": millionaire_count,
+                            "funded_accounts": funded_count,
+                            "distribution_score": round(max(0.0, 100.0 - ((float(bank_economy.get("largest_balance") or 0) / circulation_value) * 100.0 if circulation_value else 0.0)), 1),
+                        },
                     },
                     "read_only": True,
                     "transaction_history_available": False,
@@ -13485,6 +13862,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "trade_fee_percent": system_settings["market_trade_fee_percent"],
                     "holding_balance": system_settings["market_holding_balance"],
                     "ai_enabled": system_settings["market_ai_enabled"],
+                    "autopilot_enabled": system_settings["market_autopilot_enabled"],
+                    "autopilot_interval_minutes": system_settings["market_autopilot_interval_minutes"],
+                    "volatility_percent": system_settings["market_volatility_percent"],
+                    "autopilot_last_tick": system_settings["market_autopilot_last_tick"],
+                    "gemini_autopilot_enabled": system_settings["market_gemini_autopilot_enabled"],
+                    "gemini_interval_minutes": system_settings["market_gemini_interval_minutes"],
+                    "gemini_last_tick": system_settings["market_gemini_last_tick"],
+                    "gemini_configured": bool(GEMINI_API_KEY),
                     "securities": [dict(row) for row in all_rows(db, "SELECT * FROM market_securities ORDER BY security_type, ticker")],
                     "programs": [dict(row) for row in all_rows(db, "SELECT p.*, s.ticker FROM market_price_programs p LEFT JOIN market_securities s ON s.id=p.security_id ORDER BY p.created_at DESC LIMIT 50")],
                     "events": [dict(row) for row in all_rows(db, "SELECT * FROM market_events ORDER BY created_at DESC LIMIT 50")],
@@ -13492,6 +13877,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                         COALESCE(target.name, 'Unassigned bearer PIN') AS target_name,creator.name AS created_by_name,used.name AS used_by_name
                         FROM market_cash_codes c LEFT JOIN users target ON target.id=c.target_user_id JOIN users creator ON creator.id=c.created_by
                         LEFT JOIN users used ON used.id=c.used_by ORDER BY c.created_at DESC LIMIT 100""")],
+                    "promotions": [dict(row) for row in all_rows(db, """SELECT p.id,p.campaign_name,p.code_hint,p.reward_type,p.cash_amount,p.share_quantity,p.bundle_size,
+                        p.max_redemptions,p.redemption_count,p.expires_at,p.active,p.created_at,s.ticker,creator.name AS created_by_name
+                        FROM market_promo_codes p LEFT JOIN market_securities s ON s.id=p.security_id JOIN users creator ON creator.id=p.created_by
+                        ORDER BY p.created_at DESC LIMIT 100""")],
+                    "promotion_redemptions": [dict(row) for row in all_rows(db, """SELECT r.reward_summary,r.redeemed_at,p.campaign_name,u.name,u.civ_number
+                        FROM market_promo_redemptions r JOIN market_promo_codes p ON p.id=r.promo_id JOIN users u ON u.id=r.user_id
+                        ORDER BY r.redeemed_at DESC LIMIT 100""")],
                 },
                 "lottery_settings": {
                     "enabled": system_settings["lottery_enabled"],
@@ -13506,6 +13898,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "draws": [dict(row) for row in all_rows(db, """SELECT d.*,u.name AS winner_name,u.civ_number AS winner_civ FROM lottery_draws d LEFT JOIN users u ON u.id=d.winner_user_id ORDER BY d.scheduled_at DESC LIMIT 30""")],
                     "entries": [dict(row) for row in all_rows(db, """SELECT e.*,u.name,u.civ_number,u.roles FROM lottery_entries e JOIN users u ON u.id=e.user_id ORDER BY e.created_at DESC LIMIT 250""")],
                     "fund_adjustments": [dict(row) for row in all_rows(db, """SELECT a.*,u.name AS created_by_name FROM lottery_fund_adjustments a JOIN users u ON u.id=a.created_by ORDER BY a.created_at DESC LIMIT 100""")],
+                    "special_prizes": [dict(row) for row in all_rows(db, """SELECT p.*,u.name AS created_by_name,w.name AS winner_name FROM lottery_special_prizes p JOIN users u ON u.id=p.created_by LEFT JOIN users w ON w.id=p.winner_user_id ORDER BY CASE p.status WHEN 'active' THEN 0 WHEN 'disabled' THEN 1 ELSE 2 END,p.created_at DESC""")],
                 },
             },
         )
@@ -13879,6 +14272,59 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         add_admin_audit(db, int(user["id"]), f"market.{tx_type}.code_created", target_user_id, {"expires_at": expires.isoformat(), "unassigned": True, "amount_bound": False})
         self.send_json(201, {"ok": True, "code": raw_code, "transaction_type": tx_type, "unassigned": True, "expires_at": expires.isoformat()})
 
+    def api_dev_market_promotion(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        payload = self.read_json(); reward_type = str(payload.get("reward_type") or "").lower()
+        campaign_name = str(payload.get("campaign_name") or "").strip()[:120]
+        if reward_type not in ("cash", "stock", "random_bundle") or not campaign_name:
+            self.error(400, "Campaign name and a valid reward type are required."); return
+        try:
+            cash_amount = round(max(0, float(payload.get("cash_amount") or 0)), 2)
+            share_quantity = round(max(0.000001, float(payload.get("share_quantity") or 1)), 6)
+            bundle_size = int(payload.get("bundle_size") or 0)
+            max_redemptions = max(1, min(100000, int(payload.get("max_redemptions") or 1)))
+            expiry_days = max(1, min(365, int(payload.get("expiry_days") or 30)))
+        except (TypeError, ValueError):
+            self.error(400, "Reward values, limits, and expiration must be numeric."); return
+        if reward_type == "cash" and cash_amount <= 0:
+            self.error(400, "Enter a positive Ravenhood cash reward."); return
+        if reward_type == "random_bundle" and bundle_size not in (3, 5, 9):
+            self.error(400, "Random starter bundles must contain 3, 5, or 9 stocks."); return
+        security = None
+        if reward_type == "stock":
+            security = one(db, "SELECT id,ticker FROM market_securities WHERE ticker=? AND active=1", (str(payload.get("ticker") or "").upper().strip(),))
+            if not security:
+                self.error(400, "Select an active Ravenhood security."); return
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        custom = str(payload.get("custom_code") or "").upper().strip().replace(" ", "")
+        raw_code = custom or "FCX-" + "".join(secrets.choice(alphabet) for _ in range(4)) + "-" + "".join(secrets.choice(alphabet) for _ in range(4))
+        if len(raw_code) < 6 or len(raw_code) > 32:
+            self.error(400, "Promo codes must contain between 6 and 32 characters."); return
+        code_hash = hashlib.sha256(raw_code.encode("utf-8")).hexdigest()
+        if one(db, "SELECT id FROM market_promo_codes WHERE code_hash=?", (code_hash,)):
+            self.error(409, "That promotional code already exists."); return
+        created = utcnow(); expires = created + dt.timedelta(days=expiry_days)
+        db.execute("""INSERT INTO market_promo_codes
+            (campaign_name,code_hash,code_hint,reward_type,cash_amount,security_id,share_quantity,bundle_size,max_redemptions,expires_at,created_by,created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""", (campaign_name, code_hash, raw_code[-4:], reward_type, cash_amount,
+            security["id"] if security else None, share_quantity, bundle_size, max_redemptions, expires.isoformat(), user["id"], created.isoformat()))
+        add_admin_audit(db, int(user["id"]), "market.promotion.created", details={"campaign": campaign_name, "reward_type": reward_type, "max_redemptions": max_redemptions})
+        self.send_json(201, {"ok": True, "code": raw_code, "campaign_name": campaign_name, "expires_at": expires.isoformat()})
+
+    def api_dev_market_promotion_status(self, db: Database, user: DbRow | None, promo_id: int | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        if not promo_id or not one(db, "SELECT id FROM market_promo_codes WHERE id=?", (promo_id,)):
+            self.error(404, "Promotional campaign not found."); return
+        active = 1 if bool(self.read_json().get("active")) else 0
+        db.execute("UPDATE market_promo_codes SET active=? WHERE id=?", (active, promo_id))
+        add_admin_audit(db, int(user["id"]), "market.promotion.status", details={"promo_id": promo_id, "active": bool(active)})
+        self.send_json(200, {"ok": True, "active": bool(active)})
+
     def api_dev_market_settings(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
         if err:
@@ -13888,11 +14334,39 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             transfer_fee = max(0, min(25, float(payload.get("transfer_fee_percent") or 0)))
             trade_fee = max(0, min(10, float(payload.get("trade_fee_percent") or 0)))
         except (TypeError, ValueError): self.error(400, "Fees must be numeric."); return
-        set_system_setting(db, "market_open", "1" if bool(payload.get("market_open")) else "0")
-        set_system_setting(db, "market_transfer_fee_percent", str(transfer_fee)); set_system_setting(db, "market_trade_fee_percent", str(trade_fee))
-        set_system_setting(db, "market_ai_enabled", "1" if bool(payload.get("ai_enabled", True)) else "0")
+        if "market_open" in payload:
+            set_system_setting(db, "market_open", "1" if bool(payload.get("market_open")) else "0")
+        if "transfer_fee_percent" in payload:
+            set_system_setting(db, "market_transfer_fee_percent", str(transfer_fee))
+        if "trade_fee_percent" in payload:
+            set_system_setting(db, "market_trade_fee_percent", str(trade_fee))
+        if "ai_enabled" in payload:
+            set_system_setting(db, "market_ai_enabled", "1" if bool(payload.get("ai_enabled")) else "0")
+        try:
+            automation_interval = max(1, min(60, int(payload.get("autopilot_interval_minutes") or 5)))
+            volatility = max(0.1, min(15.0, float(payload.get("volatility_percent") or 3.5)))
+            gemini_interval = max(15, min(1440, int(payload.get("gemini_interval_minutes") or 60)))
+        except (TypeError, ValueError):
+            self.error(400, "Automation intervals and volatility must be numeric."); return
+        if "autopilot_enabled" in payload:
+            set_system_setting(db, "market_autopilot_enabled", "1" if bool(payload.get("autopilot_enabled")) else "0")
+            set_system_setting(db, "market_autopilot_interval_minutes", str(automation_interval))
+            set_system_setting(db, "market_volatility_percent", str(volatility))
+        if "gemini_autopilot_enabled" in payload:
+            set_system_setting(db, "market_gemini_autopilot_enabled", "1" if bool(payload.get("gemini_autopilot_enabled")) else "0")
+            set_system_setting(db, "market_gemini_interval_minutes", str(gemini_interval))
         add_admin_audit(db, int(user["id"]), "market.settings.updated", details={"market_open": bool(payload.get("market_open")), "transfer_fee": transfer_fee, "trade_fee": trade_fee})
         self.send_json(200, {"ok": True})
+
+    def api_dev_market_volatility_cycle(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        settings = get_system_settings(db)
+        result = market_volatility_cycle(db, settings["market_volatility_percent"], "manual", int(user["id"]))
+        set_system_setting(db, "market_autopilot_last_tick", now_iso())
+        add_admin_audit(db, int(user["id"]), "market.volatility_cycle", details=result)
+        self.send_json(200, {"ok": True, **result})
 
     def api_dev_market_program(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
@@ -14028,6 +14502,47 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("INSERT INTO lottery_fund_adjustments (amount,reason,created_by,created_at) VALUES (?,?,?,?)", (amount, reason, user["id"], now_iso()))
         add_admin_audit(db, int(user["id"]), "lottery.funds.added", details={"amount": amount, "reason": reason})
         self.send_json(200, {"ok": True, "amount": amount, "funding": lottery_funding_snapshot(db)})
+
+    def api_dev_lottery_prize_create(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        payload = self.read_json(); name = str(payload.get("prize_name") or "").strip()[:120]
+        provider = str(payload.get("provider") or "other").strip().lower()[:40]
+        prize_type = str(payload.get("prize_type") or "gift_card").strip().lower()[:40]
+        display_value = str(payload.get("display_value") or "").strip()[:80]
+        sponsor = str(payload.get("sponsor") or "").strip()[:120]
+        notes = str(payload.get("fulfillment_notes") or "").strip()[:1000]
+        try: quantity = max(1, min(100, int(payload.get("quantity") or 1)))
+        except (TypeError, ValueError): quantity = 1
+        if len(name) < 3:
+            self.error(400, "Enter a clear special-prize name."); return
+        if provider not in {"steam", "xbox", "playstation", "discord", "faircroft", "other"}:
+            provider = "other"
+        db.execute("INSERT INTO lottery_special_prizes (prize_name,prize_type,provider,display_value,quantity,sponsor,fulfillment_notes,status,created_by,created_at) VALUES (?,?,?,?,?,?,?,'active',?,?)", (name, prize_type, provider, display_value, quantity, sponsor, notes, user["id"], now_iso()))
+        add_admin_audit(db, int(user["id"]), "lottery.special_prize.created", details={"prize_name": name, "provider": provider, "quantity": quantity})
+        self.send_json(201, {"ok": True})
+
+    def api_dev_lottery_prize_update(self, db: Database, user: DbRow | None, prize_id: int | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        prize = one(db, "SELECT * FROM lottery_special_prizes WHERE id=?", (prize_id,)) if prize_id else None
+        if not prize:
+            self.error(404, "Lottery special prize not found."); return
+        action = str(self.read_json().get("action") or "").lower()
+        if action == "disable" and prize["status"] == "active":
+            db.execute("UPDATE lottery_special_prizes SET status='disabled' WHERE id=?", (prize_id,))
+        elif action == "restore" and prize["status"] == "disabled":
+            db.execute("UPDATE lottery_special_prizes SET status='active' WHERE id=?", (prize_id,))
+        elif action == "delete" and prize["status"] != "awarded":
+            db.execute("DELETE FROM lottery_special_prizes WHERE id=?", (prize_id,))
+        else:
+            self.error(409, "That prize action is not available in its current state."); return
+        add_admin_audit(db, int(user["id"]), f"lottery.special_prize.{action}", details={"prize_id": prize_id, "prize_name": prize["prize_name"]})
+        self.send_json(200, {"ok": True})
 
     def api_dev_lottery_entry_review(self, db: Database, user: DbRow | None, entry_id: int | None) -> None:
         err = developer_required(user)
@@ -14549,6 +15064,22 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("UPDATE dmv_records SET action_notice_pending = 0 WHERE user_id = ?", (user["id"],))
         self.send_json(200, {"ok": True})
 
+    def api_settlement_notice_acknowledge(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        payload = self.read_json()
+        try:
+            notice_id = int(payload.get("notice_id") or 0)
+        except (TypeError, ValueError):
+            notice_id = 0
+        notice = one(db, "SELECT id FROM settlement_notices WHERE id = ? AND user_id = ? AND acknowledged_at IS NULL", (notice_id, user["id"]))
+        if not notice:
+            self.error(404, "Settlement notice not found")
+            return
+        db.execute("UPDATE settlement_notices SET acknowledged_at = ? WHERE id = ?", (now_iso(), notice_id))
+        self.send_json(200, {"ok": True})
+
     def send_dev_account_response(
         self,
         db: Database,
@@ -14912,6 +15443,31 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"ok": True})
 
     def fine_settlement_payload(self, db: Database) -> dict[str, Any]:
+        outstanding_accounts = all_rows(
+            db,
+            """
+            SELECT u.id AS user_id, u.name, u.civ_number,
+                   COUNT(c.id) AS outstanding_count, COALESCE(SUM(c.fine_amount), 0) AS outstanding_total,
+                   MIN(c.created_at) AS oldest_fine_at, MAX(c.created_at) AS newest_fine_at,
+                   COALESCE(d.license_status, 'No license') AS license_status
+            FROM citations c
+            JOIN users u ON u.id = c.civ_id
+            LEFT JOIN dmv_records d ON d.user_id = u.id
+            WHERE c.status IN ('issued', 'reviewed', 'reduced', 'closed')
+              AND COALESCE(c.disposition, '') NOT IN ('not_guilty', 'dismissed')
+            GROUP BY u.id, u.name, u.civ_number, d.license_status
+            ORDER BY outstanding_total DESC, oldest_fine_at
+            """
+        )
+        notice_history = all_rows(
+            db,
+            """SELECT n.*, recipient.name AS recipient_name, recipient.civ_number,
+                      creator.name AS created_by_name
+               FROM settlement_notices n
+               JOIN users recipient ON recipient.id = n.user_id
+               JOIN users creator ON creator.id = n.created_by
+               ORDER BY n.created_at DESC LIMIT 100""",
+        )
         unpaid = all_rows(
             db,
             """
@@ -15028,12 +15584,65 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             ]
             result_tax_batches.append(item)
         return {
+            "outstanding_accounts": [dict(row) for row in outstanding_accounts],
+            "outstanding_count": sum(int(row["outstanding_count"] or 0) for row in outstanding_accounts),
+            "outstanding_total": sum(float(row["outstanding_total"] or 0) for row in outstanding_accounts),
+            "notice_history": [dict(row) for row in notice_history],
             "unpaid": [dict(row) for row in unpaid],
             "batches": result_batches,
             "tax_ready": [dict(row) for row in tax_ready],
             "tax_licenses": tax_licenses,
             "tax_batches": result_tax_batches,
         }
+
+    def api_create_settlement_notices(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        notice_type = str(payload.get("notice_type") or "").strip().lower()
+        presets = {
+            "suspension": ("Final notice: driver license suspension", "Failure to resolve your outstanding fines may result in suspension of your Faircroft driver license."),
+            "revocation": ("Final notice: driver license revocation", "Continued failure to resolve your outstanding fines may result in revocation of your Faircroft driver license."),
+            "warrant": ("Final notice: warrant enforcement", "Failure to pay outstanding fines may result in a warrant for your arrest in the State of Faircroft."),
+        }
+        if notice_type not in presets:
+            self.error(400, "Select a valid settlement warning")
+            return
+        mode = str(payload.get("recipient_mode") or "individual").strip().lower()
+        raw_ids = payload.get("user_ids") if isinstance(payload.get("user_ids"), list) else []
+        try:
+            selected_ids = list(dict.fromkeys(int(value) for value in raw_ids))
+        except (TypeError, ValueError):
+            self.error(400, "Select valid resident accounts")
+            return
+        accounts = self.fine_settlement_payload(db)["outstanding_accounts"]
+        eligible = {int(item["user_id"]): item for item in accounts}
+        recipient_ids = list(eligible) if mode == "bulk" else [item for item in selected_ids if item in eligible]
+        if not recipient_ids:
+            self.error(400, "No residents with outstanding fines were selected")
+            return
+        subject, warning = presets[notice_type]
+        custom_note = str(payload.get("custom_note") or "").strip()[:800]
+        ts = now_iso()
+        for recipient_id in recipient_ids:
+            account = eligible[recipient_id]
+            body = (
+                f"{warning} Your account currently shows {int(account['outstanding_count'])} outstanding filing(s) totaling ${float(account['outstanding_total']):,.2f}. "
+                "Open MyFaircroft to review the balance. Pay the authorized staff member in game first; the four-digit receipt PIN must not be issued until payment is received."
+                + (f" Official note: {custom_note}" if custom_note else "")
+            )
+            db.execute(
+                """INSERT INTO settlement_notices
+                   (user_id, notice_type, subject, body, outstanding_count, outstanding_total, created_by, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (recipient_id, notice_type, subject, body, int(account["outstanding_count"]), float(account["outstanding_total"]), user["id"], ts),
+            )
+            add_message(db, recipient_id, subject, body, user["id"])
+        add_admin_audit(db, int(user["id"]), "settlement.notices.sent", None, {"notice_type": notice_type, "recipient_mode": mode, "recipient_count": len(recipient_ids)})
+        self.send_json(201, {"ok": True, "recipient_count": len(recipient_ids), "notice_type": notice_type})
 
     def api_fine_settlement(self, db: Database, user: DbRow | None) -> None:
         err = fine_settlement_required(user)
@@ -15494,7 +16103,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"users": users})
 
     def api_admin_enforcement(self, db: Database, user: DbRow | None, target_id: int) -> None:
-        err = admin_required(user)
+        err = account_management_required(user)
         if err:
             self.error(403 if user else 401, err)
             return
@@ -15748,8 +16357,38 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         add_message(db, application["user_id"], subject, note, user["id"])
         self.send_json(200, {"ok": True, "status": status})
 
+    def api_dev_reset_account_email(self, db: Database, user: DbRow | None, target_id: int) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        target = one(db, "SELECT * FROM users WHERE id = ?", (target_id,))
+        if not target:
+            self.error(404, "User not found")
+            return
+        email = str(self.read_json().get("email") or "").strip().lower()
+        if len(email) > 254 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+            self.error(400, "Enter a valid email address")
+            return
+        if str(target.get("email") or "").strip().lower() == OWNER_EMAIL and email != OWNER_EMAIL:
+            self.error(409, "The primary owner email is controlled by the Railway OWNER_EMAIL variable and cannot be reset here")
+            return
+        duplicate = one(db, "SELECT id FROM users WHERE LOWER(email) = LOWER(?) AND id <> ?", (email, target_id))
+        if duplicate:
+            self.error(409, "That email address is already assigned to another account")
+            return
+        previous_email = str(target["email"] or "")
+        db.execute("UPDATE users SET email = ? WHERE id = ?", (email, target_id))
+        add_admin_audit(db, int(user["id"]), "account.email.reset", target_id, {
+            "previous_email": previous_email,
+            "new_email": email,
+        })
+        add_message(db, target_id, "Account email updated", f"Developer staff updated your sign-in email to {email}.", int(user["id"]))
+        self.send_json(200, {"ok": True, "email": email})
+
     def api_admin_update_user(self, db: Database, user: DbRow | None, target_id: int) -> None:
-        err = admin_required(user)
+        err = account_management_required(user)
         if err:
             self.error(403 if user else 401, err)
             return
@@ -15763,6 +16402,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(400, "Roles must be a list")
             return
         cleaned = sorted(set(["civ", *[normalize_role(role) for role in next_roles if str(role).strip()]]))
+        current_roles = roles_for(target)
+        dev_role_changed = ("dev" in current_roles) != ("dev" in cleaned)
+        if dev_role_changed and not has_any(user, "owner"):
+            self.error(403, "Only an owner can grant or remove Developer access")
+            return
         if "owner" in cleaned and not has_any(user, "owner"):
             self.error(403, "Only owners can assign owner access")
             return
@@ -15797,10 +16441,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "UPDATE users SET name_change_locked = 0, name_change_unlocked_at = ? WHERE id = ?",
                 (now_iso(), target_id),
             )
+        if dev_role_changed:
+            add_admin_audit(
+                db,
+                int(user["id"]),
+                "account.developer_role.granted" if "dev" in cleaned else "account.developer_role.removed",
+                target_id,
+                {"previous_roles": current_roles, "new_roles": cleaned},
+            )
         dmv = one(db, "SELECT id FROM dmv_records WHERE user_id = ?", (target_id,))
         if not dmv:
             create_default_dmv(db, target_id)
-        add_message(db, target_id, "Account updated", "An owner/admin updated your account settings.", user["id"])
+        add_message(db, target_id, "Account updated", "Authorized Faircroft staff updated your account settings.", user["id"])
         self.send_json(200, {"ok": True})
 
     def api_admin_delete_user(self, db: Database, user: DbRow | None, target_id: int) -> None:
@@ -15911,6 +16563,7 @@ def main() -> None:
         daemon=True,
     ).start()
     threading.Thread(target=lottery_worker, name="faircroft-lottery", daemon=True).start()
+    threading.Thread(target=market_automation_worker, name="ravenhood-market-automation", daemon=True).start()
     port = int(os.environ.get("PORT", "8080"))
     host = os.environ.get("HOST", "0.0.0.0")
     server = ThreadingHTTPServer((host, port), RoleplayHandler)
