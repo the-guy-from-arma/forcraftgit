@@ -6,6 +6,8 @@
       "version": "0.2.2",
       "title": "RP OS 0.2.2",
       "added": [
+        "Added a once-per-news-cycle FNN Top Story assignment in the Press Desk, with an exclusive newsroom checkbox, visible reservation status, Gemini lead-story prioritization, conflict protection, and automatic release only after a successful manual or scheduled edition publication.",
+        "Added audited manual lottery funding inside Developer Tools Lottery Settings, including immediate prize-pool updates, required funding reasons, issuing-developer attribution, timestamps, and a permanent adjustment ledger.",
         "Added a full-screen Faircroft Leaderboards application with 27 synchronized rankings across Wealth and Credit, Activity, Combat, Public Safety, and Community divisions.",
         "Added Top Earners, monthly wealth growth, Credit Elite, credit improvement, Server Veterans, current-session activity, role-service time, K/D, kills, deaths, suicides, arrests, citations, warrants, court, DMV, CAD reporting, Press Desk, clean-driver, and Public Safety MVP rankings.",
         "Added top-three podiums, compact ranked ledgers, online indicators, authoritative source labels, division navigation, and responsive mobile leaderboard controls.",
@@ -46,6 +48,8 @@
         ,"Added an active scheduled-movement ledger to Ravenhood Stock Market Settings with affected securities, target percentage, schedule timing, live progress, and immediate stop controls."
       ],
       "changed": [
+        "Reimagined Leaderboards as an open championship arena with circular rank stages, an animated podium track, floating verified scores, integrated live-position intelligence, and a continuous standings field without card or widget containers.",
+        "Replaced the oversized linear Leaderboards page with a responsive competitive-network dashboard featuring a compact live header, swipeable championship podium, personal chase intelligence, advancement meters, and dense mobile-first standings.",
         "Rebuilt Ravenhood around selectable Day, Week, Month, and Year market views for every security, with animated recorded and projected paths, range-specific timelines, a continuous borderless ticker tape, and streamlined trading rails.",
         "Replaced the boxed Leaderboards podium with a continuous ranking runway: a single editorial leader feature, streamlined challenger flow, integrated personal position, fast division and category navigation, and one uninterrupted responsive standings sequence.",
         "Rebuilt the Faircroft Lottery as an immersive live drawing experience with a kinetic draw chamber, circulating numbered balls, physical resident entry ticket, prize and countdown stage, live drawing tape, transparent entry-to-winner journey, verified chance record, and integrated prize-funding story.",
@@ -86,6 +90,7 @@
         ,"Changed all newly issued MyFaircroft and Ravenhood four-digit receipt PINs to unassigned bearer codes that permanently record the issuing administrator and first eligible resident who redeems them."
       ],
       "fixed": [
+        "Fixed Ravenhood's persistent interaction controller so Market Overview, Deposit, Withdrawal, Transfer, ticker selection, time ranges, refresh, and both Exit controls remain functional after every workspace redraw.",
         "Fixed Ravenhood Gemini market briefings failing before generation when PostgreSQL numeric market prices and volatility values were returned as Decimal objects.",
         "Stopping an active Ravenhood price movement now cancels every related security program and restores affected prices to their recorded pre-event baselines so normal market operation can resume.",
         "Prevented temporary anti-cheat event and outbox records from contaminating persistent leaderboard rankings.",

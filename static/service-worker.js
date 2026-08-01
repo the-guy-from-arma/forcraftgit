@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v022-market-v5";
+const CACHE = "faircroft-rp-v022-fnn-top-story";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.2.2-market-v5",
+  "/static/styles.css?v=0.2.2-fnn-top-story",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.2.2-market-v5",
+  "/static/app.js?v=0.2.2-fnn-top-story",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
   "/static/brand/platforms/playstation.svg",

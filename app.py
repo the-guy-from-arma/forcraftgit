@@ -2583,6 +2583,7 @@ def ensure_schema() -> None:
                 background TEXT NOT NULL DEFAULT '',
                 public_impact TEXT NOT NULL DEFAULT '',
                 verification_notes TEXT NOT NULL DEFAULT '',
+                top_story INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'submitted',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -3041,6 +3042,18 @@ def ensure_migrations(db: Database) -> None:
         )
         """
     )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS lottery_fund_adjustments (
+            id SERIAL PRIMARY KEY,
+            amount NUMERIC(14,2) NOT NULL,
+            reason TEXT NOT NULL,
+            created_by INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT
+        )
+        """
+    )
     securities = (
         ("FNN", "Faircroft News Network", "stock", "Media", 42.50, 1.2),
         ("FCF", "Faircroft Financial", "stock", "Finance", 118.20, 0.8),
@@ -3473,6 +3486,7 @@ def ensure_migrations(db: Database) -> None:
             background TEXT NOT NULL DEFAULT '',
             public_impact TEXT NOT NULL DEFAULT '',
             verification_notes TEXT NOT NULL DEFAULT '',
+            top_story INTEGER NOT NULL DEFAULT 0,
             status TEXT NOT NULL DEFAULT 'submitted',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
@@ -3788,6 +3802,8 @@ def set_system_setting(db: Database, key: str, value: str) -> None:
         """,
         (key, value, now_iso()),
     )
+    db.execute("ALTER TABLE press_reports ADD COLUMN IF NOT EXISTS top_story INTEGER NOT NULL DEFAULT 0")
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS press_reports_one_top_story_idx ON press_reports (top_story) WHERE top_story=1")
 
 
 def lottery_funding_snapshot(db: Database, settings: dict[str, Any] | None = None) -> dict[str, float]:
@@ -3795,10 +3811,12 @@ def lottery_funding_snapshot(db: Database, settings: dict[str, Any] | None = Non
     direct = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM myfaircroft_direct_payments")
     settled = one(db, "SELECT COALESCE(SUM(fine_amount),0) AS total FROM fine_settlement_items WHERE status='paid'")
     awarded = one(db, "SELECT COALESCE(SUM(payout_amount),0) AS total FROM lottery_draws WHERE status='completed'")
+    manual = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM lottery_fund_adjustments")
     fines = float(direct["total"] or 0) + float(settled["total"] or 0)
     market = float(settings["market_holding_balance"] or 0)
     paid = float(awarded["total"] or 0)
-    return {"fines": round(fines, 2), "market_fees": round(market, 2), "awarded": round(paid, 2), "available": round(max(0.0, fines + market - paid), 2)}
+    manual_total = float(manual["total"] or 0)
+    return {"fines": round(fines, 2), "market_fees": round(market, 2), "manual": round(manual_total, 2), "awarded": round(paid, 2), "available": round(max(0.0, fines + market + manual_total - paid), 2)}
 
 
 def lottery_next_draw_at(settings: dict[str, Any], after: dt.datetime | None = None) -> dt.datetime:
@@ -5092,6 +5110,7 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
             "background": str(row["background"] or "")[:6000],
             "public_impact": str(row["public_impact"] or "")[:4000],
             "verification_notes": str(row["verification_notes"] or "")[:4000],
+            "editorial_priority": "TOP_STORY" if bool(row.get("top_story")) else "STANDARD",
             "reporter": str(row["author_name"] or "")[:140],
             "filed_at": row["created_at"],
         }
@@ -5209,6 +5228,11 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
         "that they are allegations or pending matters and never present the accused as "
         "guilty. Do not report expunged records. Prioritize significant and recent events "
         "while using older records for historical context.\n\n"
+        "If exactly one FNN newsroom press report has editorial_priority TOP_STORY, it is the "
+        "newsroom's required lead-story assignment for this edition. Use that report as the primary "
+        "basis for the edition headline, deck, and lead_story while preserving attribution, uncertainty, "
+        "and all factual safeguards. Do not replace it with another source merely because another event "
+        "appears more recent. Supporting official records may provide verified context.\n\n"
         f"CAD_AFTER_ACTION_REPORTS:\n{json.dumps(source_reports, separators=(',', ':'), ensure_ascii=False)}\n\n"
         f"COURT_CITATIONS_AND_CRIMINAL_CHARGES:\n{json.dumps(source_court_records, separators=(',', ':'), ensure_ascii=False)}\n\n"
         f"COURT_APPEALS_EXPUNGEMENT_REQUESTS:\n{json.dumps(source_court_documents, separators=(',', ':'), ensure_ascii=False)}\n\n"
@@ -5333,6 +5357,7 @@ def generate_fnn_daily_edition(force: bool = False) -> dict[str, Any]:
                 f"UPDATE press_reports SET status = 'included', updated_at = ? WHERE id IN ({placeholders})",
                 (generated_at, *press_ids),
             )
+        db.execute("UPDATE press_reports SET top_story = 0, updated_at = ? WHERE top_story = 1", (generated_at,))
         if not created:
             created = one(db, "SELECT * FROM fnn_editions WHERE edition_date = ?", (edition_date,))
     return {"status": "published", "edition": public_fnn_edition(created)}
@@ -6060,6 +6085,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_market_ai_briefing(db, user)
                 elif path == "/api/dev-tools/lottery/settings" and method == "PATCH":
                     self.api_dev_lottery_settings(db, user)
+                elif path == "/api/dev-tools/lottery/funds" and method == "POST":
+                    self.api_dev_lottery_funds(db, user)
                 elif path.startswith("/api/dev-tools/lottery/entries/") and path.endswith("/review") and method == "PATCH":
                     self.api_dev_lottery_entry_review(db, user, self.path_int(path, 4))
                 elif path == "/api/dev-tools/lottery/draw" and method == "POST":
@@ -7048,7 +7075,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             """,
             (user["id"], int(has_any(user, "owner", "dev"))),
         )
-        self.send_json(200, {"reports": [dict(row) for row in rows], "can_admin_delete": admin_required(user) is None})
+        top_story = one(db, """SELECT r.id,r.report_number,r.headline,u.name AS author_name
+            FROM press_reports r JOIN users u ON u.id=r.author_id
+            WHERE r.top_story=1 ORDER BY r.updated_at DESC LIMIT 1""")
+        self.send_json(200, {
+            "reports": [dict(row) for row in rows],
+            "can_admin_delete": admin_required(user) is None,
+            "top_story_available": top_story is None,
+            "top_story_slot": dict(top_story) if top_story else None,
+        })
 
     def api_create_press_report(self, db: Database, user: DbRow | None) -> None:
         err = press_required(user)
@@ -7065,14 +7100,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         category = str(payload.get("category") or "community").strip().lower()[:40]
         if category not in ("breaking", "community", "public_safety", "justice", "business", "events", "government", "opinion"):
             category = "community"
+        wants_top_story = str(payload.get("top_story") or "").strip().lower() in ("1", "true", "yes", "on")
+        if wants_top_story and one(db, "SELECT id FROM press_reports WHERE top_story=1 LIMIT 1"):
+            self.error(409, "The Top Story slot is already reserved for this news cycle. It will reopen after the next edition publishes.")
+            return
         ts = now_iso()
         created = db.execute(
             """
             INSERT INTO press_reports
             (report_number, author_id, headline, category, location, event_at, people,
              organizations, facts, quotes, background, public_impact, verification_notes,
-             status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', ?, ?)
+             top_story, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', ?, ?)
             RETURNING id, report_number
             """,
             (
@@ -7087,6 +7126,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 str(payload.get("background") or "").strip()[:6000],
                 str(payload.get("public_impact") or "").strip()[:4000],
                 str(payload.get("verification_notes") or "").strip()[:4000],
+                int(wants_top_story),
                 ts, ts,
             ),
         ).fetchone()
@@ -7095,7 +7135,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             int(user["id"]),
             "press.report.submitted",
             int(user["id"]),
-            {"report_number": str(created["report_number"]), "headline": headline, "category": category},
+            {"report_number": str(created["report_number"]), "headline": headline, "category": category, "top_story": wants_top_story},
         )
         saved = one(
             db,
@@ -13164,6 +13204,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "funding": lottery_funding_snapshot(db, system_settings),
                     "draws": [dict(row) for row in all_rows(db, """SELECT d.*,u.name AS winner_name,u.civ_number AS winner_civ FROM lottery_draws d LEFT JOIN users u ON u.id=d.winner_user_id ORDER BY d.scheduled_at DESC LIMIT 30""")],
                     "entries": [dict(row) for row in all_rows(db, """SELECT e.*,u.name,u.civ_number,u.roles FROM lottery_entries e JOIN users u ON u.id=e.user_id ORDER BY e.created_at DESC LIMIT 250""")],
+                    "fund_adjustments": [dict(row) for row in all_rows(db, """SELECT a.*,u.name AS created_by_name FROM lottery_fund_adjustments a JOIN users u ON u.id=a.created_by ORDER BY a.created_at DESC LIMIT 100""")],
                 },
             },
         )
@@ -13662,6 +13703,25 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         }.items(): set_system_setting(db, key, value)
         ensure_lottery_draw(db, get_system_settings(db))
         self.send_json(200, {"ok": True})
+
+    def api_dev_lottery_funds(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        payload = self.read_json()
+        try:
+            amount = round(float(payload.get("amount") or 0), 2)
+        except (TypeError, ValueError):
+            amount = 0
+        reason = str(payload.get("reason") or "").strip()[:300]
+        if amount <= 0 or amount > 1000000000:
+            self.error(400, "Enter a lottery fund amount between $0.01 and $1,000,000,000."); return
+        if len(reason) < 5:
+            self.error(400, "Document why these funds are being added to the lottery."); return
+        db.execute("INSERT INTO lottery_fund_adjustments (amount,reason,created_by,created_at) VALUES (?,?,?,?)", (amount, reason, user["id"], now_iso()))
+        add_admin_audit(db, int(user["id"]), "lottery.funds.added", details={"amount": amount, "reason": reason})
+        self.send_json(200, {"ok": True, "amount": amount, "funding": lottery_funding_snapshot(db)})
 
     def api_dev_lottery_entry_review(self, db: Database, user: DbRow | None, entry_id: int | None) -> None:
         err = developer_required(user)
