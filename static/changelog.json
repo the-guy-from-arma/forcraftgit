@@ -6,6 +6,7 @@
       "version": "0.2.2",
       "title": "RP OS 0.2.2",
       "added": [
+        "Fixed vehicle migration account isolation by correlating imported vehicles only to the exact stable Arma identity linked to the authenticated Faircroft account; unresolved legacy imports remain quarantined until ownership is confirmed.",
         "Added Developer Tools Ravenhood promotional campaigns under Active Campaigns, with generated or custom codes, expiration windows, redemption inventories, pause and resume controls, and a permanent claimant audit ledger.",
         "Added resident Ravenhood promotional redemption for exchange buying power, a selected free security, or unique randomized starter portfolios containing 3, 5, or 9 active stocks, with automatic account creation and one claim per campaign.",
         "Added Ravenhood continuous market automation with configurable short-cycle volatility, bounded mixed gains and losses, automatic protection for developer-scheduled price programs, and a manual Volatility Cycle event control.",
@@ -120,6 +121,7 @@
         ,"Reworked System Changelog into a guided release-story experience with an animated chapter route, focused Added, Changed, Fixed, and Removed views, release-impact highlights, and progressive disclosure instead of one continuous ledger."
         ,"Restored the Faircroft local-involvement ordinance control directly inside Developer Tools ICE Settings while keeping it synchronized with MDT Settings."
         ,"Upgraded Leaderboards with animated competitive podiums, flame effects for leading placements, rank-progression meters, leader margins, and exact performance needed to advance to the next position."
+        ,"Added a persistent leaderboard progression layer with rank points, eight prestige divisions, promotion thresholds, a personal next-division track, and a points vault for redeeming bonus lottery entries or starter market shares; staff observer accounts remain excluded from competition without changing economy totals."
         ,"Rebuilt Faircroft Financial as a continuous personal-banking experience with persistent account navigation, checking activity, account actions, synchronized balance history, integrated credit insights, and a restrained institutional banking design."
         ,"Rebuilt Developer Tools Game Intelligence as a continuous live-economy operations screen with circulation concentration, funded-account coverage, identity-match rates, integrated financial rankings, and streamlined persistence ledgers driven by the FCRPMUSSALO mirror."
         ,"Rebuilt the Faircroft Lottery as a continuous 2026-style resident prize campaign with a prominent weekly-winnings billboard, live drawing countdown, streamlined full-width entry runway, open participation timeline, winner spotlight, and compact transparent prize funding without stacked widget cards."
@@ -163,6 +165,7 @@
         ,"Fixed the Developer Tools operations sidebar cutting off lower navigation entries by adding an independent height-aware navigation scroller while keeping staff identity controls anchored."
         ,"Fixed large changelog releases rendering every category as an overwhelming, uninterrupted list by introducing selectable chapters and compact release previews on desktop and mobile."
         ,"Fixed PC anti-cheat records being displayed as PlayStation by correcting the Arma PlatformKind mapping and replacing raw enum numbers with explicit platform names in new telemetry."
+        ,"Added an anti-cheat review acknowledgment layer: staff can clear the current review alert without deleting detection history, while higher flag counts or newly synchronized evidence automatically raises a fresh alert."
         ,"Fixed Ravenhood structural entrance animations and the inherited RP OS app container intermittently hiding the exchange header, navigation, instrument details, order entry, and portfolio controls behind oversized empty regions."
         ,"Stabilized the Ravenhood desktop, tablet, and mobile viewport with a bounded trading canvas, persistent structural panels, compact chart proportions, responsive order controls, and reliable workspace exit placement."
       ]
@@ -1898,7 +1901,8 @@
         "Fixed admin user page overload by moving account details and actions into a popup.",
         "Fixed role leakage where admin accounts were being treated like owner accounts for MDT/CID/LEO/judge access.",
         "Fixed panic alert workflow so owners can clear active panic hits.",
-        "Fixed mobile MDT layout collisions where navigation, watch panels, and form controls stacked into an unreadable phone view."
+        "Fixed mobile MDT layout collisions where navigation, watch panels, and form controls stacked into an unreadable phone view.",
+        "Added DMV credential enforcement: suspensions issue a fixed $2,500 MyFaircroft restoration fee, revoked credentials require a separate 30-question recovery examination, and restoration is blocked until the required path is complete."
       ],
       "removed": [
         "Removed the unlocked-home income summary card from the main screen.",

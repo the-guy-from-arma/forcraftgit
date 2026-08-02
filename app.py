@@ -1164,23 +1164,33 @@ def linked_game_vehicle_rows(db: Database, user_id: int) -> list[DbRow]:
     link = one(db, "SELECT identity_id, uid, rpl_identity FROM arma_account_links WHERE user_id = ?", (user_id,))
     if not link:
         return []
-    identifiers = [str(link.get(key) or "").strip() for key in ("identity_id", "uid", "rpl_identity")]
-    identifiers = [value for value in dict.fromkeys(identifiers) if len(value) >= 8]
-    if not identifiers:
+    # Vehicle ownership is correlated only by the stable Arma identity on the
+    # linked Faircroft account. UID/RPL values and display names are not safe
+    # ownership keys and can cross unrelated persistence records.
+    identity_id = str(link.get("identity_id") or "").strip()
+    if len(identity_id) < 8:
         return []
-    clauses: list[str] = []
-    params: list[str] = []
-    for identity in identifiers:
-        clauses.extend(["owner_identity = ?", "identity_values LIKE ?"])
-        params.extend([identity, f'%"{identity}"%'])
     return all_rows(
         db,
-        f"""SELECT record_id, title, prefab, record_status, summary_payload, raw_payload, source_modified_at
+        """SELECT record_id, title, prefab, record_status, summary_payload, raw_payload, source_modified_at
             FROM game_persistence_records
-            WHERE LOWER(category) = 'vehicles' AND ({" OR ".join(clauses)})
+            WHERE LOWER(category) = 'vehicles' AND owner_identity = ?
             ORDER BY source_modified_at DESC LIMIT 60""",
-        tuple(params),
+        (identity_id,),
     )
+
+
+def imported_vehicle_belongs_to_account(db: Database, user_id: int, vehicle: DbRow) -> bool:
+    """Keep unresolved legacy imports quarantined from resident accounts."""
+    if str(vehicle.get("source") or "") != "fcrpmussalo":
+        return True
+    link = one(db, "SELECT identity_id FROM arma_account_links WHERE user_id = ?", (user_id,))
+    identity_id = str(link.get("identity_id") or "").strip() if link else ""
+    record_id = str(vehicle.get("source_record_id") or "").strip()
+    if len(identity_id) < 8 or not record_id:
+        return False
+    return bool(one(db, """SELECT record_id FROM game_persistence_records
+        WHERE LOWER(category)='vehicles' AND record_id=? AND owner_identity=?""", (record_id, identity_id)))
 
 
 def imported_vehicle_details(row: DbRow) -> dict[str, Any]:
@@ -1479,6 +1489,41 @@ DRIVER_EXAM_QUESTIONS = (
     ("If involved in a collision, a driver should:", ("Leave before police arrive", "Stop, secure the scene, exchange information, and report as required", "Hide the vehicle", "Only call a friend"), "B"),
     ("A yellow center line generally separates:", ("Traffic moving in opposite directions", "Parking spaces", "Bicycle lanes only", "Traffic moving in the same direction"), "A"),
     ("During roleplay, why must a driver carry a license, registration, and insurance?", ("They are optional decorations", "They establish lawful driving and vehicle responsibility during a stop", "Only commercial drivers need them", "They replace vehicle plates"), "B"),
+)
+
+# Revoked credentials require a separate recovery assessment. The answer key is
+# never sent to the client; only the question and option text are exposed.
+DRIVER_LICENSE_RECOVERY_QUESTIONS = (
+    ("What is the safest first action when a traffic signal turns solid red?", ("Accelerate through", "Stop before the line", "Change lanes", "Sound the horn"), "B"),
+    ("A driver approaching a pedestrian in a marked crosswalk must:", ("Yield and stop when necessary", "Pass on the shoulder", "Continue if late", "Flash high beams and continue"), "A"),
+    ("What does a yield sign require?", ("Always stop for ten seconds", "Give right of way and stop if needed", "Speed up", "Ignore traffic from the left"), "B"),
+    ("When reversing a vehicle, the driver should:", ("Use mirrors only", "Look around the vehicle and move slowly", "Reverse at highway speed", "Open the door while moving"), "B"),
+    ("A safe following distance gives a driver time to:", ("Avoid using brakes", "React to changing traffic", "Drive on the shoulder", "Pass every vehicle"), "B"),
+    ("If an officer directs traffic differently from a signal, follow:", ("The signal only", "The officer's lawful direction", "The vehicle behind you", "The fastest lane"), "B"),
+    ("When driving in heavy rain, you should:", ("Increase speed", "Reduce speed and increase following distance", "Turn off headlights", "Use the shoulder"), "B"),
+    ("A vehicle's blind spot is:", ("An area not visible in mirrors", "The hood ornament", "The road behind a stop sign", "A parking meter"), "A"),
+    ("A turn signal should be used:", ("Only at night", "Before changing direction or lanes", "Only when another driver asks", "After the turn"), "B"),
+    ("What is the proper response to a tire blowout?", ("Brake hard and jerk the wheel", "Hold the wheel, ease off the accelerator, and slow gradually", "Accelerate", "Exit immediately while moving"), "B"),
+    ("A no-passing zone exists to:", ("Increase traffic speed", "Protect drivers where visibility or roadway conditions are limited", "Reserve lanes for buses", "Permit shoulder driving"), "B"),
+    ("Before opening a parked vehicle door, check for:", ("Approaching traffic and cyclists", "Only the fuel gauge", "The radio", "The rear seat"), "A"),
+    ("If your vehicle begins to skid, you should generally:", ("Steer smoothly in the direction of the skid and avoid panic braking", "Close your eyes", "Accelerate sharply", "Turn off the engine"), "A"),
+    ("A flashing red signal means:", ("Proceed without slowing", "Stop, then proceed when safe and legal", "Parking is required", "The road is closed"), "B"),
+    ("A flashing yellow signal means:", ("Stop and turn around", "Proceed carefully after yielding as required", "Ignore all pedestrians", "Drive on the sidewalk"), "B"),
+    ("When approaching a school or marked work zone, a driver should:", ("Obey the reduced speed and watch for people", "Pass stopped vehicles on the shoulder", "Use hazard lights to speed up", "Ignore temporary signs"), "A"),
+    ("A legal parking space must not:", ("Block a crosswalk, hydrant, or emergency access", "Have a curb", "Be near a building", "Be illuminated"), "A"),
+    ("If you miss your exit, the safest choice is to:", ("Stop and reverse", "Continue and use the next safe route", "Cross the median", "Make a sudden turn"), "B"),
+    ("A driver should yield to an emergency vehicle by:", ("Pulling safely to the side and stopping when possible", "Following it closely", "Blocking the intersection", "Turning off all lights"), "A"),
+    ("Vehicle registration primarily identifies:", ("The vehicle in the government record", "The driver's favorite route", "The officer's shift", "The weather"), "A"),
+    ("Insurance documentation demonstrates:", ("Financial responsibility for the vehicle", "A vehicle is always safe", "A driver may ignore signals", "A plate is unnecessary"), "A"),
+    ("If your license is suspended, you may drive:", ("Only when no officer is nearby", "Only after the suspension is lawfully cleared", "Whenever roads are empty", "With hazard lights"), "B"),
+    ("A driver who receives a citation should:", ("Review the instructions and meet the required deadline", "Destroy it", "Give it to another driver", "Ignore every court date"), "A"),
+    ("When entering a roundabout, yield to:", ("Traffic already circulating", "Vehicles behind you only", "Parked vehicles", "No one"), "A"),
+    ("A safe lane change requires:", ("Signal, mirror check, blind-spot check, and a safe gap", "A horn only", "A sudden swerve", "Stopping in the lane"), "A"),
+    ("A vehicle with unsafe equipment should be:", ("Operated until it breaks", "Repaired before normal operation", "Driven faster", "Hidden from inspection"), "B"),
+    ("If a collision causes injury, the driver should:", ("Call emergency services and remain at the scene as required", "Leave immediately", "Move an injured person without need", "Delete all information"), "A"),
+    ("During a lawful traffic stop, a driver should:", ("Keep hands visible and follow reasonable instructions", "Reach under the seat without notice", "Exit into traffic", "Drive away"), "A"),
+    ("The purpose of a speed limit is to:", ("Set a safe maximum for roadway conditions", "Guarantee no collision can occur", "Require every driver to match speed exactly", "Replace all other laws"), "A"),
+    ("A clean driving record is best maintained by:", ("Following traffic laws and resolving citations promptly", "Changing plates after every stop", "Avoiding insurance", "Ignoring vehicle maintenance"), "A"),
 )
 DEPARTMENT_POSTINGS = (
     {
@@ -1944,6 +1989,25 @@ def ensure_schema() -> None:
                 PRIMARY KEY (metric_key, subject_key, snapshot_day)
             );
 
+            CREATE TABLE IF NOT EXISTS leaderboard_progress (
+                user_id INTEGER PRIMARY KEY,
+                season_points INTEGER NOT NULL DEFAULT 0,
+                lifetime_points INTEGER NOT NULL DEFAULT 0,
+                redeemed_points INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS leaderboard_perk_redemptions (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                perk_type TEXT NOT NULL,
+                cost INTEGER NOT NULL,
+                reward_summary TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS citizenship_records (
                 user_id INTEGER PRIMARY KEY,
                 citizenship_status TEXT NOT NULL DEFAULT 'Undocumented',
@@ -2059,6 +2123,16 @@ def ensure_schema() -> None:
                 clear_reason TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS anticheat_flag_reviews (
+                player_uid TEXT PRIMARY KEY,
+                reviewed_teleport_flags INTEGER NOT NULL DEFAULT 0,
+                reviewed_aim_flags INTEGER NOT NULL DEFAULT 0,
+                reviewed_event_count INTEGER NOT NULL DEFAULT 0,
+                reviewed_by INTEGER,
+                reviewed_at TEXT NOT NULL,
+                FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS anticheat_sync_status (
@@ -3225,6 +3299,22 @@ def ensure_migrations(db: Database) -> None:
     )
     db.execute("ALTER TABLE dmv_driver_exam_attempts ADD COLUMN IF NOT EXISTS character_id INTEGER")
     db.execute("CREATE INDEX IF NOT EXISTS dmv_driver_exam_user_idx ON dmv_driver_exam_attempts (user_id, created_at DESC)")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dmv_license_recovery_exam_attempts (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            score INTEGER NOT NULL,
+            total INTEGER NOT NULL DEFAULT 30,
+            passed INTEGER NOT NULL DEFAULT 0,
+            answers_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute("ALTER TABLE dmv_license_recovery_exam_attempts ADD COLUMN IF NOT EXISTS character_id INTEGER")
+    db.execute("CREATE INDEX IF NOT EXISTS dmv_license_recovery_user_idx ON dmv_license_recovery_exam_attempts (user_id, created_at DESC)")
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_civ_number_unique ON users (civ_number)")
     for user in all_rows(db, "SELECT id FROM users WHERE civ_number IS NULL"):
         db.execute("UPDATE users SET civ_number = ? WHERE id = ?", (generate_civ_number(db), user["id"]))
@@ -3300,6 +3390,19 @@ def ensure_migrations(db: Database) -> None:
             clear_reason TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS anticheat_flag_reviews (
+            player_uid TEXT PRIMARY KEY,
+            reviewed_teleport_flags INTEGER NOT NULL DEFAULT 0,
+            reviewed_aim_flags INTEGER NOT NULL DEFAULT 0,
+            reviewed_event_count INTEGER NOT NULL DEFAULT 0,
+            reviewed_by INTEGER,
+            reviewed_at TEXT NOT NULL,
+            FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL
         )
         """
     )
@@ -4685,14 +4788,18 @@ CHARACTER_RECORD_TABLES: dict[str, tuple[str, str, str, str]] = {
 def unassigned_character_records(db: Database, user_id: int) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for record_type, (table, owner_column, label_expression, date_column) in CHARACTER_RECORD_TABLES.items():
-        rows = all_rows(
-            db,
-            f"""SELECT id, {label_expression} AS label, {date_column} AS record_date
+        if record_type == "vehicle":
+            rows = all_rows(db, """SELECT v.id, v.plate || ' - ' || v.vehicle_make || ' ' || v.vehicle_model AS label, v.created_at AS record_date
+                FROM dmv_vehicles v
+                LEFT JOIN arma_account_links l ON l.user_id=v.user_id
+                LEFT JOIN game_persistence_records p ON LOWER(p.category)='vehicles' AND p.record_id=v.source_record_id AND p.owner_identity=l.identity_id
+                WHERE v.user_id=? AND v.character_id IS NULL AND (v.source <> 'fcrpmussalo' OR p.record_id IS NOT NULL)
+                ORDER BY v.id""", (user_id,))
+        else:
+            rows = all_rows(db, f"""SELECT id, {label_expression} AS label, {date_column} AS record_date
                 FROM {table}
                 WHERE {owner_column} = ? AND character_id IS NULL
-                ORDER BY id""",
-            (user_id,),
-        )
+                ORDER BY id""", (user_id,))
         for row in rows:
             records.append(
                 {
@@ -6069,6 +6176,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_fnn(db, user)
                 elif path == "/api/leaderboards" and method == "GET":
                     self.api_leaderboards(db, user)
+                elif path == "/api/leaderboards/perks" and method == "POST":
+                    self.api_leaderboard_perk(db, user)
                 elif path == "/api/citizenship" and method == "GET":
                     self.api_citizenship(db, user)
                 elif path == "/api/citizenship/exam" and method == "POST":
@@ -6177,6 +6286,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dmv_apply_license(db, user)
                 elif path == "/api/dmv/driver-exam" and method == "POST":
                     self.api_dmv_driver_exam(db, user)
+                elif path == "/api/dmv/license-recovery-exam" and method == "POST":
+                    self.api_dmv_license_recovery_exam(db, user)
                 elif path == "/api/dmv/vehicles" and method == "POST":
                     self.api_dmv_register_vehicle(db, user)
                 elif path.startswith("/api/dmv/vehicles/") and path.endswith("/insurance") and method == "PATCH":
@@ -6317,6 +6428,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_download_package(user, "android")
                 elif path == "/api/dev-tools" and method == "GET":
                     self.api_dev_tools(db, user)
+                elif path.startswith("/api/dev-tools/anticheat/") and path.endswith("/review") and method == "POST":
+                    self.api_dev_review_anticheat_flags(db, user, path.split("/")[4])
                 elif path == "/api/dev-tools/experience" and method == "PATCH":
                     self.api_dev_update_experience(db, user)
                 elif path == "/api/dev-tools/beta-program" and method == "PATCH":
@@ -7396,6 +7509,83 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         public_safety = eligible(public_safety)
         role_time = {key: eligible(items) for key, items in role_time.items()}
         current_user_excluded = int(user["id"]) in staff_user_ids
+        ranked_boards = {
+            "wealth": ranked(wealth, "balance"),
+            "bank_growth": ranked([item for item in bank_growth if item["growth"] > 0], "growth"),
+            "playtime": ranked([item for item in telemetry if item["playtime_seconds"] > 0], "playtime_seconds"),
+            "monthly_activity": ranked(monthly_activity, "monthly_seconds"),
+            "current_session": ranked(current_sessions, "current_session_seconds"),
+            "deaths": ranked([item for item in telemetry if item["deaths"] > 0], "deaths"),
+            "kills": ranked([item for item in telemetry if item["kills"] > 0], "kills"),
+            "suicides": ranked([item for item in telemetry if item["suicides"] > 0], "suicides"),
+            "kd_ratio": ranked([item for item in telemetry if item["kills"] >= 5], "kd_ratio"),
+            "credit": ranked(credit, "score"),
+            "credit_improvement": ranked([item for item in credit_improvement if item["score_gain"] > 0], "score_gain"),
+            "reputation": ranked(reputation, "reputation_score"),
+            "vehicles": ranked(vehicle_owners, "vehicle_count"),
+            "citations_received": ranked(citations_received, "citation_count"),
+            "citations_issued": ranked(citations_issued, "citation_count"),
+            "arrests": ranked(arrests, "arrest_count"),
+            "most_wanted": ranked(most_wanted, "warrant_count"),
+            "court_victories": ranked(court_victories, "victory_count"),
+            "cases_filed": ranked(citations_issued, "citation_count"),
+            "reports_submitted": ranked(reports_submitted, "report_count"),
+            "press_reports": ranked(press_submitted, "report_count"),
+            "community_veteran": ranked(community_veterans, "member_days"),
+            "leo_hours": ranked(role_time["leo_hours"], "playtime_seconds"),
+            "fire_hours": ranked(role_time["fire_hours"], "playtime_seconds"),
+            "civ_hours": ranked(role_time["civ_hours"], "playtime_seconds"),
+            "clean_driver": ranked(clean_drivers, "compliant_vehicles"),
+            "public_safety_mvp": ranked(public_safety, "safety_score"),
+        }
+        point_totals: dict[int, int] = {}
+        for board_rows in ranked_boards.values():
+            for row in board_rows:
+                if not row.get("user_id"):
+                    continue
+                placement_points = max(25, 1000 - ((int(row["rank"]) - 1) * 35))
+                row["division_points"] = placement_points
+                point_totals[int(row["user_id"])] = point_totals.get(int(row["user_id"]), 0) + placement_points
+        existing_progress = {int(row["user_id"]): row for row in all_rows(db, "SELECT * FROM leaderboard_progress")}
+        for progress_user_id, earned in point_totals.items():
+            previous = existing_progress.get(progress_user_id)
+            redeemed_points = int(previous["redeemed_points"] or 0) if previous else 0
+            # Keep redeemed points spent.  Rebuilding the leaderboard must not
+            # refill a user's wallet from the raw placement total on every GET.
+            available_from_rank = max(0, int(earned) - redeemed_points)
+            season_points = max(int(previous["season_points"] or 0) if previous else 0, available_from_rank)
+            lifetime_points = max(int(previous["lifetime_points"] or 0) if previous else 0, int(earned))
+            db.execute("""INSERT INTO leaderboard_progress (user_id,season_points,lifetime_points,updated_at)
+                VALUES (?,?,?,?) ON CONFLICT (user_id) DO UPDATE SET season_points=EXCLUDED.season_points,
+                lifetime_points=EXCLUDED.lifetime_points,updated_at=EXCLUDED.updated_at""",
+                (progress_user_id, season_points, lifetime_points, now_iso()))
+        progress = one(db, "SELECT * FROM leaderboard_progress WHERE user_id=?", (user["id"],))
+        points = int(progress["season_points"] or 0) if progress else 0
+        lifetime_points = int(progress["lifetime_points"] or 0) if progress else points
+        tiers = [("Bronze", 0), ("Silver", 500), ("Gold", 1250), ("Platinum", 2500), ("Diamond", 5000), ("Master", 9000), ("Apex", 15000), ("Crown", 25000)]
+        current_tier = tiers[0]
+        next_tier = None
+        for tier in tiers:
+            if points >= tier[1]:
+                current_tier = tier
+            elif next_tier is None:
+                next_tier = tier
+        span = max(1, (next_tier[1] - current_tier[1]) if next_tier else 1)
+        tier_percent = 100 if not next_tier else max(0, min(100, round((points - current_tier[1]) / span * 100)))
+        progression = {
+            "points": points,
+            "lifetime_points": lifetime_points,
+            "redeemed_points": int(progress["redeemed_points"] or 0) if progress else 0,
+            "division": current_tier[0],
+            "next_division": next_tier[0] if next_tier else None,
+            "next_threshold": next_tier[1] if next_tier else points,
+            "progress_percent": tier_percent,
+            "ranked_boards": sum(1 for board_rows in ranked_boards.values() if any(int(row.get("user_id") or 0) == int(user["id"]) for row in board_rows)),
+            "perks": [
+                {"type": "lottery_entry", "cost": 250, "label": "Bonus lottery entry", "detail": "Add one verified chance to the next Faircroft drawing."},
+                {"type": "stock_share", "cost": 750, "label": "Starter stock share", "detail": "Receive one free share in the active Faircroft market."},
+            ],
+        }
         self.send_json(
             200,
             {
@@ -7408,35 +7598,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "staff_excluded": len(staff_user_ids),
                 },
                 "current_user_excluded": current_user_excluded,
-                "boards": {
-                    "wealth": ranked(wealth, "balance"),
-                    "bank_growth": ranked([item for item in bank_growth if item["growth"] > 0], "growth"),
-                    "playtime": ranked([item for item in telemetry if item["playtime_seconds"] > 0], "playtime_seconds"),
-                    "monthly_activity": ranked(monthly_activity, "monthly_seconds"),
-                    "current_session": ranked(current_sessions, "current_session_seconds"),
-                    "deaths": ranked([item for item in telemetry if item["deaths"] > 0], "deaths"),
-                    "kills": ranked([item for item in telemetry if item["kills"] > 0], "kills"),
-                    "suicides": ranked([item for item in telemetry if item["suicides"] > 0], "suicides"),
-                    "kd_ratio": ranked([item for item in telemetry if item["kills"] >= 5], "kd_ratio"),
-                    "credit": ranked(credit, "score"),
-                    "credit_improvement": ranked([item for item in credit_improvement if item["score_gain"] > 0], "score_gain"),
-                    "reputation": ranked(reputation, "reputation_score"),
-                    "vehicles": ranked(vehicle_owners, "vehicle_count"),
-                    "citations_received": ranked(citations_received, "citation_count"),
-                    "citations_issued": ranked(citations_issued, "citation_count"),
-                    "arrests": ranked(arrests, "arrest_count"),
-                    "most_wanted": ranked(most_wanted, "warrant_count"),
-                    "court_victories": ranked(court_victories, "victory_count"),
-                    "cases_filed": ranked(citations_issued, "citation_count"),
-                    "reports_submitted": ranked(reports_submitted, "report_count"),
-                    "press_reports": ranked(press_submitted, "report_count"),
-                    "community_veteran": ranked(community_veterans, "member_days"),
-                    "leo_hours": ranked(role_time["leo_hours"], "playtime_seconds"),
-                    "fire_hours": ranked(role_time["fire_hours"], "playtime_seconds"),
-                    "civ_hours": ranked(role_time["civ_hours"], "playtime_seconds"),
-                    "clean_driver": ranked(clean_drivers, "compliant_vehicles"),
-                    "public_safety_mvp": ranked(public_safety, "safety_score"),
-                },
+                "boards": ranked_boards,
+                "progression": progression,
                 "sources": {
                     "wealth": "FCRPMUSSALO live bank sync",
                     "bank_growth": "Bank snapshot history begins after deployment",
@@ -7468,6 +7631,67 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 },
             },
         )
+
+    def api_leaderboard_perk(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        if "staff" in roles_for(user):
+            self.error(403, "Staff observer accounts cannot redeem competitive perks.")
+            return
+        payload = self.read_json()
+        perk_type = str(payload.get("perk_type") or "").strip().lower()
+        perks = {
+            "lottery_entry": (250, "Bonus Faircroft Lottery entry"),
+            "stock_share": (750, "One free share in the active Faircroft market"),
+        }
+        if perk_type not in perks:
+            self.error(400, "Choose a valid leaderboard perk.")
+            return
+        cost, reward_label = perks[perk_type]
+        progress = one(db, "SELECT * FROM leaderboard_progress WHERE user_id=?", (user["id"],))
+        if not progress or int(progress["season_points"] or 0) < cost:
+            self.error(409, f"You need {cost:,} rank points for this perk.")
+            return
+        summary = reward_label
+        if perk_type == "lottery_entry":
+            settings = get_system_settings(db)
+            if not settings["lottery_enabled"]:
+                self.error(409, "Lottery entries are currently closed.")
+                return
+            excluded = sorted(set(roles_for(user)) & set(settings["lottery_excluded_roles"]))
+            if excluded:
+                self.error(403, "This account is excluded from lottery participation by role policy.")
+                return
+            draw = ensure_lottery_draw(db, settings)
+            today = utcnow().astimezone(ZoneInfo(settings["lottery_timezone"])).date().isoformat()
+            count = int(one(db, "SELECT COUNT(*) AS count FROM lottery_entries WHERE user_id=? AND entry_date=?", (user["id"], today))["count"] or 0)
+            weight = max([settings["lottery_role_weights"].get(role, 1.0) for role in roles_for(user)] or [1.0])
+            db.execute("INSERT INTO lottery_entries (draw_id,user_id,entry_date,entry_number,role_weight,created_at) VALUES (?,?,?,?,?,?)", (draw["id"], user["id"], today, count + 1, weight, now_iso()))
+            summary = f"Bonus lottery entry FC-{count + 1:02d}"
+        else:
+            security = one(db, "SELECT * FROM market_securities WHERE active<>0 ORDER BY id LIMIT 1")
+            if not security:
+                self.error(409, "No active market security is available for this perk.")
+                return
+            account = one(db, "SELECT * FROM market_accounts WHERE user_id=?", (user["id"],))
+            if not account:
+                ts = now_iso()
+                db.execute("INSERT INTO market_accounts (user_id,cash_balance,status,created_at,updated_at) VALUES (?,?,?,?,?)", (user["id"], 0, "active", ts, ts))
+                account = one(db, "SELECT * FROM market_accounts WHERE user_id=?", (user["id"],))
+            db.execute("""INSERT INTO market_holdings (account_id,security_id,quantity,average_cost) VALUES (?,?,?,0)
+                ON CONFLICT (account_id,security_id) DO UPDATE SET quantity=market_holdings.quantity+EXCLUDED.quantity""", (account["id"], security["id"], 1))
+            summary = f"1 share of {security['ticker']}"
+        updated = one(db, """UPDATE leaderboard_progress SET season_points=season_points-?, redeemed_points=redeemed_points+?, updated_at=?
+            WHERE user_id=? AND season_points>=? RETURNING season_points,redeemed_points""", (cost, cost, now_iso(), user["id"], cost))
+        if not updated:
+            self.error(409, "Your rank points changed. Refresh the leaderboard and try again.")
+            return
+        db.execute("INSERT INTO leaderboard_perk_redemptions (user_id,perk_type,cost,reward_summary,created_at) VALUES (?,?,?,?,?)", (user["id"], perk_type, cost, summary, now_iso()))
+        add_admin_audit(db, int(user["id"]), "leaderboard.perk.redeemed", int(user["id"]), {"perk": perk_type, "cost": cost, "reward": summary})
+        self.send_json(201, {"ok": True, "perk_type": perk_type, "reward_summary": summary, "points": int(updated["season_points"] or 0)})
 
     def api_generate_fnn(self, user: DbRow | None) -> None:
         if not user or not has_any(user, "owner", "dev"):
@@ -8037,6 +8261,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if owned.get("character_id") is not None:
             self.error(409, "This record is already assigned to a character")
             return
+        if record_type == "vehicle":
+            vehicle = one(db, "SELECT * FROM dmv_vehicles WHERE id=?", (record_id,))
+            if not vehicle or not imported_vehicle_belongs_to_account(db, int(user["id"]), vehicle):
+                self.error(403, "This imported vehicle is not verified against your linked Arma identity")
+                return
         db.execute(f"UPDATE {table} SET character_id = ? WHERE id = ?", (character["id"], record_id))
         add_admin_audit(
             db,
@@ -9289,11 +9518,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             record = one(db, "SELECT * FROM dmv_records WHERE user_id = ?", (user["id"],))
         sync_linked_vehicles_to_dmv(db, int(user["id"]))
         active_character = ensure_default_character(db, int(user["id"]), str(user["name"] or "Civilian"))
-        vehicles = all_rows(
+        vehicles = [row for row in all_rows(
             db,
             "SELECT * FROM dmv_vehicles WHERE user_id = ? AND character_id = ? ORDER BY created_at DESC",
             (user["id"], active_character["id"]),
-        )
+        ) if imported_vehicle_belongs_to_account(db, int(user["id"]), row)]
         game_vehicles: list[dict[str, Any]] = []
         for row in linked_game_vehicle_rows(db, int(user["id"])):
             item = dict(row)
@@ -9310,6 +9539,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         server_now = utcnow()
         exam_attempts = all_rows(db, "SELECT score, total, passed, created_at FROM dmv_driver_exam_attempts WHERE user_id = ? ORDER BY created_at DESC LIMIT 12", (user["id"],))
+        recovery_attempts = all_rows(db, "SELECT score, total, passed, created_at FROM dmv_license_recovery_exam_attempts WHERE user_id = ? ORDER BY created_at DESC LIMIT 12", (user["id"],))
         failures = 0
         for attempt in exam_attempts:
             if bool(attempt["passed"]):
@@ -9352,6 +9582,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "enabled": settings["autopilot_license_enabled"],
                     "minutes": approval_minutes,
                     "server_time": server_now.isoformat(),
+                },
+                "recovery_exam": {
+                    "questions": [[question, list(options)] for question, options, _answer in DRIVER_LICENSE_RECOVERY_QUESTIONS],
+                    "attempts": [dict(row) for row in recovery_attempts],
+                    "passing_score": 24,
+                    "total": len(DRIVER_LICENSE_RECOVERY_QUESTIONS),
+                    "required_status": "Revoked",
                 },
             },
         )
@@ -9412,6 +9649,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403 if user else 401, err)
             return
         assert user is not None
+        current_record = one(db, "SELECT license_status FROM dmv_records WHERE user_id = ?", (user["id"],))
+        current_status = str(current_record["license_status"] if current_record else "Exam Required")
+        if current_status == "Suspended":
+            self.error(409, "Your license is suspended. Pay the $2,500 suspension restoration fee in MyFaircroft before retesting.")
+            return
+        if current_status == "Revoked":
+            self.error(409, "Your license is revoked. Complete the 30-question recovery examination instead.")
+            return
         attempts = all_rows(db, "SELECT * FROM dmv_driver_exam_attempts WHERE user_id = ? ORDER BY created_at DESC LIMIT 12", (user["id"],))
         failures = 0
         for attempt in attempts:
@@ -9455,6 +9700,51 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             remaining = max(0, 3 - (failures + 1))
             add_message(db, user["id"], "Driver examination result", f"Score: {score}/10. A score of 8 is required. Attempts remaining before the 48-hour wait: {remaining}.")
         self.send_json(200, {"ok": True, "score": score, "total": 10, "passed": passed, "attempts_before_lock": max(0, 3 - (failures + (0 if passed else 1)))})
+
+    def api_dmv_license_recovery_exam(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        record = one(db, "SELECT license_status, license_class FROM dmv_records WHERE user_id = ?", (user["id"],))
+        if not record or str(record["license_status"]) != "Revoked":
+            self.error(409, "The recovery examination is available only for a revoked driver license.")
+            return
+        payload = self.read_json()
+        answers: dict[str, str] = {}
+        score = 0
+        letters = ("A", "B", "C", "D")
+        for index, (_question, _options, correct) in enumerate(DRIVER_LICENSE_RECOVERY_QUESTIONS, start=1):
+            answer = str(payload.get(f"q{index}") or "").upper().strip()
+            if answer not in letters:
+                self.error(400, f"Question {index} requires an answer")
+                return
+            answers[f"q{index}"] = answer
+            score += int(answer == correct)
+        passed = score >= 24
+        ts = now_iso()
+        active_character = ensure_default_character(db, int(user["id"]), str(user.get("name") or "Civilian"))
+        db.execute(
+            "INSERT INTO dmv_license_recovery_exam_attempts (user_id, character_id, score, total, passed, answers_json, created_at) VALUES (?, ?, ?, 30, ?, ?, ?)",
+            (user["id"], active_character["id"], score, int(passed), json.dumps(answers), ts),
+        )
+        if passed:
+            db.execute(
+                "UPDATE dmv_records SET license_status = 'Valid', action_notice_pending = 1, action_notice_reason = ?, action_notice_at = ?, updated_at = ? WHERE user_id = ?",
+                (f"30-question recovery examination passed with {score}/30.", ts, ts, user["id"]),
+            )
+            db.execute(
+                """INSERT INTO dmv_license_applications
+                   (user_id, application_type, license_class, legal_name, date_of_birth, notes, status, reviewer_notes, created_at, updated_at)
+                   VALUES (?, 'Revoked License Recovery Examination', ?, ?, '', ?, 'approved', ?, ?, ?)""",
+                (user["id"], record["license_class"], user["name"], f"Score {score}/30", "Automatically reissued after passing the Faircroft 30-question recovery examination.", ts, ts),
+            )
+            add_message(db, user["id"], "Driver license reissued", f"You passed the Faircroft revoked-license recovery examination with {score}/30. Your driver license is valid again.")
+        else:
+            add_message(db, user["id"], "Recovery examination result", f"Your revoked-license recovery score was {score}/30. A score of 24/30 is required to reissue the credential.")
+        add_admin_audit(db, int(user["id"]), "dmv.license.recovery_exam", int(user["id"]), {"score": score, "total": 30, "passed": passed})
+        self.send_json(200, {"ok": True, "score": score, "total": 30, "passing_score": 24, "passed": passed})
 
     def api_dmv_register_vehicle(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -13308,6 +13598,42 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("UPDATE beta_tasks SET active = ?, updated_at = ? WHERE id = ?", (active, now_iso(), task_id))
         self.send_json(200, {"ok": True})
 
+    def api_dev_review_anticheat_flags(self, db: Database, user: DbRow | None, player_uid: str) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        uid = str(player_uid or "").strip()[:160]
+        player = one(db, "SELECT uid, player_name, teleport_flags, aim_flags FROM anticheat_players WHERE uid = ?", (uid,))
+        if not player:
+            self.error(404, "Anti-cheat player was not found")
+            return
+        event_count = one(db, "SELECT COUNT(*) AS count FROM anticheat_events WHERE player_uid = ?", (uid,))
+        ts = now_iso()
+        db.execute(
+            """
+            INSERT INTO anticheat_flag_reviews
+                (player_uid, reviewed_teleport_flags, reviewed_aim_flags, reviewed_event_count, reviewed_by, reviewed_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT (player_uid) DO UPDATE SET
+                reviewed_teleport_flags = EXCLUDED.reviewed_teleport_flags,
+                reviewed_aim_flags = EXCLUDED.reviewed_aim_flags,
+                reviewed_event_count = EXCLUDED.reviewed_event_count,
+                reviewed_by = EXCLUDED.reviewed_by,
+                reviewed_at = EXCLUDED.reviewed_at
+            """,
+            (uid, int(player["teleport_flags"] or 0), int(player["aim_flags"] or 0), int(event_count["count"] if event_count else 0), user["id"], ts),
+        )
+        add_admin_audit(db, int(user["id"]), "anticheat.flags.reviewed", details={
+            "player_uid": uid,
+            "player_name": player.get("player_name") or "",
+            "teleport_flags": int(player["teleport_flags"] or 0),
+            "aim_flags": int(player["aim_flags"] or 0),
+            "event_count": int(event_count["count"] if event_count else 0),
+        })
+        self.send_json(200, {"ok": True, "player_uid": uid, "reviewed_at": ts})
+
     def api_dev_tools(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
         if err:
@@ -13516,6 +13842,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                    active_lock.id AS active_lock_id,
                    active_lock.reason AS active_lock_reason,
                    active_lock.grey_screened_at AS active_lock_at,
+                   COALESCE(flag_review.reviewed_teleport_flags, 0) AS reviewed_teleport_flags,
+                   COALESCE(flag_review.reviewed_aim_flags, 0) AS reviewed_aim_flags,
+                   COALESCE(flag_review.reviewed_event_count, 0) AS reviewed_event_count,
+                   flag_review.reviewed_at AS flags_reviewed_at,
                    COALESCE(alts.alt_group_count, 0) AS alt_group_count
             FROM anticheat_players p
             LEFT JOIN LATERAL (
@@ -13528,6 +13858,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 WHERE l.player_uid = p.uid AND l.cleared_at IS NULL
                 ORDER BY l.grey_screened_at DESC, l.id DESC LIMIT 1
             ) active_lock ON TRUE
+            LEFT JOIN anticheat_flag_reviews flag_review ON flag_review.player_uid = p.uid
             LEFT JOIN users account ON account.id = link.user_id
             LEFT JOIN (
                 SELECT uid, COUNT(*) AS alt_group_count
@@ -13546,6 +13877,24 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             ORDER BY e.event_time DESC, e.first_synced_at DESC LIMIT 500
             """,
         )
+        anticheat_event_counts = {
+            str(row["player_uid"]): int(row["count"] or 0)
+            for row in all_rows(db, "SELECT player_uid, COUNT(*) AS count FROM anticheat_events GROUP BY player_uid")
+        }
+        for player in anticheat_players:
+            uid = str(player.get("uid") or "")
+            event_count = anticheat_event_counts.get(uid, 0)
+            teleport_flags = int(player.get("teleport_flags") or 0)
+            aim_flags = int(player.get("aim_flags") or 0)
+            reviewed_teleport = int(player.get("reviewed_teleport_flags") or 0)
+            reviewed_aim = int(player.get("reviewed_aim_flags") or 0)
+            reviewed_events = int(player.get("reviewed_event_count") or 0)
+            new_signal_count = max(0, teleport_flags - reviewed_teleport) + max(0, aim_flags - reviewed_aim)
+            if event_count > reviewed_events:
+                new_signal_count += 1
+            player["anti_cheat_event_count"] = event_count
+            player["unreviewed_flag_count"] = new_signal_count
+            player["flags_reviewed"] = bool(player.get("flags_reviewed_at")) and new_signal_count == 0
         anticheat_alt_groups = all_rows(
             db, "SELECT * FROM anticheat_alt_groups ORDER BY last_seen DESC, group_key LIMIT 300"
         )
@@ -13566,10 +13915,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             """,
         )
         anticheat_online = sum(1 for row in anticheat_players if row.get("online"))
-        anticheat_flagged = sum(
-            1 for row in anticheat_players
-            if int(row.get("teleport_flags") or 0) + int(row.get("aim_flags") or 0) > 0
-        )
+        anticheat_flagged = sum(1 for row in anticheat_players if int(row.get("unreviewed_flag_count") or 0) > 0)
         anticheat_grey_screened = sum(
             1 for row in anticheat_players
             if int(row.get("grey_screened") or 0) or int(row.get("profile_locked") or 0) or row.get("active_lock_id")
@@ -14926,7 +15272,26 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         endorsements = [str(value) for value in raw_endorsements] if isinstance(raw_endorsements, list) else []
         endorsements = sorted({value for value in endorsements if value in endorsement_names})
         status = allowed[action]
+        if action == "suspend" and str(target["license_status"]) != "Valid":
+            self.error(409, "Only a valid driver license can be suspended.")
+            return
+        if action == "revoke" and str(target["license_status"]) == "Revoked":
+            self.error(409, "This driver license is already revoked.")
+            return
+        if action == "restore" and str(target["license_status"]) == "Revoked":
+            self.error(409, "A revoked license can only be reissued after the resident passes the 30-question recovery examination.")
+            return
+        if action == "restore" and str(target["license_status"]) == "Suspended":
+            unpaid_fee = one(
+                db,
+                "SELECT id, fine_amount FROM citations WHERE civ_id = ? AND charge_code = 'DMV-SUSPENSION' AND status NOT IN ('paid', 'dismissed') ORDER BY created_at DESC LIMIT 1",
+                (target_id,),
+            )
+            if unpaid_fee:
+                self.error(409, "The $2,500 suspension restoration fee must be paid in MyFaircroft before this license can be restored.")
+                return
         fee = 0.0
+        suspension_fee = 2500.0 if action == "suspend" else 0.0
         if action == "restore":
             try:
                 fee = round(max(0.0, min(1000000.0, float(payload.get("restoration_fee") or 0))), 2)
@@ -14948,6 +15313,32 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             ),
         )
         fee_case_id = None
+        suspension_fee_case_id = None
+        if action == "suspend":
+            charge = db.execute(
+                """INSERT INTO charge_catalog
+                   (code, title, category, description, fine_amount, points, severity, kind)
+                   VALUES ('DMV-SUSPENSION', 'Driver License Suspension Restoration Fee', 'DMV Administrative Fee',
+                           'Fixed fee required to restore a suspended Faircroft driver license.', 2500, 0, 'Administrative', 'citation')
+                   ON CONFLICT(code) DO UPDATE SET title = excluded.title, fine_amount = excluded.fine_amount
+                   RETURNING id"""
+            ).fetchone()
+            active_character = ensure_default_character(db, target_id, str(target["name"] or "Civilian"))
+            created_fee = db.execute(
+                """INSERT INTO citations
+                   (civ_id, officer_id, judge_id, charge_id, character_id, charge_code, charge_title, category,
+                    fine_amount, points, severity, location, narrative, status, court_date, judgment_notes,
+                    final_result, disposition, sentence_minutes, sentence_notes, minimum_sentence_minutes,
+                    maximum_sentence_minutes, decided_at, created_at, updated_at)
+                   VALUES (?, ?, NULL, ?, ?, 'DMV-SUSPENSION', 'Driver License Suspension Restoration Fee',
+                           'DMV Administrative Fee', 2500, 0, 'Administrative', 'Faircroft DMV', ?, 'issued', NULL, NULL,
+                           '', '', 0, '', 0, 0, NULL, ?, ?) RETURNING id""",
+                (
+                    target_id, user["id"], charge["id"], active_character["id"],
+                    reason or "Suspension restoration fee assessed by Faircroft DMV.", ts, ts,
+                ),
+            ).fetchone()
+            suspension_fee_case_id = int(created_fee["id"])
         if action == "restore":
             if fee > 0:
                 charge = db.execute(
@@ -14988,12 +15379,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             body += f" Reason: {reason}."
         if fee > 0:
             body += f" A ${fee:,.2f} restoration fee was submitted to Settlement Operations for the next manual midnight deduction."
+        if suspension_fee > 0:
+            body += " A fixed $2,500 suspension restoration fee is now due in MyFaircroft. Pay the fee before requesting license restoration."
         add_message(db, target_id, "Faircroft DMV credential update", body, int(user["id"]))
         add_admin_audit(
             db, int(user["id"]), f"dmv.license.{action}", target_id,
             {"status": status, "license_class": license_class, "endorsements": endorsements, "reason": reason, "restoration_fee": fee, "fee_case_id": fee_case_id},
         )
-        self.send_json(200, {"ok": True, "status": status, "restoration_fee": fee, "fee_case_id": fee_case_id})
+        self.send_json(200, {"ok": True, "status": status, "restoration_fee": fee, "fee_case_id": fee_case_id, "suspension_fee": suspension_fee, "suspension_fee_case_id": suspension_fee_case_id})
 
     def api_dev_update_press_member(self, db: Database, user: DbRow | None, member_id: int) -> None:
         err = developer_required(user)

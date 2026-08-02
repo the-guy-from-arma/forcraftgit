@@ -13484,6 +13484,7 @@ textarea:focus {
 .dmv-license-state.suspended,
 .dmv-license-state.expired { color: #f7c65e; background: rgba(245, 158, 11, .14); }
 .dmv-license-state.revoked { color: #ff7788; background: rgba(244, 63, 94, .14); }
+.dmv-license-state small { display: block; margin-top: 4px; color: currentColor; font-size: 8px; letter-spacing: .03em; line-height: 1.2; text-transform: none; opacity: .85; }
 .dmv-license-row fieldset { min-height: 42px; display: flex; flex-wrap: wrap; gap: 5px 12px; padding: 5px 8px; border: 1px solid #33414b; border-radius: 5px; }
 .dmv-license-row fieldset legend { padding: 0 4px; color: #87949e; font-size: 10px; }
 .dmv-license-row fieldset label { color: #b4c0c7; font-size: 11px; }
@@ -18911,3 +18912,25 @@ textarea:focus {
 .market-onboarding-actions{display:flex;justify-content:center;gap:12px;flex-wrap:wrap}
 @media(max-width:900px){.dev-promo-form{grid-template-columns:1fr 1fr}.dev-promo-ledger-head{display:none}.dev-promo-ledger article{grid-template-columns:1fr auto}.dev-promo-ledger article span:nth-child(2),.dev-promo-ledger article span:nth-child(3){grid-column:1}.dev-promo-redemptions{grid-template-columns:1fr}}
 @media(max-width:560px){.dev-promo-form{grid-template-columns:1fr}.dev-promo-command{padding:18px}.dev-promo-command>header{align-items:flex-start;flex-direction:column}}
+
+/* Promo issuer: a short, guided workflow instead of a dense settings grid. */
+.dev-promo-form [hidden]{display:none!important}
+.dev-promo-lanes{grid-column:1/-1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding-bottom:16px;border-bottom:1px solid #284147}
+.dev-promo-lanes button{display:flex;align-items:center;gap:12px;text-align:left;background:#09171a;border:1px solid #244047;border-radius:12px;padding:13px 14px;color:#dce9e8;cursor:pointer;transition:background .2s,border-color .2s,transform .2s}
+.dev-promo-lanes button:hover{transform:translateY(-1px);border-color:#39e6ad}
+.dev-promo-lanes button.active{background:linear-gradient(135deg,rgba(57,230,173,.18),rgba(28,110,107,.14));border-color:#39e6ad;box-shadow:0 0 0 1px rgba(57,230,173,.14)}
+.dev-promo-lanes button>b{color:#39e6ad;font-size:.72rem;letter-spacing:.08em}.dev-promo-lanes button>span{display:grid;gap:4px}
+.dev-promo-form label small,.dev-promo-lanes small{color:#789198;font-size:.72rem;line-height:1.35}
+@media(max-width:900px){.dev-promo-lanes{grid-template-columns:1fr}}
+
+/* Ranked progression layer — points, prestige, and rewards. */
+.lb8-progression{position:relative;display:grid;grid-template-columns:minmax(220px,.85fr) minmax(320px,1.45fr) minmax(280px,1.1fr);gap:0;margin:0 clamp(14px,4vw,58px);border-block:1px solid #27353c;background:linear-gradient(110deg,rgba(48,214,255,.05),rgba(255,201,76,.04) 48%,rgba(67,239,163,.04));overflow:hidden}
+.lb8-progression:before{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(105deg,transparent 35%,rgba(255,255,255,.035) 50%,transparent 65%);transform:translateX(-100%);animation:lb8ProgressSweep 7s ease-in-out infinite}
+.lb8-progression>div{position:relative;z-index:1;padding:22px 24px;border-right:1px solid #27353c}.lb8-progression>div:last-child{border-right:0}
+.lb8-progression small{display:block;color:#71838b;font-size:8px;font-weight:950;letter-spacing:.16em;text-transform:uppercase}.lb8-progression-core{display:grid;align-content:center;gap:8px}.lb8-progression-core>strong{font-size:31px;letter-spacing:-.05em}.lb8-progression-core>strong em{color:#788b92;font-size:9px;font-style:normal;letter-spacing:.12em}.lb8-progression-core>span{color:var(--rank);font-size:10px;font-weight:950;letter-spacing:.1em}.lb8-progression-core>i{height:7px;display:block;overflow:hidden;border-radius:99px;background:#202e35}.lb8-progression-core>i b{display:block;width:var(--progress);height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--rank),#fff1a8);box-shadow:0 0 14px var(--rank);animation:lb8ProgressIn 1s cubic-bezier(.2,.8,.2,1)}
+.lb8-prestige-path>div{display:grid;grid-template-columns:repeat(8,1fr);align-items:start;gap:4px;margin-top:15px}.lb8-prestige-path span{position:relative;display:grid;justify-items:center;gap:7px;color:#526269;text-align:center}.lb8-prestige-path span:before{content:"";position:absolute;top:14px;left:50%;right:-50%;height:1px;background:#2a3940}.lb8-prestige-path span:last-child:before{display:none}.lb8-prestige-path b{position:relative;z-index:1;width:29px;height:29px;display:grid;place-items:center;border:1px solid #33444b;border-radius:50%;background:#0a1115;font-size:11px}.lb8-prestige-path em{font-size:7px;font-style:normal;font-weight:950;letter-spacing:.08em}.lb8-prestige-path i{font-size:7px;font-style:normal;color:#5e7279}.lb8-prestige-path span.earned{color:var(--rank)}.lb8-prestige-path span.earned b{border-color:var(--rank);color:#0a1115;background:var(--rank);box-shadow:0 0 13px color-mix(in srgb,var(--rank) 38%,transparent)}.lb8-prestige-path span.earned:before{background:var(--rank)}
+.lb8-perk-vault>div{display:grid;gap:8px;margin-top:12px}.lb8-perk-vault button{display:flex;align-items:center;justify-content:space-between;gap:14px;width:100%;padding:11px 12px;border:1px solid #33444b;border-radius:8px;color:#eaf1f2;text-align:left;background:rgba(8,15,19,.78);cursor:pointer;transition:border-color .2s,transform .2s,background .2s}.lb8-perk-vault button:hover:not(:disabled){transform:translateX(3px);border-color:var(--rank);background:rgba(var(--rank-rgb),.08)}.lb8-perk-vault button:disabled{opacity:.42;cursor:not-allowed}.lb8-perk-vault button span{display:grid;gap:3px}.lb8-perk-vault button strong{font-size:11px}.lb8-perk-vault button em{color:#7d9097;font-size:8px;font-style:normal;line-height:1.35}.lb8-perk-vault button>b{flex:0 0 auto;color:var(--rank);font-size:9px;white-space:nowrap}
+@keyframes lb8ProgressSweep{0%,35%{transform:translateX(-100%)}65%,100%{transform:translateX(100%)}}@keyframes lb8ProgressIn{from{width:0}}
+@media(max-width:1050px){.lb8-progression{grid-template-columns:1fr 1fr}.lb8-progression>div:nth-child(2){border-right:0}.lb8-perk-vault{grid-column:1/-1;border-top:1px solid #27353c}}
+@media(max-width:650px){.lb8-progression{display:block;margin:0 14px}.lb8-progression>div{border-right:0;border-bottom:1px solid #27353c}.lb8-progression>div:last-child{border-bottom:0}.lb8-prestige-path>div{gap:2px}.lb8-prestige-path em{font-size:6px}.lb8-perk-vault button{padding:13px}}
+@media(prefers-reduced-motion:reduce){.lb8-progression:before,.lb8-progression-core>i b{animation:none}}

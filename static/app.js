@@ -1572,6 +1572,7 @@ function leaderboardIdentity(item) {
 
 function renderLeaderboards() {
   const data = state.cache.leaderboards || { boards: {}, summary: {}, sources: {} };
+  const progression = data.progression || {};
   const boardKey = LEADERBOARD_CONFIG[state.leaderboardTab] ? state.leaderboardTab : "wealth";
   const config = LEADERBOARD_CONFIG[boardKey];
   const rows = data.boards?.[boardKey] || [];
@@ -1597,6 +1598,7 @@ function renderLeaderboards() {
   const generatedTime = escapeHtml(data.generated_at ? new Date(data.generated_at).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}) : "syncing");
   const personalProgress = personal ? leaderboardProgress(boardKey, rows, personalIndex) : null;
   const rankTier = (rank) => rank === 1 ? ["CROWN", "crown"] : rank <= 3 ? ["APEX", "apex"] : rank <= 10 ? ["DIAMOND", "diamond"] : rank <= 20 ? ["PLATINUM", "platinum"] : ["CONTENDER", "contender"];
+  const prestigeTiers = [["BRONZE",0],["SILVER",500],["GOLD",1250],["PLATINUM",2500],["DIAMOND",5000],["MASTER",9000],["APEX",15000],["CROWN",25000]];
   const playerBadge = (item) => String(item?.name || "FC").split(/\s+/).map((part) => part[0] || "").join("").slice(0, 2).toUpperCase();
   return `<div class="leaderboard-command leaderboard-v8 ${config.accent}">
     <header class="lb8-season-hud">
@@ -1609,6 +1611,11 @@ function renderLeaderboards() {
       <nav class="lb8-events">${Object.entries(LEADERBOARD_CONFIG).filter(([,item])=>item.group===activeGroup).map(([key,item],index)=>`<button type="button" class="${boardKey===key?"active":""}" data-leaderboard-tab="${key}"><small>${String(index+1).padStart(2,"0")}</small><span>${escapeHtml(item.label)}</span></button>`).join("")}</nav>
     </div>
     ${data.current_user_excluded ? `<aside class="lb8-observer"><span>${iconSvg.shield}</span><div><strong>OBSERVER ACCESS</strong><small>Staff accounts can watch the live field but do not occupy public ranks.</small></div><b>NON-COMPETING</b></aside>` : ""}
+    ${!data.current_user_excluded ? `<section class="lb8-progression">
+      <div class="lb8-progression-core"><small>YOUR PRESTIGE TRACK</small><strong>${Number(progression.points||0).toLocaleString()} <em>RANK POINTS</em></strong><span>${escapeHtml(progression.division||"BRONZE")} DIVISION${progression.next_division?` · ${escapeHtml(progression.next_division)} IS NEXT`:` · HIGHEST DIVISION`}</span><i><b style="--progress:${Number(progression.progress_percent||0)}%"></b></i><small>${progression.next_division?`${Math.max(0,Number(progression.next_threshold||0)-Number(progression.points||0)).toLocaleString()} points to ${escapeHtml(progression.next_division)}`:"Season crown reached"}</small></div>
+      <div class="lb8-prestige-path"><small>THE CLIMB</small><div>${prestigeTiers.map(([label,threshold])=>`<span class="${Number(progression.points||0)>=threshold?"earned":""}"><b>${label.slice(0,1)}</b><em>${label}</em><i>${threshold.toLocaleString()}</i></span>`).join("")}</div></div>
+      <div class="lb8-perk-vault"><small>REDEEM YOUR MOMENTUM</small><div>${(progression.perks||[]).map(perk=>`<button type="button" data-leaderboard-perk="${escapeHtml(perk.type)}" ${Number(progression.points||0)<Number(perk.cost||0)?"disabled":""}><span><strong>${escapeHtml(perk.label)}</strong><em>${escapeHtml(perk.detail)}</em></span><b>${Number(perk.cost||0).toLocaleString()} pts</b></button>`).join("")}</div></div>
+    </section>` : ""}
     ${leader ? `<main class="lb8-arena">
       <section class="lb8-podium-zone">
         <header><div><small>LIVE CHAMPIONSHIP FIELD</small><h3>THE TOP THREE</h3></div><p>Verified records update the arena automatically.</p></header>
@@ -1746,6 +1753,17 @@ function bindLeaderboardWorkspace() {
     await loadAppData("leaderboards");
     render();
   });
+  $$('[data-leaderboard-perk]').forEach((button) => button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    if (!window.confirm("Redeem rank points for this perk? The points cannot be returned.")) return;
+    button.disabled = true;
+    try {
+      const result = await api("/api/leaderboards/perks", { method: "POST", body: { perk_type: button.dataset.leaderboardPerk } });
+      toast(`${result.reward_summary} unlocked`);
+      await loadAppData("leaderboards");
+      render();
+    } catch (error) { button.disabled = false; toast(error.message); }
+  }));
   $("[data-close-leaderboards]")?.addEventListener("click", async () => {
     state.activeApp = null;
     await loadSession();
@@ -2809,7 +2827,7 @@ function renderDmv() {
   if (!record) return `<div class="empty">DMV record loading</div>`;
   const vehicles = data.vehicles || [];
   const applications = data.license_applications || [];
-  const driverExam = data.driver_exam || { questions: [], attempts: [], consecutive_failures: 0, locked_until: "", passing_score: 8 };
+  const driverExam = { ...(data.driver_exam || { questions: [], attempts: [], consecutive_failures: 0, locked_until: "", passing_score: 8 }), recovery_exam: data.recovery_exam || { questions: [], attempts: [], passing_score: 24, total: 30 } };
   const gameVehicles = data.game_vehicles || [];
   const activeVehicle = vehicles[0] || record;
   const lockdown = isUpdateLockdown();
@@ -2910,6 +2928,24 @@ function characterSelectField(characters, name = "character_id", label = "Charac
 function renderDmvLicense(record, exam) {
   const lockedUntil = exam.locked_until ? new Date(exam.locked_until) : null;
   const locked = lockedUntil && lockedUntil > new Date();
+  const status = String(record.license_status || "Exam Required");
+  const recovery = exam.recovery_exam || state.cache.dmv?.recovery_exam || { questions: [], attempts: [], passing_score: 24, total: 30 };
+  const renderQuestions = (questions, formId, submitLabel) => `<form id="${formId}" class="dmv-driver-exam">${(questions || []).map(([question, options], index) => `<fieldset><legend><span>${String(index + 1).padStart(2, "0")}</span>${escapeHtml(question)}</legend><div>${options.map((option, optionIndex) => { const letter = String.fromCharCode(65 + optionIndex); return `<label><input type="radio" name="q${index + 1}" value="${letter}" required /><b>${letter}</b><span>${escapeHtml(option)}</span></label>`; }).join("")}</div></fieldset>`).join("")}<button class="primary" type="submit">${submitLabel}</button></form>`;
+  if (status === "Revoked") {
+    return `<div class="dmv-exam-center">
+      <section class="dmv-exam-intro dmv-recovery-intro"><div><p>REVOKED CREDENTIAL RECOVERY</p><h3>Faircroft Driver Reinstatement</h3><span>A revoked credential requires a new 30-question assessment. Score ${Number(recovery.passing_score || 24)}/${Number(recovery.total || 30)} to reissue your license.</span></div><strong>30 QUESTIONS</strong></section>
+      <div class="dmv-revoked-notice"><span>!</span><div><strong>License revoked</strong><p>Your previous credential remains in the DMV and NCIC history. Passing this recovery assessment creates a new valid credential.</p></div></div>
+      ${renderQuestions(recovery.questions, "dmvLicenseRecoveryExamForm", "Submit recovery examination")}
+      <section class="dmv-attempt-ledger"><header><span>RECOVERY EXAM HISTORY</span><strong>${(recovery.attempts || []).length} attempts</strong></header>${(recovery.attempts || []).map((item) => `<div><time>${new Date(item.created_at).toLocaleString()}</time><strong>${item.score}/${item.total}</strong><span class="${item.passed ? "valid" : "failed"}">${item.passed ? "PASSED" : "NOT PASSED"}</span></div>`).join("") || `<p>No recovery attempts recorded.</p>`}</section>
+    </div>`;
+  }
+  if (status === "Suspended") {
+    return `<div class="dmv-exam-center">
+      <section class="dmv-exam-intro dmv-suspended-intro"><div><p>DRIVING PRIVILEGE SUSPENDED</p><h3>Restore your Faircroft credential</h3><span>Pay the fixed $2,500 suspension restoration fee in MyFaircroft. DMV restoration is available after the payment is recorded.</span></div><strong>$2,500 DUE</strong></section>
+      <div class="dmv-suspension-payment-gate"><span>$</span><div><strong>Payment required before restoration</strong><p>Open MyFaircroft, select the DMV suspension fee, and complete the four-digit receipt PIN payment flow. This page will update after the payment clears.</p></div><button class="primary" type="button" data-open-myfaircroft>Open MyFaircroft</button></div>
+      <section class="dmv-attempt-ledger"><header><span>LICENSE STATUS</span><strong>Suspended</strong></header><p>Your driver examination is temporarily unavailable while the suspension fee remains outstanding.</p></section>
+    </div>`;
+  }
   return `
     <div class="dmv-exam-center">
       <section class="dmv-exam-intro"><div><p>CLASS D KNOWLEDGE EXAMINATION</p><h3>Faircroft Driver Certification</h3><span>Ten RP driving questions · 8 correct required · license issued immediately on passing</span></div><strong>${Number(exam.consecutive_failures || 0)} / 3 FAILS</strong></section>
@@ -2996,6 +3032,12 @@ function setupDmvCountdown() {
 function bindDmv() {
   $$("[data-dmv-tab]").forEach((button) => button.addEventListener("click", () => {
     state.dmvTab = button.dataset.dmvTab;
+    render();
+  }));
+  $$("[data-open-myfaircroft]").forEach((button) => button.addEventListener("click", async () => {
+    state.activeApp = "my-faircroft";
+    state.myFaircroftTab = "fines";
+    await loadAppData("my-faircroft");
     render();
   }));
   setupDmvCountdown();
@@ -10163,12 +10205,12 @@ function renderDevDmvSettings(dmv) {
           const search = `${record.name} ${record.civ_number || ""} ${record.license_status} ${record.license_class}`.toLowerCase();
           return `<form class="dmv-license-row" data-dmv-license-form="${record.user_id}" data-dmv-search="${escapeHtml(search)}">
             <div class="dmv-license-identity"><strong>${escapeHtml(record.name)}</strong><span>CIV ${escapeHtml(record.civ_number || "pending")} · ${escapeHtml(record.email || "")}</span></div>
-            <span class="dmv-license-state ${String(record.license_status || "").toLowerCase()}">${escapeHtml(record.license_status)}</span>
+            <span class="dmv-license-state ${String(record.license_status || "").toLowerCase()}">${escapeHtml(record.license_status)}${record.license_status === "Suspended" ? `<small>$2,500 restoration fee due</small>` : record.license_status === "Revoked" ? `<small>30-question recovery exam</small>` : ""}</span>
             <label>Primary class<select name="license_class">${primaryClasses.map((item) => `<option value="${escapeHtml(item.name)}" ${item.name === record.license_class ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label>
             <fieldset><legend>Endorsements</legend>${endorsements.map((item) => `<label><input type="checkbox" name="endorsements" value="${escapeHtml(item.name)}" ${assigned.includes(item.name) ? "checked" : ""} /> ${escapeHtml(item.name)}</label>`).join("") || `<small>No active endorsements</small>`}</fieldset>
             <label>Administrative reason<input name="reason" maxlength="1000" placeholder="Required for status actions" /></label>
             <label>Restoration fee<input name="restoration_fee" type="number" min="0" max="1000000" step="0.01" value="0" /></label>
-            <div class="dmv-license-actions"><button class="secondary" name="action" value="update">Save details</button><button class="secondary" name="action" value="suspend">Suspend</button><button class="danger" name="action" value="revoke">Revoke</button><button class="secondary" name="action" value="expire">Expire</button><button class="primary" name="action" value="restore">Restore</button></div>
+            <div class="dmv-license-actions"><button class="secondary" name="action" value="update">Save details</button><button class="secondary" name="action" value="suspend" ${record.license_status !== "Valid" ? "disabled" : ""}>Suspend · $2,500 fee</button><button class="danger" name="action" value="revoke" ${record.license_status === "Revoked" ? "disabled" : ""}>Revoke</button><button class="secondary" name="action" value="expire" ${record.license_status === "Revoked" ? "disabled" : ""}>Expire</button><button class="primary" name="action" value="restore" ${record.license_status === "Revoked" ? "disabled" : ""}>${record.license_status === "Suspended" ? "Restore after payment" : "Restore"}</button></div>
           </form>`;
         }).join("") || `<div class="empty">No DMV license records</div>`}
       </div>
@@ -10368,16 +10410,21 @@ function renderDevTools() {
       <section class="dev-card dev-promo-command">
         <header><div><span>RAVENHOOD ACQUISITION</span><h2>Portfolio promotional codes</h2><p>Launch controlled resident rewards for buying power, a selected security, or a randomized starter portfolio.</p></div><strong>${promotions.filter(x=>x.active).length} ACTIVE</strong></header>
         <form id="devMarketPromoForm" class="dev-promo-form">
-          <label>Campaign name<input name="campaign_name" maxlength="120" placeholder="New resident portfolio launch" required /></label>
-          <label>Custom code (optional)<input name="custom_code" maxlength="32" placeholder="Generated automatically when blank" /></label>
-          <label>Reward<select name="reward_type" data-promo-reward-type><option value="cash">Ravenhood buying power</option><option value="stock">Selected free stock</option><option value="random_bundle">Random starter portfolio</option></select></label>
-          <label data-promo-cash>Buying power<input name="cash_amount" type="number" min="0.01" step="0.01" value="5000" /></label>
+          <div class="dev-promo-lanes" role="group" aria-label="Promotion reward type">
+            <button type="button" class="active" data-promo-lane="cash"><b>01</b><span><strong>Cash drop</strong><small>Buying power added to Ravenhood</small></span></button>
+            <button type="button" data-promo-lane="stock"><b>02</b><span><strong>Free stock</strong><small>Give one security and shares</small></span></button>
+            <button type="button" data-promo-lane="random_bundle"><b>03</b><span><strong>Starter portfolio</strong><small>Give a random 3, 5, or 9-stock bundle</small></span></button>
+          </div>
+          <input type="hidden" name="reward_type" data-promo-reward-type value="cash" />
+          <label>Promotion name<input name="campaign_name" maxlength="120" placeholder="New resident portfolio launch" required /><small>Internal name shown in the redemption ledger.</small></label>
+          <label>Code to issue<input name="custom_code" maxlength="32" placeholder="Leave blank to generate securely" /><small>Optional. Codes are uppercase and single-use per resident.</small></label>
+          <label class="promo-reward-field" data-promo-cash>Buying power<input name="cash_amount" type="number" min="0.01" step="0.01" value="5000" /><small>Ravenhood cash credited instantly on redemption.</small></label>
           <label data-promo-stock hidden>Security<select name="ticker">${(market.securities||[]).filter(x=>x.active).map(x=>`<option value="${escapeHtml(x.ticker)}">${escapeHtml(x.ticker)} · ${escapeHtml(x.name)}</option>`).join("")}</select></label>
-          <label data-promo-shares hidden>Shares per security<input name="share_quantity" type="number" min="0.000001" step="0.000001" value="1" /></label>
-          <label data-promo-bundle hidden>Starter portfolio size<select name="bundle_size"><option value="3">3 random stocks</option><option value="5">5 random stocks</option><option value="9">9 random stocks</option></select></label>
-          <label>Redemption inventory<input name="max_redemptions" type="number" min="1" max="100000" value="100" required /></label>
-          <label>Expires after days<input name="expiry_days" type="number" min="1" max="365" value="30" required /></label>
-          <button class="primary" type="submit">Generate promotional code</button>
+          <label data-promo-shares hidden>Shares per security<input name="share_quantity" type="number" min="0.000001" step="0.000001" value="1" /><small>Quantity granted for each selected security.</small></label>
+          <label data-promo-bundle hidden>Starter portfolio size<select name="bundle_size"><option value="3">3 random stocks</option><option value="5">5 random stocks</option><option value="9">9 random stocks</option></select><small>Randomized from the active market directory.</small></label>
+          <label>Redemption limit<input name="max_redemptions" type="number" min="1" max="100000" value="100" required /><small>How many residents may claim it.</small></label>
+          <label>Expires after (days)<input name="expiry_days" type="number" min="1" max="365" value="30" required /><small>Set the claim window before issuing.</small></label>
+          <button class="primary" type="submit">Issue this promotion</button>
         </form>
         ${state.generatedMarketPromo ? `<div class="dev-generated-code"><span>COPY THIS CODE NOW · SHOWN ONCE</span><strong>${escapeHtml(state.generatedMarketPromo.code)}</strong><small>${escapeHtml(state.generatedMarketPromo.campaign_name)} · expires ${escapeHtml(state.generatedMarketPromo.expires_at)}</small></div>` : ""}
         <div class="dev-promo-ledger"><div class="dev-promo-ledger-head"><span>Campaign</span><span>Reward</span><span>Claims</span><span>Control</span></div>${promotions.map(p=>`<article><span><strong>${escapeHtml(p.campaign_name)}</strong><small>••••-${escapeHtml(p.code_hint)} · ${escapeHtml(p.created_by_name)}</small></span><span>${p.reward_type==="cash"?money(p.cash_amount):p.reward_type==="stock"?`${Number(p.share_quantity)} ${escapeHtml(p.ticker||"")}`:`${p.bundle_size} random stocks × ${Number(p.share_quantity)}`}</span><span><strong>${Number(p.redemption_count)}/${Number(p.max_redemptions)}</strong><small>expires ${escapeHtml(String(p.expires_at||"Never").slice(0,10))}</small></span><button class="${p.active?"danger":"secondary"}" data-market-promo-status="${p.id}" data-active="${p.active?0:1}">${p.active?"Pause":"Resume"}</button></article>`).join("")||`<div class="empty">No Ravenhood promotions issued.</div>`}</div>
@@ -10706,8 +10753,8 @@ function renderDevAntiCheat(data) {
           <span class="anticheat-presence ${player.online ? "online" : ""}"></span>
           <div class="anticheat-player-id"><strong>${escapeHtml(player.player_name || "Unknown player")}</strong><small>${escapeHtml(player.uid)}</small></div>
           <div><span>${player.linked_user_id ? escapeHtml(player.account_name || "Linked account") : "No CAD link"}</span><small>${player.civ_number ? `CIV ${escapeHtml(player.civ_number)}` : "Bohemia UID unmatched"}</small></div>
-          <div><span>${Number(player.ticket_count || 0)} tickets</span><small>${flags} detection flags</small></div>
-          <div><span class="dev-record-status ${player.online ? "verified" : "closed"}">${player.online ? "Live" : "Offline"}</span>${player.active_lock_id || Number(player.grey_screened || 0) || Number(player.profile_locked || 0) ? `<span class="dev-record-status alert">grey screen</span>` : ""}<span class="dev-platform-mini">${platform.asset ? `<img src="${escapeHtml(platform.asset)}" alt="" />` : `<b>${escapeHtml(platform.mark)}</b>`}<span>${escapeHtml(platform.label)}</span></span>${Number(player.alt_group_count || 0) ? `<span class="dev-record-status alert">${Number(player.alt_group_count)} alt group</span>` : ""}<i>›</i></div>
+          <div><span>${Number(player.ticket_count || 0)} tickets</span><small>${flags} detection flags${Number(player.unreviewed_flag_count || 0) ? ` · ${Number(player.unreviewed_flag_count)} new` : ""}</small></div>
+          <div><span class="dev-record-status ${player.online ? "verified" : "closed"}">${player.online ? "Live" : "Offline"}</span>${Number(player.unreviewed_flag_count || 0) ? `<span class="dev-record-status alert">review required</span>` : ""}${player.active_lock_id || Number(player.grey_screened || 0) || Number(player.profile_locked || 0) ? `<span class="dev-record-status alert">grey screen</span>` : ""}<span class="dev-platform-mini">${platform.asset ? `<img src="${escapeHtml(platform.asset)}" alt="" />` : `<b>${escapeHtml(platform.mark)}</b>`}<span>${escapeHtml(platform.label)}</span></span>${Number(player.alt_group_count || 0) ? `<span class="dev-record-status alert">${Number(player.alt_group_count)} alt group</span>` : ""}<i>›</i></div>
         </button>`;
       }).join("") || `<div class="empty">No anti-cheat players match this search.</div>`}</div>
       <footer class="anticheat-directory-footer">
@@ -10751,7 +10798,7 @@ function renderAntiCheatMetricModal(data, metric) {
   const [title, subtitle] = definitions[metric] || definitions.players;
   let records = [];
   if (metric === "online") records = players.filter((player) => player.online);
-  else if (metric === "flagged") records = players.filter((player) => Number(player.teleport_flags || 0) + Number(player.aim_flags || 0) > 0);
+  else if (metric === "flagged") records = players.filter((player) => Number(player.unreviewed_flag_count || 0) > 0);
   else if (metric === "grey") records = players.filter((player) => player.active_lock_id || Number(player.grey_screened || 0) || Number(player.profile_locked || 0));
   else if (metric === "locks") records = (data.profile_locks || []).filter((lock) => !lock.cleared_at);
   else if (metric === "events") records = data.events || [];
@@ -11062,6 +11109,18 @@ function bindDevWorkspace() {
       button.textContent = "Clear old imported vehicles";
     }
   });
+  $("#dmvLicenseRecoveryExamForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const result = await api("/api/dmv/license-recovery-exam", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast(result.passed ? `Recovery exam passed ${result.score}/30 — license reissued` : `Recovery exam score ${result.score}/30 — 24 required`);
+      await loadAppData("dmv");
+      await loadSession();
+      render();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
   $$("[data-delete-cad-report]").forEach((button) => button.addEventListener("click", async () => {
     const reportNumber = button.dataset.reportNumber || "this report";
     if (!window.confirm(`Permanently delete after-action report ${reportNumber}? This administrative action will be audited.`)) return;
@@ -11133,7 +11192,7 @@ function bindDevWorkspace() {
         method: "PATCH",
         body: { action, license_class: formData.get("license_class"), endorsements: formData.getAll("endorsements"), reason: formData.get("reason"), restoration_fee: formData.get("restoration_fee") },
       });
-      toast(result.restoration_fee > 0 ? `License restored; ${money(result.restoration_fee)} queued for Settlement Operations` : `DMV license ${action} complete`);
+      toast(result.suspension_fee > 0 ? `License suspended; ${money(result.suspension_fee)} restoration fee issued in MyFaircroft` : result.restoration_fee > 0 ? `License restored; ${money(result.restoration_fee)} queued for Settlement Operations` : `DMV license ${action} complete`);
       await refreshDevTools();
     } catch (error) { toast(error.message); }
   }));
@@ -11163,6 +11222,19 @@ function bindDevWorkspace() {
     state.devAntiCheatUid = button.dataset.anticheatPlayer;
     state.devAntiCheatMetric = null;
     render();
+  }));
+  $$("[data-anticheat-review]").forEach((button) => button.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    if (!window.confirm("Clear this review alert? The detection history and profile flags will remain available.")) return;
+    button.disabled = true;
+    try {
+      await api("/api/dev-tools/anticheat/" + encodeURIComponent(button.dataset.anticheatReview) + "/review", { method: "POST" });
+      toast("Review alert cleared; detection history preserved");
+      await refreshDevTools();
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message);
+    }
   }));
   $$("[data-anticheat-metric]").forEach((button) => button.addEventListener("click", () => {
     state.devAntiCheatMetric = button.dataset.anticheatMetric;
@@ -11253,6 +11325,7 @@ function renderAntiCheatModal(data, uid) {
   const isLocked = player.active_lock_id || Number(player.grey_screened || 0) || Number(player.profile_locked || 0);
   const platform = devPlatformIdentity(player.detected_system);
   const riskSignals = Number(player.teleport_flags || 0) + Number(player.aim_flags || 0);
+  const unreviewedFlags = Number(player.unreviewed_flag_count || 0);
   return `<div class="dev-profile-backdrop" data-close-anticheat>
     <section class="dev-profile-modal anticheat-profile anticheat-dossier" role="dialog" aria-modal="true" aria-label="Anti-cheat intelligence dossier">
       <header class="anticheat-dossier-head">
@@ -11261,7 +11334,8 @@ function renderAntiCheatModal(data, uid) {
           <div><p class="eyebrow">TBS / Anti-Cheat Intelligence</p><h2>${escapeHtml(player.player_name || "Unknown player")}</h2><code>${escapeHtml(player.uid)}</code></div>
         </div>
         <div class="anticheat-dossier-actions">
-          <span class="anticheat-clearance ${isLocked || riskSignals ? "review" : "clear"}"><i></i>${isLocked ? "Locked" : riskSignals ? "Review required" : "No active threat"}</span>
+          <span class="anticheat-clearance ${isLocked || unreviewedFlags ? "review" : "clear"}"><i></i>${isLocked ? "Locked" : unreviewedFlags ? "Review required" : riskSignals ? "Reviewed" : "No active threat"}</span>
+          ${unreviewedFlags && !isLocked ? `<button class="secondary" type="button" data-anticheat-review="${escapeHtml(player.uid)}">Clear review alert</button>` : ""}
           ${player.linked_user_id ? `<button class="danger" data-dev-enforce="${player.linked_user_id}">Open enforcement</button>` : ""}
           <button class="secondary" data-close-anticheat>Close</button>
         </div>
@@ -11281,10 +11355,10 @@ function renderAntiCheatModal(data, uid) {
           </dl>
         </section>
         <section class="anticheat-telemetry-ledger">
-          <header><div><p class="eyebrow">Telemetry assessment</p><h3>Recorded signals</h3></div><span>${riskSignals ? `${riskSignals} FLAG${riskSignals === 1 ? "" : "S"}` : "CLEAR"}</span></header>
+          <header><div><p class="eyebrow">Telemetry assessment</p><h3>Recorded signals</h3></div><span>${unreviewedFlags ? `${unreviewedFlags} NEW` : riskSignals ? `${riskSignals} REVIEWED` : "CLEAR"}</span></header>
           <div class="anticheat-ledger-row head"><span>Signal</span><span>Value</span><span>Assessment</span></div>
-          <div class="anticheat-ledger-row"><strong>Teleport detection</strong><b>${Number(player.teleport_flags || 0)}</b><span>${Number(player.teleport_flags || 0) ? "Requires evidence review" : "No detection"}</span></div>
-          <div class="anticheat-ledger-row"><strong>Aim detection</strong><b>${Number(player.aim_flags || 0)}</b><span>${Number(player.aim_flags || 0) ? "Requires evidence review" : "No detection"}</span></div>
+          <div class="anticheat-ledger-row"><strong>Teleport detection</strong><b>${Number(player.teleport_flags || 0)}</b><span>${Number(player.teleport_flags || 0) ? (Number(player.unreviewed_flag_count || 0) ? "New evidence requires review" : "Reviewed · retained in profile") : "No detection"}</span></div>
+          <div class="anticheat-ledger-row"><strong>Aim detection</strong><b>${Number(player.aim_flags || 0)}</b><span>${Number(player.aim_flags || 0) ? (Number(player.unreviewed_flag_count || 0) ? "New evidence requires review" : "Reviewed · retained in profile") : "No detection"}</span></div>
           <div class="anticheat-ledger-row"><strong>Issued tickets</strong><b>${Number(player.ticket_count || 0)}</b><span>Administrative history</span></div>
           <div class="anticheat-ledger-row"><strong>Last anti-cheat sighting</strong><b class="text">${escapeHtml(player.last_seen_at || "Not observed")}</b><span>Game telemetry</span></div>
           <div class="anticheat-ledger-row"><strong>Last database sync</strong><b class="text">${escapeHtml(player.last_synced_at || "Not synced")}</b><span>Persistence index</span></div>
@@ -11674,7 +11748,9 @@ function bindDevTools() {
   });
   const promoReward = $("[data-promo-reward-type]");
   const syncPromoFields = () => { const type=promoReward?.value; if($("[data-promo-cash]")) $("[data-promo-cash]").hidden=type!=="cash"; if($("[data-promo-stock]")) $("[data-promo-stock]").hidden=type!=="stock"; if($("[data-promo-shares]")) $("[data-promo-shares]").hidden=!(["stock","random_bundle"].includes(type)); if($("[data-promo-bundle]")) $("[data-promo-bundle]").hidden=type!=="random_bundle"; };
-  promoReward?.addEventListener("change", syncPromoFields); syncPromoFields();
+  promoReward?.addEventListener("change", syncPromoFields);
+  $$('[data-promo-lane]').forEach(button=>button.addEventListener('click',()=>{ if(promoReward) promoReward.value=button.dataset.promoLane; $$('[data-promo-lane]').forEach(item=>item.classList.toggle('active',item===button)); syncPromoFields(); }));
+  syncPromoFields();
   $("#devMarketPromoForm")?.addEventListener("submit", async event => { event.preventDefault(); try { state.generatedMarketPromo=await api("/api/dev-tools/market/promotions",{method:"POST",body:Object.fromEntries(new FormData(event.currentTarget))}); toast("Ravenhood promotional code issued"); await refreshDevTools(); } catch(error){toast(error.message);} });
   $$('[data-market-promo-status]').forEach(button=>button.addEventListener('click',async()=>{try{await api(`/api/dev-tools/market/promotions/${button.dataset.marketPromoStatus}`,{method:'PATCH',body:{active:button.dataset.active==='1'}});toast("Promotion status updated");await refreshDevTools();}catch(error){toast(error.message);}}));
   $("#devEmergencyUnlinkAllForm")?.addEventListener("submit", async (event) => {
@@ -12660,7 +12736,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.2.2-market-promotions").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.2.2-vehicle-isolation").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {
