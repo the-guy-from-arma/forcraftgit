@@ -9241,12 +9241,21 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err); return
         assert user is not None
-        raw_code = str(self.read_json().get("code") or "").upper().strip().replace(" ", "")
+        entered_code = str(self.read_json().get("code") or "").upper()
+        raw_code = "".join(entered_code.split())
         if len(raw_code) < 6:
             self.error(400, "Enter a valid Ravenhood promotional code."); return
-        promo = one(db, """SELECT p.*,s.ticker,s.name AS security_name FROM market_promo_codes p
-            LEFT JOIN market_securities s ON s.id=p.security_id WHERE p.code_hash=? AND p.active=1""",
-            (hashlib.sha256(raw_code.encode("utf-8")).hexdigest(),))
+        code_candidates = [raw_code]
+        compact_code = raw_code.replace("-", "")
+        if compact_code != raw_code:
+            code_candidates.append(compact_code)
+        promo = None
+        for candidate in code_candidates:
+            promo = one(db, """SELECT p.*,s.ticker,s.name AS security_name FROM market_promo_codes p
+                LEFT JOIN market_securities s ON s.id=p.security_id WHERE p.code_hash=? AND p.active=1""",
+                (hashlib.sha256(candidate.encode("utf-8")).hexdigest(),))
+            if promo:
+                break
         if not promo or (promo.get("expires_at") and promo["expires_at"] <= now_iso()):
             self.error(404, "This promotional code is invalid or no longer active."); return
         if int(promo["redemption_count"] or 0) >= int(promo["max_redemptions"] or 0):
