@@ -10429,8 +10429,8 @@ function renderDevTools() {
           <button class="primary" type="submit">Issue this promotion</button>
         </form>
         ${state.generatedMarketPromo ? `<div class="dev-generated-code"><span>COPY THIS CODE NOW · SHOWN ONCE</span><strong>${escapeHtml(state.generatedMarketPromo.code)}</strong><small>${escapeHtml(state.generatedMarketPromo.campaign_name)} · expires ${escapeHtml(state.generatedMarketPromo.expires_at)}</small></div>` : ""}
-        <div class="dev-promo-ledger"><div class="dev-promo-ledger-head"><span>Campaign</span><span>Reward</span><span>Claims</span><span>Control</span></div>${promotions.map(p=>`<article><span><strong>${escapeHtml(p.campaign_name)}</strong><small>••••-${escapeHtml(p.code_hint)} · ${escapeHtml(p.created_by_name)}</small></span><span>${p.reward_type==="cash"?money(p.cash_amount):p.reward_type==="stock"?`${Number(p.share_quantity)} ${escapeHtml(p.ticker||"")}`:`${p.bundle_size} random stocks × ${Number(p.share_quantity)}`}</span><span><strong>${Number(p.redemption_count)}/${Number(p.max_redemptions)}</strong><small>expires ${escapeHtml(String(p.expires_at||"Never").slice(0,10))}</small></span><button class="${p.active?"danger":"secondary"}" data-market-promo-status="${p.id}" data-active="${p.active?0:1}">${p.active?"Pause":"Resume"}</button></article>`).join("")||`<div class="empty">No Ravenhood promotions issued.</div>`}</div>
-        <footer class="dev-promo-redemptions"><strong>Recent redemptions</strong>${redemptions.slice(0,12).map(r=>`<span><b>${escapeHtml(r.name)} · CIV ${escapeHtml(r.civ_number||"")}</b><em>${escapeHtml(r.reward_summary)}</em><small>${escapeHtml(r.campaign_name)} · ${escapeHtml(r.redeemed_at)}</small></span>`).join("")||`<small>No codes redeemed yet.</small>`}</footer>
+        <div class="dev-promo-ledger"><div class="dev-promo-ledger-head"><span>Campaign</span><span>Reward</span><span>Claims</span><span>Control</span></div>${promotions.map(p=>`<article><span><strong>${escapeHtml(p.campaign_name)}</strong><small>${escapeHtml(p.code_plain || `legacy code ending ${p.code_hint}`)} · ${escapeHtml(p.created_by_name)}</small></span><span>${p.reward_type==="cash"?money(p.cash_amount):p.reward_type==="stock"?`${Number(p.share_quantity)} ${escapeHtml(p.ticker||"")}`:`${p.bundle_size} random stocks × ${Number(p.share_quantity)}`}</span><span><strong>${Number(p.redemption_count)}/${Number(p.max_redemptions)}</strong><small>expires ${escapeHtml(String(p.expires_at||"Never").slice(0,10))}</small></span><span class="dev-promo-controls"><button class="${p.active?"danger":"secondary"}" data-market-promo-status="${p.id}" data-active="${p.active?0:1}">${p.active?"Pause":"Resume"}</button><button class="danger" data-market-promo-delete="${p.id}" data-market-promo-name="${escapeHtml(p.campaign_name)}">Delete</button></span></article>`).join("")||`<div class="empty">No Ravenhood promotions issued.</div>`}</div>
+        <footer class="dev-promo-redemptions"><strong>Recent redemptions</strong>${redemptions.slice(0,12).map(r=>`<span><b>${escapeHtml(r.name)} · CIV ${escapeHtml(r.civ_number||"")}</b><em>${escapeHtml(r.reward_summary)}</em><small>${escapeHtml(r.code_plain || `legacy code ending ${r.code_hint || ""}`)} · ${escapeHtml(r.campaign_name)} · ${escapeHtml(r.redeemed_at)}</small></span>`).join("")||`<small>No codes redeemed yet.</small>`}</footer>
       </section>
     </div>`;
   }
@@ -11755,6 +11755,17 @@ function bindDevTools() {
   syncPromoFields();
   $("#devMarketPromoForm")?.addEventListener("submit", async event => { event.preventDefault(); try { state.generatedMarketPromo=await api("/api/dev-tools/market/promotions",{method:"POST",body:Object.fromEntries(new FormData(event.currentTarget))}); toast("Ravenhood promotional code issued"); await refreshDevTools(); } catch(error){toast(error.message);} });
   $$('[data-market-promo-status]').forEach(button=>button.addEventListener('click',async()=>{try{await api(`/api/dev-tools/market/promotions/${button.dataset.marketPromoStatus}`,{method:'PATCH',body:{active:button.dataset.active==='1'}});toast("Promotion status updated");await refreshDevTools();}catch(error){toast(error.message);}}));
+  $$('[data-market-promo-delete]').forEach(button=>button.addEventListener('click',async()=>{
+    const name = button.dataset.marketPromoName || "this promotion";
+    if (!confirm(`Delete ${name}? This permanently removes the promo code and its redemption records.`)) return;
+    try {
+      await api(`/api/dev-tools/market/promotions/${button.dataset.marketPromoDelete}`, { method: "DELETE" });
+      toast("Promotion deleted");
+      await refreshDevTools();
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
   $("#devEmergencyUnlinkAllForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;

@@ -68,6 +68,7 @@
         ,"Added an active scheduled-movement ledger to Ravenhood Stock Market Settings with affected securities, target percentage, schedule timing, live progress, and immediate stop controls."
       ],
       "changed": [
+        "Changed Ravenhood promotional-code administration to show full live promo codes in Developer Tools, expose codes in redemption/audit logs, and add audited hard-delete controls beside Pause and Resume.",
         "Reworked Ravenhood into a cleaner exchange experience with a compact discovery rail instead of a long stock ledger, phone-safe quick actions, and dedicated modal sheets for deposits, withdrawals, transfers, and promotional redemptions.",
         "Expanded Stock Market Settings with independent volatility and Gemini automation controls, cycle timing, intensity limits, last-run status, and immediate developer execution while retaining manual overrides.",
         "Expanded Game Intelligence beyond its top-ten summaries while preserving the existing dashboard design, making every account and balance investigable from the same workspace.",

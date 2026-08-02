@@ -3144,6 +3144,7 @@ def ensure_migrations(db: Database) -> None:
             campaign_name TEXT NOT NULL,
             code_hash TEXT NOT NULL UNIQUE,
             code_hint TEXT NOT NULL,
+            code_plain TEXT NOT NULL DEFAULT '',
             reward_type TEXT NOT NULL,
             cash_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
             security_id INTEGER,
@@ -3160,6 +3161,7 @@ def ensure_migrations(db: Database) -> None:
         )
         """
     )
+    db.execute("ALTER TABLE market_promo_codes ADD COLUMN IF NOT EXISTS code_plain TEXT NOT NULL DEFAULT ''")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS market_promo_redemptions (
@@ -6472,6 +6474,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_market_promotion(db, user)
                 elif path.startswith("/api/dev-tools/market/promotions/") and method == "PATCH":
                     self.api_dev_market_promotion_status(db, user, self.path_int(path, 4))
+                elif path.startswith("/api/dev-tools/market/promotions/") and method == "DELETE":
+                    self.api_dev_market_promotion_delete(db, user, self.path_int(path, 4))
                 elif path == "/api/dev-tools/lottery/settings" and method == "PATCH":
                     self.api_dev_lottery_settings(db, user)
                 elif path == "/api/dev-tools/lottery/funds" and method == "POST":
@@ -9292,7 +9296,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("""INSERT INTO market_promo_redemptions (promo_id,user_id,account_id,reward_summary,redeemed_at)
             VALUES (?,?,?,?,?)""", (promo["id"], user["id"], account["id"], summary, ts))
         db.execute("UPDATE market_promo_codes SET redemption_count=redemption_count+1 WHERE id=?", (promo["id"],))
-        add_admin_audit(db, int(user["id"]), "market.promotion.redeemed", int(user["id"]), {"campaign": promo["campaign_name"], "reward": summary})
+        add_admin_audit(db, int(user["id"]), "market.promotion.redeemed", int(user["id"]), {
+            "campaign": promo["campaign_name"],
+            "code": promo["code_plain"] or promo["code_hint"],
+            "reward": summary,
+        })
         self.send_json(200, {"ok": True, "campaign_name": promo["campaign_name"], "reward_summary": summary})
 
     def api_lottery(self, db: Database, user: DbRow | None) -> None:
@@ -14232,11 +14240,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                         COALESCE(target.name, 'Unassigned bearer PIN') AS target_name,creator.name AS created_by_name,used.name AS used_by_name
                         FROM market_cash_codes c LEFT JOIN users target ON target.id=c.target_user_id JOIN users creator ON creator.id=c.created_by
                         LEFT JOIN users used ON used.id=c.used_by ORDER BY c.created_at DESC LIMIT 100""")],
-                    "promotions": [dict(row) for row in all_rows(db, """SELECT p.id,p.campaign_name,p.code_hint,p.reward_type,p.cash_amount,p.share_quantity,p.bundle_size,
+                    "promotions": [dict(row) for row in all_rows(db, """SELECT p.id,p.campaign_name,p.code_hint,p.code_plain,p.reward_type,p.cash_amount,p.share_quantity,p.bundle_size,
                         p.max_redemptions,p.redemption_count,p.expires_at,p.active,p.created_at,s.ticker,creator.name AS created_by_name
                         FROM market_promo_codes p LEFT JOIN market_securities s ON s.id=p.security_id JOIN users creator ON creator.id=p.created_by
                         ORDER BY p.created_at DESC LIMIT 100""")],
-                    "promotion_redemptions": [dict(row) for row in all_rows(db, """SELECT r.reward_summary,r.redeemed_at,p.campaign_name,u.name,u.civ_number
+                    "promotion_redemptions": [dict(row) for row in all_rows(db, """SELECT r.reward_summary,r.redeemed_at,p.campaign_name,p.code_plain,p.code_hint,u.name,u.civ_number
                         FROM market_promo_redemptions r JOIN market_promo_codes p ON p.id=r.promo_id JOIN users u ON u.id=r.user_id
                         ORDER BY r.redeemed_at DESC LIMIT 100""")],
                 },
@@ -14663,10 +14671,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(409, "That promotional code already exists."); return
         created = utcnow(); expires = created + dt.timedelta(days=expiry_days)
         db.execute("""INSERT INTO market_promo_codes
-            (campaign_name,code_hash,code_hint,reward_type,cash_amount,security_id,share_quantity,bundle_size,max_redemptions,expires_at,created_by,created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""", (campaign_name, code_hash, raw_code[-4:], reward_type, cash_amount,
+            (campaign_name,code_hash,code_hint,code_plain,reward_type,cash_amount,security_id,share_quantity,bundle_size,max_redemptions,expires_at,created_by,created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", (campaign_name, code_hash, raw_code[-4:], raw_code, reward_type, cash_amount,
             security["id"] if security else None, share_quantity, bundle_size, max_redemptions, expires.isoformat(), user["id"], created.isoformat()))
-        add_admin_audit(db, int(user["id"]), "market.promotion.created", details={"campaign": campaign_name, "reward_type": reward_type, "max_redemptions": max_redemptions})
+        add_admin_audit(db, int(user["id"]), "market.promotion.created", details={
+            "campaign": campaign_name,
+            "code": raw_code,
+            "reward_type": reward_type,
+            "max_redemptions": max_redemptions,
+        })
         self.send_json(201, {"ok": True, "code": raw_code, "campaign_name": campaign_name, "expires_at": expires.isoformat()})
 
     def api_dev_market_promotion_status(self, db: Database, user: DbRow | None, promo_id: int | None) -> None:
@@ -14679,6 +14692,23 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("UPDATE market_promo_codes SET active=? WHERE id=?", (active, promo_id))
         add_admin_audit(db, int(user["id"]), "market.promotion.status", details={"promo_id": promo_id, "active": bool(active)})
         self.send_json(200, {"ok": True, "active": bool(active)})
+
+    def api_dev_market_promotion_delete(self, db: Database, user: DbRow | None, promo_id: int | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        promo = one(db, "SELECT id,campaign_name,code_hint,code_plain,redemption_count FROM market_promo_codes WHERE id=?", (promo_id,))
+        if not promo:
+            self.error(404, "Promotional campaign not found."); return
+        db.execute("DELETE FROM market_promo_codes WHERE id=?", (promo["id"],))
+        add_admin_audit(db, int(user["id"]), "market.promotion.deleted", details={
+            "promo_id": promo["id"],
+            "campaign": promo["campaign_name"],
+            "code": promo["code_plain"] or promo["code_hint"],
+            "redemptions": int(promo["redemption_count"] or 0),
+        })
+        self.send_json(200, {"ok": True})
 
     def api_dev_market_settings(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
