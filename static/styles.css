@@ -18913,6 +18913,53 @@ textarea:focus {
 @media(max-width:900px){.dev-promo-form{grid-template-columns:1fr 1fr}.dev-promo-ledger-head{display:none}.dev-promo-ledger article{grid-template-columns:1fr auto}.dev-promo-ledger article span:nth-child(2),.dev-promo-ledger article span:nth-child(3){grid-column:1}.dev-promo-redemptions{grid-template-columns:1fr}}
 @media(max-width:560px){.dev-promo-form{grid-template-columns:1fr}.dev-promo-command{padding:18px}.dev-promo-command>header{align-items:flex-start;flex-direction:column}}
 
+/* Ravenhood exchange experience refresh */
+.market-mobile-actions{display:none}
+.market-discovery{margin-top:30px;padding-top:22px;border-top:1px solid rgba(75,210,151,.16)}
+.market-discovery>header{display:flex;align-items:end;justify-content:space-between;gap:18px;margin-bottom:18px}
+.market-discovery span{color:#4fe0a2;font-size:8px;font-weight:950;letter-spacing:.16em}
+.market-discovery h2{margin:4px 0 0;font-size:22px;letter-spacing:-.03em}
+.market-discovery>header strong{color:#739286;font-size:9px;letter-spacing:.12em}
+.market-symbol-rail{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:10px}
+.market-symbol-rail button{position:relative;min-height:118px;padding:16px;border:1px solid rgba(76,215,156,.13);border-radius:0;background:linear-gradient(145deg,rgba(10,28,21,.84),rgba(4,12,9,.45));color:#effbf6;text-align:left;overflow:hidden;cursor:pointer;opacity:0;animation:marketSymbolIn .45s calc(.08s * var(--symbol-index)) cubic-bezier(.16,1,.3,1) forwards;transition:transform .2s,border-color .2s,background .2s}
+.market-symbol-rail button:before{content:"";position:absolute;inset:auto -18% -45% 38%;height:80px;border-radius:50%;background:radial-gradient(circle,rgba(67,229,159,.2),transparent 68%);opacity:0;transition:opacity .2s}
+.market-symbol-rail button:hover,.market-symbol-rail button.active{transform:translateY(-3px);border-color:rgba(72,230,163,.58);background:linear-gradient(145deg,rgba(12,45,32,.88),rgba(4,12,9,.55))}
+.market-symbol-rail button:hover:before,.market-symbol-rail button.active:before{opacity:1}
+.market-symbol-rail button>span{display:block;color:#62edb2;font-size:11px;font-family:ui-monospace,Consolas,monospace}
+.market-symbol-rail button>strong{display:block;margin:18px 0 7px;font-size:16px;line-height:1.12}
+.market-symbol-rail button>small{display:block;color:#84a59a;font-size:10px;line-height:1.35}
+.market-symbol-rail button>em{position:absolute;right:14px;bottom:13px;font-style:normal;font-size:10px;font-weight:900}
+.market-action-modal{position:fixed!important;inset:0!important;z-index:10000!important;display:grid;place-items:center;background:radial-gradient(circle at 50% 16%,rgba(57,230,173,.14),transparent 34%),rgba(1,7,5,.88);backdrop-filter:blur(18px)}
+.market-action-modal .market-modal-card{position:relative;width:min(620px,calc(100vw - 34px));max-height:min(740px,calc(100dvh - 42px));overflow:auto;border-radius:0;border:1px solid rgba(76,222,160,.28);background:linear-gradient(145deg,rgba(8,27,20,.98),rgba(3,10,7,.98));box-shadow:0 36px 120px rgba(0,0,0,.72),0 0 0 1px rgba(74,229,166,.08)}
+.market-action-modal .market-modal-card:before{content:"";position:absolute;left:0;right:0;top:0;height:2px;background:linear-gradient(90deg,#1ec981,#6dffc0,#1ec981)}
+.market-action-modal .market-modal-card>button:first-child{position:absolute;right:16px;top:16px;float:none;border:1px solid rgba(122,168,151,.35);border-radius:50%;background:rgba(16,39,30,.86);color:#fff}
+.market-action-modal h2{max-width:430px;font-size:clamp(28px,4vw,44px);line-height:.95;letter-spacing:-.05em}
+.market-action-modal ol{padding-left:18px;border-block:1px solid rgba(75,210,151,.14);padding-block:14px}
+.market-action-modal label{margin-top:14px}
+@keyframes marketSymbolIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+
+@media(max-width:1180px){.market-symbol-rail{grid-template-columns:repeat(3,minmax(150px,1fr))}}
+@media(max-width:760px){
+  #app:has(.market-terminal-workspace){overflow:auto!important}
+  .market-mobile-actions{position:sticky;top:68px;z-index:19;display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:rgba(6,18,13,.94);border-bottom:1px solid rgba(73,211,151,.18);backdrop-filter:blur(12px)}
+  .market-mobile-actions button{min-height:44px;border:0;border-right:1px solid rgba(73,211,151,.12);background:transparent;color:#ccede0;font-size:10px;font-weight:900;letter-spacing:.05em}
+  .market-v5 .market-tape{height:35px;padding-inline:10px;gap:18px;top:112px}
+  .market-v5 .market-tape button{font-size:9px}
+  .market-v5 .market-rail>nav,.market-v5 .market-movers,.market-v5 .market-admin-note{display:none}
+  .market-v5 .market-account-summary{padding:14px;border:1px solid rgba(75,210,151,.13);background:rgba(7,22,16,.62)}
+  .market-v5 .market-instrument-head{display:block}
+  .market-v5 .market-instrument-head>div:last-child{text-align:left;margin-top:18px}
+  .market-v5 .market-quote-strip{grid-template-columns:1fr 1fr}
+  .market-v5 .market-quote-strip>span:nth-child(2n){border-right:0}
+  .market-v5 .market-depth-strip{display:none}
+  .market-symbol-rail{display:flex;overflow-x:auto;gap:12px;padding:2px 0 14px;scroll-snap-type:x mandatory}
+  .market-symbol-rail button{flex:0 0 min(72vw,260px);scroll-snap-align:start}
+  .market-action-modal{place-items:end center;padding:0}
+  .market-action-modal .market-modal-card{width:100%;max-height:91dvh;border-width:1px 0 0;border-radius:18px 18px 0 0;padding:26px 18px max(28px,env(safe-area-inset-bottom))}
+  .market-action-modal h2{font-size:34px}
+  .market-recipient-search{grid-template-columns:1fr}
+}
+
 /* Promo issuer: a short, guided workflow instead of a dense settings grid. */
 .dev-promo-form [hidden]{display:none!important}
 .dev-promo-lanes{grid-column:1/-1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding-bottom:16px;border-bottom:1px solid #284147}
