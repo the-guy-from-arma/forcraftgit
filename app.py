@@ -14666,8 +14666,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         raw_code = custom or "FCX-" + "".join(secrets.choice(alphabet) for _ in range(4)) + "-" + "".join(secrets.choice(alphabet) for _ in range(4))
         if len(raw_code) < 6 or len(raw_code) > 32:
             self.error(400, "Promo codes must contain between 6 and 32 characters."); return
-        code_hash = hashlib.sha256(raw_code.encode("utf-8")).hexdigest()
-        if one(db, "SELECT id FROM market_promo_codes WHERE code_hash=?", (code_hash,)):
+        canonical_code = raw_code.replace("-", "")
+        code_hash = hashlib.sha256(canonical_code.encode("utf-8")).hexdigest()
+        legacy_hash = hashlib.sha256(raw_code.encode("utf-8")).hexdigest()
+        if one(db, "SELECT id FROM market_promo_codes WHERE code_hash IN (?,?)", (code_hash, legacy_hash)):
             self.error(409, "That promotional code already exists."); return
         created = utcnow(); expires = created + dt.timedelta(days=expiry_days)
         db.execute("""INSERT INTO market_promo_codes

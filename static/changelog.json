@@ -69,6 +69,7 @@
       ],
       "changed": [
         "Changed Ravenhood promotional-code administration to show full live promo codes in Developer Tools, expose codes in redemption/audit logs, and add audited hard-delete controls beside Pause and Resume.",
+        "Rebuilt Ravenhood's active trading workspace into a resident-first brokerage canvas with a premium portfolio landing area, connected security spotlight, softer watchlist and holdings flow, product-style modals, improved mobile trading actions, and a less boxed exchange presentation.",
         "Reworked Ravenhood with an E-Trade-inspired brokerage workstation layer: broker-style command header, smoother live ticker, account/watchlist rail, dimensional quote and chart workspace, stronger Day/Week/Month/Year chart controls, refined order ticket, and phone-safe bottom trading actions.",
         "Reworked Ravenhood into a cleaner exchange experience with a compact discovery rail instead of a long stock ledger, phone-safe quick actions, and dedicated modal sheets for deposits, withdrawals, transfers, and promotional redemptions.",
         "Expanded Stock Market Settings with independent volatility and Gemini automation controls, cycle timing, intensity limits, last-run status, and immediate developer execution while retaining manual overrides.",
@@ -133,6 +134,7 @@
         ,"Changed all newly issued MyFaircroft and Ravenhood four-digit receipt PINs to unassigned bearer codes that permanently record the issuing administrator and first eligible resident who redeems them."
       ],
       "fixed": [
+        "Fixed Ravenhood promotional redemption feedback by canonicalizing newly issued promo codes, preserving compatibility with older codes, refreshing the portfolio immediately after a claim, and showing a dedicated success confirmation receipt.",
         "Consolidated duplicate changelog records that shared the same release version so RP OS 0.2.2 appears once while preserving every unique release note.",
         "Replaced boxed changelog overview widgets with a connected Roadmap-style release route, animated milestone chapters, continuous editorial change ledgers, and responsive release navigation.",
         "Reworked the FNN New Story Brief into a wide responsive newsroom intake workspace, eliminating its cramped nested scrollbar while retaining every source, verification, context, quotation, and Top Story field.",
