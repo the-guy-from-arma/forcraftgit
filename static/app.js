@@ -3764,7 +3764,7 @@ function renderMarketWorkspace() {
   const projectionBase=Math.max(-12,Math.min(12,change*2.5));
   const scenarios=[{label:"Defensive",rate:-7.5},{label:"Current path",rate:projectionBase},{label:"Growth",rate:12.5}];
   const featureRail=[selected,...movers,...securities].filter((x,index,array)=>x?.ticker&&array.findIndex(item=>item?.ticker===x.ticker)===index).slice(0,10);
-  return `<main class="market-workspace market-terminal-workspace market-v3 market-v4 market-v5">
+  return `<main class="market-workspace market-terminal-workspace market-v3 market-v4 market-v5 market-v6">
     <button class="market-persistent-exit" type="button" data-close-market aria-label="Exit Ravenhood"><span>&larr;</span><b>Exit Ravenhood</b></button>
     <header class="market-topbar"><div class="market-brand"><span>RH</span><div><strong>Ravenhood</strong><small>FAIRCROFT SECURITIES EXCHANGE</small></div></div><div class="market-session"><span>FCX</span><i></i><strong>${data.market_open?"Continuous trading":"Market closed"}</strong></div><div class="market-top-actions"><em class="${data.market_open?"open":"closed"}">${data.market_open?"MARKET OPEN":"MARKET CLOSED"}</em><button class="secondary" data-market-dialog="promo">Redeem promo</button><button class="secondary" data-refresh-market>Sync market</button><button class="market-exit" type="button" data-close-market><span>&larr;</span> Exit Ravenhood</button></div></header>
     <div class="market-tape">${securities.concat(securities).map(x=>`<button data-market-ticker="${escapeHtml(x.ticker)}"><b>${escapeHtml(x.ticker)}</b><span>${money(x.price)}</span><i class="${marketChange(x)>=0?"up":"down"}">${marketChange(x)>=0?"+":""}${marketChange(x).toFixed(2)}%</i></button>`).join("")}</div>
