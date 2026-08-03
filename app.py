@@ -6476,6 +6476,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_ice_overview(db, user)
                 elif path == "/api/ice/camera-events" and method == "GET":
                     self.api_ice_camera_events(db, user)
+                elif path.startswith("/api/ice/accounts/") and method == "GET":
+                    self.api_ice_account(db, user, self.path_int(path, 3))
                 elif path == "/api/ice/search" and method == "GET":
                     self.api_ice_search(db, user, query)
                 elif path == "/api/ice/cases" and method == "POST":
@@ -7221,20 +7223,59 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         linked_rows = all_rows(
             db,
-            "SELECT identity_id, player_name, user_id FROM arma_account_links WHERE identity_id <> '' OR player_name <> ''",
+            """
+            SELECT
+                l.identity_id,
+                l.player_name,
+                l.user_id,
+                u.name AS account_name,
+                u.email AS account_email,
+                u.civ_number AS account_civ_number
+            FROM arma_account_links l
+            LEFT JOIN users u ON u.id = l.user_id
+            WHERE l.identity_id <> '' OR l.player_name <> ''
+            """,
         )
-        linked = {str(row["identity_id"]).strip().casefold() for row in linked_rows if row.get("identity_id")}
-        linked_names = {str(row["player_name"]).strip().casefold(): row for row in linked_rows if row.get("player_name")}
+        linked_identities = {
+            str(row["identity_id"]).strip().casefold(): row
+            for row in linked_rows
+            if row.get("identity_id")
+        }
+        linked_names = {
+            str(row["player_name"]).strip().casefold(): row
+            for row in linked_rows
+            if row.get("player_name")
+        }
         events: list[dict[str, Any]] = []
+        cameras: dict[str, dict[str, Any]] = {}
         for row in rows:
             item = dict(row)
             identity_key = str(item.get("identity_id") or "").strip().casefold()
             name_key = str(item.get("subject_name") or "").strip().casefold()
-            match = linked_names.get(name_key) if name_key else None
-            item["linked_account"] = bool((identity_key and identity_key in linked) or match)
-            item["linked_match"] = "identity_id" if identity_key and identity_key in linked else ("player_name" if match else "")
+            identity_match = linked_identities.get(identity_key) if identity_key else None
+            name_match = linked_names.get(name_key) if name_key else None
+            match = identity_match or name_match
+            item["linked_account"] = bool(match)
+            item["linked_match"] = "identity_id" if identity_match else ("player_name" if name_match else "")
             if match:
                 item["linked_user_id"] = match.get("user_id")
+                item["linked_account_name"] = match.get("account_name") or match.get("player_name") or "Matched Faircroft account"
+                item["linked_account_email"] = match.get("account_email") or ""
+                item["linked_civ_number"] = match.get("account_civ_number") or ""
+                item["linked_player_name"] = match.get("player_name") or ""
+            camera_id = str(item.get("camera_id") or "Unknown camera").strip() or "Unknown camera"
+            camera_record = cameras.setdefault(
+                camera_id,
+                {"camera_id": camera_id, "events": 0, "linked": 0, "last_seen": None, "locations": set()},
+            )
+            camera_record["events"] += 1
+            if item["linked_account"]:
+                camera_record["linked"] += 1
+            if item.get("location"):
+                camera_record["locations"].add(str(item.get("location")))
+            captured = item.get("captured_at")
+            if captured and (not camera_record["last_seen"] or str(captured) > str(camera_record["last_seen"])):
+                camera_record["last_seen"] = captured
             item.pop("raw_payload", None)
             events.append(item)
         last_sync = one(db, "SELECT last_success_at, status, records FROM anticheat_sync_status WHERE source_key = 'fluck_camera'")
@@ -7247,9 +7288,29 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 pass
         high = sum(1 for item in events if str(item.get("severity") or "").lower() in {"high", "critical", "urgent"})
+        camera_list = sorted(
+            (
+                {
+                    **camera,
+                    "locations": sorted(camera["locations"])[:4],
+                }
+                for camera in cameras.values()
+            ),
+            key=lambda camera: (str(camera.get("last_seen") or ""), str(camera.get("camera_id") or "")),
+            reverse=True,
+        )
+        linked_count = sum(1 for item in events if item.get("linked_account"))
         return {
             "events": events,
-            "stats": {"total": len(events), "last_24_hours": recent, "high_priority": high},
+            "cameras": camera_list,
+            "stats": {
+                "total": len(events),
+                "last_24_hours": recent,
+                "high_priority": high,
+                "camera_count": len(camera_list),
+                "linked": linked_count,
+                "unlinked": max(len(events) - linked_count, 0),
+            },
             "source_file": SHADOWHAVEN_CAMERA_EVENTS_FILE,
             "last_sync": dict(last_sync) if last_sync else None,
             "operational": bool(last_sync and last_sync.get("status") == "synced"),
@@ -7261,6 +7322,110 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403 if user else 401, err)
             return
         self.send_json(200, self._ice_camera_payload(db))
+
+    def api_ice_account(self, db: Database, user: DbRow | None, target_id: int) -> None:
+        err = ice_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        account = one(
+            db,
+            """
+            SELECT u.*, l.id AS link_id, l.server_id, l.identity_id, l.uid,
+                   l.rpl_identity, l.platform, l.player_name, l.linked_at,
+                   l.last_seen_at, l.last_sync_at
+            FROM users u
+            LEFT JOIN arma_account_links l ON l.user_id = u.id
+            WHERE u.id = ?
+            """,
+            (target_id,),
+        )
+        if not account:
+            self.error(404, "Account not found")
+            return
+        if not account.get("link_id"):
+            self.error(409, "This account does not have an active Arma link")
+            return
+        sanctions = all_rows(
+            db,
+            """
+            SELECT s.*, creator.name AS created_by_name, revoker.name AS revoked_by_name
+            FROM account_sanctions s
+            JOIN users creator ON creator.id = s.created_by
+            LEFT JOIN users revoker ON revoker.id = s.revoked_by
+            WHERE s.user_id = ? ORDER BY s.created_at DESC LIMIT 100
+            """,
+            (target_id,),
+        )
+        warnings = all_rows(
+            db,
+            """
+            SELECT w.*, creator.name AS created_by_name, resolver.name AS resolved_by_name
+            FROM account_internal_warnings w
+            JOIN users creator ON creator.id = w.created_by
+            LEFT JOIN users resolver ON resolver.id = w.resolved_by
+            WHERE w.user_id = ? ORDER BY w.created_at DESC LIMIT 100
+            """,
+            (target_id,),
+        )
+        arma_activity = all_rows(
+            db,
+            """
+            SELECT * FROM arma_activity_logs
+            WHERE user_id = ? ORDER BY received_at DESC LIMIT 150
+            """,
+            (target_id,),
+        )
+        characters = all_rows(
+            db,
+            "SELECT * FROM user_characters WHERE user_id = ? ORDER BY is_active DESC, updated_at DESC",
+            (target_id,),
+        )
+        jobs = all_rows(
+            db,
+            """
+            SELECT uj.*, j.title, j.market
+            FROM user_jobs uj JOIN jobs j ON j.id = uj.job_id
+            WHERE uj.user_id = ? ORDER BY uj.started_at DESC
+            """,
+            (target_id,),
+        )
+        citations = all_rows(
+            db,
+            """
+            SELECT c.*
+            FROM citations c
+            WHERE c.civ_id = ? ORDER BY c.created_at DESC LIMIT 100
+            """,
+            (target_id,),
+        )
+        properties = all_rows(
+            db,
+            """
+            SELECT p.* FROM properties p
+            WHERE p.owner_id = ? ORDER BY p.created_at DESC
+            """,
+            (target_id,),
+        )
+        active_block = active_account_block(db, target_id)
+        game_bank = one(
+            db,
+            "SELECT * FROM arma_game_bank_balances WHERE identity_id = ?",
+            (account.get("identity_id") or "",),
+        )
+        self.send_dev_account_response(
+            db,
+            account,
+            active_block,
+            sanctions,
+            warnings,
+            arma_activity,
+            characters,
+            jobs,
+            citations,
+            properties,
+            game_bank,
+        )
 
     def api_ice_overview(self, db: Database, user: DbRow | None) -> None:
         err = ice_required(user)
