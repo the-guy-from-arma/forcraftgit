@@ -85,7 +85,7 @@
         "Simplified business taxes into an issued-bill workflow: staff assesses the tax, residents receive a MyFaircroft notice, and payment is completed directly from the Taxes tab with a verified four-digit receipt PIN instead of a confusing settlement batch.",
         "Added verified business-tax receipts to the Faircroft Lottery public-service funding pool with resident notification and permanent payment auditing.",
         "Rebuilt ICE MDT as a branded Faircroft federal operations terminal with dedicated Command Overview, Identity Intelligence, Case Operations, Detainers, and Command Applications navigation while preserving the local-ordinance data restriction.",
-        "Upgraded the ICE FLUCK Camera System into a federal camera intelligence desk with distinct camera-source visibility, linked/unlinked observation status, improved inspector details, and one-click matched CAD profile review.",
+        "Upgraded the ICE FLUCK Camera System into a Faircroft-branded federal camera command desk with distinct camera-source visibility, linked/unlinked observation status, a polished intelligence-file inspector, and one-click matched CAD profile review.",
         "Added a branded FLUCK Camera Search intelligence module with an animated federal network preview and a clearly locked Coming Soon state for federal law enforcement.",
         "Added FLUCK camera-source indexing, linked-profile counts, and CAD account-match payloads so ICE can identify whether Shadow Haven is exporting one camera or multiple camera feeds.",
         "Integrated the official Faircroft emblem throughout the citizen passport cover, issuing header, document seal, security watermark, holographic validation mark, and live-registry authentication treatment.",
