@@ -1169,19 +1169,47 @@ def shadowhaven_persistence_sync_worker() -> None:
         time.sleep(SHADOWHAVEN_PERSISTENCE_SYNC_SECONDS)
 
 
+PROPERTY_RECORD_KEYS = {
+    "id", "PropertyId", "propertyId", "property_id",
+    "OwnerUid", "ownerUid", "owner_identity", "ownerIdentity", "ownerId", "owner_id",
+    "GuestUids", "guestUids", "Locked", "locked", "Tenure", "tenure",
+    "RentPayments", "rentPayments", "PropertyName", "propertyName", "property_name",
+}
+
+
+def _looks_like_property_record(value: dict[str, Any], source_key: str = "") -> bool:
+    if any(key in value for key in ("PropertyId", "propertyId", "property_id", "OwnerUid", "ownerUid")):
+        return True
+    if source_key.lower().startswith(("auto_house", "house_", "property_")):
+        return True
+    score = sum(1 for key in PROPERTY_RECORD_KEYS if key in value)
+    return score >= 3
+
+
 def _property_candidates(payload: Any) -> list[tuple[str, Any]]:
-    if isinstance(payload, list):
-        return [(str(index), value) for index, value in enumerate(payload)]
-    if not isinstance(payload, dict):
-        return []
-    for key in ("properties", "propertyRecords", "property_records", "records", "items"):
-        if isinstance(payload.get(key), list):
-            return [(str(index), value) for index, value in enumerate(payload[key])]
-        if isinstance(payload.get(key), dict):
-            return [(str(item_key), item_value) for item_key, item_value in payload[key].items() if isinstance(item_value, dict)]
-    if any(key in payload for key in ("PropertyId", "propertyId", "property_id", "address", "propertyName", "property_name", "OwnerUid", "ownerUid")):
-        return [("property", payload)]
-    return [(str(key), value) for key, value in payload.items() if isinstance(value, (dict, list))]
+    """Return every property-looking object from a raw TBS property JSON file.
+
+    TBS Property Mod exports have appeared in several shapes over time:
+    a direct list, a dict keyed by PropertyId, or nested under arbitrary save
+    containers.  The Housing Market needs the raw list, so this walker indexes
+    records by their JSON path instead of depending on one container name.
+    """
+    candidates: list[tuple[str, Any]] = []
+
+    def walk(value: Any, path: str, source_key: str = "") -> None:
+        if isinstance(value, dict):
+            if _looks_like_property_record(value, source_key):
+                candidates.append((path or source_key or "property", value))
+                return
+            for key, item in value.items():
+                next_path = f"{path}.{key}" if path else str(key)
+                walk(item, next_path, str(key))
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                walk(item, f"{path}[{index}]" if path else str(index), str(index))
+
+    walk(payload, "")
+    return candidates
 
 
 def extract_shadowhaven_properties(payload: Any) -> list[dict[str, str]]:

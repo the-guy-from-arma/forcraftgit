@@ -141,6 +141,7 @@
         ,"Changed all newly issued MyFaircroft and Ravenhood four-digit receipt PINs to unassigned bearer codes that permanently record the issuing administrator and first eligible resident who redeems them."
       ],
       "fixed": [
+        "Fixed Developer Tools Housing Market imports so nested TBS Property Mod housing lists are recursively read from raw JSON containers instead of only accepting shallow normalized property arrays.",
         "Fixed Ravenhood promotional redemption feedback by canonicalizing newly issued promo codes, preserving compatibility with older codes, refreshing the portfolio immediately after a claim, and showing a dedicated success confirmation receipt.",
         "Consolidated duplicate changelog records that shared the same release version so RP OS 0.2.2 appears once while preserving every unique release note.",
         "Replaced boxed changelog overview widgets with a connected Roadmap-style release route, animated milestone chapters, continuous editorial change ledgers, and responsive release navigation.",
