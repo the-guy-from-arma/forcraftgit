@@ -67,6 +67,13 @@ SHADOWHAVEN_REPUTATION_FILE = os.environ.get(
 SHADOWHAVEN_REPUTATION_SYNC_SECONDS = max(
     15, int(os.environ.get("SHADOWHAVEN_REPUTATION_SYNC_SECONDS", "30"))
 )
+SHADOWHAVEN_CAMERA_EVENTS_FILE = os.environ.get(
+    "SHADOWHAVEN_CAMERA_EVENTS_FILE",
+    "profile/profile/FLUCKCamera/camera_events.json",
+).strip()
+SHADOWHAVEN_CAMERA_EVENTS_SYNC_SECONDS = max(
+    15, int(os.environ.get("SHADOWHAVEN_CAMERA_EVENTS_SYNC_SECONDS", "20"))
+)
 SHADOWHAVEN_PERSISTENCE_ROOT = os.environ.get(
     "SHADOWHAVEN_PERSISTENCE_ROOT",
     "profile/profile/.db/FCRPMUSSALO",
@@ -79,6 +86,13 @@ SHADOWHAVEN_PERSISTENCE_MAX_FILES = max(
 )
 SHADOWHAVEN_PERSISTENCE_MAX_FILE_BYTES = max(
     65536, int(os.environ.get("SHADOWHAVEN_PERSISTENCE_MAX_FILE_BYTES", "524288"))
+)
+SHADOWHAVEN_PROPERTY_FILE = os.environ.get(
+    "SHADOWHAVEN_PROPERTY_FILE",
+    "profile/profile/TBS Property Mod/properties.json",
+).strip()
+SHADOWHAVEN_PROPERTY_SYNC_SECONDS = max(
+    20, int(os.environ.get("SHADOWHAVEN_PROPERTY_SYNC_SECONDS", "60"))
 )
 SHADOWHAVEN_ANTICHEAT_DATABASE_FILE = os.environ.get(
     "SHADOWHAVEN_ANTICHEAT_DATABASE_FILE",
@@ -566,6 +580,129 @@ def shadowhaven_reputation_sync_worker() -> None:
         time.sleep(SHADOWHAVEN_REPUTATION_SYNC_SECONDS)
 
 
+def _camera_event_candidates(payload: Any) -> list[Any]:
+    """Accept the common FLUCK export shapes without coupling the PWA to its schema."""
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return []
+    for key in ("events", "camera_events", "cameraEvents", "records", "items", "observations"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return value
+    for key in ("data", "payload", "result"):
+        value = payload.get(key)
+        if isinstance(value, (dict, list)):
+            nested = _camera_event_candidates(value)
+            if nested:
+                return nested
+    return []
+
+
+def _camera_value(event: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = event.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def extract_shadowhaven_camera_events(payload: Any) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    for index, value in enumerate(_camera_event_candidates(payload)):
+        if not isinstance(value, dict):
+            continue
+        captured_at = _camera_value(value, "capturedAt", "captured_at", "timestamp", "time", "createdAt", "created_at")
+        event_id = _camera_value(value, "eventId", "event_id", "id", "uuid", "guid")
+        raw = json.dumps(value, separators=(",", ":"), default=str)
+        if not event_id:
+            event_id = hashlib.sha256(f"{captured_at}\x1f{raw}".encode("utf-8")).hexdigest()[:32]
+        camera_id = _camera_value(value, "cameraId", "camera_id", "camera", "source", "device")
+        event_type = _camera_value(value, "eventType", "event_type", "type", "kind") or "observation"
+        severity = (_camera_value(value, "severity", "priority", "risk", "classification") or "info").lower()
+        subject_name = _camera_value(value, "subjectName", "subject_name", "playerName", "player_name", "name", "driver")
+        identity_id = _camera_value(value, "identityId", "identity_id", "bohemiaId", "bohemia_id", "uid", "playerUID")
+        vehicle_plate = _camera_value(value, "plate", "plateNumber", "plate_number", "licensePlate", "license_plate")
+        location = _camera_value(value, "location", "address", "zone", "corridor")
+        evidence_url = _camera_value(value, "evidenceUrl", "evidence_url", "imageUrl", "image_url", "snapshotUrl", "snapshot_url")
+        summary = _camera_value(value, "summary", "description", "details", "note", "message")
+        records.append({
+            "event_id": event_id[:160], "captured_at": captured_at[:100] or now_iso(),
+            "camera_id": camera_id[:160], "event_type": event_type[:100], "severity": severity[:40],
+            "subject_name": subject_name[:160], "identity_id": identity_id[:180],
+            "vehicle_plate": vehicle_plate[:80], "location": location[:240],
+            "evidence_url": evidence_url[:600], "summary": summary[:1200], "raw_payload": raw[:30000],
+            "source_file": SHADOWHAVEN_CAMERA_EVENTS_FILE[:255], "source_index": str(index),
+        })
+    return records
+
+
+def sync_shadowhaven_camera_events_once() -> int:
+    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+        return 0
+    transport = paramiko.Transport((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_PORT))
+    try:
+        transport.connect(username=SHADOWHAVEN_SFTP_USERNAME, password=SHADOWHAVEN_SFTP_PASSWORD)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+        try:
+            with sftp.open(SHADOWHAVEN_CAMERA_EVENTS_FILE, "r") as remote_file:
+                payload = json.loads(remote_file.read().decode("utf-8-sig"))
+        finally:
+            sftp.close()
+    finally:
+        transport.close()
+    records = extract_shadowhaven_camera_events(payload)
+    synced_at = now_iso()
+    with conn() as db:
+        for record in records:
+            db.execute(
+                """
+                INSERT INTO fluck_camera_events
+                (event_id, captured_at, camera_id, event_type, severity, subject_name, identity_id,
+                 vehicle_plate, location, evidence_url, summary, raw_payload, source_file, synced_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (event_id) DO UPDATE SET
+                    captured_at = EXCLUDED.captured_at, camera_id = EXCLUDED.camera_id,
+                    event_type = EXCLUDED.event_type, severity = EXCLUDED.severity,
+                    subject_name = EXCLUDED.subject_name, identity_id = EXCLUDED.identity_id,
+                    vehicle_plate = EXCLUDED.vehicle_plate, location = EXCLUDED.location,
+                    evidence_url = EXCLUDED.evidence_url, summary = EXCLUDED.summary,
+                    raw_payload = EXCLUDED.raw_payload, source_file = EXCLUDED.source_file,
+                    synced_at = EXCLUDED.synced_at
+                """,
+                tuple(record[key] for key in (
+                    "event_id", "captured_at", "camera_id", "event_type", "severity", "subject_name",
+                    "identity_id", "vehicle_plate", "location", "evidence_url", "summary", "raw_payload",
+                    "source_file",
+                )) + (synced_at,),
+            )
+        db.execute(
+            """
+            INSERT INTO anticheat_sync_status
+            (source_key, source_path, status, records, last_success_at, last_error, updated_at)
+            VALUES ('fluck_camera', ?, 'synced', ?, ?, '', ?)
+            ON CONFLICT (source_key) DO UPDATE SET source_path = EXCLUDED.source_path,
+                status = 'synced', records = EXCLUDED.records, last_success_at = EXCLUDED.last_success_at,
+                last_error = '', updated_at = EXCLUDED.updated_at
+            """,
+            (SHADOWHAVEN_CAMERA_EVENTS_FILE[:255], len(records), synced_at, synced_at),
+        )
+    return len(records)
+
+
+def shadowhaven_camera_events_sync_worker() -> None:
+    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+        print("Shadowhaven FLUCK Camera sync disabled: credentials are not configured")
+        return
+    while True:
+        try:
+            accepted = sync_shadowhaven_camera_events_once()
+            print(f"Shadowhaven FLUCK Camera sync updated {accepted} event(s)")
+        except Exception as exc:
+            print(f"Shadowhaven FLUCK Camera sync failed: {type(exc).__name__}: {exc}")
+        time.sleep(SHADOWHAVEN_CAMERA_EVENTS_SYNC_SECONDS)
+
+
 def faircroft_credit_snapshot(reputation: int | None) -> dict[str, Any]:
     if reputation is None:
         return {
@@ -1023,6 +1160,107 @@ def shadowhaven_persistence_sync_worker() -> None:
         except Exception as exc:
             print(f"Shadowhaven FCRPMUSSALO sync failed: {type(exc).__name__}: {exc}")
         time.sleep(SHADOWHAVEN_PERSISTENCE_SYNC_SECONDS)
+
+
+def _property_candidates(payload: Any) -> list[tuple[str, Any]]:
+    if isinstance(payload, list):
+        return [(str(index), value) for index, value in enumerate(payload)]
+    if not isinstance(payload, dict):
+        return []
+    for key in ("properties", "propertyRecords", "property_records", "records", "items"):
+        if isinstance(payload.get(key), list):
+            return [(str(index), value) for index, value in enumerate(payload[key])]
+        if isinstance(payload.get(key), dict):
+            return [(str(item_key), item_value) for item_key, item_value in payload[key].items() if isinstance(item_value, dict)]
+    if any(key in payload for key in ("propertyId", "property_id", "address", "propertyName", "property_name")):
+        return [("property", payload)]
+    return [(str(key), value) for key, value in payload.items() if isinstance(value, (dict, list))]
+
+
+def extract_shadowhaven_properties(payload: Any) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    for source_key, value in _property_candidates(payload):
+        if not isinstance(value, dict):
+            continue
+        raw = json.dumps(value, separators=(",", ":"), default=str)
+        property_id = str(value.get("id") or value.get("propertyId") or value.get("property_id") or source_key).strip()
+        if not property_id:
+            property_id = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+        def pick(*keys: str) -> str:
+            for key in keys:
+                if value.get(key) is not None and str(value.get(key)).strip():
+                    return str(value.get(key)).strip()
+            return ""
+        records.append({
+            "property_id": property_id[:180],
+            "name": pick("name", "propertyName", "property_name", "title", "displayName")[:180] or "Unnamed property",
+            "address": pick("address", "location", "street", "coordinates")[:300],
+            "owner_identity": pick("ownerIdentity", "owner_identity", "ownerId", "owner_id", "identityId", "identity_id", "bohemiaId")[:180],
+            "status": pick("status", "state", "availability")[:80] or "unknown",
+            "price": pick("price", "purchasePrice", "purchase_price", "value", "cost")[:100],
+            "rent": pick("rent", "rentRate", "rent_rate", "rentValue")[:100],
+            "property_type": pick("type", "propertyType", "property_type", "category")[:100],
+            "raw_payload": raw[:50000],
+        })
+    return records
+
+
+def sync_shadowhaven_properties_once() -> int:
+    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+        return 0
+    transport = paramiko.Transport((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_PORT))
+    try:
+        transport.connect(username=SHADOWHAVEN_SFTP_USERNAME, password=SHADOWHAVEN_SFTP_PASSWORD)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+        try:
+            with sftp.open(SHADOWHAVEN_PROPERTY_FILE, "r") as remote_file:
+                payload = json.loads(remote_file.read().decode("utf-8-sig"))
+        finally:
+            sftp.close()
+    finally:
+        transport.close()
+    records = extract_shadowhaven_properties(payload)
+    synced_at = now_iso()
+    with conn() as db:
+        for record in records:
+            db.execute(
+                """
+                INSERT INTO game_property_records
+                (property_id, name, address, owner_identity, status, price_text, rent_text, property_type, raw_payload, source_file, synced_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (property_id) DO UPDATE SET
+                    name = EXCLUDED.name, address = EXCLUDED.address, owner_identity = EXCLUDED.owner_identity,
+                    status = EXCLUDED.status, price_text = EXCLUDED.price_text, rent_text = EXCLUDED.rent_text,
+                    property_type = EXCLUDED.property_type, raw_payload = EXCLUDED.raw_payload,
+                    source_file = EXCLUDED.source_file, synced_at = EXCLUDED.synced_at
+                """,
+                (record["property_id"], record["name"], record["address"], record["owner_identity"], record["status"], record["price"], record["rent"], record["property_type"], record["raw_payload"], SHADOWHAVEN_PROPERTY_FILE[:255], synced_at),
+            )
+        db.execute(
+            """
+            INSERT INTO anticheat_sync_status
+            (source_key, source_path, status, records, last_success_at, last_error, updated_at)
+            VALUES ('property_mod', ?, 'synced', ?, ?, '', ?)
+            ON CONFLICT (source_key) DO UPDATE SET source_path = EXCLUDED.source_path,
+                status = 'synced', records = EXCLUDED.records, last_success_at = EXCLUDED.last_success_at,
+                last_error = '', updated_at = EXCLUDED.updated_at
+            """,
+            (SHADOWHAVEN_PROPERTY_FILE[:255], len(records), synced_at, synced_at),
+        )
+    return len(records)
+
+
+def shadowhaven_property_sync_worker() -> None:
+    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+        print("Shadowhaven TBS Property Mod sync disabled: credentials are not configured")
+        return
+    while True:
+        try:
+            accepted = sync_shadowhaven_properties_once()
+            print(f"Shadowhaven TBS Property Mod sync updated {accepted} property record(s)")
+        except Exception as exc:
+            print(f"Shadowhaven TBS Property Mod sync failed: {type(exc).__name__}: {exc}")
+        time.sleep(SHADOWHAVEN_PROPERTY_SYNC_SECONDS)
 
 
 def roles_for(user: DbRow) -> list[str]:
@@ -2050,6 +2288,30 @@ def ensure_schema() -> None:
                 FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS fluck_camera_events (
+                event_id TEXT PRIMARY KEY,
+                captured_at TEXT NOT NULL,
+                camera_id TEXT NOT NULL DEFAULT '',
+                event_type TEXT NOT NULL DEFAULT '',
+                severity TEXT NOT NULL DEFAULT 'info',
+                subject_name TEXT NOT NULL DEFAULT '',
+                identity_id TEXT NOT NULL DEFAULT '',
+                vehicle_plate TEXT NOT NULL DEFAULT '',
+                location TEXT NOT NULL DEFAULT '',
+                evidence_url TEXT NOT NULL DEFAULT '',
+                summary TEXT NOT NULL DEFAULT '',
+                raw_payload TEXT NOT NULL DEFAULT '{}',
+                source_file TEXT NOT NULL DEFAULT '',
+                synced_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_fluck_camera_events_captured
+                ON fluck_camera_events (captured_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_fluck_camera_events_identity
+                ON fluck_camera_events (identity_id);
+            CREATE INDEX IF NOT EXISTS idx_fluck_camera_events_plate
+                ON fluck_camera_events (vehicle_plate);
+
             CREATE TABLE IF NOT EXISTS anticheat_players (
                 uid TEXT PRIMARY KEY,
                 player_name TEXT NOT NULL DEFAULT '',
@@ -2171,6 +2433,25 @@ def ensure_schema() -> None:
                 last_error TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS game_property_records (
+                property_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL DEFAULT '',
+                address TEXT NOT NULL DEFAULT '',
+                owner_identity TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'unknown',
+                price_text TEXT NOT NULL DEFAULT '',
+                rent_text TEXT NOT NULL DEFAULT '',
+                property_type TEXT NOT NULL DEFAULT '',
+                raw_payload TEXT NOT NULL DEFAULT '{}',
+                source_file TEXT NOT NULL DEFAULT '',
+                synced_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS game_property_owner_idx
+                ON game_property_records (owner_identity);
+            CREATE INDEX IF NOT EXISTS game_property_status_idx
+                ON game_property_records (status, synced_at DESC);
 
             CREATE TABLE IF NOT EXISTS developer_unlink_codes (
                 id SERIAL PRIMARY KEY,
@@ -6186,6 +6467,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_citizenship_exam(db, user)
                 elif path == "/api/ice/overview" and method == "GET":
                     self.api_ice_overview(db, user)
+                elif path == "/api/ice/camera-events" and method == "GET":
+                    self.api_ice_camera_events(db, user)
                 elif path == "/api/ice/search" and method == "GET":
                     self.api_ice_search(db, user, query)
                 elif path == "/api/ice/cases" and method == "POST":
@@ -6924,6 +7207,46 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         self.send_json(200, {"passed": passed, "score": score, "total": 6})
 
+    def _ice_camera_payload(self, db: Database) -> dict[str, Any]:
+        rows = all_rows(
+            db,
+            "SELECT * FROM fluck_camera_events ORDER BY captured_at DESC LIMIT 300",
+        )
+        linked = {
+            str(row["identity_id"])
+            for row in all_rows(db, "SELECT identity_id FROM arma_account_links WHERE identity_id <> ''")
+        }
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["linked_account"] = bool(item.get("identity_id") and str(item["identity_id"]) in linked)
+            item.pop("raw_payload", None)
+            events.append(item)
+        last_sync = one(db, "SELECT last_success_at, status, records FROM anticheat_sync_status WHERE source_key = 'fluck_camera'")
+        cutoff = utcnow() - dt.timedelta(hours=24)
+        recent = 0
+        for item in events:
+            try:
+                if parse_bridge_datetime(item.get("captured_at")) >= cutoff:
+                    recent += 1
+            except (TypeError, ValueError):
+                pass
+        high = sum(1 for item in events if str(item.get("severity") or "").lower() in {"high", "critical", "urgent"})
+        return {
+            "events": events,
+            "stats": {"total": len(events), "last_24_hours": recent, "high_priority": high},
+            "source_file": SHADOWHAVEN_CAMERA_EVENTS_FILE,
+            "last_sync": dict(last_sync) if last_sync else None,
+            "operational": bool(last_sync and last_sync.get("status") == "synced"),
+        }
+
+    def api_ice_camera_events(self, db: Database, user: DbRow | None) -> None:
+        err = ice_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        self.send_json(200, self._ice_camera_payload(db))
+
     def api_ice_overview(self, db: Database, user: DbRow | None) -> None:
         err = ice_required(user)
         if err:
@@ -6990,6 +7313,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "ordinance_notice": "Faircroft Local Ordinance restricts local police involvement with federal immigration operations. NCIC identity and safety checks remain available; local reports, BOLOs, and warrants are withheld when the restriction is active.",
                 "can_command": can_command,
                 "applications": applications,
+                "fluck_camera": self._ice_camera_payload(db),
             },
         )
 
@@ -14052,6 +14376,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "records": int(bank_category["records"] or 0),
                 "last_synced_at": bank_category.get("last_synced_at"),
             })
+        property_rows = all_rows(
+            db,
+            "SELECT property_id, name, address, owner_identity, status, price_text, rent_text, property_type, source_file, synced_at FROM game_property_records ORDER BY synced_at DESC, name LIMIT 1000",
+        )
+        property_sync = one(
+            db,
+            "SELECT * FROM anticheat_sync_status WHERE source_key = 'property_mod'",
+        )
         self.send_json(
             200,
             {
@@ -14148,6 +14480,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     },
                     "read_only": True,
                     "transaction_history_available": False,
+                },
+                "property_intelligence": {
+                    "records": [dict(row) for row in property_rows],
+                    "total": len(property_rows),
+                    "occupied": sum(1 for row in property_rows if str(row.get("status") or "").lower() in {"owned", "occupied", "rented"}),
+                    "available": sum(1 for row in property_rows if str(row.get("status") or "").lower() in {"available", "vacant", "for_sale"}),
+                    "source_file": SHADOWHAVEN_PROPERTY_FILE,
+                    "sync": dict(property_sync) if property_sync else {"status": "awaiting_first_sync", "records": 0},
+                    "read_only": True,
                 },
                 "app_visibility": {
                     "apps": [
@@ -16982,6 +17323,11 @@ def main() -> None:
         daemon=True,
     ).start()
     threading.Thread(
+        target=shadowhaven_camera_events_sync_worker,
+        name="shadowhaven-fluck-camera-sync",
+        daemon=True,
+    ).start()
+    threading.Thread(
         target=shadowhaven_anticheat_sync_worker,
         name="shadowhaven-anticheat-sync",
         daemon=True,
@@ -16989,6 +17335,11 @@ def main() -> None:
     threading.Thread(
         target=shadowhaven_persistence_sync_worker,
         name="shadowhaven-persistence-sync",
+        daemon=True,
+    ).start()
+    threading.Thread(
+        target=shadowhaven_property_sync_worker,
+        name="shadowhaven-property-sync",
         daemon=True,
     ).start()
     threading.Thread(
