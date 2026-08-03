@@ -604,6 +604,13 @@ def _camera_value(event: dict[str, Any], *keys: str) -> str:
         value = event.get(key)
         if value is not None and str(value).strip():
             return str(value).strip()
+    for nested_key in ("player", "subject", "identity", "driver", "vehicle"):
+        nested = event.get(nested_key)
+        if isinstance(nested, dict):
+            for key in keys:
+                value = nested.get(key)
+                if value is not None and str(value).strip():
+                    return str(value).strip()
     return ""
 
 
@@ -621,7 +628,7 @@ def extract_shadowhaven_camera_events(payload: Any) -> list[dict[str, str]]:
         event_type = _camera_value(value, "eventType", "event_type", "type", "kind") or "observation"
         severity = (_camera_value(value, "severity", "priority", "risk", "classification") or "info").lower()
         subject_name = _camera_value(value, "subjectName", "subject_name", "playerName", "player_name", "name", "driver")
-        identity_id = _camera_value(value, "identityId", "identity_id", "bohemiaId", "bohemia_id", "uid", "playerUID")
+        identity_id = _camera_value(value, "identityId", "identity_id", "bohemiaId", "bohemia_id", "bohemiaID", "bohemiaIdentityId", "biId", "bi_id", "uid", "playerUID", "playerUid")
         vehicle_plate = _camera_value(value, "plate", "plateNumber", "plate_number", "licensePlate", "license_plate")
         location = _camera_value(value, "location", "address", "zone", "corridor")
         evidence_url = _camera_value(value, "evidenceUrl", "evidence_url", "imageUrl", "image_url", "snapshotUrl", "snapshot_url")
@@ -7212,14 +7219,22 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             db,
             "SELECT * FROM fluck_camera_events ORDER BY captured_at DESC LIMIT 300",
         )
-        linked = {
-            str(row["identity_id"])
-            for row in all_rows(db, "SELECT identity_id FROM arma_account_links WHERE identity_id <> ''")
-        }
+        linked_rows = all_rows(
+            db,
+            "SELECT identity_id, player_name, user_id FROM arma_account_links WHERE identity_id <> '' OR player_name <> ''",
+        )
+        linked = {str(row["identity_id"]).strip().casefold() for row in linked_rows if row.get("identity_id")}
+        linked_names = {str(row["player_name"]).strip().casefold(): row for row in linked_rows if row.get("player_name")}
         events: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            item["linked_account"] = bool(item.get("identity_id") and str(item["identity_id"]) in linked)
+            identity_key = str(item.get("identity_id") or "").strip().casefold()
+            name_key = str(item.get("subject_name") or "").strip().casefold()
+            match = linked_names.get(name_key) if name_key else None
+            item["linked_account"] = bool((identity_key and identity_key in linked) or match)
+            item["linked_match"] = "identity_id" if identity_key and identity_key in linked else ("player_name" if match else "")
+            if match:
+                item["linked_user_id"] = match.get("user_id")
             item.pop("raw_payload", None)
             events.append(item)
         last_sync = one(db, "SELECT last_success_at, status, records FROM anticheat_sync_status WHERE source_key = 'fluck_camera'")
