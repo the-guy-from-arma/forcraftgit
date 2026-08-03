@@ -1179,7 +1179,7 @@ def _property_candidates(payload: Any) -> list[tuple[str, Any]]:
             return [(str(index), value) for index, value in enumerate(payload[key])]
         if isinstance(payload.get(key), dict):
             return [(str(item_key), item_value) for item_key, item_value in payload[key].items() if isinstance(item_value, dict)]
-    if any(key in payload for key in ("propertyId", "property_id", "address", "propertyName", "property_name")):
+    if any(key in payload for key in ("PropertyId", "propertyId", "property_id", "address", "propertyName", "property_name", "OwnerUid", "ownerUid")):
         return [("property", payload)]
     return [(str(key), value) for key, value in payload.items() if isinstance(value, (dict, list))]
 
@@ -1190,7 +1190,7 @@ def extract_shadowhaven_properties(payload: Any) -> list[dict[str, str]]:
         if not isinstance(value, dict):
             continue
         raw = json.dumps(value, separators=(",", ":"), default=str)
-        property_id = str(value.get("id") or value.get("propertyId") or value.get("property_id") or source_key).strip()
+        property_id = str(value.get("id") or value.get("PropertyId") or value.get("propertyId") or value.get("property_id") or source_key).strip()
         if not property_id:
             property_id = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
         def pick(*keys: str) -> str:
@@ -1198,15 +1198,19 @@ def extract_shadowhaven_properties(payload: Any) -> list[dict[str, str]]:
                 if value.get(key) is not None and str(value.get(key)).strip():
                     return str(value.get(key)).strip()
             return ""
+        owner_identity = pick("OwnerUid", "ownerUid", "ownerIdentity", "owner_identity", "ownerId", "owner_id", "identityId", "identity_id", "bohemiaId")
+        status = pick("status", "state", "availability")
+        if not status:
+            status = "sold" if owner_identity else "available"
         records.append({
             "property_id": property_id[:180],
-            "name": pick("name", "propertyName", "property_name", "title", "displayName")[:180] or "Unnamed property",
+            "name": pick("name", "PropertyName", "propertyName", "property_name", "title", "displayName")[:180] or property_id[:80] or "Unnamed property",
             "address": pick("address", "location", "street", "coordinates")[:300],
-            "owner_identity": pick("ownerIdentity", "owner_identity", "ownerId", "owner_id", "identityId", "identity_id", "bohemiaId")[:180],
-            "status": pick("status", "state", "availability")[:80] or "unknown",
+            "owner_identity": owner_identity[:180],
+            "status": status[:80],
             "price": pick("price", "purchasePrice", "purchase_price", "value", "cost")[:100],
-            "rent": pick("rent", "rentRate", "rent_rate", "rentValue")[:100],
-            "property_type": pick("type", "propertyType", "property_type", "category")[:100],
+            "rent": pick("RentPayments", "rentPayments", "rent", "rentRate", "rent_rate", "rentValue")[:100],
+            "property_type": pick("type", "PropertyType", "propertyType", "property_type", "category")[:100] or "Housing",
             "raw_payload": raw[:50000],
         })
     return records
@@ -14558,7 +14562,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             })
         property_rows = all_rows(
             db,
-            "SELECT property_id, name, address, owner_identity, status, price_text, rent_text, property_type, source_file, synced_at FROM game_property_records ORDER BY synced_at DESC, name LIMIT 1000",
+            """
+            SELECT p.property_id, p.name, p.address, p.owner_identity, p.status, p.price_text,
+                   p.rent_text, p.property_type, p.raw_payload, p.source_file, p.synced_at,
+                   u.id AS owner_user_id, u.name AS owner_name, u.civ_number AS owner_civ,
+                   l.player_name AS owner_player_name, l.platform AS owner_platform
+            FROM game_property_records p
+            LEFT JOIN arma_account_links l ON l.identity_id = p.owner_identity OR l.uid = p.owner_identity
+            LEFT JOIN users u ON u.id = l.user_id
+            ORDER BY p.synced_at DESC, p.name
+            LIMIT 1000
+            """,
         )
         property_sync = one(
             db,

@@ -20,6 +20,7 @@
         "Added a complete Account Management directory inside Developer Tools that mirrors the existing Admin account controls for verification, roles, agency assignment, name-change recovery, password resets, RP OS/CAD enforcement, Arma enforcement, and authorized account deletion without removing the Admin workspace.",
         "Added developer-only sign-in email resets with normalized validation, duplicate-address protection, explicit confirmation, resident notification, and permanent staff audit records.",
         "Added a Developer Tools Lottery special-prize vault for Steam, Xbox, PlayStation, Discord, Faircroft, and custom rewards with quantities, sponsors, private fulfillment instructions, activation controls, winner assignment, and permanent auditing.",
+        "Added a Developer Tools Housing Market tab that indexes Shadow Haven TBS Property Mod housing records, separates available and sold properties, resolves linked Faircroft owners from OwnerUid values, and displays tenure, rent payments, lock state, guest access, source property IDs, and sync status.",
         "Added a Faircroft Lottery Quick Draw development preview marked Coming Soon for future rapid drawing rounds.",
         "Added ICE Agent recruitment to Faircroft Careers with a 20-question multiple-choice federal-service qualification, a mandatory internal 20/20 advancement threshold, and character-specific application records.",
         "Added an ICE Commander Applications desk inside ICE MDT for qualification review, interview and training advancement, command denial, and final appointment that automatically grants the ICE Agent role and notifies the candidate.",
@@ -69,6 +70,7 @@
       ],
       "changed": [
         "Changed Ravenhood promotional-code administration to show full live promo codes in Developer Tools, expose codes in redemption/audit logs, and add audited hard-delete controls beside Pause and Resume.",
+        "Reworked Ravenhood around a visible account portfolio desk so residents can immediately review total account value, buying power, invested balance, unrealized movement, every owned position, per-stock gain or loss, allocation weight, and jump from a holding directly into that security's trade view.",
         "Rebuilt Ravenhood's active trading workspace into a resident-first brokerage canvas with a premium portfolio landing area, connected security spotlight, softer watchlist and holdings flow, product-style modals, improved mobile trading actions, and a less boxed exchange presentation.",
         "Added a persistent Ravenhood dark and light theme switch and converted the Market Movers card rail into an operational exchange scanner with price, sector, movement, and selected-security command rows instead of a generated-looking horizontal card strip.",
         "Upgraded Ravenhood into a denser 2026 trader surface with a compact account-standing rail, portfolio allocation telemetry, selected-instrument ticker masthead, richer live quote card, bid/ask/spread chart readouts, animated market-depth bands, and reduced sidebar footprint.",

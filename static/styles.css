@@ -19053,6 +19053,60 @@ textarea:focus {
 @media(max-width:1180px){.market-v9 .market-v7-home{grid-template-columns:1fr}.market-v9 .market-v7-order{grid-column:1;grid-row:auto;border-left:0;border-top:1px solid rgba(77,255,183,.14);display:grid;grid-template-columns:1fr 1fr 1fr}.market-v9 .market-v7-account{grid-template-columns:1fr}.market-v9 .market-v7-actions{min-width:0}}
 @media(max-width:860px){.market-v9 .market-v7-home{min-height:0}.market-v9 .market-v7-account{padding:14px}.market-v9 .market-v7-standing dl{grid-template-columns:1fr 1fr}.market-v9 .market-v7-focus{padding:18px 14px}.market-v9 .market-v7-hero h1>b{font-size:60px}.market-v9 .market-v7-chart{height:460px!important}.market-v9 .market-v7-order{display:block;padding:14px 14px 108px}.market-v9 .market-v9-candles i{width:6px}}
 
+/* Ravenhood v10: account-first trading desk */
+.market-v10 .market-v7-top nav{border:0;background:rgba(255,255,255,.035);backdrop-filter:blur(18px)}
+.market-v10 .market-v7-top nav button{border-radius:999px}
+.market-v10 .market-v7-home{grid-template-columns:minmax(0,1fr) 330px;background:
+  radial-gradient(circle at 18% 18%,rgba(73,255,184,.11),transparent 24%),
+  radial-gradient(circle at 86% 42%,rgba(59,139,255,.08),transparent 28%),
+  linear-gradient(135deg,#020605,#06120e 52%,#020604)}
+.market-v10 .market-v7-account{grid-template-columns:260px minmax(0,1fr) 220px;padding:16px 26px;background:rgba(2,8,6,.56);backdrop-filter:blur(18px)}
+.market-v10 .market-v7-card{background:linear-gradient(135deg,rgba(49,233,158,.25),rgba(67,129,255,.16));border:1px solid rgba(104,255,202,.16);box-shadow:0 24px 80px rgba(0,0,0,.32),inset 0 1px rgba(255,255,255,.08)}
+.market-v10 .market-v7-standing div{background:transparent;border:0;border-bottom:1px solid rgba(104,255,202,.11);border-radius:0}
+.market-v10 .market-v7-actions button{border-radius:999px;border:1px solid rgba(104,255,202,.22);background:rgba(255,255,255,.045);color:#eafff5;box-shadow:none}
+.market-v10 .market-v7-actions button:first-child{background:linear-gradient(135deg,#37eba3,#69b7ff);color:#04100b;border:0}
+.market-v10 .market-v7-focus{padding-top:24px;background:
+  linear-gradient(90deg,rgba(255,255,255,.018),transparent 28%,rgba(255,255,255,.018)),
+  radial-gradient(circle at 75% 4%,rgba(52,226,154,.14),transparent 28%)}
+.market-v10 .market-v7-hero{border-bottom:0;padding-bottom:10px}
+.market-v10 .market-v7-hero h1>b{font-size:clamp(58px,6.6vw,112px);text-shadow:0 18px 80px rgba(64,255,178,.13)}
+.market-v10 .market-v7-quote-card{border-radius:30px!important;background:
+  linear-gradient(145deg,rgba(52,226,154,.2),rgba(105,183,255,.08)),
+  rgba(255,255,255,.035)!important}
+.market-v10-portfolio{margin:16px 0 22px;padding:0;border-top:1px solid rgba(104,255,202,.16);border-bottom:1px solid rgba(104,255,202,.16);position:relative;overflow:hidden}
+.market-v10-portfolio:before{content:"";position:absolute;inset:-40% -10% auto 45%;height:220px;background:radial-gradient(circle,rgba(54,235,160,.16),transparent 62%);filter:blur(8px);pointer-events:none;animation:marketV10Sweep 6s ease-in-out infinite alternate}
+.market-v10-portfolio-head{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;padding:24px 4px 18px;position:relative;z-index:1}
+.market-v10-portfolio-head span,.market-v10-account-strip small{display:block;color:#49e5a2;font-size:9px;font-weight:1000;letter-spacing:.16em;text-transform:uppercase}
+.market-v10-portfolio-head h2{font-size:clamp(28px,3vw,48px);letter-spacing:-.055em;margin:6px 0 5px}
+.market-v10-portfolio-head p{margin:0;color:#92b3a7}
+.market-v10-portfolio-head>strong{font-size:clamp(24px,2.5vw,38px);letter-spacing:-.04em;text-align:right}
+.market-v10-portfolio-head>strong small{display:block;font-size:12px;margin-top:4px}
+.market-v10-account-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:rgba(104,255,202,.12);position:relative;z-index:1}
+.market-v10-account-strip span{padding:15px 18px;background:rgba(4,13,10,.86)}
+.market-v10-account-strip b{display:block;margin-top:5px;font-size:18px}
+.market-v10-holdings{position:relative;z-index:1;padding:12px 0 24px;display:grid;gap:0}
+.market-v10-holdings button{width:100%;min-height:68px;display:grid;grid-template-columns:44px minmax(170px,1fr) minmax(110px,.45fr) minmax(145px,.55fr) minmax(120px,.45fr);align-items:center;gap:16px;border:0;border-bottom:1px solid rgba(104,255,202,.1);background:transparent;color:#eafff5;text-align:left;cursor:pointer;transition:background .2s ease,transform .2s ease,padding .2s ease}
+.market-v10-holdings button:hover,.market-v10-holdings button.active{background:linear-gradient(90deg,rgba(52,226,154,.12),transparent 78%);padding-left:10px}
+.market-v10-holdings i{font-style:normal;color:#4bdc9d;font-size:11px;font-weight:1000;letter-spacing:.14em}
+.market-v10-holdings span{display:grid;gap:2px}.market-v10-holdings span b{font-size:19px}.market-v10-holdings span small{color:#83a89b}
+.market-v10-holdings em{font-style:normal;color:#a3c0b5;font-size:12px}.market-v10-holdings strong{display:grid;font-size:16px}.market-v10-holdings strong small{font-size:11px;margin-top:3px}
+.market-v10-holdings mark{height:5px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden}.market-v10-holdings mark u{display:block;height:100%;background:linear-gradient(90deg,#35eaa0,#69b7ff);border-radius:inherit;animation:marketAllocation 1.1s ease-out both}
+.market-v10-empty{padding:26px;border:1px dashed rgba(104,255,202,.2);border-radius:24px;background:rgba(255,255,255,.025);display:grid;gap:10px;color:#a2bfb4}
+.market-v10-empty b{font-size:22px;color:#fff}.market-v10-empty button{width:max-content;min-height:42px;display:inline-flex;border-radius:999px;padding:0 18px;background:#35eaa0;color:#04100b;font-weight:1000}
+.market-v10 .market-v7-statline{border-radius:0;border-inline:0;background:transparent;margin-top:0}
+.market-v10 .market-v7-chart{border-radius:30px!important}
+.market-v10 .market-v7-order{background:rgba(2,8,6,.5);backdrop-filter:blur(18px)}
+.market-v10 .market-v7-order .market-order-ticket,.market-v10 .market-v7-positions,.market-v10 .market-v7-activity{border-radius:28px!important;background:rgba(255,255,255,.04)!important}
+.market-v10.market-v7-light .market-v7-home{background:#f4f8f6;color:#10291f}
+.market-v10.market-v7-light .market-v7-account,.market-v10.market-v7-light .market-v7-order{background:rgba(255,255,255,.72)}
+.market-v10.market-v7-light .market-v10-account-strip{background:rgba(16,40,68,.1)}
+.market-v10.market-v7-light .market-v10-account-strip span{background:#fff}
+.market-v10.market-v7-light .market-v10-holdings button{color:#10291f;border-bottom-color:rgba(16,40,68,.1)}
+.market-v10.market-v7-light .market-v10-holdings span small,.market-v10.market-v7-light .market-v10-holdings em{color:#637a71}
+@keyframes marketV10Sweep{from{transform:translateX(-12%);opacity:.55}to{transform:translateX(10%);opacity:1}}
+@media(max-width:1180px){.market-v10 .market-v7-home{grid-template-columns:1fr}.market-v10 .market-v7-account{grid-template-columns:1fr 1fr}.market-v10-portfolio-head{align-items:flex-start}.market-v10-holdings button{grid-template-columns:38px minmax(150px,1fr) minmax(90px,.45fr) minmax(130px,.55fr)}.market-v10-holdings mark{display:none}}
+@media(max-width:860px){.market-v10 .market-v7-account{display:block}.market-v10-portfolio-head{display:grid;padding:20px 0 14px}.market-v10-portfolio-head>strong{text-align:left}.market-v10-account-strip{grid-template-columns:1fr 1fr}.market-v10-account-strip span{padding:13px}.market-v10-holdings button{grid-template-columns:34px 1fr auto;gap:10px;min-height:74px}.market-v10-holdings em{display:none}.market-v10-holdings strong{grid-column:2/-1}.market-v10 .market-v7-chart{height:390px!important}}
+
 /* Promo issuer: a short, guided workflow instead of a dense settings grid. */
 .dev-promo-form [hidden]{display:none!important}
 .dev-promo-lanes{grid-column:1/-1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding-bottom:16px;border-bottom:1px solid #284147}
@@ -19102,3 +19156,6 @@ textarea:focus {
 .ice-camera-profile-link,.ice-camera-profile-missing{position:relative;z-index:1;border-radius:18px;padding:17px 18px;background:linear-gradient(135deg,rgba(84,224,202,.14),rgba(14,44,51,.7));box-shadow:inset 0 0 0 1px rgba(255,255,255,.025)}.ice-camera-profile-link:hover{transform:translateY(-1px)}
 .ice-camera-source-strip{border:0;border-radius:22px;padding:22px 24px;background:linear-gradient(105deg,rgba(231,196,94,.085),rgba(92,237,242,.055),rgba(255,255,255,.018));box-shadow:inset 0 0 0 1px rgba(111,238,242,.12)}.ice-camera-source-strip>div:first-child strong{font-size:28px;letter-spacing:-.04em}.ice-camera-source-list{gap:10px}.ice-camera-source-list span{border:0;border-radius:16px;background:rgba(2,10,13,.48);box-shadow:inset 0 0 0 1px rgba(111,238,242,.11);padding:13px 14px}.ice-camera-footnote{padding:0 4px}
 @keyframes iceFluckOrbit{to{transform:rotate(360deg)}}@media(max-width:980px){.ice-camera-command{padding-left:34px}.ice-camera-command:before{position:relative;left:auto;top:auto;margin-bottom:18px}.ice-camera-grid{grid-template-columns:1fr}.ice-camera-ledger{border-right:0}.ice-camera-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:620px){.ice-view-fluck .ice-workspace main{width:calc(100% - 18px)}.ice-camera-command{padding:24px 20px;border-radius:20px}.ice-camera-command h2{font-size:46px}.ice-camera-health{min-width:0;border-left:0;border-top:1px solid rgba(111,238,242,.18);padding:16px 0 0}.ice-camera-metrics{grid-template-columns:1fr}.ice-camera-grid{min-height:0;border-radius:18px}.ice-camera-source-strip{grid-template-columns:1fr}.ice-camera-source-list{grid-template-columns:1fr}.ice-camera-inspector:before{font-size:42px}}
+/* Housing Market: SHS property ownership board */
+.housing-market-console{--house-gold:#f2c86b;--house-blue:#72a7ff;--house-green:#55dbb4}.housing-market-hero{background:radial-gradient(circle at 12% 8%,rgba(242,200,107,.2),transparent 38%),radial-gradient(circle at 78% 18%,rgba(114,167,255,.18),transparent 34%),linear-gradient(125deg,#121a28,#071018)!important}.housing-market-hero h2{color:#fff7de}.housing-market-rail{grid-template-columns:repeat(5,1fr)!important}.housing-market-rail div:first-child strong{color:#fff7de}.housing-market-registry{background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,.012))!important;border-color:rgba(242,200,107,.16)!important}.housing-market-table-head,.housing-market-row{display:grid;grid-template-columns:minmax(220px,1.35fr) .55fr 1.2fr .65fr .65fr;gap:18px;align-items:center}.housing-market-table-head{padding:14px 0;color:#8798ad;font:800 10px monospace;letter-spacing:.14em;text-transform:uppercase;border-bottom:1px solid rgba(132,155,190,.16)}.housing-market-row{position:relative;min-height:84px;padding:17px 0;border-bottom:1px solid rgba(132,155,190,.12);color:#eaf1fb}.housing-market-row:before{content:"";position:absolute;left:-12px;top:18px;bottom:18px;width:3px;border-radius:99px;background:var(--house-green);box-shadow:0 0 18px rgba(85,219,180,.45)}.housing-market-row.sold:before{background:var(--house-gold);box-shadow:0 0 18px rgba(242,200,107,.35)}.housing-market-row strong,.housing-market-row small{display:block}.housing-market-row small{margin-top:5px;color:#8291a6;font-size:11px;overflow-wrap:anywhere}.housing-market-row span:first-child strong{font-size:15px}.housing-market-row .property-state.sold{color:var(--house-gold)}.housing-market-row .property-state.available{color:var(--house-green)}.housing-market-registry .property-intel-toolbar p{margin:4px 0 0;color:#91a0b4}.housing-market-registry footer{border-top:1px solid rgba(132,155,190,.12);margin-top:8px}
+@media(max-width:980px){.housing-market-rail{grid-template-columns:1fr 1fr!important}.housing-market-rail div:nth-child(2n){border-right:0}.housing-market-table-head{display:none}.housing-market-row{grid-template-columns:1fr 1fr;gap:12px;padding:18px 8px 18px 14px}.housing-market-row span:first-child{grid-column:1/-1}}
