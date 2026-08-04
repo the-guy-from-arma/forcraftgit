@@ -4,6 +4,7 @@ import base64
 import datetime as dt
 import hashlib
 import hmac
+import io
 import json
 import mimetypes
 import os
@@ -51,32 +52,43 @@ ANDROID_APK_URL = os.environ.get(
 ).strip()
 ARMA_BRIDGE_API_KEY = os.environ.get("ARMA_BRIDGE_API_KEY", "").strip()
 ARMA_LINK_CODE_TTL_MINUTES = int(os.environ.get("ARMA_LINK_CODE_TTL_MINUTES", "30"))
-SHADOWHAVEN_SFTP_HOST = os.environ.get("SHADOWHAVEN_SFTP_HOST", "").strip()
-SHADOWHAVEN_SFTP_PORT = int(os.environ.get("SHADOWHAVEN_SFTP_PORT", "2022"))
-SHADOWHAVEN_SFTP_USERNAME = os.environ.get("SHADOWHAVEN_SFTP_USERNAME", "").strip()
-SHADOWHAVEN_SFTP_PASSWORD = os.environ.get("SHADOWHAVEN_SFTP_PASSWORD", "")
+SHADOWHAVEN_SFTP_HOST = os.environ.get("LOAFHOSTS_SFTP_HOST", os.environ.get("SHADOWHAVEN_SFTP_HOST", "")).strip()
+SHADOWHAVEN_SFTP_PORT = int(os.environ.get("LOAFHOSTS_SFTP_PORT", os.environ.get("SHADOWHAVEN_SFTP_PORT", "2022")))
+SHADOWHAVEN_SFTP_USERNAME = os.environ.get("LOAFHOSTS_SFTP_USERNAME", os.environ.get("SHADOWHAVEN_SFTP_USERNAME", "")).strip()
+SHADOWHAVEN_SFTP_PASSWORD = os.environ.get("LOAFHOSTS_SFTP_PASSWORD", os.environ.get("SHADOWHAVEN_SFTP_PASSWORD", ""))
+SHADOWHAVEN_SFTP_PRIVATE_KEY = os.environ.get(
+    "LOAFHOSTS_SFTP_PRIVATE_KEY",
+    os.environ.get("SHADOWHAVEN_SFTP_PRIVATE_KEY", ""),
+).strip()
+SHADOWHAVEN_SFTP_PRIVATE_KEY_PASSPHRASE = os.environ.get(
+    "LOAFHOSTS_SFTP_PRIVATE_KEY_PASSPHRASE",
+    os.environ.get("SHADOWHAVEN_SFTP_PRIVATE_KEY_PASSPHRASE", ""),
+)
 SHADOWHAVEN_BANK_FILE = os.environ.get(
-    "SHADOWHAVEN_BANK_FILE",
-    "profile/profile/.db/FCRPMUSSALO/Banks/00bb0001-1e42-6138-7e90-c04752d4fab6.json",
+    "LOAFHOSTS_BANK_FILE",
+    os.environ.get(
+        "SHADOWHAVEN_BANK_FILE",
+        "profile/profile/.db/FCRPMUSSALO/Banks/00bb0001-1e42-6138-7e90-c04752d4fab6.json",
+    ),
 ).strip()
 SHADOWHAVEN_BANK_SYNC_SECONDS = max(5, int(os.environ.get("SHADOWHAVEN_BANK_SYNC_SECONDS", "15")))
 SHADOWHAVEN_REPUTATION_FILE = os.environ.get(
-    "SHADOWHAVEN_REPUTATION_FILE",
-    "profile/profile/MedicalHud/reputation.json",
+    "LOAFHOSTS_REPUTATION_FILE",
+    os.environ.get("SHADOWHAVEN_REPUTATION_FILE", "profile/profile/MedicalHud/reputation.json"),
 ).strip()
 SHADOWHAVEN_REPUTATION_SYNC_SECONDS = max(
     15, int(os.environ.get("SHADOWHAVEN_REPUTATION_SYNC_SECONDS", "30"))
 )
 SHADOWHAVEN_CAMERA_EVENTS_FILE = os.environ.get(
-    "SHADOWHAVEN_CAMERA_EVENTS_FILE",
-    "profile/profile/FLUCKCamera/camera_events.json",
+    "LOAFHOSTS_CAMERA_EVENTS_FILE",
+    os.environ.get("SHADOWHAVEN_CAMERA_EVENTS_FILE", "profile/profile/FLUCKCamera/camera_events.json"),
 ).strip()
 SHADOWHAVEN_CAMERA_EVENTS_SYNC_SECONDS = max(
     15, int(os.environ.get("SHADOWHAVEN_CAMERA_EVENTS_SYNC_SECONDS", "20"))
 )
 SHADOWHAVEN_PERSISTENCE_ROOT = os.environ.get(
-    "SHADOWHAVEN_PERSISTENCE_ROOT",
-    "profile/profile/.db/FCRPMUSSALO",
+    "LOAFHOSTS_PERSISTENCE_ROOT",
+    os.environ.get("SHADOWHAVEN_PERSISTENCE_ROOT", "profile/profile/.db/FCRPMUSSALO"),
 ).strip().rstrip("/")
 SHADOWHAVEN_PERSISTENCE_SYNC_SECONDS = max(
     60, int(os.environ.get("SHADOWHAVEN_PERSISTENCE_SYNC_SECONDS", "120"))
@@ -87,20 +99,35 @@ SHADOWHAVEN_PERSISTENCE_MAX_FILES = max(
 SHADOWHAVEN_PERSISTENCE_MAX_FILE_BYTES = max(
     65536, int(os.environ.get("SHADOWHAVEN_PERSISTENCE_MAX_FILE_BYTES", "524288"))
 )
-SHADOWHAVEN_PROPERTY_FILE = os.environ.get(
-    "SHADOWHAVEN_PROPERTY_FILE",
+DEFAULT_SHADOWHAVEN_PROPERTY_FILES = [
     "profile/profile/TBS Property Mod/properties.json",
+    "profile/profile/TBS Property Mod/owned-properties.json",
+    "profile/profile/TBS Property Mod/rented-properties.json",
+]
+_configured_property_files = os.environ.get(
+    "LOAFHOSTS_PROPERTY_FILES",
+    os.environ.get("SHADOWHAVEN_PROPERTY_FILES", ""),
 ).strip()
+if _configured_property_files:
+    SHADOWHAVEN_PROPERTY_FILES = [
+        file_path.strip()
+        for file_path in re.split(r"[,;\n]+", _configured_property_files)
+        if file_path.strip()
+    ]
+else:
+    _single_property_file = os.environ.get("LOAFHOSTS_PROPERTY_FILE", os.environ.get("SHADOWHAVEN_PROPERTY_FILE", "")).strip()
+    SHADOWHAVEN_PROPERTY_FILES = [_single_property_file] if _single_property_file else DEFAULT_SHADOWHAVEN_PROPERTY_FILES
+SHADOWHAVEN_PROPERTY_FILE = SHADOWHAVEN_PROPERTY_FILES[0] if SHADOWHAVEN_PROPERTY_FILES else DEFAULT_SHADOWHAVEN_PROPERTY_FILES[0]
 SHADOWHAVEN_PROPERTY_SYNC_SECONDS = max(
     20, int(os.environ.get("SHADOWHAVEN_PROPERTY_SYNC_SECONDS", "60"))
 )
 SHADOWHAVEN_ANTICHEAT_DATABASE_FILE = os.environ.get(
-    "SHADOWHAVEN_ANTICHEAT_DATABASE_FILE",
-    "profile/profile/TB/tb_player_database.json",
+    "LOAFHOSTS_ANTICHEAT_DATABASE_FILE",
+    os.environ.get("SHADOWHAVEN_ANTICHEAT_DATABASE_FILE", "profile/profile/TB/tb_player_database.json"),
 ).strip()
 SHADOWHAVEN_ANTICHEAT_ALT_FILE = os.environ.get(
-    "SHADOWHAVEN_ANTICHEAT_ALT_FILE",
-    "profile/profile/TB/tb_alt_accounts.json",
+    "LOAFHOSTS_ANTICHEAT_ALT_FILE",
+    os.environ.get("SHADOWHAVEN_ANTICHEAT_ALT_FILE", "profile/profile/TB/tb_alt_accounts.json"),
 ).strip()
 SHADOWHAVEN_ANTICHEAT_SYNC_SECONDS = max(
     15, int(os.environ.get("SHADOWHAVEN_ANTICHEAT_SYNC_SECONDS", "30"))
@@ -405,6 +432,50 @@ def all_rows(db: Database, sql: str, params: tuple[Any, ...] = ()) -> list[DbRow
     return db.execute(sql, params).fetchall()
 
 
+def has_shadowhaven_sftp_credentials() -> bool:
+    return bool(
+        SHADOWHAVEN_SFTP_HOST
+        and SHADOWHAVEN_SFTP_USERNAME
+        and (SHADOWHAVEN_SFTP_PASSWORD or SHADOWHAVEN_SFTP_PRIVATE_KEY)
+    )
+
+
+def _shadowhaven_sftp_private_key_text() -> str:
+    key_value = (SHADOWHAVEN_SFTP_PRIVATE_KEY or "").strip()
+    if not key_value:
+        return ""
+    if "BEGIN " in key_value:
+        return key_value.replace("\\n", "\n")
+    key_path = Path(key_value)
+    if key_path.exists() and key_path.is_file():
+        return key_path.read_text(encoding="utf-8")
+    return key_value.replace("\\n", "\n")
+
+
+def _load_shadowhaven_sftp_private_key() -> paramiko.PKey | None:
+    key_text = _shadowhaven_sftp_private_key_text()
+    if not key_text:
+        return None
+    passphrase = SHADOWHAVEN_SFTP_PRIVATE_KEY_PASSPHRASE or None
+    key_errors: list[str] = []
+    for key_type in (paramiko.Ed25519Key, paramiko.RSAKey, paramiko.ECDSAKey, paramiko.DSSKey):
+        try:
+            return key_type.from_private_key(io.StringIO(key_text), password=passphrase)
+        except Exception as exc:
+            key_errors.append(f"{key_type.__name__}: {exc}")
+    raise RuntimeError("SFTP private key could not be loaded: " + " | ".join(key_errors))
+
+
+def connect_shadowhaven_transport() -> paramiko.Transport:
+    transport = paramiko.Transport((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_PORT))
+    private_key = _load_shadowhaven_sftp_private_key()
+    if private_key:
+        transport.connect(username=SHADOWHAVEN_SFTP_USERNAME, pkey=private_key)
+    else:
+        transport.connect(username=SHADOWHAVEN_SFTP_USERNAME, password=SHADOWHAVEN_SFTP_PASSWORD)
+    return transport
+
+
 def extract_shadowhaven_bank_data(payload: Any) -> tuple[dict[str, Any], str]:
     if not isinstance(payload, dict):
         return {}, ""
@@ -422,11 +493,10 @@ def extract_shadowhaven_bank_data(payload: Any) -> tuple[dict[str, Any], str]:
 
 
 def sync_shadowhaven_bank_once() -> int:
-    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+    if not has_shadowhaven_sftp_credentials():
         return 0
-    transport = paramiko.Transport((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_PORT))
+    transport = connect_shadowhaven_transport()
     try:
-        transport.connect(username=SHADOWHAVEN_SFTP_USERNAME, password=SHADOWHAVEN_SFTP_PASSWORD)
         sftp = paramiko.SFTPClient.from_transport(transport)
         try:
             with sftp.open(SHADOWHAVEN_BANK_FILE, "r") as remote_file:
@@ -487,7 +557,7 @@ def sync_shadowhaven_bank_once() -> int:
 
 
 def shadowhaven_bank_sync_worker() -> None:
-    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+    if not has_shadowhaven_sftp_credentials():
         print("Shadowhaven SFTP bank sync disabled: credentials are not configured")
         return
     while True:
@@ -524,11 +594,10 @@ def extract_shadowhaven_reputation_data(payload: Any) -> tuple[list[tuple[str, i
 
 
 def sync_shadowhaven_reputation_once() -> int:
-    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+    if not has_shadowhaven_sftp_credentials():
         return 0
-    transport = paramiko.Transport((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_PORT))
+    transport = connect_shadowhaven_transport()
     try:
-        transport.connect(username=SHADOWHAVEN_SFTP_USERNAME, password=SHADOWHAVEN_SFTP_PASSWORD)
         sftp = paramiko.SFTPClient.from_transport(transport)
         try:
             with sftp.open(SHADOWHAVEN_REPUTATION_FILE, "r") as remote_file:
@@ -568,7 +637,7 @@ def sync_shadowhaven_reputation_once() -> int:
 
 
 def shadowhaven_reputation_sync_worker() -> None:
-    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+    if not has_shadowhaven_sftp_credentials():
         print("Shadowhaven reputation sync disabled: credentials are not configured")
         return
     while True:
@@ -645,11 +714,10 @@ def extract_shadowhaven_camera_events(payload: Any) -> list[dict[str, str]]:
 
 
 def sync_shadowhaven_camera_events_once() -> int:
-    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+    if not has_shadowhaven_sftp_credentials():
         return 0
-    transport = paramiko.Transport((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_PORT))
+    transport = connect_shadowhaven_transport()
     try:
-        transport.connect(username=SHADOWHAVEN_SFTP_USERNAME, password=SHADOWHAVEN_SFTP_PASSWORD)
         sftp = paramiko.SFTPClient.from_transport(transport)
         try:
             with sftp.open(SHADOWHAVEN_CAMERA_EVENTS_FILE, "r") as remote_file:
@@ -698,7 +766,7 @@ def sync_shadowhaven_camera_events_once() -> int:
 
 
 def shadowhaven_camera_events_sync_worker() -> None:
-    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+    if not has_shadowhaven_sftp_credentials():
         print("Shadowhaven FLUCK Camera sync disabled: credentials are not configured")
         return
     while True:
@@ -738,11 +806,10 @@ def faircroft_credit_snapshot(reputation: int | None) -> dict[str, Any]:
 
 
 def sync_shadowhaven_anticheat_once() -> tuple[int, int]:
-    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+    if not has_shadowhaven_sftp_credentials():
         return 0, 0
-    transport = paramiko.Transport((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_PORT))
+    transport = connect_shadowhaven_transport()
     try:
-        transport.connect(username=SHADOWHAVEN_SFTP_USERNAME, password=SHADOWHAVEN_SFTP_PASSWORD)
         sftp = paramiko.SFTPClient.from_transport(transport)
         try:
             with sftp.open(SHADOWHAVEN_ANTICHEAT_DATABASE_FILE, "r") as remote_file:
@@ -932,7 +999,7 @@ def sync_shadowhaven_anticheat_once() -> tuple[int, int]:
 
 
 def shadowhaven_anticheat_sync_worker() -> None:
-    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+    if not has_shadowhaven_sftp_credentials():
         print("Shadowhaven SFTP anti-cheat sync disabled: credentials are not configured")
         return
     while True:
@@ -1046,16 +1113,15 @@ def upsert_persistence_record_batch(records: list[tuple[Any, ...]]) -> None:
 
 
 def sync_shadowhaven_persistence_once() -> tuple[int, dict[str, int]]:
-    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+    if not has_shadowhaven_sftp_credentials():
         return 0, {}
-    transport = paramiko.Transport((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_PORT))
+    transport = connect_shadowhaven_transport()
     processed = 0
     category_counts: dict[str, int] = {}
     seen_source_paths: set[str] = set()
     scan_complete = False
     synced_at = now_iso()
     try:
-        transport.connect(username=SHADOWHAVEN_SFTP_USERNAME, password=SHADOWHAVEN_SFTP_PASSWORD)
         sftp = paramiko.SFTPClient.from_transport(transport)
         try:
             # The list is reversed because this scanner consumes it with pop().
@@ -1153,7 +1219,7 @@ def sync_shadowhaven_persistence_once() -> tuple[int, dict[str, int]]:
 
 
 def shadowhaven_persistence_sync_worker() -> None:
-    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+    if not has_shadowhaven_sftp_credentials():
         print("Shadowhaven FCRPMUSSALO sync disabled: credentials are not configured")
         return
     print(
@@ -1245,23 +1311,40 @@ def extract_shadowhaven_properties(payload: Any) -> list[dict[str, str]]:
 
 
 def sync_shadowhaven_properties_once() -> int:
-    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+    if not has_shadowhaven_sftp_credentials():
         return 0
-    transport = paramiko.Transport((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_PORT))
+    records_by_source: list[tuple[str, dict[str, str]]] = []
+    read_sources: list[str] = []
+    read_errors: list[str] = []
+    transport = connect_shadowhaven_transport()
     try:
-        transport.connect(username=SHADOWHAVEN_SFTP_USERNAME, password=SHADOWHAVEN_SFTP_PASSWORD)
         sftp = paramiko.SFTPClient.from_transport(transport)
         try:
-            with sftp.open(SHADOWHAVEN_PROPERTY_FILE, "r") as remote_file:
-                payload = json.loads(remote_file.read().decode("utf-8-sig"))
+            for source_path in SHADOWHAVEN_PROPERTY_FILES:
+                try:
+                    with sftp.open(source_path, "r") as remote_file:
+                        payload = json.loads(remote_file.read().decode("utf-8-sig"))
+                except OSError as exc:
+                    read_errors.append(f"{source_path}: {exc}")
+                    continue
+                records = extract_shadowhaven_properties(payload)
+                if "rented" in source_path.lower():
+                    for record in records:
+                        if record.get("owner_identity") and record.get("status") in {"sold", "available"}:
+                            record["status"] = "rented"
+                read_sources.append(source_path)
+                records_by_source.extend((source_path, record) for record in records)
         finally:
             sftp.close()
     finally:
         transport.close()
-    records = extract_shadowhaven_properties(payload)
+    if not read_sources:
+        raise RuntimeError("No TBS Property Mod files could be read: " + "; ".join(read_errors[:6]))
     synced_at = now_iso()
     with conn() as db:
-        for record in records:
+        for source_path in read_sources:
+            db.execute("DELETE FROM game_property_records WHERE source_file = ?", (source_path[:255],))
+        for source_path, record in records_by_source:
             db.execute(
                 """
                 INSERT INTO game_property_records
@@ -1273,7 +1356,7 @@ def sync_shadowhaven_properties_once() -> int:
                     property_type = EXCLUDED.property_type, raw_payload = EXCLUDED.raw_payload,
                     source_file = EXCLUDED.source_file, synced_at = EXCLUDED.synced_at
                 """,
-                (record["property_id"], record["name"], record["address"], record["owner_identity"], record["status"], record["price"], record["rent"], record["property_type"], record["raw_payload"], SHADOWHAVEN_PROPERTY_FILE[:255], synced_at),
+                (record["property_id"], record["name"], record["address"], record["owner_identity"], record["status"], record["price"], record["rent"], record["property_type"], record["raw_payload"], source_path[:255], synced_at),
             )
         db.execute(
             """
@@ -1284,13 +1367,13 @@ def sync_shadowhaven_properties_once() -> int:
                 status = 'synced', records = EXCLUDED.records, last_success_at = EXCLUDED.last_success_at,
                 last_error = '', updated_at = EXCLUDED.updated_at
             """,
-            (SHADOWHAVEN_PROPERTY_FILE[:255], len(records), synced_at, synced_at),
+            (", ".join(read_sources)[:255], len(records_by_source), synced_at, synced_at),
         )
-    return len(records)
+    return len(records_by_source)
 
 
 def shadowhaven_property_sync_worker() -> None:
-    if not all((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_USERNAME, SHADOWHAVEN_SFTP_PASSWORD)):
+    if not has_shadowhaven_sftp_credentials():
         print("Shadowhaven TBS Property Mod sync disabled: credentials are not configured")
         return
     while True:
@@ -14708,7 +14791,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "total": len(property_rows),
                     "occupied": sum(1 for row in property_rows if str(row.get("status") or "").lower() in {"owned", "occupied", "rented"}),
                     "available": sum(1 for row in property_rows if str(row.get("status") or "").lower() in {"available", "vacant", "for_sale"}),
-                    "source_file": SHADOWHAVEN_PROPERTY_FILE,
+                    "source_file": ", ".join(SHADOWHAVEN_PROPERTY_FILES),
+                    "source_files": SHADOWHAVEN_PROPERTY_FILES,
                     "sync": dict(property_sync) if property_sync else {"status": "awaiting_first_sync", "records": 0},
                     "read_only": True,
                 },

@@ -2,6 +2,7 @@ data/
 __pycache__/
 *.pyc
 .env
+.codex-sftp-keys/
 .pythonlibs/
 desktop/node_modules/
 desktop/release/
