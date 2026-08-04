@@ -60,6 +60,10 @@ SHADOWHAVEN_SFTP_PRIVATE_KEY = os.environ.get(
     "LOAFHOSTS_SFTP_PRIVATE_KEY",
     os.environ.get("SHADOWHAVEN_SFTP_PRIVATE_KEY", ""),
 ).strip()
+SHADOWHAVEN_SFTP_PRIVATE_KEY_B64 = os.environ.get(
+    "LOAFHOSTS_SFTP_PRIVATE_KEY_B64",
+    os.environ.get("SHADOWHAVEN_SFTP_PRIVATE_KEY_B64", ""),
+).strip()
 SHADOWHAVEN_SFTP_PRIVATE_KEY_PASSPHRASE = os.environ.get(
     "LOAFHOSTS_SFTP_PRIVATE_KEY_PASSPHRASE",
     os.environ.get("SHADOWHAVEN_SFTP_PRIVATE_KEY_PASSPHRASE", ""),
@@ -436,16 +440,23 @@ def has_shadowhaven_sftp_credentials() -> bool:
     return bool(
         SHADOWHAVEN_SFTP_HOST
         and SHADOWHAVEN_SFTP_USERNAME
-        and (SHADOWHAVEN_SFTP_PASSWORD or SHADOWHAVEN_SFTP_PRIVATE_KEY)
+        and SHADOWHAVEN_SFTP_PASSWORD
     )
 
 
 def _shadowhaven_sftp_private_key_text() -> str:
+    if SHADOWHAVEN_SFTP_PRIVATE_KEY_B64:
+        try:
+            return base64.b64decode(SHADOWHAVEN_SFTP_PRIVATE_KEY_B64).decode("utf-8").replace("\r\n", "\n")
+        except Exception as exc:
+            raise RuntimeError(f"SFTP private key base64 could not be decoded: {exc}") from exc
     key_value = (SHADOWHAVEN_SFTP_PRIVATE_KEY or "").strip()
     if not key_value:
         return ""
+    if (key_value.startswith('"') and key_value.endswith('"')) or (key_value.startswith("'") and key_value.endswith("'")):
+        key_value = key_value[1:-1].strip()
     if "BEGIN " in key_value:
-        return key_value.replace("\\n", "\n")
+        return key_value.replace("\\n", "\n").replace("\r\n", "\n")
     key_path = Path(key_value)
     if key_path.exists() and key_path.is_file():
         return key_path.read_text(encoding="utf-8")
@@ -478,12 +489,10 @@ def _load_shadowhaven_sftp_private_key() -> paramiko.PKey | None:
 
 def connect_shadowhaven_transport() -> paramiko.Transport:
     transport = paramiko.Transport((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_PORT))
-    private_key = _load_shadowhaven_sftp_private_key()
-    if private_key:
-        transport.connect(username=SHADOWHAVEN_SFTP_USERNAME, pkey=private_key)
-    else:
+    if SHADOWHAVEN_SFTP_PASSWORD:
         transport.connect(username=SHADOWHAVEN_SFTP_USERNAME, password=SHADOWHAVEN_SFTP_PASSWORD)
-    return transport
+        return transport
+    raise RuntimeError("SFTP password login is required")
 
 
 def extract_shadowhaven_bank_data(payload: Any) -> tuple[dict[str, Any], str]:
@@ -568,14 +577,14 @@ def sync_shadowhaven_bank_once() -> int:
 
 def shadowhaven_bank_sync_worker() -> None:
     if not has_shadowhaven_sftp_credentials():
-        print("Shadowhaven SFTP bank sync disabled: credentials are not configured")
+        print("LoafHosts SFTP bank sync disabled: credentials are not configured")
         return
     while True:
         try:
             accepted = sync_shadowhaven_bank_once()
-            print(f"Shadowhaven SFTP bank sync updated {accepted} balance(s)")
+            print(f"LoafHosts SFTP bank sync updated {accepted} balance(s)")
         except Exception as exc:
-            print(f"Shadowhaven SFTP bank sync failed: {type(exc).__name__}: {exc}")
+            print(f"LoafHosts SFTP bank sync failed: {type(exc).__name__}: {exc}")
         time.sleep(SHADOWHAVEN_BANK_SYNC_SECONDS)
 
 
@@ -648,14 +657,14 @@ def sync_shadowhaven_reputation_once() -> int:
 
 def shadowhaven_reputation_sync_worker() -> None:
     if not has_shadowhaven_sftp_credentials():
-        print("Shadowhaven reputation sync disabled: credentials are not configured")
+        print("LoafHosts reputation sync disabled: credentials are not configured")
         return
     while True:
         try:
             accepted = sync_shadowhaven_reputation_once()
-            print(f"Shadowhaven MedicalHud reputation sync updated {accepted} record(s)")
+            print(f"LoafHosts MedicalHud reputation sync updated {accepted} record(s)")
         except Exception as exc:
-            print(f"Shadowhaven MedicalHud reputation sync failed: {type(exc).__name__}: {exc}")
+            print(f"LoafHosts MedicalHud reputation sync failed: {type(exc).__name__}: {exc}")
         time.sleep(SHADOWHAVEN_REPUTATION_SYNC_SECONDS)
 
 
@@ -777,14 +786,14 @@ def sync_shadowhaven_camera_events_once() -> int:
 
 def shadowhaven_camera_events_sync_worker() -> None:
     if not has_shadowhaven_sftp_credentials():
-        print("Shadowhaven FLUCK Camera sync disabled: credentials are not configured")
+        print("LoafHosts FLUCK Camera sync disabled: credentials are not configured")
         return
     while True:
         try:
             accepted = sync_shadowhaven_camera_events_once()
-            print(f"Shadowhaven FLUCK Camera sync updated {accepted} event(s)")
+            print(f"LoafHosts FLUCK Camera sync updated {accepted} event(s)")
         except Exception as exc:
-            print(f"Shadowhaven FLUCK Camera sync failed: {type(exc).__name__}: {exc}")
+            print(f"LoafHosts FLUCK Camera sync failed: {type(exc).__name__}: {exc}")
         time.sleep(SHADOWHAVEN_CAMERA_EVENTS_SYNC_SECONDS)
 
 
@@ -1010,14 +1019,14 @@ def sync_shadowhaven_anticheat_once() -> tuple[int, int]:
 
 def shadowhaven_anticheat_sync_worker() -> None:
     if not has_shadowhaven_sftp_credentials():
-        print("Shadowhaven SFTP anti-cheat sync disabled: credentials are not configured")
+        print("LoafHosts SFTP anti-cheat sync disabled: credentials are not configured")
         return
     while True:
         try:
             players, groups = sync_shadowhaven_anticheat_once()
-            print(f"Shadowhaven SFTP anti-cheat sync updated {players} player(s), {groups} alt group(s)")
+            print(f"LoafHosts SFTP anti-cheat sync updated {players} player(s), {groups} alt group(s)")
         except Exception as exc:
-            print(f"Shadowhaven SFTP anti-cheat sync failed: {type(exc).__name__}: {exc}")
+            print(f"LoafHosts SFTP anti-cheat sync failed: {type(exc).__name__}: {exc}")
         time.sleep(SHADOWHAVEN_ANTICHEAT_SYNC_SECONDS)
 
 
@@ -1187,7 +1196,7 @@ def sync_shadowhaven_persistence_once() -> tuple[int, dict[str, int]]:
                         upsert_persistence_record_batch(records)
                         records.clear()
                         print(
-                            f"Shadowhaven FCRPMUSSALO sync progress: "
+                            f"LoafHosts FCRPMUSSALO sync progress: "
                             f"{processed} record(s), current category {category}"
                         )
             scan_complete = not pending
@@ -1230,18 +1239,18 @@ def sync_shadowhaven_persistence_once() -> tuple[int, dict[str, int]]:
 
 def shadowhaven_persistence_sync_worker() -> None:
     if not has_shadowhaven_sftp_credentials():
-        print("Shadowhaven FCRPMUSSALO sync disabled: credentials are not configured")
+        print("LoafHosts FCRPMUSSALO sync disabled: credentials are not configured")
         return
     print(
-        f"Shadowhaven FCRPMUSSALO sync starting from "
+        f"LoafHosts FCRPMUSSALO sync starting from "
         f"{SHADOWHAVEN_PERSISTENCE_ROOT}"
     )
     while True:
         try:
             records, categories = sync_shadowhaven_persistence_once()
-            print(f"Shadowhaven FCRPMUSSALO sync updated {records} record(s): {categories}")
+            print(f"LoafHosts FCRPMUSSALO sync updated {records} record(s): {categories}")
         except Exception as exc:
-            print(f"Shadowhaven FCRPMUSSALO sync failed: {type(exc).__name__}: {exc}")
+            print(f"LoafHosts FCRPMUSSALO sync failed: {type(exc).__name__}: {exc}")
         time.sleep(SHADOWHAVEN_PERSISTENCE_SYNC_SECONDS)
 
 
@@ -1384,14 +1393,14 @@ def sync_shadowhaven_properties_once() -> int:
 
 def shadowhaven_property_sync_worker() -> None:
     if not has_shadowhaven_sftp_credentials():
-        print("Shadowhaven TBS Property Mod sync disabled: credentials are not configured")
+        print("LoafHosts TBS Property Mod sync disabled: credentials are not configured")
         return
     while True:
         try:
             accepted = sync_shadowhaven_properties_once()
-            print(f"Shadowhaven TBS Property Mod sync updated {accepted} property record(s)")
+            print(f"LoafHosts TBS Property Mod sync updated {accepted} property record(s)")
         except Exception as exc:
-            print(f"Shadowhaven TBS Property Mod sync failed: {type(exc).__name__}: {exc}")
+            print(f"LoafHosts TBS Property Mod sync failed: {type(exc).__name__}: {exc}")
         time.sleep(SHADOWHAVEN_PROPERTY_SYNC_SECONDS)
 
 
