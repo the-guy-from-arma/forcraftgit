@@ -458,7 +458,17 @@ def _load_shadowhaven_sftp_private_key() -> paramiko.PKey | None:
         return None
     passphrase = SHADOWHAVEN_SFTP_PRIVATE_KEY_PASSPHRASE or None
     key_errors: list[str] = []
-    for key_type in (paramiko.Ed25519Key, paramiko.RSAKey, paramiko.ECDSAKey, paramiko.DSSKey):
+    key_types = [
+        key_type
+        for key_type in (
+            getattr(paramiko, "Ed25519Key", None),
+            getattr(paramiko, "RSAKey", None),
+            getattr(paramiko, "ECDSAKey", None),
+            getattr(paramiko, "DSSKey", None),
+        )
+        if key_type is not None
+    ]
+    for key_type in key_types:
         try:
             return key_type.from_private_key(io.StringIO(key_text), password=passphrase)
         except Exception as exc:
