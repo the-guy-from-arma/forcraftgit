@@ -343,6 +343,9 @@ ROLE_ALIASES = {
     "ice agent": "ice_agent",
     "ice-agent": "ice_agent",
     "ice commander": "ice_commander",
+    "realty owner": "realty_owner",
+    "realty-owner": "realty_owner",
+    "real estate owner": "realty_owner",
     "ice-commander": "ice_commander",
 }
 
@@ -2152,6 +2155,10 @@ SYSTEM_SETTING_DEFAULTS = {
     "lottery_quick_draw_enabled": "1",
     "lottery_quick_draw_interval_minutes": "240",
     "lottery_quick_draw_entries": "1",
+    "lottery_player_pool_enabled": "1",
+    "lottery_player_pool_direction": "increase",
+    "lottery_player_pool_rate_per_minute": "100.00",
+    "lottery_player_pool_last_tick": "",
     "gang_creation_enabled": "1",
     "gang_global_limit": "100",
     "gang_default_member_limit": "20",
@@ -2175,6 +2182,8 @@ APP_VISIBILITY_OPTIONS = (
     ("lottery", "Faircroft Lottery"),
     ("insurance", "Faircroft Insurance"),
     ("gangs", "Gang Network"),
+    ("realty", "Faircroft Realty Group"),
+    ("realty-dashboard", "Realty Dash"),
     ("messages", "Messages"),
     ("changelog", "Changelog"),
     ("contracts", "Contracts"),
@@ -2845,6 +2854,70 @@ def ensure_schema() -> None:
                 ON game_property_records (owner_identity);
             CREATE INDEX IF NOT EXISTS game_property_status_idx
                 ON game_property_records (status, synced_at DESC);
+
+            CREATE TABLE IF NOT EXISTS realty_property_assignments (
+                property_id TEXT PRIMARY KEY,
+                owner_user_id INTEGER,
+                owner_character_id INTEGER,
+                tenant_user_id INTEGER,
+                tenant_character_id INTEGER,
+                source_listing_id INTEGER,
+                assignment_type TEXT NOT NULL DEFAULT 'sale',
+                assigned_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL,
+                FOREIGN KEY (owner_character_id) REFERENCES user_characters(id) ON DELETE SET NULL,
+                FOREIGN KEY (tenant_user_id) REFERENCES users(id) ON DELETE SET NULL,
+                FOREIGN KEY (tenant_character_id) REFERENCES user_characters(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS realty_listings (
+                id SERIAL PRIMARY KEY,
+                listing_number TEXT NOT NULL UNIQUE,
+                property_id TEXT NOT NULL,
+                seller_user_id INTEGER NOT NULL,
+                seller_character_id INTEGER NOT NULL,
+                listing_type TEXT NOT NULL DEFAULT 'sale',
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                neighborhood TEXT NOT NULL DEFAULT '',
+                asking_price NUMERIC(14,2) NOT NULL DEFAULT 0,
+                reserve_price NUMERIC(14,2) NOT NULL DEFAULT 0,
+                bid_increment NUMERIC(14,2) NOT NULL DEFAULT 1000,
+                photo_urls TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'draft',
+                starts_at TEXT,
+                closes_at TEXT,
+                winner_user_id INTEGER,
+                winner_character_id INTEGER,
+                winning_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                closed_at TEXT,
+                FOREIGN KEY (seller_user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (seller_character_id) REFERENCES user_characters(id) ON DELETE CASCADE,
+                FOREIGN KEY (winner_user_id) REFERENCES users(id) ON DELETE SET NULL,
+                FOREIGN KEY (winner_character_id) REFERENCES user_characters(id) ON DELETE SET NULL
+            );
+            CREATE INDEX IF NOT EXISTS realty_listing_status_idx
+                ON realty_listings (status, closes_at, created_at DESC);
+            CREATE INDEX IF NOT EXISTS realty_listing_property_idx
+                ON realty_listings (property_id, status);
+
+            CREATE TABLE IF NOT EXISTS realty_bids (
+                id SERIAL PRIMARY KEY,
+                listing_id INTEGER NOT NULL,
+                bidder_user_id INTEGER NOT NULL,
+                bidder_character_id INTEGER NOT NULL,
+                amount NUMERIC(14,2) NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (listing_id) REFERENCES realty_listings(id) ON DELETE CASCADE,
+                FOREIGN KEY (bidder_user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (bidder_character_id) REFERENCES user_characters(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS realty_bid_listing_idx
+                ON realty_bids (listing_id, amount DESC, created_at ASC);
 
             CREATE TABLE IF NOT EXISTS property_tax_assessments (
                 id SERIAL PRIMARY KEY,
@@ -3727,6 +3800,24 @@ def ensure_migrations(db: Database) -> None:
     )
     db.execute(
         """
+        CREATE TABLE IF NOT EXISTS myfaircroft_property_tax_payments (
+            id SERIAL PRIMARY KEY,
+            assessment_id INTEGER NOT NULL UNIQUE,
+            property_id TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            code_id INTEGER NOT NULL UNIQUE,
+            amount NUMERIC(14,2) NOT NULL,
+            received_by INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (assessment_id) REFERENCES property_tax_assessments(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (code_id) REFERENCES myfaircroft_payment_codes(id) ON DELETE CASCADE,
+            FOREIGN KEY (received_by) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute(
+        """
         CREATE TABLE IF NOT EXISTS market_accounts (
             id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL UNIQUE,
@@ -3967,6 +4058,22 @@ def ensure_migrations(db: Database) -> None:
         )
         """
     )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS lottery_player_pool_accruals (
+            id SERIAL PRIMARY KEY,
+            tick_bucket TEXT NOT NULL,
+            amount NUMERIC(14,2) NOT NULL,
+            player_count INTEGER NOT NULL DEFAULT 0,
+            rate_per_minute NUMERIC(14,2) NOT NULL DEFAULT 0,
+            elapsed_seconds INTEGER NOT NULL DEFAULT 0,
+            direction TEXT NOT NULL DEFAULT 'increase',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    db.execute("ALTER TABLE lottery_player_pool_accruals ADD COLUMN IF NOT EXISTS tick_bucket TEXT")
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS lottery_player_pool_tick_bucket_idx ON lottery_player_pool_accruals(tick_bucket)")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS lottery_special_prizes (
@@ -4837,6 +4944,10 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "lottery_quick_draw_enabled": str(raw.get("lottery_quick_draw_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "lottery_quick_draw_interval_minutes": max(30, min(1440, int(raw.get("lottery_quick_draw_interval_minutes") or 240))),
         "lottery_quick_draw_entries": max(1, min(5, int(raw.get("lottery_quick_draw_entries") or 1))),
+        "lottery_player_pool_enabled": str(raw.get("lottery_player_pool_enabled") or "1") in ("1", "true", "True", "yes", "on"),
+        "lottery_player_pool_direction": "decrease" if str(raw.get("lottery_player_pool_direction") or "increase").lower() == "decrease" else "increase",
+        "lottery_player_pool_rate_per_minute": max(0.0, min(1000000.0, float(raw.get("lottery_player_pool_rate_per_minute") or 100))),
+        "lottery_player_pool_last_tick": str(raw.get("lottery_player_pool_last_tick") or "")[:80],
         "gang_creation_enabled": str(raw.get("gang_creation_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "gang_global_limit": max(1, min(1000, int(raw.get("gang_global_limit") or 100))),
         "gang_default_member_limit": max(2, min(200, int(raw.get("gang_default_member_limit") or 20))),
@@ -4867,15 +4978,62 @@ def lottery_funding_snapshot(db: Database, settings: dict[str, Any] | None = Non
     direct = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM myfaircroft_direct_payments")
     settled = one(db, "SELECT COALESCE(SUM(fine_amount),0) AS total FROM fine_settlement_items WHERE status='paid'")
     taxes = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM myfaircroft_tax_payments")
+    property_taxes = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM myfaircroft_property_tax_payments")
     awarded = one(db, "SELECT COALESCE(SUM(payout_amount),0) AS total FROM lottery_draws WHERE status='completed'")
     manual = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM lottery_fund_adjustments")
+    player_activity = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM lottery_player_pool_accruals")
     fines = float(direct["total"] or 0) + float(settled["total"] or 0)
-    tax_receipts = float(taxes["total"] or 0)
+    tax_receipts = float(taxes["total"] or 0) + float(property_taxes["total"] or 0)
     market = float(settings["market_holding_balance"] or 0)
     paid = float(awarded["total"] or 0)
     manual_total = float(manual["total"] or 0)
+    player_activity_total = float(player_activity["total"] or 0)
     public_receipts = fines + tax_receipts
-    return {"fines": round(public_receipts, 2), "taxes": round(tax_receipts, 2), "market_fees": round(market, 2), "manual": round(manual_total, 2), "awarded": round(paid, 2), "available": round(max(0.0, public_receipts + market + manual_total - paid), 2)}
+    return {"fines": round(public_receipts, 2), "taxes": round(tax_receipts, 2), "market_fees": round(market, 2), "manual": round(manual_total, 2), "player_activity": round(player_activity_total, 2), "awarded": round(paid, 2), "available": round(max(0.0, public_receipts + market + manual_total + player_activity_total - paid), 2)}
+
+
+def lottery_player_pool_status(db: Database, settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    settings = settings or get_system_settings(db)
+    online_row = one(db, "SELECT COUNT(*) AS count FROM anticheat_players WHERE is_online=1")
+    online_players = int(online_row["count"] or 0) if online_row else 0
+    rate = float(settings["lottery_player_pool_rate_per_minute"] or 0)
+    sign = -1 if settings["lottery_player_pool_direction"] == "decrease" else 1
+    per_minute = round(online_players * rate * sign, 2)
+    return {
+        "enabled": bool(settings["lottery_player_pool_enabled"]),
+        "online_players": online_players,
+        "direction": settings["lottery_player_pool_direction"],
+        "rate_per_player_minute": round(rate, 2),
+        "change_per_minute": per_minute,
+        "change_per_second": round(per_minute / 60.0, 4),
+        "last_tick": settings["lottery_player_pool_last_tick"],
+    }
+
+
+def run_lottery_player_pool_tick(db: Database, settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    settings = settings or get_system_settings(db)
+    current = utcnow()
+    status = lottery_player_pool_status(db, settings)
+    last = parse_iso(settings["lottery_player_pool_last_tick"]) if settings["lottery_player_pool_last_tick"] else None
+    # Never replay a long outage into the prize pool. At most one minute is
+    # accrued on a delayed worker tick.
+    elapsed = max(0, min(60, int((current - last).total_seconds()))) if last else 0
+    set_system_setting(db, "lottery_player_pool_last_tick", current.isoformat())
+    if not status["enabled"] or elapsed <= 0 or status["online_players"] <= 0 or status["rate_per_player_minute"] <= 0:
+        return {**status, "elapsed_seconds": elapsed, "amount": 0.0}
+    amount = round(status["change_per_minute"] * elapsed / 60.0, 2)
+    if amount:
+        tick_bucket = current.replace(second=0, microsecond=0).isoformat()
+        db.execute(
+            """INSERT INTO lottery_player_pool_accruals (tick_bucket,amount,player_count,rate_per_minute,elapsed_seconds,direction,created_at)
+            VALUES (?,?,?,?,?,?,?) ON CONFLICT(tick_bucket) DO UPDATE SET
+            amount=lottery_player_pool_accruals.amount+excluded.amount,
+            player_count=excluded.player_count,rate_per_minute=excluded.rate_per_minute,
+            elapsed_seconds=lottery_player_pool_accruals.elapsed_seconds+excluded.elapsed_seconds,
+            direction=excluded.direction,created_at=excluded.created_at""",
+            (tick_bucket, amount, status["online_players"], status["rate_per_player_minute"], elapsed, status["direction"], current.isoformat()),
+        )
+    return {**status, "elapsed_seconds": elapsed, "amount": amount}
 
 
 def market_volatility_cycle(db: Database, amplitude: float, source: str = "autopilot", actor_id: int | None = None) -> dict[str, Any]:
@@ -4991,7 +5149,11 @@ def award_lottery_bonus_entries(db: Database, user_id: int, amount: int, source:
     settings = get_system_settings(db)
     draw = ensure_lottery_draw(db, settings)
     today = utcnow().astimezone(ZoneInfo(settings["lottery_timezone"])).date().isoformat()
-    next_number = int(one(db, "SELECT COALESCE(MAX(entry_number),0) AS maximum FROM lottery_entries WHERE draw_id=? AND user_id=? AND entry_date=?", (draw["id"], user_id, today))["maximum"] or 0)
+    # Entry numbers are unique per resident and calendar date, even when a draw
+    # rolls over during that date. Lock the resident while allocating the range
+    # so two simultaneous rewards cannot select the same next number.
+    one(db, "SELECT id FROM users WHERE id=? FOR UPDATE", (user_id,))
+    next_number = int(one(db, "SELECT COALESCE(MAX(entry_number),0) AS maximum FROM lottery_entries WHERE user_id=? AND entry_date=?", (user_id, today))["maximum"] or 0)
     created = 0
     for offset in range(max(0, amount)):
         next_number += 1
@@ -5071,11 +5233,13 @@ def lottery_worker() -> None:
     while True:
         try:
             with conn() as db:
+                settings = get_system_settings(db)
+                run_lottery_player_pool_tick(db, settings)
                 run_due_lottery_draws(db)
-                run_due_quick_draws(db)
+                run_due_quick_draws(db, settings)
         except Exception as exc:
             print(f"Lottery scheduler error: {exc}")
-        time.sleep(30)
+        time.sleep(10)
 
 
 def auto_verify_stats(db: Database, settings: dict[str, Any] | None = None) -> dict[str, int]:
@@ -6011,6 +6175,14 @@ def ice_required(user: DbRow | None) -> str | None:
     return None
 
 
+def realty_owner_required(user: DbRow | None) -> str | None:
+    if not user:
+        return "Authentication required"
+    if not has_any(user, "realty_owner", "owner", "dev"):
+        return "Faircroft Realty owner credential required"
+    return None
+
+
 def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     if not user:
         return []
@@ -6052,6 +6224,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         ("lottery", "LOTTERY", "trophy", verified, False),
         ("insurance", "INSURANCE", "insurance", verified, False),
         ("gangs", "GANG NETWORK", "gang", verified, False),
+        ("realty", "FAIRCROFT REALTY", "realty", verified, False),
         ("leaderboards", "Leaderboards", "trophy", verified, False),
         ("wallstreet", "WALLSTREET", "trending", verified, False),
         ("messages", "Messages", "message", verified, False),
@@ -6082,6 +6255,8 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps.append({"id": "downloads", "label": "Download Our App", "icon": "download", "enabled": True, "hidden": False})
     if has_any(user, "owner", "dev") or (has_any(user, "press") and str(user.get("press_pass_status") or "active").lower() == "active"):
         apps.append({"id": "press", "label": "Press Desk", "icon": "press", "enabled": True, "hidden": False})
+    if has_any(user, "realty_owner", "owner", "dev"):
+        apps.append({"id": "realty-dashboard", "label": "Realty Dash", "icon": "realty-dashboard", "enabled": True, "hidden": False})
     visibility = settings.get("app_visibility") or {}
     return [item for item in apps if item["id"] in PROTECTED_APP_IDS or visibility.get(item["id"], True)]
 
@@ -6776,6 +6951,8 @@ def human_request_type(value: Any) -> str:
 
 
 ACTIVE_CASE_STATUSES = ("issued", "contested", "reviewed", "reduced", "continued")
+PROPERTY_TAX_BASE_VALUE = 350_000.0
+PROPERTY_TAX_ALLOWED_RATES = (0.12, 0.14, 0.18)
 
 
 def is_parking_charge(charge: DbRow | dict[str, Any]) -> bool:
@@ -7281,6 +7458,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_properties(db, user)
                 elif path.startswith("/api/properties/") and path.endswith("/buy") and method == "POST":
                     self.api_buy_property(db, user, self.path_int(path, 2))
+                elif path == "/api/realty" and method == "GET":
+                    self.api_realty(db, user)
+                elif path == "/api/realty/bids" and method == "POST":
+                    self.api_realty_bid(db, user)
+                elif path == "/api/realty-dashboard" and method == "GET":
+                    self.api_realty_dashboard(db, user)
+                elif path == "/api/realty-dashboard/listings" and method == "POST":
+                    self.api_create_realty_listing(db, user)
+                elif path.startswith("/api/realty-dashboard/listings/") and method == "PATCH":
+                    self.api_update_realty_listing(db, user, self.path_int(path, 3))
                 elif path == "/api/my-faircroft" and method == "GET":
                     self.api_my_faircroft(db, user)
                 elif path.startswith("/api/my-faircroft/fines/") and path.endswith("/pay") and method == "POST":
@@ -7293,6 +7480,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_create_record_request(db, user, self.path_int(path, 3), "expungement")
                 elif path.startswith("/api/my-faircroft/taxes/") and path.endswith("/pay") and method == "POST":
                     self.api_pay_business_tax(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/my-faircroft/property-taxes/") and path.endswith("/pay") and method == "POST":
+                    self.api_pay_property_tax(db, user, self.path_int(path, 3))
                 elif path == "/api/court/my-cases" and method == "GET":
                     self.api_my_cases(db, user)
                 elif path.startswith("/api/court/my-cases/") and path.endswith("/pay") and method == "POST":
@@ -7435,6 +7624,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_market_promotion_delete(db, user, self.path_int(path, 4))
                 elif path == "/api/dev-tools/lottery/settings" and method == "PATCH":
                     self.api_dev_lottery_settings(db, user)
+                elif path == "/api/dev-tools/lottery/player-pool" and method == "PATCH":
+                    self.api_dev_lottery_player_pool(db, user)
                 elif path == "/api/dev-tools/lottery/funds" and method == "POST":
                     self.api_dev_lottery_funds(db, user)
                 elif path == "/api/dev-tools/lottery/prizes" and method == "POST":
@@ -8914,10 +9105,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 return
             draw = ensure_lottery_draw(db, settings)
             today = utcnow().astimezone(ZoneInfo(settings["lottery_timezone"])).date().isoformat()
-            count = int(one(db, "SELECT COUNT(*) AS count FROM lottery_entries WHERE user_id=? AND entry_date=?", (user["id"], today))["count"] or 0)
+            one(db, "SELECT id FROM users WHERE id=? FOR UPDATE", (user["id"],))
+            next_number = int(one(db, "SELECT COALESCE(MAX(entry_number),0) AS maximum FROM lottery_entries WHERE user_id=? AND entry_date=?", (user["id"], today))["maximum"] or 0) + 1
             weight = max([settings["lottery_role_weights"].get(role, 1.0) for role in roles_for(user)] or [1.0])
-            db.execute("INSERT INTO lottery_entries (draw_id,user_id,entry_date,entry_number,role_weight,created_at) VALUES (?,?,?,?,?,?)", (draw["id"], user["id"], today, count + 1, weight, now_iso()))
-            summary = f"Bonus lottery entry FC-{count + 1:02d}"
+            db.execute("INSERT INTO lottery_entries (draw_id,user_id,entry_date,entry_number,role_weight,source,created_at) VALUES (?,?,?,?,?,'leaderboard_perk',?)", (draw["id"], user["id"], today, next_number, weight, now_iso()))
+            summary = f"Bonus lottery entry FC-{next_number:02d}"
         else:
             security = one(db, "SELECT * FROM market_securities WHERE active<>0 ORDER BY id LIMIT 1")
             if not security:
@@ -10782,7 +10974,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         quick_draw = ensure_quick_draw(db, settings)
         quick_entries = [dict(row) for row in all_rows(db, "SELECT * FROM lottery_quick_draw_entries WHERE draw_id=? AND user_id=? ORDER BY entry_number", (quick_draw["id"], user["id"]))]
         quick_latest = one(db, "SELECT d.*,u.name AS winner_name,u.civ_number AS winner_civ FROM lottery_quick_draws d LEFT JOIN users u ON u.id=d.winner_user_id WHERE d.status='completed' ORDER BY d.completed_at DESC LIMIT 1")
-        self.send_json(200, {"enabled": settings["lottery_enabled"], "draw": dict(draw), "funding": funding, "entries": [dict(row) for row in entries], "entries_today": today_count, "daily_limit": settings["lottery_daily_entries"], "remaining_today": max(0, settings["lottery_daily_entries"]-today_count), "role_weight": weight, "excluded": bool(excluded), "excluded_roles": excluded, "latest_result": dict(latest) if latest else None, "latest_special_prizes": latest_prizes, "timezone": settings["lottery_timezone"], "scratch": {"enabled": settings["lottery_scratch_enabled"], "daily_limit": settings["lottery_scratch_daily_cards"], "cards": scratch_cards}, "quick_draw": {"enabled": settings["lottery_quick_draw_enabled"], "draw": dict(quick_draw), "daily_limit": settings["lottery_quick_draw_entries"], "entries": quick_entries, "latest_result": dict(quick_latest) if quick_latest else None}})
+        self.send_json(200, {"enabled": settings["lottery_enabled"], "draw": dict(draw), "funding": funding, "player_pool": lottery_player_pool_status(db, settings), "entries": [dict(row) for row in entries], "entries_today": today_count, "daily_limit": settings["lottery_daily_entries"], "remaining_today": max(0, settings["lottery_daily_entries"]-today_count), "role_weight": weight, "excluded": bool(excluded), "excluded_roles": excluded, "latest_result": dict(latest) if latest else None, "latest_special_prizes": latest_prizes, "timezone": settings["lottery_timezone"], "scratch": {"enabled": settings["lottery_scratch_enabled"], "daily_limit": settings["lottery_scratch_daily_cards"], "cards": scratch_cards}, "quick_draw": {"enabled": settings["lottery_quick_draw_enabled"], "draw": dict(quick_draw), "daily_limit": settings["lottery_quick_draw_entries"], "entries": quick_entries, "latest_result": dict(quick_latest) if quick_latest else None}})
 
     def api_lottery_entry(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -10796,13 +10988,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if excluded:
             self.error(403, "This account is excluded from lottery participation by role policy."); return
         draw = ensure_lottery_draw(db, settings); today = utcnow().astimezone(ZoneInfo(settings["lottery_timezone"])).date().isoformat()
+        # Serialize this resident's daily entry allocation. The database key is
+        # (user_id, entry_date, entry_number), not draw_id, so draw rollover and
+        # fast repeated requests must share one daily number sequence.
+        one(db, "SELECT id FROM users WHERE id=? FOR UPDATE", (user["id"],))
         count = int(one(db, "SELECT COUNT(*) AS count FROM lottery_entries WHERE user_id=? AND entry_date=? AND source='standard'", (user["id"], today))["count"] or 0)
         if count >= settings["lottery_daily_entries"]:
             self.error(409, "All daily lottery entries have already been submitted."); return
         weight = max([settings["lottery_role_weights"].get(role, 1.0) for role in roles] or [1.0])
-        next_number = int(one(db, "SELECT COALESCE(MAX(entry_number),0) AS maximum FROM lottery_entries WHERE draw_id=? AND user_id=? AND entry_date=?", (draw["id"], user["id"], today))["maximum"] or 0) + 1
+        next_number = int(one(db, "SELECT COALESCE(MAX(entry_number),0) AS maximum FROM lottery_entries WHERE user_id=? AND entry_date=?", (user["id"], today))["maximum"] or 0) + 1
         db.execute("INSERT INTO lottery_entries (draw_id,user_id,entry_date,entry_number,role_weight,source,created_at) VALUES (?,?,?,?,?,'standard',?)", (draw["id"], user["id"], today, next_number, weight, now_iso()))
-        self.send_json(201, {"ok": True, "entry_number": count+1, "remaining_today": settings["lottery_daily_entries"]-count-1})
+        self.send_json(201, {"ok": True, "entry_number": next_number, "remaining_today": settings["lottery_daily_entries"]-count-1})
 
     def api_lottery_scratch(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -12179,6 +12375,280 @@ class RoleplayHandler(BaseHTTPRequestHandler):
     def api_buy_property(self, db: Database, user: DbRow | None, property_id: int) -> None:
         self.error(410, "Website bank purchases are disabled. Complete this purchase through the in-game economy.")
 
+    def realty_close_listing(self, db: Database, listing_id: int, actor_id: int | None = None) -> dict[str, Any]:
+        listing = one(db, "SELECT * FROM realty_listings WHERE id = ? FOR UPDATE", (listing_id,))
+        if not listing:
+            raise ValueError("Realty listing not found")
+        if str(listing.get("status") or "") not in {"active", "closing"}:
+            return dict(listing)
+        winning_bid = one(
+            db,
+            """SELECT b.*, u.name AS bidder_name, u.civ_number, c.character_name
+               FROM realty_bids b
+               JOIN users u ON u.id = b.bidder_user_id
+               JOIN user_characters c ON c.id = b.bidder_character_id
+               WHERE b.listing_id = ? AND b.status = 'active'
+               ORDER BY b.amount DESC, b.created_at ASC, b.id ASC LIMIT 1""",
+            (listing_id,),
+        )
+        ts = now_iso()
+        if not winning_bid:
+            db.execute("UPDATE realty_listings SET status = 'expired', closed_at = ?, updated_at = ? WHERE id = ?", (ts, ts, listing_id))
+            add_message(db, int(listing["seller_user_id"]), "Realty listing closed", f"{listing['title']} closed without a qualifying bid.", actor_id)
+            return dict(one(db, "SELECT * FROM realty_listings WHERE id = ?", (listing_id,)) or listing)
+        reserve = round(float(listing.get("reserve_price") or 0), 2)
+        if reserve > 0 and round(float(winning_bid["amount"] or 0), 2) < reserve:
+            db.execute("UPDATE realty_listings SET status = 'expired', closed_at = ?, updated_at = ? WHERE id = ?", (ts, ts, listing_id))
+            db.execute("UPDATE realty_bids SET status = 'reserve_not_met' WHERE listing_id = ?", (listing_id,))
+            add_message(db, int(listing["seller_user_id"]), "Realty reserve not met", f"{listing['title']} closed without reaching its private reserve.", actor_id)
+            for bidder in all_rows(db, "SELECT DISTINCT bidder_user_id FROM realty_bids WHERE listing_id = ?", (listing_id,)):
+                add_message(db, int(bidder["bidder_user_id"]), "Faircroft Realty auction closed", f"{listing['title']} closed without meeting the seller's private reserve. No deed or tenancy was transferred.", actor_id)
+            return dict(one(db, "SELECT * FROM realty_listings WHERE id = ?", (listing_id,)) or listing)
+        listing_type = str(listing.get("listing_type") or "sale").lower()
+        winner_user_id = int(winning_bid["bidder_user_id"])
+        winner_character_id = int(winning_bid["bidder_character_id"])
+        amount = round(float(winning_bid["amount"] or 0), 2)
+        if listing_type == "rent":
+            db.execute(
+                """INSERT INTO realty_property_assignments
+                   (property_id, owner_user_id, owner_character_id, tenant_user_id, tenant_character_id, source_listing_id, assignment_type, assigned_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, 'rent', ?, ?)
+                   ON CONFLICT (property_id) DO UPDATE SET owner_user_id = EXCLUDED.owner_user_id,
+                       owner_character_id = EXCLUDED.owner_character_id, tenant_user_id = EXCLUDED.tenant_user_id,
+                       tenant_character_id = EXCLUDED.tenant_character_id, source_listing_id = EXCLUDED.source_listing_id,
+                       assignment_type = 'rent', assigned_at = EXCLUDED.assigned_at, updated_at = EXCLUDED.updated_at""",
+                (listing["property_id"], listing["seller_user_id"], listing["seller_character_id"], winner_user_id, winner_character_id, listing_id, ts, ts),
+            )
+            final_status = "rented"
+            outcome = f"Your rental bid of ${amount:,.2f} was accepted for {listing['title']}. The Faircroft tenancy record is now active."
+        else:
+            db.execute(
+                """INSERT INTO realty_property_assignments
+                   (property_id, owner_user_id, owner_character_id, tenant_user_id, tenant_character_id, source_listing_id, assignment_type, assigned_at, updated_at)
+                   VALUES (?, ?, ?, NULL, NULL, ?, 'sale', ?, ?)
+                   ON CONFLICT (property_id) DO UPDATE SET owner_user_id = EXCLUDED.owner_user_id,
+                       owner_character_id = EXCLUDED.owner_character_id, tenant_user_id = NULL, tenant_character_id = NULL,
+                       source_listing_id = EXCLUDED.source_listing_id, assignment_type = 'sale',
+                       assigned_at = EXCLUDED.assigned_at, updated_at = EXCLUDED.updated_at""",
+                (listing["property_id"], winner_user_id, winner_character_id, listing_id, ts, ts),
+            )
+            final_status = "sold"
+            outcome = f"Your winning bid of ${amount:,.2f} secured {listing['title']}. The Faircroft deed record is now assigned to your selected character."
+        db.execute(
+            "UPDATE realty_listings SET status = ?, winner_user_id = ?, winner_character_id = ?, winning_amount = ?, closed_at = ?, updated_at = ? WHERE id = ?",
+            (final_status, winner_user_id, winner_character_id, amount, ts, ts, listing_id),
+        )
+        db.execute("UPDATE realty_bids SET status = CASE WHEN id = ? THEN 'won' ELSE 'outbid' END WHERE listing_id = ?", (winning_bid["id"], listing_id))
+        add_message(db, winner_user_id, "Faircroft Realty closing complete", outcome, actor_id or int(listing["seller_user_id"]))
+        add_message(db, int(listing["seller_user_id"]), "Faircroft Realty auction awarded", f"{listing['title']} closed to {winning_bid['character_name']} for ${amount:,.2f}.", actor_id)
+        add_admin_audit(db, actor_id or int(listing["seller_user_id"]), "realty.listing.closed", winner_user_id, {"listing_id": listing_id, "property_id": listing["property_id"], "type": listing_type, "amount": amount})
+        return dict(one(db, "SELECT * FROM realty_listings WHERE id = ?", (listing_id,)) or listing)
+
+    def realty_finalize_expired(self, db: Database) -> None:
+        rows = all_rows(db, "SELECT id FROM realty_listings WHERE status = 'active' AND closes_at IS NOT NULL AND closes_at <= ?", (now_iso(),))
+        for row in rows:
+            self.realty_close_listing(db, int(row["id"]))
+
+    def realty_listing_payload(self, db: Database, row: DbRow, viewer_id: int | None = None) -> dict[str, Any]:
+        item = dict(row)
+        try:
+            item["photos"] = json.loads(str(item.get("photo_urls") or "[]"))
+        except (TypeError, json.JSONDecodeError):
+            item["photos"] = []
+        top = one(db, "SELECT b.*, u.name AS bidder_name, c.character_name FROM realty_bids b JOIN users u ON u.id=b.bidder_user_id JOIN user_characters c ON c.id=b.bidder_character_id WHERE b.listing_id=? ORDER BY b.amount DESC, b.created_at ASC LIMIT 1", (row["id"],))
+        count = one(db, "SELECT COUNT(*) AS count FROM realty_bids WHERE listing_id=?", (row["id"],))
+        item["current_bid"] = float(top["amount"]) if top else 0
+        item["bid_count"] = int(count["count"] if count else 0)
+        item["top_bidder"] = top.get("character_name") if top and viewer_id in {int(row["seller_user_id"]), int(top["bidder_user_id"])} else "Private bidder"
+        item["is_mine"] = bool(viewer_id and int(row["seller_user_id"]) == int(viewer_id))
+        return item
+
+    def api_realty(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        self.realty_finalize_expired(db)
+        rows = all_rows(
+            db,
+            """SELECT r.*, p.address, p.property_type, p.price_text, p.rent_text,
+                      seller.name AS seller_name, seller.civ_number AS seller_civ_number,
+                      sc.character_name AS seller_character_name,
+                      winner.name AS winner_name, wc.character_name AS winner_character_name
+               FROM realty_listings r
+               LEFT JOIN game_property_records p ON p.property_id=r.property_id
+               JOIN users seller ON seller.id=r.seller_user_id
+               JOIN user_characters sc ON sc.id=r.seller_character_id
+               LEFT JOIN users winner ON winner.id=r.winner_user_id
+               LEFT JOIN user_characters wc ON wc.id=r.winner_character_id
+               WHERE r.status IN ('active','sold','rented')
+               ORDER BY CASE r.status WHEN 'active' THEN 0 ELSE 1 END, r.closes_at, r.created_at DESC""",
+        )
+        characters = all_rows(db, "SELECT id, character_name, is_active FROM user_characters WHERE user_id=? AND status='active' ORDER BY is_active DESC, character_name", (user["id"],))
+        my_bids = all_rows(db, "SELECT listing_id, MAX(amount) AS amount, COUNT(*) AS bid_count FROM realty_bids WHERE bidder_user_id=? GROUP BY listing_id", (user["id"],))
+        self.send_json(200, {"listings": [self.realty_listing_payload(db, row, int(user["id"])) for row in rows], "characters": [dict(row) for row in characters], "my_bids": [dict(row) for row in my_bids]})
+
+    def api_realty_bid(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        try:
+            listing_id = int(payload.get("listing_id") or 0)
+            amount = round(float(payload.get("amount") or 0), 2)
+        except (TypeError, ValueError):
+            self.error(400, "Enter a valid bid amount")
+            return
+        try:
+            character = require_owned_character(db, int(user["id"]), payload.get("character_id"))
+        except ValueError as exc:
+            self.error(400, str(exc))
+            return
+        self.realty_finalize_expired(db)
+        listing = one(db, "SELECT * FROM realty_listings WHERE id=? FOR UPDATE", (listing_id,))
+        if not listing or listing["status"] != "active":
+            self.error(409, "This listing is no longer accepting bids")
+            return
+        if int(listing["seller_user_id"]) == int(user["id"]):
+            self.error(409, "A listing owner cannot bid on their own property")
+            return
+        highest = one(db, "SELECT MAX(amount) AS amount FROM realty_bids WHERE listing_id=?", (listing_id,))
+        floor = max(float(listing["asking_price"] or 0), float(highest["amount"] or 0) + float(listing["bid_increment"] or 0) if highest and highest.get("amount") is not None else 0)
+        if amount < floor:
+            self.error(409, f"The next qualifying bid is ${floor:,.2f}")
+            return
+        db.execute("INSERT INTO realty_bids (listing_id,bidder_user_id,bidder_character_id,amount,status,created_at) VALUES (?,?,?,?, 'active', ?)", (listing_id, user["id"], character["id"], amount, now_iso()))
+        add_message(db, int(listing["seller_user_id"]), "New Faircroft Realty bid", f"A verified ${amount:,.2f} bid was placed on {listing['title']}.", int(user["id"]))
+        self.send_json(201, {"ok": True, "amount": amount, "message": "Your verified bid is now recorded"})
+
+    def realty_owned_properties(self, db: Database, user_id: int) -> list[dict[str, Any]]:
+        rows = all_rows(
+            db,
+            """SELECT p.*, COALESCE(a.owner_user_id,l.user_id) AS resolved_owner_user_id,
+                      a.owner_character_id, a.tenant_user_id, a.tenant_character_id, a.assignment_type,
+                      active.id AS active_listing_id, active.status AS listing_status
+               FROM game_property_records p
+               LEFT JOIN arma_account_links l ON l.identity_id=p.owner_identity OR l.uid=p.owner_identity
+               LEFT JOIN realty_property_assignments a ON a.property_id=p.property_id
+               LEFT JOIN realty_listings active ON active.property_id=p.property_id AND active.status IN ('draft','active')
+               WHERE COALESCE(a.owner_user_id,l.user_id)=?
+               ORDER BY CASE WHEN p.status='rented' OR LOWER(p.source_file) LIKE '%rented%' THEN 1 ELSE 0 END, p.name, p.property_id""",
+            (user_id,),
+        )
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["holding_type"] = "rented" if str(item.get("status") or "").lower() == "rented" or "rented" in str(item.get("source_file") or "").lower() else "owned"
+            result.append(item)
+        return result
+
+    def api_realty_dashboard(self, db: Database, user: DbRow | None) -> None:
+        err = realty_owner_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        self.realty_finalize_expired(db)
+        properties = self.realty_owned_properties(db, int(user["id"]))
+        rows = all_rows(db, """SELECT r.*, p.address,p.property_type,p.status AS source_status, sc.character_name AS seller_character_name,
+            winner.name AS winner_name,wc.character_name AS winner_character_name FROM realty_listings r
+            LEFT JOIN game_property_records p ON p.property_id=r.property_id
+            JOIN user_characters sc ON sc.id=r.seller_character_id
+            LEFT JOIN users winner ON winner.id=r.winner_user_id LEFT JOIN user_characters wc ON wc.id=r.winner_character_id
+            WHERE r.seller_user_id=? ORDER BY r.created_at DESC""", (user["id"],))
+        characters = all_rows(db, "SELECT id,character_name,is_active FROM user_characters WHERE user_id=? AND status='active' ORDER BY is_active DESC,character_name", (user["id"],))
+        listings = [self.realty_listing_payload(db, row, int(user["id"])) for row in rows]
+        self.send_json(200, {"properties": properties, "listings": listings, "characters": [dict(row) for row in characters], "summary": {"inventory": len(properties), "live": sum(1 for x in listings if x["status"] == "active"), "drafts": sum(1 for x in listings if x["status"] == "draft"), "closed": sum(1 for x in listings if x["status"] in {"sold","rented"}), "bid_volume": round(sum(float(x.get("current_bid") or 0) for x in listings), 2)}})
+
+    def api_create_realty_listing(self, db: Database, user: DbRow | None) -> None:
+        err = realty_owner_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        property_id = str(payload.get("property_id") or "").strip()
+        eligible = {str(item["property_id"]): item for item in self.realty_owned_properties(db, int(user["id"]))}
+        if property_id not in eligible:
+            self.error(403, "Select a synchronized property attached to your verified Realty portfolio")
+            return
+        if eligible[property_id].get("active_listing_id"):
+            self.error(409, "This property already has an open Realty file")
+            return
+        try:
+            character = require_owned_character(db, int(user["id"]), payload.get("character_id"))
+            asking = round(float(payload.get("asking_price") or 0), 2)
+            reserve = round(float(payload.get("reserve_price") or asking), 2)
+            increment = round(float(payload.get("bid_increment") or 1000), 2)
+        except ValueError as exc:
+            self.error(400, str(exc))
+            return
+        listing_type = str(payload.get("listing_type") or "sale").lower()
+        title = " ".join(str(payload.get("title") or "").split())[:140]
+        description = str(payload.get("description") or "").strip()[:6000]
+        if listing_type not in {"sale", "rent"} or len(title) < 5 or len(description) < 30 or asking <= 0 or increment <= 0:
+            self.error(400, "Complete the property type, title, detailed description, price, and bid increment")
+            return
+        photos_raw = payload.get("photos") or []
+        if isinstance(photos_raw, str):
+            photos_raw = [line.strip() for line in photos_raw.splitlines() if line.strip()]
+        photos = [str(url).strip()[:4000] for url in photos_raw if str(url).strip().startswith(("https://", "http://", "data:image/"))][:8]
+        closes_at = str(payload.get("closes_at") or "").strip()
+        try:
+            close_dt = parse_iso(closes_at)
+        except Exception:
+            close_dt = utcnow() + dt.timedelta(days=7)
+        if close_dt <= utcnow() + dt.timedelta(minutes=15) or close_dt > utcnow() + dt.timedelta(days=90):
+            self.error(400, "Auction closing must be between 15 minutes and 90 days from now")
+            return
+        status = "active" if bool(payload.get("publish")) else "draft"
+        ts = now_iso()
+        listing_number = f"FCR-{utcnow().strftime('%y%m')}-{secrets.randbelow(900000)+100000}"
+        created = db.execute("""INSERT INTO realty_listings (listing_number,property_id,seller_user_id,seller_character_id,listing_type,title,description,neighborhood,asking_price,reserve_price,bid_increment,photo_urls,status,starts_at,closes_at,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id""", (listing_number,property_id,user["id"],character["id"],listing_type,title,description,str(payload.get("neighborhood") or "").strip()[:120],asking,reserve,increment,json.dumps(photos),status,ts if status=="active" else None,close_dt.isoformat(),ts,ts)).fetchone()
+        add_admin_audit(db, int(user["id"]), "realty.listing.created", int(user["id"]), {"listing_id": int(created["id"]), "property_id": property_id, "status": status, "type": listing_type})
+        self.send_json(201, {"ok": True, "id": int(created["id"]), "listing_number": listing_number})
+
+    def api_update_realty_listing(self, db: Database, user: DbRow | None, listing_id: int) -> None:
+        err = realty_owner_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        listing = one(db, "SELECT * FROM realty_listings WHERE id=? AND seller_user_id=?", (listing_id,user["id"]))
+        if not listing:
+            self.error(404, "Realty listing not found in your portfolio")
+            return
+        payload = self.read_json()
+        action = str(payload.get("action") or "").lower()
+        ts = now_iso()
+        if action == "publish":
+            if listing["status"] != "draft":
+                self.error(409, "Only draft listings can be published")
+                return
+            db.execute("UPDATE realty_listings SET status='active',starts_at=?,updated_at=? WHERE id=?", (ts,ts,listing_id))
+        elif action == "cancel":
+            if listing["status"] not in {"draft","active"}:
+                self.error(409, "This Realty file is already closed")
+                return
+            if one(db, "SELECT id FROM realty_bids WHERE listing_id=? LIMIT 1", (listing_id,)):
+                self.error(409, "An auction with verified bids must be formally closed, not cancelled")
+                return
+            db.execute("UPDATE realty_listings SET status='cancelled',closed_at=?,updated_at=? WHERE id=?", (ts,ts,listing_id))
+        elif action == "close":
+            try:
+                self.realty_close_listing(db, listing_id, int(user["id"]))
+            except ValueError as exc:
+                self.error(409, str(exc))
+                return
+        else:
+            self.error(400, "Select publish, cancel, or close")
+            return
+        self.send_json(200, {"ok": True})
+
     def my_faircroft_payload(self, db: Database, user: DbRow) -> dict[str, Any]:
         active_character = ensure_default_character(db, int(user["id"]), str(user.get("name") or "Civilian"))
         active_character_id = int(active_character["id"])
@@ -12216,6 +12686,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             """,
             (user["id"], active_character_id),
         )
+        property_taxes = all_rows(
+            db,
+            """
+            SELECT assessment.*, property.name AS property_name, property.address AS property_address
+            FROM property_tax_assessments assessment
+            JOIN game_property_records property ON property.property_id = assessment.property_id
+            WHERE assessment.owner_user_id = ?
+              AND LOWER(COALESCE(property.source_file, '')) NOT LIKE '%rented%'
+            ORDER BY assessment.assessed_at DESC
+            """,
+            (user["id"],),
+        )
         record_requests = all_rows(
             db,
             """
@@ -12229,6 +12711,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         case_payload = [dict(row) for row in cases]
         tax_payload = [dict(row) for row in taxes]
+        property_tax_payload = [dict(row) for row in property_taxes]
         outstanding_fines = [
             item
             for item in case_payload
@@ -12237,6 +12720,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             and float(item.get("fine_amount") or 0) > 0
         ]
         outstanding_taxes = [item for item in tax_payload if item["status"] == "unpaid"]
+        outstanding_property_taxes = [item for item in property_tax_payload if item["status"] == "unpaid"]
         pending_fine_ids = {
             int(item["id"])
             for item in outstanding_fines
@@ -12251,10 +12735,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "cases": case_payload,
             "record_requests": [dict(item) for item in record_requests],
             "taxes": tax_payload,
+            "property_taxes": property_tax_payload,
             "bank": public_user_with_game_bank(db, user),
             "summary": {
                 "outstanding_fines": round(sum(max(0, float(item["fine_amount"] or 0) - float(item.get("direct_paid_amount") or 0)) for item in outstanding_fines), 2),
-                "outstanding_taxes": round(sum(float(item["amount"] or 0) for item in outstanding_taxes), 2),
+                "outstanding_taxes": round(
+                    sum(float(item["amount"] or 0) for item in outstanding_taxes)
+                    + sum(float(item["amount"] or 0) for item in outstanding_property_taxes), 2
+                ),
                 "open_cases": sum(1 for item in case_payload if item["status"] in ACTIVE_CASE_STATUSES),
                 "pending_payments": len(pending_fine_ids) + len(pending_tax_ids),
                 "verified_direct_payments": int(one(db, "SELECT COUNT(*) AS count FROM myfaircroft_direct_payments WHERE user_id = ?", (user["id"],))["count"] or 0),
@@ -12593,6 +13081,66 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             add_message(db, staff["id"], "MyFaircroft tax payment", f"{user['name']} requested payment of ${amount:,.2f} for {account['business_name']}. Batch {batch_number}.", user["id"])
         add_admin_audit(db, int(user["id"]), "myfaircroft.tax.payment_requested", int(user["id"]), {"business_id": business_id, "batch_number": batch_number, "amount": amount})
         self.send_json(201, {"ok": True, "batch_number": batch_number, "amount": amount})
+
+    def api_pay_property_tax(self, db: Database, user: DbRow | None, assessment_id: int) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        raw_code = str(self.read_json().get("code") or "").strip()
+        if not re.fullmatch(r"\d{4}", raw_code):
+            self.error(400, "Enter the four-digit MyFaircroft receipt PIN")
+            return
+        assessment = one(
+            db,
+            """SELECT assessment.*, property.name AS property_name, property.source_file
+               FROM property_tax_assessments assessment
+               JOIN game_property_records property ON property.property_id=assessment.property_id
+               WHERE assessment.id=? AND assessment.owner_user_id=?""",
+            (assessment_id, user["id"]),
+        )
+        if not assessment:
+            self.error(404, "Property-tax bill not found")
+            return
+        if "rented" in str(assessment.get("source_file") or "").lower():
+            self.error(409, "Rental tenancies are not liable for ownership property tax")
+            return
+        if assessment["status"] != "unpaid":
+            self.error(409, "This property-tax bill is no longer payable")
+            return
+        code_hash = hashlib.sha256(raw_code.encode("utf-8")).hexdigest()
+        payment_code = one(
+            db,
+            """SELECT * FROM myfaircroft_payment_codes
+               WHERE code_hash=? AND target_user_id IS NULL AND used_at IS NULL
+                 AND revoked_at IS NULL AND expires_at>?""",
+            (code_hash, now_iso()),
+        )
+        if not payment_code:
+            self.error(403, "A valid unused four-digit receipt PIN is required before this property-tax bill can be paid")
+            return
+        ts = now_iso()
+        amount = round(float(assessment["amount"] or 0), 2)
+        db.execute(
+            """INSERT INTO myfaircroft_property_tax_payments
+               (assessment_id,property_id,user_id,code_id,amount,received_by,created_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (assessment_id, assessment["property_id"], user["id"], payment_code["id"], amount, payment_code["created_by"], ts),
+        )
+        db.execute(
+            "UPDATE myfaircroft_payment_codes SET target_user_id=?,used_by=?,used_at=? WHERE id=? AND used_at IS NULL",
+            (user["id"], user["id"], ts, payment_code["id"]),
+        )
+        db.execute("UPDATE property_tax_assessments SET status='paid',paid_at=? WHERE id=?", (ts, assessment_id))
+        add_message(
+            db, user["id"], "Faircroft property tax payment verified",
+            f"Your ${amount:,.2f} property-tax bill for {assessment.get('property_name') or assessment['property_id']} was paid and recorded. The verified receipt was added to the Faircroft Lottery fund.",
+            payment_code["created_by"],
+        )
+        add_admin_audit(db, int(user["id"]), "myfaircroft.property_tax.payment_redeemed", int(user["id"]), {
+            "assessment_id": assessment_id, "property_id": assessment["property_id"], "amount": amount,
+            "code_hint": payment_code["code_hint"], "issued_by": payment_code["created_by"],
+        })
+        self.send_json(200, {"ok": True, "paid": True, "amount": amount, "assessment_id": assessment_id})
 
     def api_contest_case(self, db: Database, user: DbRow | None, case_id: int) -> None:
         if not user:
@@ -15565,11 +16113,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             """
             SELECT p.property_id, p.name, p.address, p.owner_identity, p.status, p.price_text,
                    p.rent_text, p.property_type, p.raw_payload, p.source_file, p.synced_at,
-                   u.id AS owner_user_id, u.name AS owner_name, u.civ_number AS owner_civ,
+                   COALESCE(ru.id,u.id) AS owner_user_id, COALESCE(ru.name,u.name) AS owner_name,
+                   COALESCE(ru.civ_number,u.civ_number) AS owner_civ,
                    l.player_name AS owner_player_name, l.platform AS owner_platform
             FROM game_property_records p
             LEFT JOIN arma_account_links l ON l.identity_id = p.owner_identity OR l.uid = p.owner_identity
+            LEFT JOIN realty_property_assignments ra ON ra.property_id = p.property_id
             LEFT JOIN users u ON u.id = l.user_id
+            LEFT JOIN users ru ON ru.id = ra.owner_user_id
             ORDER BY p.synced_at DESC, p.name
             LIMIT 1000
             """,
@@ -15882,7 +16433,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "quick_draw_enabled": system_settings["lottery_quick_draw_enabled"],
                     "quick_draw_interval_minutes": system_settings["lottery_quick_draw_interval_minutes"],
                     "quick_draw_entries": system_settings["lottery_quick_draw_entries"],
+                    "player_pool": lottery_player_pool_status(db, system_settings),
                     "funding": lottery_funding_snapshot(db, system_settings),
+                    "player_pool_accruals": [dict(row) for row in all_rows(db, "SELECT * FROM lottery_player_pool_accruals ORDER BY created_at DESC LIMIT 100")],
                     "draws": [dict(row) for row in all_rows(db, """SELECT d.*,u.name AS winner_name,u.civ_number AS winner_civ FROM lottery_draws d LEFT JOIN users u ON u.id=d.winner_user_id ORDER BY d.scheduled_at DESC LIMIT 30""")],
                     "entries": [dict(row) for row in all_rows(db, """SELECT e.*,u.name,u.civ_number,u.roles FROM lottery_entries e JOIN users u ON u.id=e.user_id ORDER BY e.created_at DESC LIMIT 250""")],
                     "fund_adjustments": [dict(row) for row in all_rows(db, """SELECT a.*,u.name AS created_by_name FROM lottery_fund_adjustments a JOIN users u ON u.id=a.created_by ORDER BY a.created_at DESC LIMIT 100""")],
@@ -16607,6 +17160,30 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         }.items(): set_system_setting(db, key, value)
         ensure_lottery_draw(db, get_system_settings(db))
         self.send_json(200, {"ok": True})
+
+    def api_dev_lottery_player_pool(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        payload = self.read_json()
+        direction = str(payload.get("direction") or "increase").strip().lower()
+        try:
+            rate = max(0.0, min(1000000.0, float(payload.get("rate_per_player_minute") or 0)))
+        except (TypeError, ValueError):
+            self.error(400, "Enter a valid per-player lottery rate."); return
+        if direction not in ("increase", "decrease"):
+            self.error(400, "Choose whether online players increase or decrease the pool."); return
+        for key, value in {
+            "lottery_player_pool_enabled": "1" if payload.get("enabled") else "0",
+            "lottery_player_pool_direction": direction,
+            "lottery_player_pool_rate_per_minute": str(rate),
+            "lottery_player_pool_last_tick": utcnow().isoformat(),
+        }.items():
+            set_system_setting(db, key, value)
+        add_admin_audit(db, int(user["id"]), "lottery.player_pool.updated", details={"enabled": bool(payload.get("enabled")), "direction": direction, "rate_per_player_minute": rate})
+        settings = get_system_settings(db)
+        self.send_json(200, {"ok": True, "player_pool": lottery_player_pool_status(db, settings)})
 
     def api_dev_lottery_funds(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
@@ -17728,7 +18305,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         property_tax_rows = all_rows(
             db,
             """
-            SELECT p.*, l.user_id AS owner_user_id, u.name AS owner_name,
+            SELECT p.*, COALESCE(ra.owner_user_id,l.user_id) AS owner_user_id, u.name AS owner_name,
                    u.civ_number AS owner_civ_number,
                    (SELECT COALESCE(SUM(a.amount), 0)
                       FROM property_tax_assessments a
@@ -17736,10 +18313,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                    (SELECT e.action FROM property_enforcement_actions e
                      WHERE e.property_id = p.property_id ORDER BY e.id DESC LIMIT 1) AS latest_enforcement
             FROM game_property_records p
+            LEFT JOIN realty_property_assignments ra ON ra.property_id = p.property_id
             LEFT JOIN arma_account_links l
               ON l.identity_id = p.owner_identity OR l.uid = p.owner_identity
-            LEFT JOIN users u ON u.id = l.user_id
-            WHERE COALESCE(p.owner_identity, '') <> ''
+            LEFT JOIN users u ON u.id = COALESCE(ra.owner_user_id,l.user_id)
+            WHERE (COALESCE(p.owner_identity, '') <> '' OR ra.owner_user_id IS NOT NULL)
+              AND LOWER(COALESCE(p.source_file, '')) NOT LIKE '%rented%'
             ORDER BY u.name, p.name, p.property_id
             """,
         )
@@ -17747,11 +18326,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         property_owner_totals: dict[str, dict[str, Any]] = {}
         for row in property_tax_rows:
             item = dict(row)
-            price_match = re.search(r"-?[0-9]+(?:\.[0-9]+)?", str(item.get("price_text") or "").replace(",", ""))
-            assessed_value = max(0.0, float(price_match.group(0))) if price_match else 0.0
+            assessed_value = PROPERTY_TAX_BASE_VALUE
             item["source_assessed_value"] = round(assessed_value, 2)
             item["property_tax_rate"] = 0.14
             item["projected_tax"] = round(assessed_value * 0.14, 2)
+            item["tax_rate_options"] = [
+                {"rate": rate, "percent": int(rate * 100), "amount": round(assessed_value * rate, 2)}
+                for rate in PROPERTY_TAX_ALLOWED_RATES
+            ]
             item["unpaid_property_tax"] = round(float(item.get("unpaid_property_tax") or 0), 2)
             item["enforcement_state"] = "clear" if item.get("latest_enforcement") in {None, "release"} else item.get("latest_enforcement")
             property_tax_accounts.append(item)
@@ -17852,6 +18434,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "property_tax_accounts": property_tax_accounts,
             "property_tax_owners": property_tax_owners,
             "property_tax_rate": 0.14,
+            "property_tax_base_value": PROPERTY_TAX_BASE_VALUE,
+            "property_tax_allowed_rates": list(PROPERTY_TAX_ALLOWED_RATES),
             "property_tax_summary": {
                 "properties": len(property_tax_accounts),
                 "owners": len(property_tax_owners),
@@ -17874,38 +18458,41 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         notes = str(payload.get("notes") or "").strip()[:1000]
         record = one(
             db,
-            """SELECT p.*, l.user_id AS owner_user_id, u.name AS owner_name
+            """SELECT p.*, COALESCE(ra.owner_user_id,l.user_id) AS owner_user_id, u.name AS owner_name
                FROM game_property_records p
+               LEFT JOIN realty_property_assignments ra ON ra.property_id = p.property_id
                LEFT JOIN arma_account_links l ON l.identity_id = p.owner_identity OR l.uid = p.owner_identity
-               LEFT JOIN users u ON u.id = l.user_id
+               LEFT JOIN users u ON u.id = COALESCE(ra.owner_user_id,l.user_id)
                WHERE p.property_id = ?""",
             (property_id,),
         )
         if not record or not str(record.get("owner_identity") or "").strip():
             self.error(404, "An owned property record is required")
             return
+        if "rented" in str(record.get("source_file") or "").lower():
+            self.error(409, "Rental tenancies are not taxable ownership records")
+            return
         existing = one(db, "SELECT id FROM property_tax_assessments WHERE property_id = ? AND status = 'unpaid'", (property_id,))
         if existing:
             self.error(409, "This property already has an unpaid tax assessment")
             return
         try:
-            assessed_value = float(payload.get("assessed_value") or 0)
+            submitted_rate = float(payload.get("tax_rate") or 0)
         except (TypeError, ValueError):
-            assessed_value = 0
-        if assessed_value <= 0:
-            match = re.search(r"[0-9]+(?:\.[0-9]+)?", str(record.get("price_text") or "").replace(",", ""))
-            assessed_value = float(match.group(0)) if match else 0
-        if assessed_value <= 0:
-            self.error(400, "Enter the verified assessed property value; the source record does not include one")
+            submitted_rate = 0
+        tax_rate = submitted_rate / 100 if submitted_rate in (12, 14, 18) else submitted_rate
+        tax_rate = round(tax_rate, 2)
+        if tax_rate not in PROPERTY_TAX_ALLOWED_RATES:
+            self.error(400, "Select the authorized 12%, 14%, or 18% property-tax rate")
             return
-        assessed_value = round(assessed_value, 2)
-        amount = round(assessed_value * 0.14, 2)
+        assessed_value = PROPERTY_TAX_BASE_VALUE
+        amount = round(assessed_value * tax_rate, 2)
         ts = now_iso()
         cursor = db.execute(
             """INSERT INTO property_tax_assessments
                (property_id, owner_identity, owner_user_id, assessed_value, tax_rate, amount, status, notes, assessed_by, assessed_at)
-               VALUES (?, ?, ?, ?, 0.14, ?, 'unpaid', ?, ?, ?) RETURNING id""",
-            (property_id, record["owner_identity"], record.get("owner_user_id"), assessed_value, amount, notes, user["id"], ts),
+               VALUES (?, ?, ?, ?, ?, ?, 'unpaid', ?, ?, ?) RETURNING id""",
+            (property_id, record["owner_identity"], record.get("owner_user_id"), assessed_value, tax_rate, amount, notes, user["id"], ts),
         )
         assessment_id = int(cursor.fetchone()["id"])
         if record.get("owner_user_id"):
@@ -17913,13 +18500,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 db,
                 int(record["owner_user_id"]),
                 "Faircroft property tax assessment",
-                f"A 14% property tax assessment of ${amount:,.2f} was issued for {record.get('name') or property_id} on an assessed value of ${assessed_value:,.2f}.",
+                f"A {int(tax_rate * 100)}% property tax assessment of ${amount:,.2f} was issued for {record.get('name') or property_id} using Faircroft's fixed ${assessed_value:,.2f} property-tax basis. Pay the bill in MyFaircroft with a verified four-digit receipt PIN.",
                 int(user["id"]),
             )
         add_admin_audit(db, int(user["id"]), "property.tax.assessed", record.get("owner_user_id"), {
-            "assessment_id": assessment_id, "property_id": property_id, "assessed_value": assessed_value, "tax_rate": 0.14, "amount": amount,
+            "assessment_id": assessment_id, "property_id": property_id, "assessed_value": assessed_value, "tax_rate": tax_rate, "amount": amount,
         })
-        self.send_json(201, {"ok": True, "assessment_id": assessment_id, "property_id": property_id, "assessed_value": assessed_value, "amount": amount})
+        self.send_json(201, {"ok": True, "assessment_id": assessment_id, "property_id": property_id, "assessed_value": assessed_value, "tax_rate": tax_rate, "amount": amount})
 
     def api_property_enforcement(self, db: Database, user: DbRow | None) -> None:
         err = fine_settlement_required(user)
@@ -17938,12 +18525,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if action != "release" and len(reason) < 10:
             self.error(400, "Enter an enforcement reason of at least 10 characters")
             return
-        record = one(db, """SELECT p.*, l.user_id AS owner_user_id, u.name AS owner_name
+        record = one(db, """SELECT p.*, COALESCE(ra.owner_user_id,l.user_id) AS owner_user_id, u.name AS owner_name
             FROM game_property_records p
+            LEFT JOIN realty_property_assignments ra ON ra.property_id=p.property_id
             LEFT JOIN arma_account_links l ON l.identity_id=p.owner_identity OR l.uid=p.owner_identity
-            LEFT JOIN users u ON u.id=l.user_id WHERE p.property_id=?""", (property_id,))
+            LEFT JOIN users u ON u.id=COALESCE(ra.owner_user_id,l.user_id) WHERE p.property_id=?""", (property_id,))
         if not record or not record.get("owner_identity"):
             self.error(404, "Owned property not found")
+            return
+        if "rented" in str(record.get("source_file") or "").lower():
+            self.error(409, "Rental tenancies cannot receive ownership-tax enforcement")
             return
         latest = one(db, "SELECT action FROM property_enforcement_actions WHERE property_id=? ORDER BY id DESC LIMIT 1", (property_id,))
         current_state = "clear" if not latest or latest["action"] == "release" else str(latest["action"])

@@ -6,6 +6,12 @@
       "version": "0.2.2",
     "title": "RP OS 0.2.2",
     "added": [
+      "Added a server-authoritative Faircroft Lottery attendance engine that reads the live Anti-Cheat player roster and adjusts the prize pool by elapsed seconds using the verified online-player count.",
+      "Added Developer Tools Lottery controls for enabling player-driven pool movement, selecting increase or decrease behavior, setting the per-player per-minute rate, viewing live per-second and per-minute velocity, and auditing recent timed accruals.",
+      "Added direct MyFaircroft property-tax bill payment using the same unassigned, audited four-digit receipt PIN authority used for fines, business taxes, and Ravenhood, with paid receipts contributing to the Faircroft Lottery fund.",
+      "Added Faircroft Realty Group, a public full-screen property market where residents can explore synchronized homes for sale or rent, review editorial property presentations and photography, select an exact character, and submit verified auction bids.",
+      "Added the private Realty Dash application and Realty Owner role, with a brokerage command center connected only to that owner's linked owned and rented property records, listing drafts, market publication, live offer oversight, and closing archives.",
+      "Added character-specific Faircroft Realty closings that record winning sale bidders as deed holders and winning rental bidders as tenants in an audited RP OS ownership overlay without writing into protected game-server property files.",
       "Added role-aware Admin Tools access with developer-controlled switches for selectively delegating restricted operational sections to administrators.",
       "Added server-enforced Admin Tools section authorization so locked administrator sections cannot be accessed by calling their protected endpoints directly.",
         "Added Faircroft Housing Conditions intelligence with live availability, occupancy, demand coverage, estimated unhoused-account rate, additional-home requirements, and market-pressure status derived from verified accounts and synchronized TBS ownership records.",
@@ -83,6 +89,9 @@
         ,"Added an active scheduled-movement ledger to Ravenhood Stock Market Settings with affected securities, target percentage, schedule timing, live progress, and immediate stop controls."
       ],
     "changed": [
+      "Changed the public Faircroft Lottery broadcast to display verified players online, live prize velocity, and a smoothly advancing jackpot amount tied to the configured attendance rate.",
+      "Changed residential property-tax assessment to a fixed $350,000 Faircroft basis with one-click authorized 12%, 14%, and 18% rate controls, producing exact bills of $42,000, $49,000, or $63,000 without manual valuation entry.",
+      "Rebuilt Admin Tools Housing Market as an owner-centered property command dashboard that consolidates every synchronized residence under one resident portfolio, adds expandable asset drawers and direct intelligence access, and separates vacant inventory from ownership records.",
       "Renamed Developer Tools to Admin Tools, gave administrators the Command Center, Account Management, Game Intelligence, Housing Market, Anti-Cheat, and Activity Log by default, and retained unrestricted access for developers and owners.",
       "Removed the separate Admin application icon and consolidated account administration into the unified Admin Tools workspace.",
         "Rebuilt the Insurance application as the official Faircroft Continuity Authority workspace with an animated protection seal, continuous policy certificate, recovery-level presentation, synchronized bank position, claim-status timeline, and responsive enrollment flow instead of stacked policy widgets.",
@@ -160,6 +169,9 @@
         ,"Changed all newly issued MyFaircroft and Ravenhood four-digit receipt PINs to unassigned bearer codes that permanently record the issuing administrator and first eligible resident who redeems them."
       ],
       "fixed": [
+        "Fixed Faircroft Lottery entry submissions colliding after a same-day drawing rollover by allocating entry numbers across the resident's full calendar day and serializing concurrent requests, while keeping bonus entries separate from the complimentary daily limit.",
+        "Fixed the ICE MDT FLUCK Camera System opening to a blank workspace by removing a stale legacy visibility rule that hid the redesigned operations center, tightening the selector to the active module boundary, and safely normalizing camera and occupant payload collections.",
+        "Fixed property-tax ownership isolation so rented-property source records are excluded from the taxable deed inventory, resident bills, liens, seizures, owner totals, and enforcement endpoints.",
         "Serialized Shadow Haven SFTP sessions and added bounded authentication retries so bank, anti-cheat, FLUCK, persistence, property, and reputation workers no longer overwhelm the host with simultaneous startup logins; missing-file errors now identify the exact configured remote path.",
         "Fixed Developer Tools Housing Market imports so nested TBS Property Mod housing lists are recursively read from raw JSON containers instead of only accepting shallow normalized property arrays.",
         "Fixed Ravenhood promotional redemption feedback by canonicalizing newly issued promo codes, preserving compatibility with older codes, refreshing the portfolio immediately after a claim, and showing a dedicated success confirmation receipt.",

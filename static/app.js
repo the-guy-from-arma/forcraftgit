@@ -200,6 +200,8 @@ const iconSvg = {
   federal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m12 2 8 4v6c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V6l8-4Z"/><path d="M8 9h8M9 9v6M12 9v6M15 9v6M7 16h10M12 5v2"/></svg>',
   insurance: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3 4 6v6c0 5 3.4 8.2 8 10 4.6-1.8 8-5 8-10V6l-8-3Z"/><path d="M8 12h8M12 8v8"/><circle cx="12" cy="12" r="6"/></svg>',
   gang: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="8" r="3"/><circle cx="5.5" cy="10" r="2.5"/><circle cx="18.5" cy="10" r="2.5"/><path d="M6 20v-2a6 6 0 0 1 12 0v2M2 20v-1a4 4 0 0 1 4-4M22 20v-1a4 4 0 0 0-4-4"/></svg>',
+  realty: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m3 11 9-7 9 7"/><path d="M5 10v10h14V10M9 20v-6h6v6"/><path d="M16.5 5.5 19 3l2 2-2.5 2.5"/></svg>',
+  "realty-dashboard": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m3 10 9-7 9 7M5 9v11h14V9"/><path d="M8 20v-6h5v6M16 13h3M16 16h3"/><circle cx="18" cy="6" r="2"/></svg>',
   plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14M5 12h14"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m15 18-6-6 6-6"/></svg>',
@@ -242,6 +244,8 @@ const tileColors = {
   "ice-mdt": "linear-gradient(145deg, #7ed8ff, #173d63 55%, #08111a)",
   insurance: "linear-gradient(145deg, #70efff, #1559a8 55%, #071c36)",
   gangs: "linear-gradient(145deg, #ff6f6f, #8e1834 55%, #17111e)",
+  realty: "linear-gradient(145deg, #f4d8a6, #9d6541 52%, #233c35)",
+  "realty-dashboard": "linear-gradient(145deg, #d4ae72, #315e52 58%, #101d1a)",
 };
 
 function money(value) {
@@ -697,6 +701,14 @@ function render() {
   if (state.activeApp === "gangs") {
     app.innerHTML = renderSystemBanner() + renderGangWorkspace() + renderRequiredProfileModals();
     bindGangWorkspace(); bindRequiredProfileModals(); return;
+  }
+  if (state.activeApp === "realty") {
+    app.innerHTML = renderSystemBanner() + renderRealtyWorkspace() + renderRequiredProfileModals();
+    bindRealtyWorkspace(); bindRequiredProfileModals(); return;
+  }
+  if (state.activeApp === "realty-dashboard") {
+    app.innerHTML = renderSystemBanner() + renderRealtyDashboardWorkspace() + renderRequiredProfileModals();
+    bindRealtyDashboardWorkspace(); bindRequiredProfileModals(); return;
   }
   if (state.activeApp) {
     app.innerHTML = phone(renderHome() + renderPanel(state.activeApp) + renderRequiredProfileModals());
@@ -1841,6 +1853,8 @@ function renderPanel(id) {
     lottery: "Faircroft Lottery",
     insurance: "Faircroft Insurance",
     gangs: "Gang Network",
+    realty: "Faircroft Realty Group",
+    "realty-dashboard": "Realty Dash",
   };
   const body = {
     profile: renderProfile,
@@ -1873,6 +1887,8 @@ function renderPanel(id) {
     lottery: renderLotteryWorkspace,
     insurance: renderInsuranceWorkspace,
     gangs: renderGangWorkspace,
+    realty: renderRealtyWorkspace,
+    "realty-dashboard": renderRealtyDashboardWorkspace,
   }[id]?.() || `<div class="empty">Module unavailable</div>`;
 
   return `
@@ -1933,6 +1949,8 @@ async function loadAppData(id) {
     "ice-mdt": () => api("/api/ice/overview"),
     insurance: () => api("/api/insurance"),
     gangs: () => api("/api/gangs"),
+    realty: () => api("/api/realty"),
+    "realty-dashboard": () => api("/api/realty-dashboard"),
     admin: async () => ({
       overview: await api("/api/admin/overview"),
       users: await api("/api/admin/users"),
@@ -2020,6 +2038,8 @@ function bindPanel() {
     downloads: bindDownloads,
     press: bindPressDesk,
     citizenship: bindCitizenship,
+    realty: bindRealtyWorkspace,
+    "realty-dashboard": bindRealtyDashboardWorkspace,
   };
   binders[state.activeApp]?.();
 }
@@ -2251,18 +2271,19 @@ function bindCitizenship() {
 function renderIceFluckCommand() {
   const data = state.cache["ice-mdt"] || {};
   const camera = data.fluck_camera || {};
-  const allEvents = camera.events || [];
-  const cameras = camera.cameras || [];
+  const allEvents = Array.isArray(camera.events) ? camera.events : [];
+  const cameras = Array.isArray(camera.cameras) ? camera.cameras : [];
   const source = state.iceCameraSource || "all";
   const term = String(state.iceCameraSearch || "").trim().toLowerCase();
   const events = allEvents.filter((event) => {
     if (source !== "all" && String(event.camera_id || "Unknown camera") !== source) return false;
     if (!term) return true;
-    const occupantText = (event.occupants || []).map((person) => `${person.name || ""} ${person.identity_id || ""} ${person.linked_account_name || ""} ${person.linked_civ_number || ""} ${person.citizenship_status || ""}`).join(" ");
+    const occupants = Array.isArray(event.occupants) ? event.occupants : [];
+    const occupantText = occupants.map((person) => `${person.name || ""} ${person.identity_id || ""} ${person.linked_account_name || ""} ${person.linked_civ_number || ""} ${person.citizenship_status || ""}`).join(" ");
     return `${event.vehicle_plate || ""} ${event.subject_name || ""} ${event.identity_id || ""} ${event.location || ""} ${event.camera_id || ""} ${occupantText}`.toLowerCase().includes(term);
   });
   const selected = events.find((event) => event.event_id === state.iceSelectedCameraEvent) || events[0] || null;
-  const selectedOccupants = selected?.occupants || [];
+  const selectedOccupants = Array.isArray(selected?.occupants) ? selected.occupants : [];
   const validCitizens = selectedOccupants.filter((person) => String(person.citizenship_status || "").toLowerCase() === "valid citizen").length;
   const cameraName = source === "all" ? "All camera sectors" : source;
   return `<section class="ice-fluck-command-v2">
@@ -3887,7 +3908,7 @@ function marketChange(security) {
 function renderLotteryCinematicWorkspace() {
   const data=state.cache.lottery;
   if(!data)return `<main class="fc-lotto"><div class="empty">Opening Faircroft Lottery Live…</div></main>`;
-  const draw=data.draw||{},funding=data.funding||{},entries=data.entries||[],remaining=Math.max(0,Number(data.remaining_today||0));
+  const draw=data.draw||{},funding=data.funding||{},playerPool=data.player_pool||{},entries=data.entries||[],remaining=Math.max(0,Number(data.remaining_today||0));
   const scheduled=draw.scheduled_at?new Date(draw.scheduled_at):null;
   const drawLabel=scheduled?scheduled.toLocaleString(undefined,{weekday:"long",month:"long",day:"numeric",hour:"numeric",minute:"2-digit",timeZone:data.timezone}):"Tuesday · 11:59 PM Eastern";
   const until=Math.max(0,(scheduled?.getTime()||Date.now())-Date.now()),days=Math.floor(until/86400000),hours=Math.floor(until%86400000/3600000),minutes=Math.floor(until%3600000/60000);
@@ -3907,10 +3928,10 @@ function renderLotteryCinematicWorkspace() {
     <header class="fc-lotto-nav"><div class="fc-lotto-wordmark"><i><b>FC</b></i><span><small>STATE OF FAIRCROFT</small><strong>LOTTERY LIVE</strong><em>OFFICIAL DRAW NETWORK</em></span></div><div class="fc-lotto-onair"><i></i><span>ON AIR</span><small>${data.enabled?"Verified entries open":"Entry window paused"}</small></div><nav><button data-refresh-lottery aria-label="Refresh drawing">↻</button><button data-close-lottery>Exit Lottery</button></nav></header>
     <section class="fc-lotto-broadcast">
       <div class="fc-lotto-copy"><span>THE OFFICIAL WEEKLY DRAW</span><h1>THIS COULD<br>BE <em>YOUR</em><br>MOMENT.</h1><p>One resident. One verified field. One Faircroft prize.</p></div>
-      <div class="fc-lotto-jackpot"><span>LIVE FAIRCROFT POOL</span><strong data-lottery-jackpot data-value="${pool}">${money(pool)}</strong><small>${pool>0?"Verified total · updated live":"Prize reservoir now building"}</small><div class="fc-lotto-signal"><i></i><i></i><i></i><i></i><i></i></div></div>
+      <div class="fc-lotto-jackpot"><span>LIVE FAIRCROFT POOL</span><strong data-lottery-jackpot data-value="${pool}" data-rate-second="${playerPool.enabled?Number(playerPool.change_per_second||0):0}">${money(pool)}</strong><small>${pool>0?"Verified total · advancing live":"Prize reservoir now building"}</small><div class="fc-lotto-crowd"><i></i><b>${Number(playerPool.online_players||0)} PLAYERS ONLINE</b><em class="${Number(playerPool.change_per_minute||0)>=0?"up":"down"}">${playerPool.enabled?`${Number(playerPool.change_per_minute||0)>=0?"+":"−"}${money(Math.abs(Number(playerPool.change_per_minute||0)))} / MIN`:"ATTENDANCE GROWTH PAUSED"}</em></div><div class="fc-lotto-signal"><i></i><i></i><i></i><i></i><i></i></div></div>
       <div class="fc-lotto-draw"><span>NEXT OFFICIAL DRAW</span><strong>${String(days).padStart(2,"0")}<i>D</i> ${String(hours).padStart(2,"0")}<i>H</i> ${String(minutes).padStart(2,"0")}<i>M</i></strong><small>${escapeHtml(drawLabel)}</small></div>
       <div class="fc-lotto-entry"><div><span>TODAY’S PASS</span><strong>${remaining}<small>/ ${data.daily_limit}</small></strong></div><p>${data.excluded?"This identity is not eligible under the current lottery policy.":remaining>0?"Your complimentary verified chance is ready.":"Today’s available entries are already in the draw."}</p><button data-lottery-enter ${!data.enabled||data.excluded||remaining<=0?"disabled":""}>${remaining>0?"Enter the weekly draw":"Entries secured"}<b>→</b></button></div>
-      <div class="fc-lotto-livebar"><span><i></i> LIVE POOL</span><b>${money(pool)}</b><span>VERIFIED FIELD</span><b>${entries.length}</b><span>DAILY ACCESS</span><b>${remaining} REMAINING</b></div>
+      <div class="fc-lotto-livebar"><span><i></i> LIVE POOL</span><b>${money(pool)}</b><span>ACTIVE SERVER</span><b>${Number(playerPool.online_players||0)} ONLINE</b><span>POOL VELOCITY</span><b>${playerPool.enabled?`${Number(playerPool.change_per_second||0)>=0?"+":"−"}${money(Math.abs(Number(playerPool.change_per_second||0)))}/SEC`:"PAUSED"}</b><span>DAILY ACCESS</span><b>${remaining} REMAINING</b></div>
     </section>
     <nav class="fc-lotto-dock"><button class="active" data-lottery-panel=""><i>01</i><span>Weekly Draw</span><small>Live pool and entry</small></button><button data-lottery-panel="scratch"><i>02</i><span>Instant Scratch</span><small>${cardsRemaining} card${cardsRemaining===1?"":"s"} ready</small></button><button data-lottery-panel="quick"><i>03</i><span>Quick Draw</span><small>${quickRemaining} entries available</small></button><button data-lottery-panel="tickets"><i>04</i><span>My Chances</span><small>${entries.length} verified</small></button><button data-lottery-panel="about"><i>05</i><span>How It Works</span><small>Official pool ledger</small></button></nav>
     <footer class="fc-lotto-footer"><span>FAIRCROFT LOTTERY COMMISSION</span><i></i><span>VERIFIED RESIDENT DRAW · ${escapeHtml(drawLabel)}</span></footer>
@@ -3992,6 +4013,8 @@ function renderLotteryWorkspace() {
 }
 
 function startLotteryCinematicEffects(){
+  if(state.lotteryPoolTimer)clearInterval(state.lotteryPoolTimer);
+  state.lotteryPoolTimer=null;
   if(state.lotteryAnimation)cancelAnimationFrame(state.lotteryAnimation);
   const canvas=$("[data-lottery-canvas]");
   if(!canvas)return;
@@ -4002,13 +4025,13 @@ function startLotteryCinematicEffects(){
   const animate=time=>{context.clearRect(0,0,width,height);const glow=context.createRadialGradient(width*.73,height*.44,10,width*.73,height*.44,width*.42);glow.addColorStop(0,"rgba(129,55,208,.16)");glow.addColorStop(1,"rgba(9,7,14,0)");context.fillStyle=glow;context.fillRect(0,0,width,height);particles.forEach((particle,index)=>{particle.x+=particle.vx;particle.y+=particle.vy+Math.sin(time/1200+particle.phase)*.025;if(particle.x<-60)particle.x=width+60;if(particle.x>width+60)particle.x=-60;if(particle.y<-60)particle.y=height+60;if(particle.y>height+60)particle.y=-60;context.beginPath();context.arc(particle.x,particle.y,particle.r,0,Math.PI*2);const gradient=context.createRadialGradient(particle.x-particle.r*.3,particle.y-particle.r*.35,1,particle.x,particle.y,particle.r);gradient.addColorStop(0,"rgba(255,251,223,.92)");gradient.addColorStop(.55,"rgba(246,200,79,.7)");gradient.addColorStop(1,"rgba(128,73,10,.12)");context.fillStyle=gradient;context.fill();context.strokeStyle="rgba(255,224,132,.32)";context.stroke();context.fillStyle="rgba(32,17,2,.62)";context.font=`700 ${Math.max(8,particle.r*.72)}px Inter,Arial`;context.textAlign="center";context.textBaseline="middle";context.fillText(particle.label,particle.x,particle.y+1)});if(!reduceMotion)state.lotteryAnimation=requestAnimationFrame(animate);};
   animate(0);
   const jackpot=$("[data-lottery-jackpot]");
-  if(jackpot&&!reduceMotion){const target=Number(jackpot.dataset.value||0),started=performance.now(),duration=1300;const tick=now=>{const progress=Math.min(1,(now-started)/duration),eased=1-Math.pow(1-progress,3);jackpot.textContent=money(target*eased);if(progress<1)requestAnimationFrame(tick);};requestAnimationFrame(tick);}
+  if(jackpot){const target=Number(jackpot.dataset.value||0),rate=Number(jackpot.dataset.rateSecond||0),started=performance.now(),duration=reduceMotion?0:1300;const tick=now=>{const progress=duration?Math.min(1,(now-started)/duration):1,eased=1-Math.pow(1-progress,3);jackpot.textContent=money(target*eased);if(progress<1)requestAnimationFrame(tick);else if(rate){const liveStarted=Date.now();state.lotteryPoolTimer=setInterval(()=>{jackpot.textContent=money(Math.max(0,target+rate*((Date.now()-liveStarted)/1000)));},250);}};requestAnimationFrame(tick);}
 }
 
 function bindLotteryWorkspace(){
   startLotteryCinematicEffects();
   $$('[data-lottery-panel]').forEach(button=>button.addEventListener("click",()=>{state.lotteryPanel=button.dataset.lotteryPanel||"";render();}));
-  $("[data-close-lottery]")?.addEventListener("click",async()=>{if(state.lotteryAnimation)cancelAnimationFrame(state.lotteryAnimation);state.lotteryAnimation=null;state.lotteryPanel="";state.activeApp=null;await loadSession();});
+  $("[data-close-lottery]")?.addEventListener("click",async()=>{if(state.lotteryAnimation)cancelAnimationFrame(state.lotteryAnimation);if(state.lotteryPoolTimer)clearInterval(state.lotteryPoolTimer);state.lotteryAnimation=null;state.lotteryPoolTimer=null;state.lotteryPanel="";state.activeApp=null;await loadSession();});
   $("[data-refresh-lottery]")?.addEventListener("click",async()=>{await loadAppData("lottery");render();});
   $("[data-lottery-enter]")?.addEventListener("click",async()=>{await api("/api/lottery/entries",{method:"POST",body:"{}"});toast("Official lottery entry recorded");await loadAppData("lottery");render();});
   $("[data-lottery-scratch]")?.addEventListener("click",async()=>{try{const result=await api("/api/lottery/scratch",{method:"POST",body:{}});toast(result.bonus_entries?`Scratch card revealed: +${result.bonus_entries} weekly entry${result.bonus_entries===1?"":"ies"}`:"Scratch card revealed. No bonus entry today.");await loadAppData("lottery");render();}catch(error){toast(error.message);}});
@@ -5771,6 +5794,7 @@ function renderMyFaircroft() {
   const data = state.cache["my-faircroft"] || {};
   const cases = data.cases || [];
   const taxes = data.taxes || [];
+  const propertyTaxes = data.property_taxes || [];
   const summary = data.summary || {};
   const recordRequests = data.record_requests || [];
   const taxAccounts = myFaircroftTaxAccounts(taxes);
@@ -5778,12 +5802,14 @@ function renderMyFaircroft() {
   const scheduledCases = cases.filter((item) => ["issued", "contested", "reviewed", "reduced", "continued"].includes(item.status));
   const historyCases = cases.filter((item) => !myFaircroftFineIsDue(item) || item.disposition);
   const paidTaxes = taxes.filter((item) => item.status === "paid");
+  const paidPropertyTaxes = propertyTaxes.filter((item) => item.status === "paid");
+  const duePropertyTaxes = propertyTaxes.filter((item) => item.status === "unpaid");
   const tabs = [["overview", "Overview"], ["court-dates", `Court dates (${scheduledCases.length})`], ["fines", "Fines"], ["taxes", "Taxes"], ["history", "Records"]];
   const body = {
     overview: `
       <section class="myfc-action-ledger">
         <button data-myfc-tab="fines"><span>Fine balance</span><strong>${money(summary.outstanding_fines)}</strong><small>${dueFines.length} open item${dueFines.length === 1 ? "" : "s"}</small></button>
-        <button data-myfc-tab="taxes"><span>Tax balance</span><strong>${money(summary.outstanding_taxes)}</strong><small>${taxAccounts.length} business account${taxAccounts.length === 1 ? "" : "s"}</small></button>
+        <button data-myfc-tab="taxes"><span>Tax balance</span><strong>${money(summary.outstanding_taxes)}</strong><small>${taxAccounts.length} business and ${duePropertyTaxes.length} property bill${duePropertyTaxes.length === 1 ? "" : "s"}</small></button>
         <button data-myfc-tab="history"><span>Payment records</span><strong>${Number(summary.verified_direct_payments || 0) + Number(summary.pending_payments || 0)}</strong><small>Verified receipts and settlement history</small></button>
       </section>
       <section class="myfc-notice">
@@ -5793,8 +5819,8 @@ function renderMyFaircroft() {
     `,
     "court-dates": renderMyFaircroftCourtDates(scheduledCases),
     fines: renderMyFaircroftFines(dueFines),
-    taxes: renderMyFaircroftTaxes(taxAccounts),
-    history: renderMyFaircroftHistory(historyCases, paidTaxes, recordRequests),
+    taxes: renderMyFaircroftTaxes(taxAccounts, duePropertyTaxes),
+    history: renderMyFaircroftHistory(historyCases, paidTaxes, recordRequests, paidPropertyTaxes),
   }[state.myFaircroftTab] || "";
   return `
     <div class="myfc-app">
@@ -5828,6 +5854,89 @@ function renderMyFaircroftWorkspace() {
     </header>
     <main class="myfc-workspace-scroll"><div class="myfc-workspace-content">${renderMyFaircroft()}</div></main>
   </section>`;
+}
+
+function realtyTimeLabel(value) {
+  const end = new Date(value || 0).getTime();
+  if (!end || Number.isNaN(end)) return "Closing schedule pending";
+  const remaining = end - Date.now();
+  if (remaining <= 0) return "Closing now";
+  const days = Math.floor(remaining / 86400000);
+  const hours = Math.floor((remaining % 86400000) / 3600000);
+  const minutes = Math.floor((remaining % 3600000) / 60000);
+  return days ? `${days}d ${hours}h remaining` : hours ? `${hours}h ${minutes}m remaining` : `${minutes}m remaining`;
+}
+
+function realtyImage(listing, index = 0) {
+  const photos = Array.isArray(listing?.photos) ? listing.photos : [];
+  const source = photos[index] || photos[0];
+  return source
+    ? `<img src="${escapeHtml(source)}" alt="${escapeHtml(listing.title || "Faircroft property")}" loading="lazy" />`
+    : `<div class="realty-image-fallback"><span>FC</span><strong>FAIRCROFT REALTY GROUP</strong><small>Private property presentation</small></div>`;
+}
+
+function renderRealtyWorkspace() {
+  const data = state.cache.realty || {};
+  const all = data.listings || [];
+  const filter = state.realtyFilter || "all";
+  const query = String(state.realtySearch || "").trim().toLowerCase();
+  const active = all.filter((item) => item.status === "active");
+  const visible = all.filter((item) => (filter === "all" || item.listing_type === filter) && (!query || [item.title,item.address,item.neighborhood,item.property_type].join(" ").toLowerCase().includes(query)));
+  const featured = active[0] || all[0];
+  const selected = all.find((item) => Number(item.id) === Number(state.realtySelectedId));
+  const characters = data.characters || [];
+  const nextBid = selected ? Math.max(Number(selected.asking_price || 0), Number(selected.current_bid || 0) + Number(selected.bid_increment || 0)) : 0;
+  return `<section class="realty-public-workspace">
+    <header class="realty-public-nav"><a class="realty-wordmark"><i>FC</i><span><strong>Faircroft Realty Group</strong><small>Residences · Investments · Rentals</small></span></a><nav><button class="${filter === "all" ? "active" : ""}" data-realty-filter="all">Discover</button><button class="${filter === "sale" ? "active" : ""}" data-realty-filter="sale">For sale</button><button class="${filter === "rent" ? "active" : ""}" data-realty-filter="rent">For rent</button></nav><div><span>${active.length} live opportunities</span><button data-refresh-realty>Refresh</button><button data-exit-realty>Return to RP OS</button></div></header>
+    ${featured ? `<section class="realty-feature"><div class="realty-feature-media">${realtyImage(featured)}<span>${escapeHtml(featured.listing_type === "rent" ? "EXCLUSIVE LEASE" : "SIGNATURE SALE")}</span></div><div class="realty-feature-copy"><p>CURATED FAIRCROFT RESIDENCE</p><h1>${escapeHtml(featured.title)}</h1><address>${escapeHtml(featured.address || featured.neighborhood || "Faircroft private market")}</address><p>${escapeHtml(String(featured.description || "").slice(0,240))}</p><div><strong>${money(featured.current_bid || featured.asking_price)}<small>${featured.listing_type === "rent" ? "current monthly offer" : "current bid"}</small></strong><span>${escapeHtml(realtyTimeLabel(featured.closes_at))}</span></div><button data-realty-view="${featured.id}">Explore this residence <b>→</b></button></div></section>` : `<section class="realty-feature empty-market"><p>FAIRCROFT PRIVATE MARKET</p><h1>Exceptional homes will appear here.</h1><span>The Realty Group is preparing its first verified property release.</span></section>`}
+    <section class="realty-discovery"><header><div><p>THE COLLECTION</p><h2>Find your place in Faircroft.</h2></div><label><span>Search the market</span><input data-realty-search value="${escapeHtml(state.realtySearch || "")}" placeholder="Neighborhood, address, residence" /></label></header>
+      <div class="realty-listing-stream">${visible.map((listing, index) => `<article class="realty-listing ${index % 3 === 0 ? "wide" : ""}" data-realty-view="${listing.id}"><div class="realty-listing-photo">${realtyImage(listing)}<span>${escapeHtml(listing.status === "active" ? realtyTimeLabel(listing.closes_at) : humanLabel(listing.status))}</span></div><div class="realty-listing-copy"><p>${escapeHtml(listing.property_type || "Faircroft residence")} · ${escapeHtml(listing.listing_type === "rent" ? "For lease" : "For sale")}</p><h3>${escapeHtml(listing.title)}</h3><address>${escapeHtml(listing.address || listing.neighborhood || "Location available in file")}</address><footer><strong>${money(listing.current_bid || listing.asking_price)}</strong><span>${Number(listing.bid_count || 0)} verified bid${Number(listing.bid_count || 0) === 1 ? "" : "s"}</span><b>View residence →</b></footer></div></article>`).join("") || `<div class="realty-no-results">No residences match this collection.</div>`}</div>
+    </section>
+    <footer class="realty-public-footer"><strong>FRG</strong><p>Every residence is matched to a synchronized Faircroft property record. Bids are attached to the character selected at submission.</p><span>FAIRCROFT REALTY GROUP · VERIFIED PROPERTY NETWORK</span></footer>
+    ${selected ? `<div class="realty-modal-backdrop"><article class="realty-property-modal"><button class="realty-modal-close" data-close-realty-detail>×</button><div class="realty-modal-gallery"><div>${realtyImage(selected)}</div><aside>${(selected.photos || []).slice(1,4).map((_,index) => `<button data-realty-photo="${index+1}">${realtyImage(selected,index+1)}</button>`).join("")}</aside></div><div class="realty-modal-body"><main><p>${escapeHtml(selected.listing_number)} · ${escapeHtml(selected.listing_type === "rent" ? "RESIDENTIAL LEASE" : "PRIVATE SALE")}</p><h2>${escapeHtml(selected.title)}</h2><address>${escapeHtml(selected.address || selected.neighborhood || "Faircroft")}</address><div class="realty-description">${escapeHtml(selected.description)}</div><dl><div><dt>Current offer</dt><dd>${money(selected.current_bid || selected.asking_price)}</dd></div><div><dt>Verified bids</dt><dd>${Number(selected.bid_count || 0)}</dd></div><div><dt>Minimum advance</dt><dd>${money(selected.bid_increment)}</dd></div><div><dt>Closing</dt><dd>${escapeHtml(new Date(selected.closes_at).toLocaleString())}</dd></div></dl></main><aside><span>PRIVATE OFFER DESK</span><h3>${escapeHtml(realtyTimeLabel(selected.closes_at))}</h3><p>A winning sale bid records the selected character as Faircroft deed holder. A winning rental offer records that character as tenant.</p>${selected.status === "active" && !selected.is_mine ? `<form id="realtyBidForm"><input type="hidden" name="listing_id" value="${selected.id}"/><label>Character identity<select name="character_id" required><option value="">Select the bidding character</option>${characters.map((character) => `<option value="${character.id}">${escapeHtml(character.character_name)}${character.is_active ? " · active" : ""}</option>`).join("")}</select></label><label>Your verified offer<input name="amount" type="number" min="${nextBid}" step=".01" value="${nextBid.toFixed(2)}" required/></label><small>Next qualifying offer: ${money(nextBid)}</small><button>Place verified bid <b>→</b></button></form>` : `<div class="realty-owner-notice">${selected.is_mine ? "This residence belongs to your Realty portfolio." : `This listing is ${escapeHtml(humanLabel(selected.status))}.`}</div>`}</aside></div></article></div>` : ""}
+  </section>`;
+}
+
+function bindRealtyWorkspace() {
+  $$('[data-realty-filter]').forEach((button) => button.addEventListener('click', () => { state.realtyFilter = button.dataset.realtyFilter; render(); }));
+  $('[data-realty-search]')?.addEventListener('input', (event) => { state.realtySearch = event.currentTarget.value; render(); });
+  $$('[data-realty-view]').forEach((element) => element.addEventListener('click', () => { state.realtySelectedId = Number(element.dataset.realtyView); render(); }));
+  $('[data-close-realty-detail]')?.addEventListener('click', () => { state.realtySelectedId = null; render(); });
+  $('[data-exit-realty]')?.addEventListener('click', async () => { state.activeApp = null; state.realtySelectedId = null; await loadSession(); });
+  $('[data-refresh-realty]')?.addEventListener('click', async () => { await loadAppData('realty'); render(); });
+  $('#realtyBidForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+      await api('/api/realty/bids', { method: 'POST', body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
+      toast('Your verified Realty bid was placed successfully');
+      await loadAppData('realty'); render();
+    } catch (error) { toast(error.message); }
+  });
+}
+
+function renderRealtyDashboardWorkspace() {
+  const data = state.cache['realty-dashboard'] || {};
+  const properties = data.properties || [], listings = data.listings || [], summary = data.summary || {}, characters = data.characters || [];
+  const view = state.realtyDashView || 'command';
+  const selectedProperty = properties.find((item) => String(item.property_id) === String(state.realtyDraftProperty));
+  const defaultClose = new Date(Date.now() + 7 * 86400000).toISOString().slice(0,16);
+  const viewListings = view === 'auctions' ? listings.filter((x) => x.status === 'active') : view === 'archive' ? listings.filter((x) => ['sold','rented','expired','cancelled'].includes(x.status)) : listings;
+  return `<section class="realty-command-workspace"><aside class="realty-command-rail"><div class="realty-command-brand"><i>FRG</i><div><strong>Faircroft Realty Group</strong><small>Private Brokerage Command</small></div></div><p>PORTFOLIO OPERATIONS</p><nav><button class="${view==='command'?'active':''}" data-realty-dash-view="command"><span>01</span>Command overview</button><button class="${view==='inventory'?'active':''}" data-realty-dash-view="inventory"><span>02</span>Property portfolio <b>${properties.length}</b></button><button class="${view==='auctions'?'active':''}" data-realty-dash-view="auctions"><span>03</span>Live auctions <b>${Number(summary.live||0)}</b></button><button class="${view==='archive'?'active':''}" data-realty-dash-view="archive"><span>04</span>Closing archive</button></nav><footer><span>Authorized Realty Owner</span><strong>${escapeHtml(state.session?.user?.name || '')}</strong></footer></aside><main class="realty-command-main"><header class="realty-command-topbar"><div><p>FRG / BROKERAGE OPERATIONS</p><h1>${view==='inventory'?'Property Portfolio':view==='auctions'?'Live Auction Desk':view==='archive'?'Closing Archive':'Realty Command'}</h1></div><div><span><i></i> Registry synchronized</span><button data-refresh-realty-dash>Sync portfolio</button><button data-exit-realty-dash>Exit workspace</button></div></header>
+    <section class="realty-command-hero"><div><p>PRIVATE MARKET INTELLIGENCE</p><h2>Turn verified property into opportunity.</h2><span>Owned and rented holdings are resolved from the signed-in owner’s linked game identity. Every listing, offer, and closing remains attached to a specific character.</span></div><dl><div><dt>Portfolio</dt><dd>${Number(summary.inventory||0)}</dd><small>synchronized holdings</small></div><div><dt>Live</dt><dd>${Number(summary.live||0)}</dd><small>active market files</small></div><div><dt>Offer volume</dt><dd>${money(summary.bid_volume||0)}</dd><small>highest verified offers</small></div><div><dt>Closings</dt><dd>${Number(summary.closed||0)}</dd><small>deeds and tenancies</small></div></dl></section>
+    ${view === 'inventory' ? `<section class="realty-inventory-ledger"><header><div><p>VERIFIED HOLDINGS</p><h2>Select a property to create its market presentation.</h2></div><span>${properties.length} records</span></header>${properties.map((property) => `<article><div class="realty-property-monogram"><span>${property.holding_type==='rented'?'R':'O'}</span></div><div><small>${escapeHtml(property.holding_type)} · ${escapeHtml(property.property_type||'residence')}</small><strong>${escapeHtml(property.name||property.property_id)}</strong><p>${escapeHtml(property.address||property.property_id)}</p></div><dl><div><dt>Source status</dt><dd>${escapeHtml(humanLabel(property.status||'verified'))}</dd></div><div><dt>Tenure</dt><dd>${escapeHtml(property.rent_text||'Filed')}</dd></div></dl>${property.active_listing_id?`<span class="realty-live-tag">${escapeHtml(humanLabel(property.listing_status))}</span>`:`<button data-realty-create="${escapeHtml(property.property_id)}">Create listing →</button>`}</article>`).join('') || `<div class="realty-empty-ledger">No owned or rented properties are attached to this linked identity.</div>`}</section>` : `<section class="realty-auction-ledger"><header><div><p>${view==='archive'?'CLOSING HISTORY':'MARKET FILES'}</p><h2>${view==='auctions'?'Auctions receiving verified offers.':view==='archive'?'Completed deeds, tenancies, and expired files.':'Your complete Realty listing desk.'}</h2></div>${view==='command'?`<button data-realty-dash-view="inventory">List a property <b>＋</b></button>`:''}</header><div>${viewListings.map((listing) => `<article><span class="realty-file-status ${escapeHtml(listing.status)}">${escapeHtml(humanLabel(listing.status))}</span><div><small>${escapeHtml(listing.listing_number)} · ${escapeHtml(listing.listing_type)}</small><strong>${escapeHtml(listing.title)}</strong><p>${escapeHtml(listing.address||listing.property_id)}</p></div><dl><div><dt>Current offer</dt><dd>${money(listing.current_bid||listing.asking_price)}</dd></div><div><dt>Bids</dt><dd>${Number(listing.bid_count||0)}</dd></div><div><dt>Closing</dt><dd>${escapeHtml(realtyTimeLabel(listing.closes_at))}</dd></div></dl><div class="realty-file-actions">${listing.status==='draft'?`<button data-realty-listing-action="publish" data-listing-id="${listing.id}">Publish</button>`:''}${['draft','active'].includes(listing.status)?`<button data-realty-listing-action="${listing.status==='active'?'close':'cancel'}" data-listing-id="${listing.id}">${listing.status==='active'?'Close auction':'Discard'}</button>`:''}</div></article>`).join('') || `<div class="realty-empty-ledger">No Realty files appear in this view.</div>`}</div></section>`}
+    </main>
+    ${selectedProperty ? `<div class="realty-modal-backdrop"><form id="realtyListingForm" class="realty-studio"><header><div><p>FAIRCROFT REALTY / LISTING STUDIO</p><h2>Present ${escapeHtml(selectedProperty.name||'this residence')}.</h2><span>${escapeHtml(selectedProperty.address||selectedProperty.property_id)}</span></div><button type="button" data-close-realty-studio>×</button></header><div class="realty-studio-body"><aside><span>PROPERTY SOURCE</span><strong>${escapeHtml(selectedProperty.holding_type)}</strong><p>${escapeHtml(selectedProperty.property_type||'Residential holding')}</p><small>${escapeHtml(selectedProperty.property_id)}</small><div class="realty-studio-preview">FRG<i></i></div></aside><main><input type="hidden" name="property_id" value="${escapeHtml(selectedProperty.property_id)}"/><div class="realty-form-pair"><label>Listing character<select name="character_id" required><option value="">Select responsible character</option>${characters.map((character)=>`<option value="${character.id}">${escapeHtml(character.character_name)}${character.is_active?' · active':''}</option>`).join('')}</select></label><label>Market release<select name="listing_type"><option value="sale">Offer for sale</option><option value="rent">Offer for rent</option></select></label></div><label>Property headline<input name="title" value="${escapeHtml(selectedProperty.name||'')}" placeholder="A memorable residence name" required/></label><label>Neighborhood or district<input name="neighborhood" value="${escapeHtml(selectedProperty.address||'')}" placeholder="Where this opportunity lives"/></label><label>Residence story<textarea name="description" minlength="30" placeholder="Describe the architecture, grounds, lifestyle, access, features, and ideal resident." required></textarea></label><div class="realty-form-triple"><label>Opening offer<input name="asking_price" type="number" min="1" step=".01" required/></label><label>Private reserve<input name="reserve_price" type="number" min="0" step=".01"/></label><label>Bid increment<input name="bid_increment" type="number" min="1" step=".01" value="1000" required/></label></div><label>Auction closes<input name="closes_at" type="datetime-local" value="${defaultClose}" required/></label><label>Property photography<textarea name="photos" placeholder="Paste up to 8 direct image URLs, one per line"></textarea><small>Use wide, well-lit exterior and interior images. The first image becomes the cover.</small></label></main></div><footer><button type="button" data-close-realty-studio>Save for later</button><button name="publish" value="false">Create private draft</button><button name="publish" value="true">Publish to Faircroft Realty <b>→</b></button></footer></form></div>`:''}
+  </section>`;
+}
+
+function bindRealtyDashboardWorkspace() {
+  $$('[data-realty-dash-view]').forEach((button)=>button.addEventListener('click',()=>{state.realtyDashView=button.dataset.realtyDashView;render();}));
+  $$('[data-realty-create]').forEach((button)=>button.addEventListener('click',()=>{state.realtyDraftProperty=button.dataset.realtyCreate;render();}));
+  $$('[data-close-realty-studio]').forEach((button)=>button.addEventListener('click',()=>{state.realtyDraftProperty=null;render();}));
+  $('[data-exit-realty-dash]')?.addEventListener('click',async()=>{state.activeApp=null;state.realtyDraftProperty=null;await loadSession();});
+  $('[data-refresh-realty-dash]')?.addEventListener('click',async()=>{await loadAppData('realty-dashboard');render();});
+  $('#realtyListingForm')?.addEventListener('submit',async(event)=>{event.preventDefault();const submitter=event.submitter;const body=Object.fromEntries(new FormData(event.currentTarget).entries());body.publish=submitter?.value==='true';body.photos=String(body.photos||'').split(/\r?\n/).map(x=>x.trim()).filter(Boolean);body.closes_at=new Date(body.closes_at).toISOString();try{await api('/api/realty-dashboard/listings',{method:'POST',body});toast(body.publish?'Residence published to Faircroft Realty':'Private Realty draft created');state.realtyDraftProperty=null;await loadAppData('realty-dashboard');render();}catch(error){toast(error.message);}});
+  $$('[data-realty-listing-action]').forEach((button)=>button.addEventListener('click',async()=>{const action=button.dataset.realtyListingAction;if(!confirm(`${humanLabel(action)} this Realty file?`))return;try{await api(`/api/realty-dashboard/listings/${button.dataset.listingId}`,{method:'PATCH',body:{action}});toast(`Realty file ${action} complete`);await loadAppData('realty-dashboard');render();}catch(error){toast(error.message);}}));
 }
 
 function renderMyFaircroftCourtDates(cases) {
@@ -5880,7 +5989,7 @@ function renderMyFaircroftFines(cases) {
   `;
 }
 
-function renderMyFaircroftTaxes(accounts) {
+function renderMyFaircroftTaxes(accounts, propertyTaxes = []) {
   return `
     <section class="myfc-ledger">
       <header><div><p class="eyebrow">Department of revenue</p><h3>Business taxes</h3></div><span>${accounts.length} account${accounts.length === 1 ? "" : "s"}</span></header>
@@ -5898,10 +6007,14 @@ function renderMyFaircroftTaxes(accounts) {
         `;
       }).join("") || `<div class="empty">No unpaid business taxes</div>`}
     </section>
+    <section class="myfc-ledger property-tax-bills">
+      <header><div><p class="eyebrow">Real property revenue</p><h3>Property tax bills</h3></div><span>${propertyTaxes.length} deed${propertyTaxes.length === 1 ? "" : "s"}</span></header>
+      ${propertyTaxes.map((item) => `<article class="myfc-ledger-row tax"><div class="myfc-ledger-code"><strong>${Math.round(Number(item.tax_rate || 0) * 100)}%</strong><small>Property levy</small></div><div class="myfc-ledger-main"><h4>${escapeHtml(item.property_name || item.property_id)}</h4><p>${escapeHtml(item.property_address || item.property_id)}</p><small>Fixed ${money(item.assessed_value)} tax basis · Pay staff in game, then enter the four-digit receipt PIN</small></div><div class="myfc-ledger-money"><strong>${money(item.amount)}</strong><span>Due</span></div><div class="myfc-ledger-actions"><button class="primary" data-pay-property-tax="${item.id}">Pay property bill</button></div></article>`).join("") || `<div class="empty">No unpaid ownership property taxes</div>`}
+    </section>
   `;
 }
 
-function renderMyFaircroftHistory(cases, taxes, recordRequests = []) {
+function renderMyFaircroftHistory(cases, taxes, recordRequests = [], propertyTaxes = []) {
   const latestRequests = new Map();
   recordRequests.forEach((request) => {
     const key = `${request.citation_id}:${request.request_type}`;
@@ -5925,6 +6038,14 @@ function renderMyFaircroftHistory(cases, taxes, recordRequests = []) {
       reference: item.payment_batch_number || item.license_number,
       title: `${item.business_name} / ${item.period_label}`,
       result: "Business tax paid",
+      amount: item.amount,
+    })),
+    ...propertyTaxes.map((item) => ({
+      kind: "property-tax",
+      date: item.paid_at || item.assessed_at,
+      reference: item.property_id,
+      title: item.property_name || item.property_address || item.property_id,
+      result: "Property tax paid",
       amount: item.amount,
     })),
   ].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
@@ -5998,6 +6119,18 @@ function bindMyFaircroft() {
     try {
       const result = await api(`/api/my-faircroft/taxes/${button.dataset.payTax}/pay`, { method: "POST", body: { code: String(code).trim() } });
       toast(`${money(result.amount)} tax payment verified · lottery fund updated`);
+      await loadAppData("my-faircroft");
+      render();
+    } catch (error) {
+      if (error.message) toast(error.message);
+    }
+  }));
+  $$('[data-pay-property-tax]').forEach((button) => button.addEventListener("click", async () => {
+    const code = window.prompt("Pay the authorized staff member in game first, then enter the unused four-digit receipt PIN they provide.", "");
+    if (code === null) return;
+    try {
+      const result = await api(`/api/my-faircroft/property-taxes/${button.dataset.payPropertyTax}/pay`, { method: "POST", body: { code: String(code).trim() } });
+      toast(`${money(result.amount)} property-tax payment verified`);
       await loadAppData("my-faircroft");
       render();
     } catch (error) {
@@ -10633,9 +10766,10 @@ function renderDevMarketSettings(market, users) {
 }
 
 function renderDevLotterySettings(lottery){
-  const funding=lottery.funding||{},entries=lottery.entries||[],draws=lottery.draws||[],adjustments=lottery.fund_adjustments||[],prizes=lottery.special_prizes||[];
+  const funding=lottery.funding||{},playerPool=lottery.player_pool||{},playerAccruals=lottery.player_pool_accruals||[],entries=lottery.entries||[],draws=lottery.draws||[],adjustments=lottery.fund_adjustments||[],prizes=lottery.special_prizes||[];
   return `<div class="stack dev-lottery-view"><div class="dev-view-intro"><div><span>FAIRCROFT DRAW CONTROL</span><h2>Lottery Settings</h2><p>Control the weekly benefit draw, review entries, investigate fraud, and govern role-based eligibility.</p></div><strong>${money(funding.available)} AVAILABLE</strong></div>
-    <div class="lottery-dev-funding"><div><span>FINE RECEIPTS</span><strong>${money(funding.fines)}</strong></div><div><span>RAVENHOOD FEES</span><strong>${money(funding.market_fees)}</strong></div><div><span>MANUAL FUNDING</span><strong>${money(funding.manual)}</strong></div><div><span>AWARDED</span><strong>${money(funding.awarded)}</strong></div><div><span>ACTIVE POOL</span><strong>${money(funding.available)}</strong></div></div>
+    <div class="lottery-dev-funding"><div><span>FINE RECEIPTS</span><strong>${money(funding.fines)}</strong></div><div><span>RAVENHOOD FEES</span><strong>${money(funding.market_fees)}</strong></div><div><span>PLAYER ACTIVITY</span><strong>${money(funding.player_activity||0)}</strong></div><div><span>MANUAL FUNDING</span><strong>${money(funding.manual)}</strong></div><div><span>AWARDED</span><strong>${money(funding.awarded)}</strong></div><div><span>ACTIVE POOL</span><strong>${money(funding.available)}</strong></div></div>
+    <section class="lottery-attendance-engine"><header><div><span>LIVE ATTENDANCE ENGINE</span><h2>Player-powered prize velocity</h2><p>The verified Anti-Cheat roster drives a timed pool adjustment. Every tick is recorded without changing game-server money.</p></div><div class="lottery-attendance-live"><i></i><strong>${Number(playerPool.online_players||0)}</strong><span>ONLINE NOW</span></div></header><div class="lottery-attendance-flow"><div><small>PER PLAYER / MINUTE</small><strong>${playerPool.direction==="decrease"?"−":"+"}${money(playerPool.rate_per_player_minute||0)}</strong></div><b>×</b><div><small>VERIFIED ONLINE</small><strong>${Number(playerPool.online_players||0)}</strong></div><b>=</b><div class="${Number(playerPool.change_per_minute||0)>=0?"positive":"negative"}"><small>CURRENT POOL VELOCITY</small><strong>${Number(playerPool.change_per_minute||0)>=0?"+":"−"}${money(Math.abs(Number(playerPool.change_per_minute||0)))}/MIN</strong><em>${Number(playerPool.change_per_second||0)>=0?"+":"−"}${money(Math.abs(Number(playerPool.change_per_second||0)))}/SEC</em></div></div><div class="lottery-attendance-controls"><form id="devLotteryPlayerPoolForm"><label class="dev-certify"><input name="enabled" type="checkbox" ${playerPool.enabled?"checked":""}/> Enable player-driven pool movement</label><label>Movement<select name="direction"><option value="increase" ${playerPool.direction!=="decrease"?"selected":""}>Increase pool</option><option value="decrease" ${playerPool.direction==="decrease"?"selected":""}>Decrease pool</option></select></label><label>Rate per online player, per minute<input name="rate_per_player_minute" type="number" min="0" max="1000000" step="0.01" value="${Number(playerPool.rate_per_player_minute||0)}"/></label><button class="primary">Apply live rate</button></form><div class="lottery-attendance-ledger">${playerAccruals.slice(0,8).map(item=>`<p><time>${new Date(item.created_at).toLocaleTimeString()}</time><span>${Number(item.player_count)} online × ${money(item.rate_per_minute)}/min</span><strong class="${Number(item.amount)>=0?"positive":"negative"}">${Number(item.amount)>=0?"+":"−"}${money(Math.abs(Number(item.amount)))}</strong></p>`).join("")||`<div class="empty">The activity ledger begins on the next timed tick.</div>`}</div></div></section>
     <section class="dev-card lottery-fund-authority"><div class="dev-card-header"><div><span>PRIZE FUND AUTHORITY</span><h2>Add funds to the lottery</h2><p>Manual additions immediately increase the available drawing pool and are permanently attributed to the issuing developer.</p></div><strong>AUDITED</strong></div><div class="dev-grid-2"><form id="devLotteryFundsForm" class="form-grid"><label>Amount to add<input name="amount" type="number" min="0.01" max="1000000000" step="0.01" required placeholder="0.00"/></label><label class="wide">Funding reason<textarea name="reason" minlength="5" maxlength="300" required placeholder="Community event allocation, authorized prize increase, or other documented RP source"></textarea></label><button class="primary wide">Authorize lottery funding</button></form><div class="dev-detail-list">${adjustments.map(item=>`<div><strong>+${money(item.amount)} · ${escapeHtml(item.created_by_name)}</strong><small>${escapeHtml(item.reason)} · ${new Date(item.created_at).toLocaleString()}</small></div>`).join("")||`<div class="empty">No manual lottery funding has been issued.</div>`}</div></div></section>
     <section class="dev-card lottery-special-prize-control"><div class="dev-card-header"><div><span>SEALED BONUS VAULT</span><h2>Special drawing prizes</h2><p>Add platform gift cards and custom prizes. Active details remain invisible to residents until the drawing completes.</p></div><strong>${prizes.filter(item=>item.status==="active").reduce((total,item)=>total+Number(item.quantity||1),0)} SEALED</strong></div><div class="dev-grid-2"><form id="devLotteryPrizeForm" class="form-grid"><label>Prize name<input name="prize_name" maxlength="120" required placeholder="Steam Gift Card"/></label><label>Provider<select name="provider"><option value="steam">Steam</option><option value="xbox">Xbox</option><option value="playstation">PlayStation</option><option value="discord">Discord</option><option value="faircroft">Faircroft</option><option value="other">Other</option></select></label><label>Prize type<select name="prize_type"><option value="gift_card">Gift card</option><option value="digital_code">Digital code</option><option value="membership">Membership</option><option value="merchandise">Merchandise</option><option value="custom">Custom prize</option></select></label><label>Display value<input name="display_value" maxlength="80" placeholder="$25.00 or 3 months"/></label><label>Quantity<input name="quantity" type="number" min="1" max="100" value="1"/></label><label>Sponsor<input name="sponsor" maxlength="120" placeholder="Faircroft Community"/></label><label class="wide">Private fulfillment notes<textarea name="fulfillment_notes" maxlength="1000" placeholder="Code location, purchasing developer, delivery requirements, or redemption instructions. Never shown before the draw."></textarea></label><button class="primary wide">Seal prize for next drawing</button></form><div class="lottery-prize-vault">${prizes.map(item=>`<article class="${escapeHtml(item.status)}"><div><span>${escapeHtml(item.provider.toUpperCase())}</span><strong>${escapeHtml(item.prize_name)}${Number(item.quantity||1)>1?` ×${Number(item.quantity)}`:""}</strong><small>${escapeHtml(item.display_value||"Value not published")} · ${escapeHtml(item.status.toUpperCase())} · added by ${escapeHtml(item.created_by_name)}</small>${item.winner_name?`<em>Awarded to ${escapeHtml(item.winner_name)}</em>`:""}</div>${item.status!=="awarded"?`<aside><button type="button" data-lottery-prize-action="${item.status==="active"?"disable":"restore"}" data-prize-id="${item.id}">${item.status==="active"?"Remove from draw":"Return to draw"}</button><button class="danger" type="button" data-lottery-prize-action="delete" data-prize-id="${item.id}">Delete</button></aside>`:""}</article>`).join("")||`<div class="empty">The special-prize vault is empty.</div>`}</div></div></section>
     <section class="dev-card"><div class="dev-card-header"><div><span>DRAW POLICY</span><h2>Schedule and eligibility engine</h2></div><strong>${lottery.enabled?"OPEN":"PAUSED"}</strong></div><form id="devLotterySettingsForm" class="form-grid"><label class="dev-certify wide"><input name="enabled" type="checkbox" ${lottery.enabled?"checked":""}/> Accept resident lottery entries</label><label>Daily entries per resident<input name="daily_entries" type="number" min="1" max="20" value="${Number(lottery.daily_entries||3)}"/></label><label>Drawing weekday<select name="draw_weekday">${["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].map((day,index)=>`<option value="${index}" ${Number(lottery.draw_weekday)===index?"selected":""}>${day}</option>`).join("")}</select></label><label>Drawing time<input name="draw_time" type="time" value="${escapeHtml(lottery.draw_time||"23:59")}"/></label><label>Timezone<input name="timezone" value="${escapeHtml(lottery.timezone||"America/New_York")}"/></label><label>Payout percentage<input name="payout_percent" type="number" min="1" max="100" step=".01" value="${Number(lottery.payout_percent||100)}"/><small>Percentage of available pool awarded.</small></label><label class="dev-certify wide"><input name="scratch_enabled" type="checkbox" ${lottery.scratch_enabled?"checked":""}/> Enable the daily scratch-card release</label><label>Scratch cards per day<input name="scratch_daily_cards" type="number" min="1" max="5" value="${Number(lottery.scratch_daily_cards||1)}"/></label><label class="dev-certify wide"><input name="quick_draw_enabled" type="checkbox" ${lottery.quick_draw_enabled?"checked":""}/> Enable Quick Draw timed rounds</label><label>Quick Draw interval (minutes)<input name="quick_draw_interval_minutes" type="number" min="30" max="1440" value="${Number(lottery.quick_draw_interval_minutes||240)}"/></label><label>Entries per Quick Draw<input name="quick_draw_entries" type="number" min="1" max="5" value="${Number(lottery.quick_draw_entries||1)}"/></label><label class="wide">Role winning weights (JSON)<textarea name="role_weights" placeholder='{"beta":1.25,"civ":1}'>${escapeHtml(JSON.stringify(lottery.role_weights||{},null,2))}</textarea><small>1.0 is standard odds; 2.0 doubles an eligible entry's draw weight.</small></label><label class="wide">Excluded roles<input name="excluded_roles" value="${escapeHtml((lottery.excluded_roles||[]).join(", "))}" placeholder="owner, dev, admin"/><small>Comma-separated roles that cannot enter or win.</small></label><button class="primary wide">Save lottery governance</button></form></section>
@@ -11103,7 +11237,7 @@ function renderDevHousingMarket(data) {
     try { raw = JSON.parse(property.raw_payload || "{}"); } catch (_) { raw = {}; }
     const guestUids = Array.isArray(raw.GuestUids) ? raw.GuestUids : Array.isArray(raw.guestUids) ? raw.guestUids : [];
     const ownerUid = property.owner_identity || raw.OwnerUid || raw.ownerUid || "";
-    const sold = Boolean(ownerUid);
+    const sold = Boolean(ownerUid || property.owner_user_id);
     return {
       propertyId: raw.PropertyId || raw.propertyId || property.property_id || "",
       ownerUid,
@@ -11123,9 +11257,36 @@ function renderDevHousingMarket(data) {
   const available = enriched.length - sold;
   const locked = enriched.filter((property) => String(property._meta.locked).toLowerCase() === "true").length;
   const guests = enriched.reduce((sum, property) => sum + property._meta.guestUids.length, 0);
+  const portfolios = new Map();
+  visible.filter((property) => property._meta.sold).forEach((property) => {
+    const meta = property._meta;
+    const key = property.owner_user_id ? `account-${property.owner_user_id}` : `identity-${meta.ownerUid || "unknown"}`;
+    if (!portfolios.has(key)) portfolios.set(key, {
+      accountId: property.owner_user_id || null,
+      name: property.owner_name || "Unmatched Arma owner",
+      civ: property.owner_civ || "Not linked",
+      identity: meta.ownerUid || "Identity unavailable",
+      platform: property.owner_platform || "Game identity",
+      properties: [],
+    });
+    portfolios.get(key).properties.push(property);
+  });
+  const ownerPortfolios = [...portfolios.values()].sort((a, b) => b.properties.length - a.properties.length || a.name.localeCompare(b.name));
+  const vacantProperties = visible.filter((property) => !property._meta.sold);
+  const largestPortfolio = ownerPortfolios[0] || null;
+  const averagePortfolio = ownerPortfolios.length ? sold / ownerPortfolios.length : 0;
+  const portfolioProperty = (property) => {
+    const meta = property._meta;
+    return `<article class="housing-asset-line"><i></i><div><strong>${escapeHtml(property.name || "Residential property")}</strong><small>${escapeHtml(property.address || meta.propertyId || "Location not filed")}</small></div><span><b>${String(meta.locked).toLowerCase() === "true" ? "SECURED" : "ACCESSIBLE"}</b><small>${escapeHtml(meta.tenure !== "" ? `Tenure ${meta.tenure}` : property.property_type || "Housing")}</small></span><span><b>${Number(meta.guestUids.length)}</b><small>guest access</small></span><code>${escapeHtml(meta.propertyId)}</code></article>`;
+  };
   return `<div class="stack dev-ops-view property-intel-console housing-market-console">
-    <section class="property-intel-hero housing-market-hero"><div><span class="dev-topbar-kicker">SHADOW HAVEN HOUSING / READ-ONLY MARKET</span><h2>Housing Market</h2><p>Live property market board showing available housing, sold housing, linked owners, tenure, rent payments, lock state, guests, and raw property identifiers from TBS Property Mod.</p></div><div class="property-intel-status"><i class="${sync.status === "synced" ? "live" : "idle"}"></i><strong>${sync.status === "synced" ? "MARKET INDEX ONLINE" : "AWAITING MARKET INDEX"}</strong><small>${escapeHtml(sync.last_success_at || "No completed import")}</small></div></section>
-    <section class="property-intel-rail housing-market-rail"><div><span>Total properties</span><strong>${Number(enriched.length || 0).toLocaleString()}</strong></div><div><span>Sold / owned</span><strong>${sold.toLocaleString()}</strong></div><div><span>Available</span><strong>${available.toLocaleString()}</strong></div><div><span>Locked</span><strong>${locked.toLocaleString()}</strong></div><div><span>Guest access</span><strong>${guests.toLocaleString()}</strong></div></section>
+    <section class="housing-command-hero"><div><span>FC / PROPERTY INTELLIGENCE</span><h2>Housing command</h2><p>One resident. One portfolio. Every synchronized residence arranged around the people who control Faircroft property.</p><div class="housing-command-live"><i class="${sync.status === "synced" ? "live" : "idle"}"></i>${sync.status === "synced" ? "Registry synchronized" : "Registry awaiting source"}<small>${escapeHtml(sync.last_success_at || "No completed import")}</small></div></div><aside><small>PROPERTY NETWORK</small><strong>${Number(enriched.length || 0).toLocaleString()}</strong><span>${ownerPortfolios.length.toLocaleString()} owner portfolios</span></aside></section>
+    <nav class="housing-command-nav"><button class="active" type="button">Portfolio command <b>${ownerPortfolios.length}</b></button><span>Owned assets <b>${sold}</b></span><span>Open inventory <b>${available}</b></span><span>Secured <b>${locked}</b></span><span>Guest credentials <b>${guests}</b></span></nav>
+    <section class="housing-portfolio-command"><header><div><span>OWNERSHIP DIRECTORY</span><h2>Resident portfolios</h2><p>Each resident appears once. Open a portfolio only when you need its individual synchronized assets.</p></div><label>Find an owner or property<input id="devPropertySearch" type="search" value="${escapeHtml(state.devPropertySearch || "")}" placeholder="Resident, CIV, identity, or property" /></label></header>
+      <div class="housing-portfolio-intel"><article><span>Largest portfolio</span><strong>${largestPortfolio ? escapeHtml(largestPortfolio.name) : "No owner"}</strong><small>${largestPortfolio ? `${largestPortfolio.properties.length} synchronized properties` : "Awaiting ownership records"}</small></article><article><span>Average holdings</span><strong>${averagePortfolio.toFixed(1)}</strong><small>properties per owner</small></article><article><span>Ownership concentration</span><strong>${sold ? ((largestPortfolio?.properties.length || 0) / sold * 100).toFixed(1) : "0.0"}%</strong><small>held by the largest portfolio</small></article></div>
+      <div class="housing-owner-grid">${ownerPortfolios.map((owner, index) => `<article class="housing-owner-portfolio ${index === 0 ? "priority" : ""}"><header><div class="housing-owner-seal">${escapeHtml(owner.name.split(/\s+/).map((part) => part[0]).join("").slice(0,2).toUpperCase() || "FC")}</div><div><span>${owner.accountId ? "VERIFIED OWNER" : "UNMATCHED IDENTITY"}</span><h3>${escapeHtml(owner.name)}</h3><small>CIV ${escapeHtml(owner.civ)} · ${escapeHtml(owner.platform)}</small></div><strong>${owner.properties.length}<small>propert${owner.properties.length === 1 ? "y" : "ies"}</small></strong></header><div class="housing-owner-snapshot"><span><b>${owner.properties.filter((p) => String(p._meta.locked).toLowerCase() === "true").length}</b> secured</span><span><b>${owner.properties.reduce((sum,p) => sum + p._meta.guestUids.length,0)}</b> guests</span><code>${escapeHtml(owner.identity)}</code></div><div class="housing-owner-preview">${owner.properties.slice(0,2).map(portfolioProperty).join("")}</div>${owner.properties.length > 2 ? `<details><summary>Open complete portfolio <b>+${owner.properties.length - 2}</b></summary><div>${owner.properties.slice(2).map(portfolioProperty).join("")}</div></details>` : ""}${owner.accountId ? `<button type="button" data-dev-account="${owner.accountId}">Open resident intelligence <b>→</b></button>` : `<p class="housing-owner-unlinked">Account link required before profile intelligence is available.</p>`}</article>`).join("") || `<div class="housing-command-empty"><strong>No owner portfolio matches this search.</strong><span>Try a resident name, CIV, identity, or property reference.</span></div>`}</div>
+    </section>
+    <section class="housing-vacancy-command"><header><div><span>OPEN MARKET INVENTORY</span><h2>Available housing</h2></div><strong>${vacantProperties.length}<small>unassigned properties</small></strong></header><div>${vacantProperties.slice(0,12).map((property) => `<article><span>AVAILABLE</span><strong>${escapeHtml(property.name || "Residential property")}</strong><small>${escapeHtml(property.address || property._meta.propertyId)}</small><code>${escapeHtml(property._meta.propertyId)}</code></article>`).join("") || `<p>Every synchronized property in this view has an owner.</p>`}</div>${vacantProperties.length > 12 ? `<footer>Showing 12 priority records · ${vacantProperties.length - 12} additional properties remain searchable</footer>` : ""}</section>
     <section class="housing-market-pressure pressure-${escapeHtml(market.pressure || "balanced")}"><header><div><span>FAIRCROFT HOUSING CONDITIONS</span><h2>${humanLabel(market.pressure || "balanced")} market pressure</h2></div><strong>${Number(market.houses_needed || 0).toLocaleString()}<small>additional homes needed</small></strong></header><div class="housing-pressure-lines"><div><label><span>Inventory availability</span><b>${Number(market.availability_rate || 0).toFixed(1)}%</b></label><i><em style="width:${Math.min(100, Number(market.availability_rate || 0))}%"></em></i></div><div><label><span>Housing demand covered</span><b>${Number(market.coverage_rate || 0).toFixed(1)}%</b></label><i><em style="width:${Math.min(100, Number(market.coverage_rate || 0))}%"></em></i></div><div><label><span>Estimated unhoused rate</span><b>${Number(market.homelessness_rate || 0).toFixed(1)}%</b></label><i><em style="width:${Math.min(100, Number(market.homelessness_rate || 0))}%"></em></i></div></div><footer><b>${Number(market.housed_accounts || 0).toLocaleString()}</b> linked residents housed · <b>${Number(market.unhoused_accounts || 0).toLocaleString()}</b> accounts without a linked property<small>${escapeHtml(market.method || "")}</small></footer></section>
     <section class="dev-card property-intel-registry housing-market-registry"><header class="property-intel-toolbar"><div><span>HOUSING REGISTRY</span><h2>Available and sold properties</h2><p>Owner names appear when the property OwnerUid matches a linked Faircroft account.</p></div><label>Search<input id="devPropertySearch" type="search" value="${escapeHtml(state.devPropertySearch || "")}" placeholder="Property ID, owner, CIV, status" /></label></header><div class="housing-market-table-head"><span>Property</span><span>Market state</span><span>Owner</span><span>Access</span><span>Tenure</span></div><div class="property-intel-table housing-market-table">${visible.map((property) => { const meta = property._meta; return `<article class="housing-market-row ${meta.sold ? "sold" : "available"}"><span><strong>${escapeHtml(property.name || "Unnamed housing record")}</strong><small>${escapeHtml(meta.propertyId || property.property_id || "No property ID")}</small></span><span><b class="property-state ${meta.sold ? "sold" : "available"}">${meta.sold ? "Sold" : "Available"}</b><small>${escapeHtml(property.property_type || "Housing")}</small></span><span><strong>${escapeHtml(meta.ownerLabel)}</strong><small>${escapeHtml(meta.ownerUid || "No OwnerUid filed")}</small></span><span><strong>${String(meta.locked).toLowerCase() === "true" ? "Locked" : String(meta.locked).toLowerCase() === "false" ? "Unlocked" : "Unknown"}</strong><small>${meta.guestUids.length} guest UID${meta.guestUids.length === 1 ? "" : "s"}</small></span><span><strong>${escapeHtml(meta.tenure !== "" ? String(meta.tenure) : "—")}</strong><small>Rent payments ${escapeHtml(meta.rentPayments !== "" ? String(meta.rentPayments) : "—")}</small></span></article>`; }).join("") || `<div class="empty">No housing records match this search.</div>`}</div><footer>Source <code>${escapeHtml(intel.source_file || "profile/profile/TBS Property Mod/properties.json")}</code> · ${escapeHtml(sync.last_success_at ? `Last sync ${sync.last_success_at}` : "Waiting for first sync")}</footer></section>
   </div>`;
@@ -11483,6 +11644,7 @@ function bindDevWorkspace() {
   $("#devMarketCodeForm")?.addEventListener("submit", async event => { event.preventDefault(); try { state.generatedMarketCode=await api("/api/dev-tools/market/codes",{method:"POST",body:Object.fromEntries(new FormData(event.currentTarget))}); toast("Unassigned Ravenhood receipt PIN issued"); await refreshDevTools(); } catch(error){toast(error.message);} });
   $("#devMarketAiForm")?.addEventListener("submit", async event => { event.preventDefault(); try { const result=await api("/api/dev-tools/market/ai-briefing",{method:"POST",body:Object.fromEntries(new FormData(event.currentTarget)),timeoutMs:120000}); state.marketAiBriefing=result.briefing; toast("Gemini market briefing complete"); await refreshDevTools(); } catch(error){toast(error.message);} });
   $("#devLotterySettingsForm")?.addEventListener("submit",async event=>{event.preventDefault();const form=event.currentTarget;const body=Object.fromEntries(new FormData(form));body.enabled=form.enabled.checked;body.scratch_enabled=form.scratch_enabled.checked;body.quick_draw_enabled=form.quick_draw_enabled.checked;try{await api("/api/dev-tools/lottery/settings",{method:"PATCH",body});toast("Lottery governance saved");await refreshDevTools();}catch(error){toast(error.message);}});
+  $("#devLotteryPlayerPoolForm")?.addEventListener("submit",async event=>{event.preventDefault();const form=event.currentTarget;const body=Object.fromEntries(new FormData(form));body.enabled=form.enabled.checked;try{const result=await api("/api/dev-tools/lottery/player-pool",{method:"PATCH",body});const pool=result.player_pool||{};toast(`Player pool rate saved · ${Number(pool.online_players||0)} online · ${Number(pool.change_per_minute||0)>=0?"+":"−"}${money(Math.abs(Number(pool.change_per_minute||0)))}/min`);await refreshDevTools();}catch(error){toast(error.message);}});
   $("#devLotteryFundsForm")?.addEventListener("submit",async event=>{event.preventDefault();const form=event.currentTarget;const body=Object.fromEntries(new FormData(form));if(!confirm(`Add ${money(Number(body.amount||0))} to the active Faircroft Lottery prize fund?`))return;try{await api("/api/dev-tools/lottery/funds",{method:"POST",body});toast(`${money(Number(body.amount||0))} added to the lottery fund`);await refreshDevTools();}catch(error){toast(error.message);}});
   $("#devLotteryPrizeForm")?.addEventListener("submit",async event=>{event.preventDefault();const body=Object.fromEntries(new FormData(event.currentTarget));try{await api("/api/dev-tools/lottery/prizes",{method:"POST",body});toast("Special prize sealed for the next drawing");await refreshDevTools();}catch(error){toast(error.message);}});
   $$('[data-lottery-prize-action]').forEach(button=>button.addEventListener("click",async()=>{const action=button.dataset.lotteryPrizeAction;if(action==="delete"&&!confirm("Permanently delete this unawarded special prize?"))return;try{await api(`/api/dev-tools/lottery/prizes/${button.dataset.prizeId}`,{method:"PATCH",body:{action}});toast("Special-prize vault updated");await refreshDevTools();}catch(error){toast(error.message);}}));
@@ -11829,7 +11991,8 @@ function renderPropertyTaxSettlement(data) {
   const summary = data.property_tax_summary || {};
   const owners = data.property_tax_owners || [];
   const properties = data.property_tax_accounts || [];
-  return `<section class="settlement-property-command"><header><div><p class="eyebrow">FAIRCROFT REAL PROPERTY REVENUE</p><h2>Property Tax & Lien Registry</h2><p>The game property files remain read-only. Assessments, liens, and seizures are exact, audited Faircroft records tied to the synchronized PropertyId.</p></div><dl><div><dt>Owned property</dt><dd>${Number(summary.properties || 0)}</dd></div><div><dt>Projected 14%</dt><dd>${money(summary.projected_tax)}</dd></div><div><dt>Unpaid</dt><dd>${money(summary.unpaid_tax)}</dd></div><div><dt>Liens / seizures</dt><dd>${Number(summary.liens || 0)} / ${Number(summary.seizures || 0)}</dd></div></dl></header>
+  const basis = Number(data.property_tax_base_value || 350000);
+  return `<section class="settlement-property-command"><header><div><p class="eyebrow">FAIRCROFT REAL PROPERTY REVENUE</p><h2>Property Tax & Lien Registry</h2><p>Deed ownership uses Faircroft's fixed ${money(basis)} tax basis. Rental tenancies are excluded from billing and enforcement.</p></div><dl><div><dt>Taxable deeds</dt><dd>${Number(summary.properties || 0)}</dd></div><div><dt>Fixed basis</dt><dd>${money(basis)}</dd></div><div><dt>Unpaid</dt><dd>${money(summary.unpaid_tax)}</dd></div><div><dt>Liens / seizures</dt><dd>${Number(summary.liens || 0)} / ${Number(summary.seizures || 0)}</dd></div></dl></header>
     <div class="settlement-property-owner-strip">${owners.map((owner) => `<article><strong>${escapeHtml(owner.owner_name)}</strong><span>${owner.property_count} propert${owner.property_count === 1 ? "y" : "ies"} · CIV ${escapeHtml(owner.owner_civ_number || "unmatched")}</span><b>${money(owner.unpaid_tax)} unpaid</b></article>`).join("") || `<div class="empty">No owned property records are synchronized.</div>`}</div>
     <div class="settlement-property-ledger">${properties.map((property) => `<article data-settlement-property="${escapeHtml(property.property_id)}" class="state-${escapeHtml(property.enforcement_state || "clear")}"><div><span>${escapeHtml(humanLabel(property.enforcement_state || "clear"))}</span><strong>${escapeHtml(property.name || property.property_id)}</strong><small>${escapeHtml(property.property_id)} · ${escapeHtml(property.owner_name || "Unmatched owner")} · CIV ${escapeHtml(property.owner_civ_number || "unmatched")}</small></div><dl><div><dt>Source value</dt><dd>${property.source_assessed_value ? money(property.source_assessed_value) : "Not filed"}</dd></div><div><dt>14% projection</dt><dd>${property.source_assessed_value ? money(property.projected_tax) : "Enter value"}</dd></div><div><dt>Unpaid</dt><dd>${money(property.unpaid_property_tax)}</dd></div></dl><form data-issue-property-tax><input type="hidden" name="property_id" value="${escapeHtml(property.property_id)}" /><input name="assessed_value" inputmode="decimal" value="${property.source_assessed_value || ""}" placeholder="Verified assessed value" /><input name="notes" placeholder="Assessment note" /><button ${Number(property.unpaid_property_tax || 0) > 0 ? "disabled" : ""}>Issue 14% assessment</button></form><div class="settlement-property-actions"><input data-property-reason placeholder="Required reason for lien or seizure" maxlength="1000" /><button type="button" class="warning" data-property-enforcement-action="lien">Place lien</button><button type="button" class="danger" data-property-enforcement-action="seize">Seize</button><button type="button" class="secondary" data-property-enforcement-action="release">Release</button></div></article>`).join("") || `<div class="empty">No owned properties are available for assessment.</div>`}</div>
   </section>`;
@@ -11994,13 +12157,25 @@ function bindFineSettlement() {
       toast(error.message);
     }
   }));
+  $$('[data-issue-property-tax]').forEach((form) => {
+    const assessedInput = form.querySelector('[name="assessed_value"]');
+    if (assessedInput) assessedInput.hidden = true;
+    const summaryTerms = form.closest('[data-settlement-property]')?.querySelectorAll('dt');
+    if (summaryTerms?.[0]) summaryTerms[0].textContent = "Fixed tax basis";
+    if (summaryTerms?.[1]) summaryTerms[1].textContent = "Default 14% levy";
+    if (!form.querySelector('[name="tax_rate"]')) {
+      (assessedInput || form.firstElementChild)?.insertAdjacentHTML("afterend", `<fieldset class="property-tax-rate-selector"><legend>Authorized rate on ${money(350000)}</legend><label><input type="radio" name="tax_rate" value="0.12"><span><b>12%</b><small>${money(42000)}</small></span></label><label><input type="radio" name="tax_rate" value="0.14" checked><span><b>14%</b><small>${money(49000)}</small></span></label><label><input type="radio" name="tax_rate" value="0.18"><span><b>18%</b><small>${money(63000)}</small></span></label></fieldset>`);
+    }
+    const submit = form.querySelector('button[type="submit"], button:not([type])');
+    if (submit) submit.textContent = "Issue selected assessment";
+  });
   $$('[data-issue-property-tax]').forEach((form) => form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const assessedValue = Number(form.assessed_value?.value || 0);
-    if (!(assessedValue > 0)) return toast("Enter the verified assessed property value");
+    const taxRate = Number(form.querySelector('[name="tax_rate"]:checked')?.value || 0);
+    if (![.12, .14, .18].includes(taxRate)) return toast("Select the 12%, 14%, or 18% rate");
     const result = await api("/api/fine-settlement/property-taxes", { method: "POST", body: {
       property_id: form.property_id.value,
-      assessed_value: assessedValue,
+      tax_rate: taxRate,
       notes: form.notes?.value || "",
     }});
     toast(`Property tax issued: ${money(result.amount)}`);
@@ -12072,6 +12247,12 @@ function bindFineSettlement() {
       input.focus();
       input.setSelectionRange(input.value.length, input.value.length);
     }
+  });
+  $("#devPropertySearch")?.addEventListener("input", (event) => {
+    state.devPropertySearch = event.target.value;
+    render();
+    const input = $("#devPropertySearch");
+    if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
   });
   $("#settlement-notice-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -12613,7 +12794,7 @@ function renderSystem() {
   `;
 }
 
-const roleOptions = ["civ", "staff", "owner", "admin", "dev", "beta", "press", "indeed_admin", "leo", "judge", "lawyer", "prosecutor", "public_defender", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "ice_agent", "ice_commander", "business_owner", "business_registrar", "city_hall", "economy_manager"];
+const roleOptions = ["civ", "staff", "owner", "admin", "dev", "beta", "press", "indeed_admin", "leo", "judge", "lawyer", "prosecutor", "public_defender", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "ice_agent", "ice_commander", "realty_owner", "business_owner", "business_registrar", "city_hall", "economy_manager"];
 
 function adminUserSearchText(user) {
   return [
