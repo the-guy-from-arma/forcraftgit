@@ -2049,6 +2049,11 @@ SYSTEM_SETTING_DEFAULTS = {
     "lottery_role_weights": "{}",
     "lottery_excluded_roles": "[]",
     "lottery_payout_percent": "100.00",
+    "lottery_scratch_enabled": "1",
+    "lottery_scratch_daily_cards": "1",
+    "lottery_quick_draw_enabled": "1",
+    "lottery_quick_draw_interval_minutes": "240",
+    "lottery_quick_draw_entries": "1",
 }
 APP_VISIBILITY_OPTIONS = (
     ("getting-started", "Getting Started"),
@@ -3630,6 +3635,7 @@ def ensure_migrations(db: Database) -> None:
             entry_date TEXT NOT NULL,
             entry_number INTEGER NOT NULL,
             role_weight NUMERIC(8,4) NOT NULL DEFAULT 1,
+            source TEXT NOT NULL DEFAULT 'standard',
             status TEXT NOT NULL DEFAULT 'eligible',
             fraud_flag INTEGER NOT NULL DEFAULT 0,
             fraud_reason TEXT NOT NULL DEFAULT '',
@@ -3643,6 +3649,7 @@ def ensure_migrations(db: Database) -> None:
         )
         """
     )
+    db.execute("ALTER TABLE lottery_entries ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'standard'")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS lottery_fund_adjustments (
@@ -3675,6 +3682,53 @@ def ensure_migrations(db: Database) -> None:
             FOREIGN KEY (draw_id) REFERENCES lottery_draws(id) ON DELETE SET NULL,
             FOREIGN KEY (winner_user_id) REFERENCES users(id) ON DELETE SET NULL,
             FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS lottery_scratch_cards (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            card_date TEXT NOT NULL,
+            card_number INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL DEFAULT 'sealed',
+            outcome TEXT NOT NULL DEFAULT '',
+            bonus_entries INTEGER NOT NULL DEFAULT 0,
+            revealed_at TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE(user_id, card_date, card_number),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS lottery_quick_draws (
+            id SERIAL PRIMARY KEY,
+            draw_key TEXT NOT NULL UNIQUE,
+            scheduled_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'scheduled',
+            winning_entry_id INTEGER,
+            winner_user_id INTEGER,
+            completed_at TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (winner_user_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS lottery_quick_draw_entries (
+            id SERIAL PRIMARY KEY,
+            draw_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            entry_number INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'eligible',
+            created_at TEXT NOT NULL,
+            UNIQUE(draw_id, user_id, entry_number),
+            FOREIGN KEY (draw_id) REFERENCES lottery_quick_draws(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
         """
     )
@@ -4465,6 +4519,11 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "lottery_role_weights": lottery_role_weights,
         "lottery_excluded_roles": lottery_excluded_roles,
         "lottery_payout_percent": max(1.0, min(100.0, float(raw.get("lottery_payout_percent") or 100))),
+        "lottery_scratch_enabled": str(raw.get("lottery_scratch_enabled") or "1") in ("1", "true", "True", "yes", "on"),
+        "lottery_scratch_daily_cards": max(1, min(5, int(raw.get("lottery_scratch_daily_cards") or 1))),
+        "lottery_quick_draw_enabled": str(raw.get("lottery_quick_draw_enabled") or "1") in ("1", "true", "True", "yes", "on"),
+        "lottery_quick_draw_interval_minutes": max(30, min(1440, int(raw.get("lottery_quick_draw_interval_minutes") or 240))),
+        "lottery_quick_draw_entries": max(1, min(5, int(raw.get("lottery_quick_draw_entries") or 1))),
         "dmv_license_classes": dmv_license_classes,
         "app_visibility": app_visibility,
     }
@@ -4609,6 +4668,60 @@ def ensure_lottery_draw(db: Database, settings: dict[str, Any] | None = None) ->
     return one(db, "SELECT * FROM lottery_draws WHERE draw_key=?", (key,))
 
 
+def award_lottery_bonus_entries(db: Database, user_id: int, amount: int, source: str) -> int:
+    """Attach non-purchasable game rewards to the scheduled weekly draw."""
+    settings = get_system_settings(db)
+    draw = ensure_lottery_draw(db, settings)
+    today = utcnow().astimezone(ZoneInfo(settings["lottery_timezone"])).date().isoformat()
+    next_number = int(one(db, "SELECT COALESCE(MAX(entry_number),0) AS maximum FROM lottery_entries WHERE draw_id=? AND user_id=? AND entry_date=?", (draw["id"], user_id, today))["maximum"] or 0)
+    created = 0
+    for offset in range(max(0, amount)):
+        next_number += 1
+        db.execute(
+            "INSERT INTO lottery_entries (draw_id,user_id,entry_date,entry_number,role_weight,source,created_at) VALUES (?,?,?,?,? ,?,?)",
+            (draw["id"], user_id, today, next_number, 1, source[:40], now_iso()),
+        )
+        created += 1
+    return created
+
+
+def quick_draw_next_at(settings: dict[str, Any], after: dt.datetime | None = None) -> dt.datetime:
+    interval = int(settings["lottery_quick_draw_interval_minutes"])
+    current = (after or utcnow()).astimezone(ZoneInfo(settings["lottery_timezone"]))
+    epoch = int(current.timestamp())
+    next_epoch = ((epoch // (interval * 60)) + 1) * interval * 60
+    return dt.datetime.fromtimestamp(next_epoch, tz=dt.timezone.utc).astimezone(ZoneInfo(settings["lottery_timezone"]))
+
+
+def ensure_quick_draw(db: Database, settings: dict[str, Any] | None = None) -> DbRow:
+    settings = settings or get_system_settings(db)
+    scheduled = quick_draw_next_at(settings)
+    key = scheduled.strftime("quick-%Y-%m-%dT%H:%M%z")
+    db.execute(
+        "INSERT INTO lottery_quick_draws (draw_key,scheduled_at,status,created_at) VALUES (?,?, 'scheduled',?) ON CONFLICT(draw_key) DO NOTHING",
+        (key, scheduled.astimezone(dt.timezone.utc).isoformat(), now_iso()),
+    )
+    return one(db, "SELECT * FROM lottery_quick_draws WHERE draw_key=?", (key,))
+
+
+def run_due_quick_draws(db: Database, settings: dict[str, Any] | None = None) -> None:
+    settings = settings or get_system_settings(db)
+    if not settings["lottery_enabled"] or not settings["lottery_quick_draw_enabled"]:
+        return
+    due = all_rows(db, "SELECT * FROM lottery_quick_draws WHERE status='scheduled' AND scheduled_at<=? ORDER BY scheduled_at", (now_iso(),))
+    for draw in due:
+        entries = all_rows(db, "SELECT * FROM lottery_quick_draw_entries WHERE draw_id=? AND status='eligible' ORDER BY id", (draw["id"],))
+        winner = entries[secrets.randbelow(len(entries))] if entries else None
+        db.execute(
+            "UPDATE lottery_quick_draws SET status='completed',winning_entry_id=?,winner_user_id=?,completed_at=? WHERE id=? AND status='scheduled'",
+            (winner["id"] if winner else None, winner["user_id"] if winner else None, now_iso(), draw["id"]),
+        )
+        if winner:
+            award_lottery_bonus_entries(db, int(winner["user_id"]), 1, "quick_draw_bonus")
+            add_message(db, winner["user_id"], "Faircroft Quick Draw Winner", "Your Quick Draw entry was selected. A bonus entry has been added to your next official Faircroft Lottery drawing.")
+    ensure_quick_draw(db, settings)
+
+
 def run_due_lottery_draws(db: Database) -> None:
     settings = get_system_settings(db)
     if not settings["lottery_enabled"]:
@@ -4641,6 +4754,7 @@ def lottery_worker() -> None:
         try:
             with conn() as db:
                 run_due_lottery_draws(db)
+                run_due_quick_draws(db)
         except Exception as exc:
             print(f"Lottery scheduler error: {exc}")
         time.sleep(30)
@@ -6694,6 +6808,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_lottery(db, user)
                 elif path == "/api/lottery/entries" and method == "POST":
                     self.api_lottery_entry(db, user)
+                elif path == "/api/lottery/scratch" and method == "POST":
+                    self.api_lottery_scratch(db, user)
+                elif path == "/api/lottery/quick-draw/entries" and method == "POST":
+                    self.api_lottery_quick_draw_entry(db, user)
                 elif path == "/api/bank/collect" and method == "POST":
                     self.api_collect_bank(db, user)
                 elif path == "/api/bank/treasury-adjust" and method == "POST":
@@ -9946,16 +10064,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err); return
         assert user is not None
-        settings = get_system_settings(db); run_due_lottery_draws(db); draw = ensure_lottery_draw(db, settings)
+        settings = get_system_settings(db); run_due_lottery_draws(db); run_due_quick_draws(db, settings); draw = ensure_lottery_draw(db, settings)
         roles = roles_for(user); excluded = sorted(set(roles) & set(settings["lottery_excluded_roles"]))
         weight = max([settings["lottery_role_weights"].get(role, 1.0) for role in roles] or [1.0])
         today = utcnow().astimezone(ZoneInfo(settings["lottery_timezone"])).date().isoformat()
         entries = all_rows(db, "SELECT * FROM lottery_entries WHERE draw_id=? AND user_id=? ORDER BY created_at DESC", (draw["id"], user["id"]))
-        today_count = sum(1 for entry in entries if entry["entry_date"] == today)
+        today_count = sum(1 for entry in entries if entry["entry_date"] == today and str(entry.get("source") or "standard") == "standard")
         funding = lottery_funding_snapshot(db, settings)
         latest = one(db, """SELECT d.*,u.name AS winner_name,u.civ_number AS winner_civ FROM lottery_draws d LEFT JOIN users u ON u.id=d.winner_user_id WHERE d.status='completed' ORDER BY d.completed_at DESC LIMIT 1""")
         latest_prizes = [dict(row) for row in all_rows(db, "SELECT prize_name,prize_type,provider,display_value,quantity,sponsor FROM lottery_special_prizes WHERE draw_id=? AND status='awarded' ORDER BY id", (latest["id"],))] if latest else []
-        self.send_json(200, {"enabled": settings["lottery_enabled"], "draw": dict(draw), "funding": funding, "entries": [dict(row) for row in entries], "entries_today": today_count, "daily_limit": settings["lottery_daily_entries"], "remaining_today": max(0, settings["lottery_daily_entries"]-today_count), "role_weight": weight, "excluded": bool(excluded), "excluded_roles": excluded, "latest_result": dict(latest) if latest else None, "latest_special_prizes": latest_prizes, "timezone": settings["lottery_timezone"]})
+        scratch_cards = [dict(row) for row in all_rows(db, "SELECT * FROM lottery_scratch_cards WHERE user_id=? AND card_date=? ORDER BY card_number", (user["id"], today))]
+        quick_draw = ensure_quick_draw(db, settings)
+        quick_entries = [dict(row) for row in all_rows(db, "SELECT * FROM lottery_quick_draw_entries WHERE draw_id=? AND user_id=? ORDER BY entry_number", (quick_draw["id"], user["id"]))]
+        quick_latest = one(db, "SELECT d.*,u.name AS winner_name,u.civ_number AS winner_civ FROM lottery_quick_draws d LEFT JOIN users u ON u.id=d.winner_user_id WHERE d.status='completed' ORDER BY d.completed_at DESC LIMIT 1")
+        self.send_json(200, {"enabled": settings["lottery_enabled"], "draw": dict(draw), "funding": funding, "entries": [dict(row) for row in entries], "entries_today": today_count, "daily_limit": settings["lottery_daily_entries"], "remaining_today": max(0, settings["lottery_daily_entries"]-today_count), "role_weight": weight, "excluded": bool(excluded), "excluded_roles": excluded, "latest_result": dict(latest) if latest else None, "latest_special_prizes": latest_prizes, "timezone": settings["lottery_timezone"], "scratch": {"enabled": settings["lottery_scratch_enabled"], "daily_limit": settings["lottery_scratch_daily_cards"], "cards": scratch_cards}, "quick_draw": {"enabled": settings["lottery_quick_draw_enabled"], "draw": dict(quick_draw), "daily_limit": settings["lottery_quick_draw_entries"], "entries": quick_entries, "latest_result": dict(quick_latest) if quick_latest else None}})
 
     def api_lottery_entry(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -9969,12 +10091,56 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if excluded:
             self.error(403, "This account is excluded from lottery participation by role policy."); return
         draw = ensure_lottery_draw(db, settings); today = utcnow().astimezone(ZoneInfo(settings["lottery_timezone"])).date().isoformat()
-        count = int(one(db, "SELECT COUNT(*) AS count FROM lottery_entries WHERE user_id=? AND entry_date=?", (user["id"], today))["count"] or 0)
+        count = int(one(db, "SELECT COUNT(*) AS count FROM lottery_entries WHERE user_id=? AND entry_date=? AND source='standard'", (user["id"], today))["count"] or 0)
         if count >= settings["lottery_daily_entries"]:
             self.error(409, "All daily lottery entries have already been submitted."); return
         weight = max([settings["lottery_role_weights"].get(role, 1.0) for role in roles] or [1.0])
-        db.execute("INSERT INTO lottery_entries (draw_id,user_id,entry_date,entry_number,role_weight,created_at) VALUES (?,?,?,?,?,?)", (draw["id"], user["id"], today, count+1, weight, now_iso()))
+        next_number = int(one(db, "SELECT COALESCE(MAX(entry_number),0) AS maximum FROM lottery_entries WHERE draw_id=? AND user_id=? AND entry_date=?", (draw["id"], user["id"], today))["maximum"] or 0) + 1
+        db.execute("INSERT INTO lottery_entries (draw_id,user_id,entry_date,entry_number,role_weight,source,created_at) VALUES (?,?,?,?,?,'standard',?)", (draw["id"], user["id"], today, next_number, weight, now_iso()))
         self.send_json(201, {"ok": True, "entry_number": count+1, "remaining_today": settings["lottery_daily_entries"]-count-1})
+
+    def api_lottery_scratch(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        settings = get_system_settings(db)
+        if not settings["lottery_enabled"] or not settings["lottery_scratch_enabled"]:
+            self.error(409, "Scratch cards are currently unavailable."); return
+        excluded = sorted(set(roles_for(user)) & set(settings["lottery_excluded_roles"]))
+        if excluded:
+            self.error(403, "This account is excluded from lottery participation by role policy."); return
+        today = utcnow().astimezone(ZoneInfo(settings["lottery_timezone"])).date().isoformat()
+        existing = all_rows(db, "SELECT * FROM lottery_scratch_cards WHERE user_id=? AND card_date=? ORDER BY card_number", (user["id"], today))
+        if len(existing) >= settings["lottery_scratch_daily_cards"]:
+            self.error(409, "All daily scratch cards have already been revealed."); return
+        roll = secrets.randbelow(1000)
+        outcome, bonus = ("jackpot", 3) if roll < 10 else (("bonus", 1) if roll < 180 else ("no_win", 0))
+        number = len(existing) + 1
+        db.execute("INSERT INTO lottery_scratch_cards (user_id,card_date,card_number,status,outcome,bonus_entries,revealed_at,created_at) VALUES (?,?,?,'revealed',?,?,?,?)", (user["id"], today, number, outcome, bonus, now_iso(), now_iso()))
+        if bonus:
+            award_lottery_bonus_entries(db, int(user["id"]), bonus, "scratch_bonus")
+            add_message(db, user["id"], "Faircroft Lottery Scratch", f"Your scratch card revealed {bonus} bonus official drawing {'entry' if bonus == 1 else 'entries'}. They are now attached to your next weekly drawing.")
+        self.send_json(201, {"ok": True, "outcome": outcome, "bonus_entries": bonus, "card_number": number})
+
+    def api_lottery_quick_draw_entry(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        settings = get_system_settings(db)
+        if not settings["lottery_enabled"] or not settings["lottery_quick_draw_enabled"]:
+            self.error(409, "Quick Draw is currently unavailable."); return
+        excluded = sorted(set(roles_for(user)) & set(settings["lottery_excluded_roles"]))
+        if excluded:
+            self.error(403, "This account is excluded from lottery participation by role policy."); return
+        run_due_quick_draws(db, settings)
+        draw = ensure_quick_draw(db, settings)
+        count = int(one(db, "SELECT COUNT(*) AS count FROM lottery_quick_draw_entries WHERE draw_id=? AND user_id=?", (draw["id"], user["id"]))["count"] or 0)
+        if count >= settings["lottery_quick_draw_entries"]:
+            self.error(409, "Your Quick Draw entry is already recorded for this round."); return
+        db.execute("INSERT INTO lottery_quick_draw_entries (draw_id,user_id,entry_number,created_at) VALUES (?,?,?,?)", (draw["id"], user["id"], count + 1, now_iso()))
+        self.send_json(201, {"ok": True, "entry_number": count + 1, "remaining": settings["lottery_quick_draw_entries"] - count - 1})
 
     def api_bank(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -14923,6 +15089,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "payout_percent": system_settings["lottery_payout_percent"],
                     "role_weights": system_settings["lottery_role_weights"],
                     "excluded_roles": system_settings["lottery_excluded_roles"],
+                    "scratch_enabled": system_settings["lottery_scratch_enabled"],
+                    "scratch_daily_cards": system_settings["lottery_scratch_daily_cards"],
+                    "quick_draw_enabled": system_settings["lottery_quick_draw_enabled"],
+                    "quick_draw_interval_minutes": system_settings["lottery_quick_draw_interval_minutes"],
+                    "quick_draw_entries": system_settings["lottery_quick_draw_entries"],
                     "funding": lottery_funding_snapshot(db, system_settings),
                     "draws": [dict(row) for row in all_rows(db, """SELECT d.*,u.name AS winner_name,u.civ_number AS winner_civ FROM lottery_draws d LEFT JOIN users u ON u.id=d.winner_user_id ORDER BY d.scheduled_at DESC LIMIT 30""")],
                     "entries": [dict(row) for row in all_rows(db, """SELECT e.*,u.name,u.civ_number,u.roles FROM lottery_entries e JOIN users u ON u.id=e.user_id ORDER BY e.created_at DESC LIMIT 250""")],
@@ -15518,6 +15689,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         try:
             daily_entries = max(1, min(20, int(payload.get("daily_entries") or 3)))
             payout_percent = max(1.0, min(100.0, float(payload.get("payout_percent") or 100)))
+            scratch_daily_cards = max(1, min(5, int(payload.get("scratch_daily_cards") or 1)))
+            quick_draw_interval_minutes = max(30, min(1440, int(payload.get("quick_draw_interval_minutes") or 240)))
+            quick_draw_entries = max(1, min(5, int(payload.get("quick_draw_entries") or 1)))
             draw_weekday = max(0, min(6, int(payload.get("draw_weekday") or 1)))
             ZoneInfo(str(payload.get("timezone") or "America/New_York"))
             if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", str(payload.get("draw_time") or "")):
@@ -15533,6 +15707,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "lottery_draw_time": str(payload.get("draw_time")), "lottery_timezone": str(payload.get("timezone"))[:80],
             "lottery_payout_percent": str(payout_percent), "lottery_role_weights": json.dumps(cleaned_weights),
             "lottery_excluded_roles": json.dumps(excluded_roles),
+            "lottery_scratch_enabled": "1" if payload.get("scratch_enabled") else "0",
+            "lottery_scratch_daily_cards": str(scratch_daily_cards),
+            "lottery_quick_draw_enabled": "1" if payload.get("quick_draw_enabled") else "0",
+            "lottery_quick_draw_interval_minutes": str(quick_draw_interval_minutes),
+            "lottery_quick_draw_entries": str(quick_draw_entries),
         }.items(): set_system_setting(db, key, value)
         ensure_lottery_draw(db, get_system_settings(db))
         self.send_json(200, {"ok": True})
