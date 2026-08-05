@@ -6,6 +6,10 @@
       "version": "0.2.2",
       "title": "RP OS 0.2.2",
       "added": [
+        "Added the Faircroft Insurance Authority application with character-specific vehicle, property, life, business, and general policies, tiered coverage questionnaires, universal four-digit receipt PIN settlement, and official expiring digital insurance certificates.",
+        "Added the Faircroft Gang Network with character-bound gang creation and membership, secure four-digit recruitment PINs, private leader command, member ranks, roster control, and strict prevention of cross-character membership leakage.",
+        "Added Developer Tools Gang Settings with creation and membership limits, complete organization and recruitment-PIN ledgers, roster governance, member locks, organization shutdown controls, and hidden gang-leader role intelligence.",
+        "Added ICE MDT Gang Intelligence with active affiliation flags, exact character identities, matched CIV and passport records, citizenship status, search, and one-click access to the linked CAD intelligence profile.",
         "Fixed vehicle migration account isolation by correlating imported vehicles only to the exact stable Arma identity linked to the authenticated Faircroft account; unresolved legacy imports remain quarantined until ownership is confirmed.",
         "Added Developer Tools Ravenhood promotional campaigns under Active Campaigns, with generated or custom codes, expiration windows, redemption inventories, pause and resume controls, and a permanent claimant audit ledger.",
         "Added resident Ravenhood promotional redemption for exchange buying power, a selected free security, or unique randomized starter portfolios containing 3, 5, or 9 active stocks, with automatic account creation and one claim per campaign.",
@@ -69,6 +73,8 @@
         ,"Added an active scheduled-movement ledger to Ravenhood Stock Market Settings with affected securities, target percentage, schedule timing, live progress, and immediate stop controls."
       ],
       "changed": [
+        "Restored Shadow Haven as the canonical SFTP game-data provider, removed LoafHosts environment-variable overrides, and separated public A2S and game endpoints from Arma's local 0.0.0.0 bind addresses.",
+        "Extended the RP OS application registry, visibility controls, responsive full-screen workspaces, and Faircroft navigation iconography for Insurance and the Gang Network without exposing the hidden gang-leader authorization role to residents.",
         "Changed Ravenhood promotional-code administration to show full live promo codes in Developer Tools, expose codes in redemption/audit logs, and add audited hard-delete controls beside Pause and Resume.",
         "Reworked Ravenhood around a visible account portfolio desk so residents can immediately review total account value, buying power, invested balance, unrealized movement, every owned position, per-stock gain or loss, allocation weight, and jump from a holding directly into that security's trade view.",
         "Rebuilt Ravenhood's active trading workspace into a resident-first brokerage canvas with a premium portfolio landing area, connected security spotlight, softer watchlist and holdings flow, product-style modals, improved mobile trading actions, and a less boxed exchange presentation.",

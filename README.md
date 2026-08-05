@@ -60,3 +60,32 @@ website service.
 - `SHADOWHAVEN_SFTP_PASSWORD`: SFTP password; configure only in Railway variables.
 - `SHADOWHAVEN_BANK_FILE`: remote FCRPMUSSALO bank JSON path.
 - `SHADOWHAVEN_BANK_SYNC_SECONDS`: polling interval, default `15` seconds.
+- `SHADOWHAVEN_REPUTATION_FILE`: remote MedicalHud reputation JSON path.
+- `SHADOWHAVEN_REPUTATION_SYNC_SECONDS`: reputation polling interval, default `30` seconds.
+- `SHADOWHAVEN_CAMERA_EVENTS_FILE`: remote FLUCK Camera event JSON path.
+- `SHADOWHAVEN_CAMERA_EVENTS_SYNC_SECONDS`: FLUCK polling interval, default `20` seconds.
+- `SHADOWHAVEN_PERSISTENCE_ROOT`: remote FCRPMUSSALO database directory.
+- `SHADOWHAVEN_PERSISTENCE_SYNC_SECONDS`: full persistence polling interval, default `120` seconds.
+- `SHADOWHAVEN_PERSISTENCE_MAX_FILES`: maximum files indexed in one persistence pass, default `5000`.
+- `SHADOWHAVEN_PERSISTENCE_MAX_FILE_BYTES`: maximum bytes read from one persistence file, default `524288`.
+- `SHADOWHAVEN_PROPERTY_FILES`: comma-separated TBS Property Mod JSON paths. Existing files are merged; missing optional paths are skipped.
+- `SHADOWHAVEN_PROPERTY_SYNC_SECONDS`: property polling interval, default `60` seconds.
+- `SHADOWHAVEN_ANTICHEAT_DATABASE_FILE`: Thunder Buddies player database JSON path.
+- `SHADOWHAVEN_ANTICHEAT_ALT_FILE`: Thunder Buddies alternate-account JSON path.
+- `SHADOWHAVEN_ANTICHEAT_SYNC_SECONDS`: anti-cheat polling interval, default `30` seconds.
+- `ARMA_A2S_HOST`: externally reachable A2S hostname or IP. Never use the server-side bind value `0.0.0.0` here.
+- `ARMA_A2S_PORT`: external A2S query port, currently `17777`.
+- `ARMA_GAME_HOST`: externally reachable game-server hostname or IP.
+- `ARMA_GAME_PORT`: external game port, currently `27015`.
+
+For the current Shadow Haven server, the public game address is
+`216.219.91.158:27015`, A2S is `216.219.91.158:17777`, and RCON is
+`216.219.91.158:19999`. Values such as `rcon.address=0.0.0.0` and
+`a2s.address=0.0.0.0` are bind addresses inside the game server and must not be
+used as Railway connection hosts. RCON also requires a non-empty password in
+the server JSON that exactly matches `ARMA_RCON_PASSWORD` in Railway.
+
+The Shadow Haven integration uses password-authenticated SFTP when
+`SHADOWHAVEN_SFTP_PASSWORD` is configured. Do not set the private-key variables
+unless the hosting account has explicitly been configured for SSH-key
+authentication. The former `LOAFHOSTS_*` names are no longer read.

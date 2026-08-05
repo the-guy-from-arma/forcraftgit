@@ -106,6 +106,10 @@ const state = {
   iceSearchResults: [],
   iceSelectedSubject: null,
   iceTab: "operations",
+  iceCameraSource: "all",
+  iceCameraSearch: "",
+  insuranceSelectedPolicy: null,
+  gangSelectedMembership: null,
   businessTab: "apply",
   businessReviewFilter: "active",
   businessLicensePage: 1,
@@ -194,6 +198,8 @@ const iconSvg = {
   trophy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 4h8v4a4 4 0 0 1-8 0V4Z"/><path d="M8 6H4v2a4 4 0 0 0 4 4M16 6h4v2a4 4 0 0 1-4 4M12 12v5M8 21h8M9 17h6"/></svg>',
   passport: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="3" width="14" height="18" rx="2"/><circle cx="12" cy="11" r="4"/><path d="M8 11h8M12 7c1 1 1.5 2.3 1.5 4S13 14 12 15c-1-1-1.5-2.3-1.5-4S11 8 12 7ZM9 18h6"/></svg>',
   federal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m12 2 8 4v6c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V6l8-4Z"/><path d="M8 9h8M9 9v6M12 9v6M15 9v6M7 16h10M12 5v2"/></svg>',
+  insurance: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3 4 6v6c0 5 3.4 8.2 8 10 4.6-1.8 8-5 8-10V6l-8-3Z"/><path d="M8 12h8M12 8v8"/><circle cx="12" cy="12" r="6"/></svg>',
+  gang: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="8" r="3"/><circle cx="5.5" cy="10" r="2.5"/><circle cx="18.5" cy="10" r="2.5"/><path d="M6 20v-2a6 6 0 0 1 12 0v2M2 20v-1a4 4 0 0 1 4-4M22 20v-1a4 4 0 0 0-4-4"/></svg>',
   plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14M5 12h14"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m15 18-6-6 6-6"/></svg>',
@@ -234,6 +240,8 @@ const tileColors = {
   leaderboards: "linear-gradient(145deg, #ffe06a, #e06d2f 52%, #46265f)",
   citizenship: "linear-gradient(145deg, #79d8ff, #244f8e 58%, #c7a348)",
   "ice-mdt": "linear-gradient(145deg, #7ed8ff, #173d63 55%, #08111a)",
+  insurance: "linear-gradient(145deg, #70efff, #1559a8 55%, #071c36)",
+  gangs: "linear-gradient(145deg, #ff6f6f, #8e1834 55%, #17111e)",
 };
 
 function money(value) {
@@ -681,6 +689,14 @@ function render() {
     bindIceWorkspace();
     bindRequiredProfileModals();
     return;
+  }
+  if (state.activeApp === "insurance") {
+    app.innerHTML = renderSystemBanner() + renderInsuranceWorkspace() + renderRequiredProfileModals();
+    bindInsuranceWorkspace(); bindRequiredProfileModals(); return;
+  }
+  if (state.activeApp === "gangs") {
+    app.innerHTML = renderSystemBanner() + renderGangWorkspace() + renderRequiredProfileModals();
+    bindGangWorkspace(); bindRequiredProfileModals(); return;
   }
   if (state.activeApp) {
     app.innerHTML = phone(renderHome() + renderPanel(state.activeApp) + renderRequiredProfileModals());
@@ -1823,6 +1839,8 @@ function renderPanel(id) {
     press: "Press Desk",
     citizenship: "Citizenship & Passport",
     lottery: "Faircroft Lottery",
+    insurance: "Faircroft Insurance",
+    gangs: "Gang Network",
   };
   const body = {
     profile: renderProfile,
@@ -1853,6 +1871,8 @@ function renderPanel(id) {
     press: renderPressDesk,
     citizenship: renderCitizenship,
     lottery: renderLotteryWorkspace,
+    insurance: renderInsuranceWorkspace,
+    gangs: renderGangWorkspace,
   }[id]?.() || `<div class="empty">Module unavailable</div>`;
 
   return `
@@ -1911,6 +1931,8 @@ async function loadAppData(id) {
     press: () => api("/api/press/reports"),
     citizenship: () => api("/api/citizenship"),
     "ice-mdt": () => api("/api/ice/overview"),
+    insurance: () => api("/api/insurance"),
+    gangs: () => api("/api/gangs"),
     admin: async () => ({
       overview: await api("/api/admin/overview"),
       users: await api("/api/admin/users"),
@@ -2120,6 +2142,53 @@ function hasFireCommandAccess() {
   return roles.some((role) => ["owner", "fire_chief", "deputy_chief", "fire_marshal"].includes(role));
 }
 
+function renderInsuranceWorkspace() {
+  const data = state.cache.insurance || { policies: [], characters: [] };
+  const policies = data.policies || [];
+  const selected = policies.find((item) => String(item.id) === String(state.insuranceSelectedPolicy)) || policies[0];
+  const characterOptions = (data.characters || []).map((item) => `<option value="${item.id}">${escapeHtml(item.character_name)}${item.is_active ? " — active" : ""}</option>`).join("");
+  let questionnaire = {};
+  try { questionnaire = JSON.parse(selected?.questionnaire || "{}"); } catch (_) {}
+  return `<section class="insurance-workspace">
+    <header class="insurance-nav"><div class="insurance-wordmark"><img src="/static/brand/faircroft-emblem.webp" alt="Faircroft"/><div><small>STATE OF FAIRCROFT</small><strong>Faircroft Insurance Authority</strong></div></div><nav><button data-insurance-scroll="coverage">Coverage</button><button data-insurance-scroll="certificate">Certificates</button></nav><div><span class="insurance-secure">● SECURE POLICY NETWORK</span><button class="secondary" data-refresh-insurance>Refresh</button><button class="primary" data-close-insurance>Exit</button></div></header>
+    <main><section class="insurance-hero"><div><small>PUBLIC PROTECTION, BUILT AROUND YOUR LIFE</small><h1>One Faircroft.<br/><em>Fully covered.</em></h1><p>Protect a vehicle, property, business, or the people who depend on you through one official resident policy network.</p><button class="primary" data-insurance-scroll="apply">Build a policy</button></div><div class="insurance-orbit"><span>FC</span><i></i><b>VERIFIED COVERAGE</b></div></section>
+    <section class="insurance-policy-rail" id="certificate"><header><div><small>YOUR COVERAGE</small><h2>Policy portfolio</h2></div><strong>${policies.filter((p) => p.status === "active").length} active</strong></header>
+      <div class="insurance-policy-tabs">${policies.map((p) => `<button class="${selected?.id === p.id ? "active" : ""}" data-insurance-policy="${p.id}"><span>${escapeHtml(humanLabel(p.policy_type))}</span><strong>${escapeHtml(p.subject_label)}</strong><small>${escapeHtml(p.policy_number)}</small></button>`).join("") || `<p>No coverage issued yet. Build your first policy below.</p>`}</div>
+      ${selected ? `<article class="insurance-certificate"><div class="insurance-cert-side"><img src="/static/brand/faircroft-emblem.webp" alt="Faircroft"/><span>FAIRCROFT<br/>INSURANCE</span><small>OFFICIAL DIGITAL CERTIFICATE</small></div><div class="insurance-cert-body"><header><div><small>CERTIFICATE OF COVERAGE</small><h2>${escapeHtml(selected.subject_label)}</h2></div><b>${escapeHtml(String(selected.status).toUpperCase())}</b></header><div class="insurance-cert-ledger"><dl><div><dt>Named insured</dt><dd>${escapeHtml(selected.character_name)}</dd></div><div><dt>Policy</dt><dd>${escapeHtml(selected.policy_number)}</dd></div><div><dt>Protection</dt><dd>${money(selected.coverage_amount)}</dd></div><div><dt>Deductible</dt><dd>${money(selected.deductible_amount)}</dd></div><div><dt>Class</dt><dd>${escapeHtml(humanLabel(selected.coverage_tier))}</dd></div><div><dt>Expires</dt><dd>${new Date(selected.expires_at).toLocaleDateString()}</dd></div></dl><p>${escapeHtml(questionnaire.risk_use || "Official Faircroft resident protection policy")}</p></div><footer><span>FAIRCROFT INSURANCE AUTHORITY</span><code>${escapeHtml(selected.policy_number.replaceAll("-", ""))}</code></footer></div></article>` : ""}
+    </section>
+    <section class="insurance-builder" id="apply"><div class="insurance-builder-copy"><small>PERSONALIZED COVERAGE</small><h2>Build the protection your character needs.</h2><p>Choose the exact character receiving the policy. Coverage never transfers automatically to another character on the same account.</p><ol><li><b>01</b>Select the protected character and asset.</li><li><b>02</b>Choose a coverage class.</li><li><b>03</b>Pay staff in game, then enter the universal four-digit receipt PIN.</li></ol></div>
+      <form id="insurancePolicyForm"><label>Insured character<select name="character_id" required><option value="">Select character</option>${characterOptions}</select></label><div class="insurance-form-pair"><label>Policy type<select name="policy_type"><option value="vehicle">Vehicle</option><option value="property">Property / house</option><option value="life">Life</option><option value="business">Business</option><option value="general">General protection</option></select></label><label>Coverage<select name="coverage_tier"><option value="essential">Essential · $750</option><option value="standard">Standard · $1,500</option><option value="premier">Premier · $3,000</option></select></label></div><label>What are we protecting?<input name="subject_label" required maxlength="120" placeholder="Plate, property name, business, or beneficiary"/></label><div class="insurance-form-pair"><label>Primary use<input name="risk_use" maxlength="500" placeholder="Personal transport, residence, commercial..."/></label><label>Location<input name="location" maxlength="500" placeholder="Faircroft address or operating area"/></label></div><label>Beneficiary or responsible party<input name="beneficiary" maxlength="500"/></label><label>Additional facts<textarea name="notes" maxlength="500"></textarea></label><label class="insurance-pin">Universal payment PIN<input name="code" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required placeholder="••••"/><small>Enter only after staff confirms the in-game payment.</small></label><button class="primary">Issue my certificate</button></form>
+    </section></main></section>`;
+}
+
+function bindInsuranceWorkspace() {
+  $(`[data-insurance-policy]`) && $$('[data-insurance-policy]').forEach((button) => button.addEventListener('click', () => { state.insuranceSelectedPolicy = button.dataset.insurancePolicy; render(); }));
+  $$('[data-insurance-scroll]').forEach((button) => button.addEventListener('click', () => document.getElementById(button.dataset.insuranceScroll)?.scrollIntoView({behavior:'smooth'})));
+  $('[data-close-insurance]')?.addEventListener('click', async () => { state.activeApp=null; await loadSession(); });
+  $('[data-refresh-insurance]')?.addEventListener('click', async () => { await loadAppData('insurance'); render(); });
+  $('#insurancePolicyForm')?.addEventListener('submit', async (event) => { event.preventDefault(); const button=$('button[type="submit"]',event.currentTarget); if(button)button.disabled=true; try { const result=await api('/api/insurance/policies',{method:'POST',body:Object.fromEntries(new FormData(event.currentTarget))}); toast(`Certificate ${result.policy_number} issued`); state.cache.insurance=await api('/api/insurance'); state.insuranceSelectedPolicy=state.cache.insurance.policies?.[0]?.id; render(); } catch(error){if(button)button.disabled=false;toast(error.message);} });
+}
+
+function renderGangWorkspace() {
+  const data=state.cache.gangs || {characters:[],memberships:[],settings:{}};
+  const memberships=data.memberships||[];
+  const selected=memberships.find((item)=>String(item.id)===String(state.gangSelectedMembership))||memberships[0];
+  const chars=(data.characters||[]).map((item)=>`<option value="${item.id}">${escapeHtml(item.character_name)}${item.is_active?' — active':''}</option>`).join('');
+  return `<section class="gang-workspace" style="--gang-accent:${escapeHtml(selected?.accent_color||'#ff536d')}"><header class="gang-topbar"><div><img src="/static/brand/faircroft-emblem.webp" alt="Faircroft"/><span><small>FAIRCROFT SOCIAL ORGANIZATIONS</small><strong>Gang Network</strong></span></div><nav><span>${memberships.length ? 'IDENTITY VERIFIED' : 'ENROLLMENT OPEN'}</span><button class="secondary" data-refresh-gangs>Sync</button><button class="primary" data-close-gangs>Exit</button></nav></header>
+  <main>${!selected ? `<section class="gang-entry"><header><small>BUILD YOUR CREW</small><h1>Every name starts<br/>with a first member.</h1><p>Join an existing organization with a leader-issued PIN or register a new gang under one exact character identity.</p></header><div class="gang-entry-actions"><form id="gangJoinForm"><span>01 / JOIN</span><h2>Enter a gang PIN</h2><label>Joining character<select name="character_id" required><option value="">Select character</option>${chars}</select></label><label>Four-digit gang PIN<input name="code" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required placeholder="0000"/></label><button class="primary">Join organization</button></form><form id="gangCreateForm"><span>02 / CREATE</span><h2>Register your gang</h2><label>Gang leader character<select name="character_id" required><option value="">Select character</option>${chars}</select></label><label>Organization name<input name="name" minlength="3" maxlength="60" required/></label><label>Mission statement<textarea name="description" maxlength="500"></textarea></label><label>Identity color<input type="color" name="accent_color" value="#ff536d"/></label><button class="primary" ${data.settings?.creation_enabled===false?'disabled':''}>${data.settings?.creation_enabled===false?'Creation closed':'Create gang'}</button></form></div></section>` : `<section class="gang-command"><aside class="gang-command-rail"><small>YOUR ORGANIZATIONS</small>${memberships.map((item)=>`<button class="${selected.id===item.id?'active':''}" data-gang-membership="${item.id}"><i style="background:${escapeHtml(item.accent_color)}"></i><span><strong>${escapeHtml(item.gang_name)}</strong><small>${escapeHtml(item.character_name)} · ${escapeHtml(humanLabel(item.gang_role))}</small></span></button>`).join('')}<footer>Only the selected character belongs to this organization. Other characters on your account remain separate.</footer></aside><div class="gang-command-stage"><header><div><small>REGISTERED FAIRCROFT ORGANIZATION</small><h1>${escapeHtml(selected.gang_name)}</h1><p>${escapeHtml(selected.description||'No public organization statement filed.')}</p></div><div class="gang-seal"><b>${escapeHtml(selected.gang_name.slice(0,2).toUpperCase())}</b><span>${escapeHtml(humanLabel(selected.gang_role))}</span></div></header><div class="gang-command-status"><span>COMMAND CHARACTER <b>${escapeHtml(selected.character_name)}</b></span><span>ROSTER <b>${selected.members?.length||0}/${selected.member_limit}</b></span><span>STATUS <b>${selected.locked?'LOCKED':'ACTIVE'}</b></span></div>${selected.gang_role==='leader'?`<section class="gang-invite-console"><div><small>SECURE RECRUITMENT</small><h2>Issue a join PIN</h2><p>Give this PIN only to the player joining. Their selected character—not their whole account—will enter your roster.</p></div><form id="gangInviteForm"><input type="hidden" name="gang_id" value="${selected.gang_id}"/><input type="hidden" name="character_id" value="${selected.character_id}"/><label>Available uses<input type="number" name="uses" value="1" min="1" max="25"/></label><button class="primary">Generate 4-digit PIN</button></form>${(selected.invite_codes||[]).slice(0,4).map((code)=>`<div class="gang-pin"><strong>${escapeHtml(code.code_hint)}</strong><span>${code.uses_remaining} use(s) · expires ${new Date(code.expires_at).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})}</span></div>`).join('')}</section>`:''}<section class="gang-roster"><header><div><small>CHARACTER DIRECTORY</small><h2>Member roster</h2></div><strong>${selected.members?.length||0} IDENTITIES</strong></header>${(selected.members||[]).map((member,index)=>`<article><b>${String(index+1).padStart(2,'0')}</b><div><strong>${escapeHtml(member.character_name)}</strong><span>${escapeHtml(humanLabel(member.gang_role))} · ${escapeHtml(humanLabel(member.status))}</span></div>${selected.gang_role==='leader'&&member.gang_role!=='leader'?`<select data-gang-member-role="${member.id}"><option value="member"${selectedAttr('member',member.gang_role)}>Member</option><option value="officer"${selectedAttr('officer',member.gang_role)}>Officer</option><option value="enforcer"${selectedAttr('enforcer',member.gang_role)}>Enforcer</option><option value="treasurer"${selectedAttr('treasurer',member.gang_role)}>Treasurer</option></select><button class="danger" data-gang-member-remove="${member.id}">Remove</button>`:`<em>${member.gang_role==='leader'?'REGISTERED LEADER':'MEMBER'}</em>`}</article>`).join('')}</section></div></section>`}</main></section>`;
+}
+
+function bindGangWorkspace(){
+  $('[data-close-gangs]')?.addEventListener('click',async()=>{state.activeApp=null;await loadSession();});
+  $('[data-refresh-gangs]')?.addEventListener('click',async()=>{await loadAppData('gangs');render();});
+  $$('[data-gang-membership]').forEach(b=>b.addEventListener('click',()=>{state.gangSelectedMembership=b.dataset.gangMembership;render();}));
+  $('#gangCreateForm')?.addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/gangs',{method:'POST',body:Object.fromEntries(new FormData(e.currentTarget))});toast('Gang registered to the selected character');await loadAppData('gangs');render();}catch(error){toast(error.message);}});
+  $('#gangJoinForm')?.addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/gangs/join',{method:'POST',body:Object.fromEntries(new FormData(e.currentTarget))});toast('Character joined the gang');await loadAppData('gangs');render();}catch(error){toast(error.message);}});
+  $('#gangInviteForm')?.addEventListener('submit',async e=>{e.preventDefault();try{const result=await api('/api/gangs/invite',{method:'POST',body:Object.fromEntries(new FormData(e.currentTarget))});toast(`Gang PIN ${result.code} issued`);await loadAppData('gangs');render();}catch(error){toast(error.message);}});
+  $$('[data-gang-member-role]').forEach(s=>s.addEventListener('change',async()=>{try{await api(`/api/gangs/members/${s.dataset.gangMemberRole}`,{method:'PATCH',body:{gang_role:s.value}});await loadAppData('gangs');render();}catch(error){toast(error.message);}}));
+  $$('[data-gang-member-remove]').forEach(b=>b.addEventListener('click',async()=>{if(!confirm('Remove this character from the gang roster?'))return;try{await api(`/api/gangs/members/${b.dataset.gangMemberRemove}`,{method:'PATCH',body:{action:'remove'}});await loadAppData('gangs');render();}catch(error){toast(error.message);}}));
+}
+
 function renderCitizenship() {
   const data = state.cache.citizenship || {};
   const record = data.record || {};
@@ -2159,6 +2228,57 @@ function bindCitizenship() {
   });
 }
 
+function renderIceFluckCommand() {
+  const data = state.cache["ice-mdt"] || {};
+  const camera = data.fluck_camera || {};
+  const allEvents = camera.events || [];
+  const cameras = camera.cameras || [];
+  const source = state.iceCameraSource || "all";
+  const term = String(state.iceCameraSearch || "").trim().toLowerCase();
+  const events = allEvents.filter((event) => {
+    if (source !== "all" && String(event.camera_id || "Unknown camera") !== source) return false;
+    if (!term) return true;
+    const occupantText = (event.occupants || []).map((person) => `${person.name || ""} ${person.identity_id || ""} ${person.linked_account_name || ""} ${person.linked_civ_number || ""} ${person.citizenship_status || ""}`).join(" ");
+    return `${event.vehicle_plate || ""} ${event.subject_name || ""} ${event.identity_id || ""} ${event.location || ""} ${event.camera_id || ""} ${occupantText}`.toLowerCase().includes(term);
+  });
+  const selected = events.find((event) => event.event_id === state.iceSelectedCameraEvent) || events[0] || null;
+  const selectedOccupants = selected?.occupants || [];
+  const validCitizens = selectedOccupants.filter((person) => String(person.citizenship_status || "").toLowerCase() === "valid citizen").length;
+  const cameraName = source === "all" ? "All camera sectors" : source;
+  return `<section class="ice-fluck-command-v2">
+    <header class="ice-fluck-v2-header">
+      <div class="ice-fluck-seal"><span>FC</span><i></i></div>
+      <div><small>FAIRCROFT FEDERAL IMMIGRATION SERVICE · VEHICLE INTELLIGENCE</small><h2>FLUCK Operations Center</h2><p>Camera observations, vehicle manifests, linked CAD identities, and citizenship checks in one federal command surface.</p></div>
+      <div class="ice-fluck-v2-status"><i class="${camera.operational ? "live" : "idle"}"></i><strong>${camera.operational ? "NETWORK LIVE" : "INDEX OFFLINE"}</strong><span>${camera.last_sync?.last_success_at ? new Date(camera.last_sync.last_success_at).toLocaleString() : "Awaiting first sync"}</span></div>
+    </header>
+    <div class="ice-fluck-v2-ribbon">
+      <span><small>OBSERVATIONS</small><strong>${Number(camera.stats?.total || 0)}</strong></span>
+      <span><small>CAMERAS</small><strong>${Number(camera.stats?.camera_count || cameras.length || 0)}</strong></span>
+      <span><small>CAD MATCHES</small><strong>${Number(camera.stats?.linked || 0)}</strong></span>
+      <span><small>PRIORITY</small><strong>${Number(camera.stats?.high_priority || 0)}</strong></span>
+      <span><small>24 HOUR FEED</small><strong>${Number(camera.stats?.last_24_hours || 0)}</strong></span>
+    </div>
+    <div class="ice-fluck-v2-shell">
+      <nav class="ice-fluck-camera-directory" aria-label="FLUCK camera directory">
+        <header><small>CAMERA DIRECTORY</small><strong>${escapeHtml(cameraName)}</strong><span>Select a source to isolate its event history.</span></header>
+        <button type="button" data-ice-camera-source="all" class="${source === "all" ? "active" : ""}"><i></i><span><strong>All camera sectors</strong><small>${allEvents.length} observations</small></span><b>LIVE</b></button>
+        ${cameras.map((cam, index) => `<button type="button" data-ice-camera-source="${escapeHtml(cam.camera_id || "Unknown camera")}" class="${source === String(cam.camera_id || "Unknown camera") ? "active" : ""}"><i></i><span><strong>${escapeHtml(cam.camera_id || `Camera ${index + 1}`)}</strong><small>${escapeHtml((cam.locations || [])[0] || "Federal camera corridor")} · ${Number(cam.events || 0)} events</small></span><b>${Number(cam.linked || 0)} CAD</b></button>`).join("") || `<div class="empty">No camera sources are reporting.</div>`}
+        <footer><span>READ-ONLY SOURCE</span><code>${escapeHtml(camera.source_file || "FLUCKCamera/camera_events.json")}</code></footer>
+      </nav>
+      <main class="ice-fluck-event-center">
+        <div class="ice-fluck-event-tools"><label><small>SEARCH FEDERAL INDEX</small><input type="search" data-ice-camera-search value="${escapeHtml(state.iceCameraSearch || "")}" placeholder="Plate, identity, CIV, passenger, location" /></label><button type="button" class="secondary" data-ice-camera-refresh>Refresh network</button></div>
+        <div class="ice-fluck-event-heading"><div><small>LIVE EVENT STREAM</small><h3>${escapeHtml(cameraName)}</h3></div><span>${events.length} visible</span></div>
+        <div class="ice-fluck-event-stream">${events.map((event) => `<button type="button" class="ice-fluck-event ${selected?.event_id === event.event_id ? "selected" : ""}" data-ice-camera-select="${escapeHtml(event.event_id)}"><span class="ice-camera-severity ${escapeHtml(String(event.severity || "info").toLowerCase())}"></span><time>${event.captured_at ? new Date(event.captured_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "--:--"}</time><span><strong>${escapeHtml(event.vehicle_plate || event.subject_name || "Unidentified vehicle")}</strong><small>${escapeHtml(event.camera_id || "Unknown camera")} · ${escapeHtml(event.location || "Location unavailable")}</small></span><em>${Number(event.occupant_count || 0)} ${Number(event.occupant_count || 0) === 1 ? "person" : "people"}</em><b class="${event.linked_account ? "linked" : "unlinked"}">${event.linked_account ? "CAD MATCH" : "UNRESOLVED"}</b></button>`).join("") || `<div class="ice-fluck-no-events"><strong>No matching observations</strong><span>Change the camera sector or search term.</span></div>`}</div>
+      </main>
+      <aside class="ice-fluck-intel-drawer">${selected ? `<header><div><small>OBSERVATION ${escapeHtml(selected.event_id || "")}</small><h3>${escapeHtml(selected.vehicle_plate || "Vehicle intelligence")}</h3></div><span class="ice-camera-severity ${escapeHtml(String(selected.severity || "info").toLowerCase())}"></span></header>
+        <p>${escapeHtml(selected.summary || "No narrative was supplied by the camera source. Identity intelligence below is resolved from the linked Faircroft account ledger.")}</p>
+        <div class="ice-fluck-capture-ledger"><span><small>CAPTURED</small><strong>${selected.captured_at ? new Date(selected.captured_at).toLocaleString() : "Unknown"}</strong></span><span><small>CAMERA</small><strong>${escapeHtml(selected.camera_id || "Unknown")}</strong></span><span><small>LOCATION</small><strong>${escapeHtml(selected.location || "Not supplied")}</strong></span><span><small>MANIFEST</small><strong>${selectedOccupants.length} observed · ${validCitizens} valid</strong></span></div>
+        <section class="ice-fluck-manifest"><header><small>VEHICLE MANIFEST / CAD RESOLUTION</small><span>${selectedOccupants.length} identities</span></header>${selectedOccupants.map((person, index) => { const valid = String(person.citizenship_status || "").toLowerCase() === "valid citizen"; return `<article><span class="ice-fluck-person-index">${String(index + 1).padStart(2, "0")}</span><div><small>${escapeHtml(humanLabel(person.role || (index ? "passenger" : "driver")))}</small><strong>${escapeHtml(person.linked_account_name || person.name || "Unresolved occupant")}</strong><em>${person.linked_civ_number ? `CIV ${escapeHtml(person.linked_civ_number)}` : escapeHtml(person.identity_id || "No stable identity supplied")}</em></div><b class="${valid ? "valid" : "warning"}">${escapeHtml(person.citizenship_status || "Identity unresolved")}</b>${person.linked_user_id ? `<button type="button" data-ice-camera-account="${person.linked_user_id}">Open CAD profile →</button>` : `<span class="unresolved">NO ACCOUNT LINK</span>`}</article>`; }).join("") || `<div class="ice-fluck-manifest-empty"><strong>No occupant manifest supplied</strong><span>This FLUCK record contains vehicle data only. Passenger identities will appear automatically when the game export reports them.</span></div>`}</section>
+        <footer>${selected.evidence_url ? `<a href="${escapeHtml(selected.evidence_url)}" target="_blank" rel="noopener">Open captured evidence</a>` : `<span>No evidence attachment supplied</span>`}<code>${escapeHtml(selected.identity_id || "NO PRIMARY ID")}</code></footer>` : `<div class="ice-fluck-intel-empty"><strong>Select an event</strong><span>Choose a camera observation to open its vehicle manifest and citizenship intelligence.</span></div>`}</aside>
+    </div>
+  </section>`;
+}
+
 function renderIceWorkspace() {
   const data = state.cache["ice-mdt"] || {};
   const results = state.iceSearchResults || [];
@@ -2175,9 +2295,11 @@ function renderIceWorkspace() {
       <button type="button" data-ice-tab="cases" class="${activeTab === "cases" ? "active" : ""}"><small>03</small><span>Case Operations</span></button>
       <button type="button" data-ice-tab="detainers" class="${activeTab === "detainers" ? "active" : ""}"><small>04</small><span>Detainers</span></button>
       <button type="button" data-ice-tab="fluck" class="${activeTab === "fluck" ? "active" : ""}"><small>05</small><span>FLUCK Camera System</span><b>${Number(data.fluck_camera?.stats?.last_24_hours || 0)}</b></button>
-      ${data.can_command ? `<button type="button" data-ice-tab="applications" class="${activeTab === "applications" ? "active" : ""}"><small>06</small><span>Command Applications</span><b>${Number(data.stats?.applications_pending || 0)}</b></button>` : ""}
+      <button type="button" data-ice-tab="gangs" class="${activeTab === "gangs" ? "active" : ""}"><small>06</small><span>Gang Intelligence</span><b>${Number(data.stats?.gang_affiliations || 0)}</b></button>
+      ${data.can_command ? `<button type="button" data-ice-tab="applications" class="${activeTab === "applications" ? "active" : ""}"><small>07</small><span>Command Applications</span><b>${Number(data.stats?.applications_pending || 0)}</b></button>` : ""}
     </nav>
     <main>
+      ${activeTab === "gangs" ? `<section class="ice-gang-intelligence"><header><div><small>FEDERAL ORGANIZATION INDEX</small><h2>Gang affiliation intelligence</h2><p>Character-scoped affiliations matched to Faircroft resident and citizenship records. Membership never transfers to another character on the same account.</p></div><strong>${Number(data.stats?.gang_affiliations||0)} FLAGS</strong></header><div class="ice-gang-toolbar"><input type="search" data-ice-gang-search placeholder="Search character, gang, CIV, or citizenship"/><span>AFFILIATION FLAGS · FEDERAL USE</span></div><div class="ice-gang-ledger">${(data.gang_affiliations||[]).map((item,index)=>`<article data-ice-gang-row><b>${String(index+1).padStart(3,'0')}</b><i style="--gang:${escapeHtml(item.accent_color||'#6de8df')}"></i><div><small>${escapeHtml(item.gang_name)}</small><strong>${escapeHtml(item.character_name)}</strong><span>${escapeHtml(humanLabel(item.gang_role))} · ${escapeHtml(humanLabel(item.status))}</span></div><div><small>FAIRCROFT IDENTITY</small><strong>CIV ${escapeHtml(item.civ_number||'pending')}</strong><span>${escapeHtml(item.passport_number||'No passport')}</span></div><div><small>CITIZENSHIP</small><strong class="${String(item.citizenship_status).toLowerCase()==='valid citizen'?'valid':'warning'}">${escapeHtml(item.citizenship_status)}</strong></div><button class="secondary" data-ice-camera-account="${item.user_id}">Open CAD profile</button></article>`).join('')||'<div class="empty">No active gang affiliations are indexed.</div>'}</div></section>` : ""}
       ${activeTab === "fluck" ? (() => { const camera = data.fluck_camera || {}; const events = camera.events || []; const cameras = camera.cameras || []; const selected = events.find((event) => event.event_id === state.iceSelectedCameraEvent) || events[0]; return `<section class="ice-camera-console"><header class="ice-camera-command"><div><small>FAIRCROFT FEDERAL CAMERA NETWORK / FLUCK</small><h2>Faircroft FLUCK Command</h2><p>Read-only observations from Shadow Haven. Camera sources, identity matches, and CAD account links are resolved from the current FLUCK export and Railway link ledger.</p></div><div class="ice-camera-health"><i class="${camera.operational ? "live" : "idle"}"></i><strong>${camera.operational ? "LIVE INDEX" : "AWAITING INDEX"}</strong><span>${camera.last_sync?.last_success_at ? `Synced ${new Date(camera.last_sync.last_success_at).toLocaleString()}` : "No successful sync yet"}</span></div></header><div class="ice-camera-metrics"><div><span>Observations</span><strong>${Number(camera.stats?.total || 0)}</strong></div><div><span>Camera sources</span><strong>${Number(camera.stats?.camera_count || cameras.length || 0)}</strong></div><div><span>Linked profiles</span><strong>${Number(camera.stats?.linked || 0)}</strong></div><div><span>Priority review</span><strong>${Number(camera.stats?.high_priority || 0)}</strong></div><div><span>Last 24 hours</span><strong>${Number(camera.stats?.last_24_hours || 0)}</strong></div></div><div class="ice-camera-toolbar"><label>Find an observation<input type="search" data-ice-camera-filter placeholder="Plate, identity, subject, location, camera" /></label><button type="button" class="secondary" data-ice-camera-refresh>Refresh index</button></div><div class="ice-camera-grid"><div class="ice-camera-ledger"><div class="ice-camera-ledger-head"><span>RECENT OBSERVATIONS</span><small>${events.length} indexed</small></div>${events.map((event) => `<button type="button" class="ice-camera-row ${selected?.event_id === event.event_id ? "selected" : ""}" data-ice-camera-select="${escapeHtml(event.event_id)}"><span class="ice-camera-severity ${escapeHtml(String(event.severity || "info").toLowerCase())}"></span><span><strong>${escapeHtml(event.vehicle_plate || event.subject_name || "Unidentified observation")}</strong><small>${escapeHtml(event.location || event.camera_id || "Camera location unavailable")} · ${event.captured_at ? new Date(event.captured_at).toLocaleString() : "time unavailable"}</small>${event.linked_account ? `<em>Matched: ${escapeHtml(event.linked_account_name || "Faircroft account")}${event.linked_civ_number ? ` · CIV ${escapeHtml(event.linked_civ_number)}` : ""}</em>` : `<em>Awaiting CAD identity match</em>`}</span><b class="${event.linked_account ? "linked" : "unlinked"}">${event.linked_account ? "LINKED" : "UNLINKED"}</b></button>`).join("") || `<div class="empty">No FLUCK camera observations have been indexed.</div>`}</div><aside class="ice-camera-inspector">${selected ? `<div class="ice-camera-inspector-head"><small>OBSERVATION DETAIL</small><span class="ice-camera-severity ${escapeHtml(String(selected.severity || "info").toLowerCase())}"></span></div><h3>${escapeHtml(selected.vehicle_plate || selected.subject_name || "Unidentified observation")}</h3><p>${escapeHtml(selected.summary || "No narrative supplied by the camera source.")}</p><dl><div><dt>Captured</dt><dd>${selected.captured_at ? new Date(selected.captured_at).toLocaleString() : "Unknown"}</dd></div><div><dt>Camera</dt><dd>${escapeHtml(selected.camera_id || "Unknown")}</dd></div><div><dt>Identity</dt><dd>${escapeHtml(selected.identity_id || "Not supplied")}</dd></div><div><dt>Link state</dt><dd class="${selected.linked_account ? "linked" : "unlinked"}">${selected.linked_account ? `Matched by ${escapeHtml(humanLabel(selected.linked_match || "identity_id"))}` : "No linked account"}</dd></div><div><dt>Location</dt><dd>${escapeHtml(selected.location || "Not supplied")}</dd></div><div><dt>Event</dt><dd>${escapeHtml(selected.event_type || "Observation")}</dd></div></dl>${selected.linked_user_id ? `<button type="button" class="ice-camera-profile-link" data-ice-camera-account="${selected.linked_user_id}"><span>Open matched CAD profile</span><strong>${escapeHtml(selected.linked_account_name || "Faircroft account")}${selected.linked_civ_number ? ` · CIV ${escapeHtml(selected.linked_civ_number)}` : ""}</strong></button>` : `<div class="ice-camera-profile-missing"><strong>No CAD match yet</strong><span>This observation has not resolved to a linked Faircroft account.</span></div>`}${selected.evidence_url ? `<a class="secondary" href="${escapeHtml(selected.evidence_url)}" target="_blank" rel="noopener">Open evidence</a>` : `<span class="ice-camera-no-evidence">No evidence attachment</span>`}</aside>` : `<aside class="ice-camera-inspector empty"><strong>Select an observation</strong><span>Choose a row to inspect the normalized FLUCK record.</span></aside>`}</div><div class="ice-camera-source-strip"><div><small>CAMERA SOURCE DIRECTORY</small><strong>${Number(camera.stats?.camera_count || cameras.length || 0)} indexed</strong>${Number(camera.stats?.camera_count || cameras.length || 0) <= 1 ? `<span>Only one camera source is present in the current Shadow Haven export.</span>` : `<span>Multiple camera sources are reporting into the FLUCK index.</span>`}</div><div class="ice-camera-source-list">${cameras.slice(0, 6).map((cam) => `<span><b>${escapeHtml(cam.camera_id || "Unknown camera")}</b><small>${Number(cam.events || 0)} events · ${Number(cam.linked || 0)} linked</small></span>`).join("") || `<span><b>No camera feed</b><small>Awaiting next sync</small></span>`}</div></div><footer class="ice-camera-footnote">Source file <code>${escapeHtml(camera.source_file || "profile/profile/FLUCKCamera/camera_events.json")}</code> · read-only federal intelligence surface</footer></section>`; })() : ""}
       ${activeTab === "applications" ? `<section class="ice-applications-desk"><header><div><small>ICE COMMAND / RECRUITMENT</small><h2>Applicant qualification queue</h2><p>Only perfect qualification files reach command review for interview, training, and appointment.</p></div><strong>${applications.filter((item) => !["approved", "denied", "closed"].includes(item.status)).length} active</strong></header><div class="ice-application-ledger">${applications.map((item) => `<article><div class="ice-application-identity"><span>${escapeHtml(item.application_number)}</span><h3>${escapeHtml(item.character_name || item.applicant_name)}</h3><p>${escapeHtml(item.applicant_name)} · CIV ${escapeHtml(item.applicant_civ_number || "pending")}</p></div><div class="ice-qualification-score"><small>QUALIFICATION</small><strong>${Number(item.qualification?.score || 0)}<em>/20</em></strong><span>${escapeHtml(humanLabel(item.status))}</span></div><details><summary>Review submitted answers</summary><div>${(item.qualification?.answers || []).map((answer) => `<p><strong>${escapeHtml(answer.question)}</strong><span>${escapeHtml(answer.answer)}</span></p>`).join("")}</div></details><div class="ice-application-actions">${!["approved", "denied", "closed"].includes(item.status) ? `<button type="button" class="secondary" data-ice-application-action="review" data-ice-application-id="${item.id}">Open review</button><button type="button" class="secondary" data-ice-application-action="interview" data-ice-application-id="${item.id}">Interview & training</button><button type="button" class="primary" data-ice-application-action="approve" data-ice-application-id="${item.id}">Appoint ICE Agent</button><button type="button" class="danger" data-ice-application-action="deny" data-ice-application-id="${item.id}">Deny</button>` : `<span>Reviewed by ${escapeHtml(item.reviewer_name || "ICE Command")}</span>`}</div></article>`).join("") || `<div class="empty">No qualified ICE Agent applications are awaiting command review.</div>`}</div></section>` : `
       <section class="ice-command-strip"><div><span>Valid citizens</span><strong>${Number(data.stats?.valid_citizens || 0)}</strong></div><div><span>Undocumented</span><strong>${Number(data.stats?.undocumented || 0)}</strong></div><div><span>Open federal cases</span><strong>${Number(data.stats?.open_cases || 0)}</strong></div></section>
@@ -2195,6 +2317,8 @@ function renderIceWorkspace() {
 }
 
 function bindIceWorkspace() {
+  const legacyFluck = $(".ice-camera-console");
+  if (state.iceTab === "fluck" && legacyFluck) legacyFluck.outerHTML = renderIceFluckCommand();
   $("[data-close-ice]")?.addEventListener("click", async () => { state.activeApp = null; await loadSession(); });
   $("[data-refresh-ice]")?.addEventListener("click", async () => { await loadAppData("ice-mdt"); render(); });
   $("[data-ice-camera-refresh]")?.addEventListener("click", async () => { await loadAppData("ice-mdt"); render(); });
@@ -2202,9 +2326,25 @@ function bindIceWorkspace() {
     state.iceSelectedCameraEvent = button.dataset.iceCameraSelect;
     render();
   }));
+  $$('[data-ice-camera-source]').forEach((button) => button.addEventListener("click", () => {
+    state.iceCameraSource = button.dataset.iceCameraSource || "all";
+    state.iceSelectedCameraEvent = null;
+    render();
+  }));
+  $("[data-ice-camera-search]")?.addEventListener("input", (event) => {
+    state.iceCameraSearch = event.currentTarget.value || "";
+    render();
+    const replacement = $("[data-ice-camera-search]");
+    replacement?.focus();
+    replacement?.setSelectionRange(state.iceCameraSearch.length, state.iceCameraSearch.length);
+  });
   $("[data-ice-camera-filter]")?.addEventListener("input", (event) => {
     const term = String(event.currentTarget.value || "").trim().toLowerCase();
     $$('[data-ice-camera-select]').forEach((row) => { row.hidden = Boolean(term) && !row.textContent.toLowerCase().includes(term); });
+  });
+  $('[data-ice-gang-search]')?.addEventListener('input', event => {
+    const term = String(event.currentTarget.value || '').trim().toLowerCase();
+    $$('[data-ice-gang-row]').forEach((row) => { row.hidden = Boolean(term) && !row.textContent.toLowerCase().includes(term); });
   });
   $$("[data-ice-camera-account]").forEach((button) => button.addEventListener("click", async () => {
     try {
@@ -10226,6 +10366,7 @@ function renderDevWorkspace() {
     autopilot: ["Auto Pilot", "Control automated civilian account verification"],
     "system-update": ["System Update", "Publish and control Faircroft limited-service mode"],
     "fnn-settings": ["FNN Settings", "Control newsroom publishing and Press Pass capacity"],
+    "gang-settings": ["Gang Settings", "Govern organizations, leaders, rosters, and recruitment PINs"],
     "market-settings": ["Stock Market Settings", "Operate Ravenhood pricing, settlement receipts, fees, and RP events"],
     "lottery-settings": ["Lottery Settings", "Govern entries, prize funding, role eligibility, fraud review, and weekly drawings"],
     "housing-market": ["Housing Market", "Read-only Shadow Haven property ownership, availability, tenure, locks, and guest access"],
@@ -10236,7 +10377,7 @@ function renderDevWorkspace() {
     <aside class="dev-sidebar">
       <div class="dev-brand"><img class="dev-emblem" src="/static/brand/faircroft-emblem.webp" alt="" /><div><strong>Faircroft RP</strong><small>Staff Operations</small></div></div>
       <p class="dev-nav-label">Operations index</p>
-      <nav>${[["dashboard","Command Center"],["accounts","Account Management"],["intelligence","Game Intelligence"],["housing-market","Housing Market"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["campaigns","Active Campaigns"],["settlement","Settlement"],["market-settings","Stock Market"],["lottery-settings","Lottery Settings"],["dmv-settings","DMV Settings"],["mdt-settings","MDT Settings"],["court-settings","Court Settings"],["ice-settings","ICE Settings"],["admin-2fa","Admin 2FA"],["autopilot","Auto Pilot"],["system-update","System Update"],["fnn-settings","FNN Settings"],["audit","Activity Log"],["settings","Settings"]].map(([id,label], index) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><small>${String(index + 1).padStart(2, "0")}</small><span>${label}</span><i></i></button>`).join("")}</nav>
+      <nav>${[["dashboard","Command Center"],["accounts","Account Management"],["intelligence","Game Intelligence"],["housing-market","Housing Market"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["campaigns","Active Campaigns"],["settlement","Settlement"],["market-settings","Stock Market"],["lottery-settings","Lottery Settings"],["gang-settings","Gang Settings"],["dmv-settings","DMV Settings"],["mdt-settings","MDT Settings"],["court-settings","Court Settings"],["ice-settings","ICE Settings"],["admin-2fa","Admin 2FA"],["autopilot","Auto Pilot"],["system-update","System Update"],["fnn-settings","FNN Settings"],["audit","Activity Log"],["settings","Settings"]].map(([id,label], index) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><small>${String(index + 1).padStart(2, "0")}</small><span>${label}</span><i></i></button>`).join("")}</nav>
       <div class="dev-sidebar-footer"><span class="dev-access-dot"></span><div><strong>Authorized Staff</strong><small>${escapeHtml(state.session?.user?.name || "Staff member")}</small></div></div>
     </aside>
     <main class="dev-main">
@@ -10474,6 +10615,14 @@ function renderFnnContentControl(fnn) {
   return `<section class="dev-card fnn-content-control"><header><div><p class="eyebrow">News source archive</p><h2>Content review and maintenance</h2><p>Open the complete source record before deciding whether it should be permanently removed.</p></div><strong>${(content.cad_reports || []).length + (content.press_reports || []).length + published.length} RECORDS</strong></header><div class="fnn-content-switchboard"><section><div><span>CAD SOURCES</span><strong>${(content.cad_reports || []).length}</strong></div>${(content.cad_reports || []).map((item) => `<button type="button" data-fnn-content-preview="cad:${item.id}"><small>${escapeHtml(item.report_number)} · ${new Date(item.created_at).toLocaleDateString()}</small><strong>${escapeHtml(item.call_type)}</strong><span>${escapeHtml(item.location || "No location")} · ${escapeHtml(item.officer_name)}</span><em>Review file →</em></button>`).join("") || `<p class="empty">No CAD reports</p>`}</section><section><div><span>PRESS DESK</span><strong>${(content.press_reports || []).length}</strong></div>${(content.press_reports || []).map((item) => `<button type="button" data-fnn-content-preview="press:${item.id}"><small>${escapeHtml(item.report_number)} · ${new Date(item.created_at).toLocaleDateString()}</small><strong>${escapeHtml(item.headline)}</strong><span>${escapeHtml(item.author_name)} · ${escapeHtml(humanLabel(item.status))}</span><em>Review story →</em></button>`).join("") || `<p class="empty">No Press Desk stories</p>`}</section><section><div><span>PUBLISHED FNN</span><strong>${published.length}</strong></div>${published.map(({ edition, story, index }) => `<button type="button" data-fnn-content-preview="fnn:${edition.id}:${index}"><small>${escapeHtml(edition.edition_date)} · ${escapeHtml(story.category || "Faircroft")}</small><strong>${escapeHtml(story.headline || "Untitled story")}</strong><span>${escapeHtml(edition.headline)}</span><em>Review edition →</em></button>`).join("") || `<p class="empty">No published supporting stories</p>`}</section></div></section>${preview}`;
 }
 
+function renderDevGangSettings(gang) {
+  const gangs=gang.gangs||[], members=gang.members||[], pins=gang.invite_codes||[], settings=gang.settings||{};
+  return `<div class="dev-gang-control"><section class="dev-gang-hero"><div><small>FAIRCROFT ORGANIZATION INTELLIGENCE</small><h2>Gang governance</h2><p>Control organization capacity, inspect character-specific rosters, and audit every leader-issued recruitment PIN.</p></div><div><strong>${gangs.filter(g=>g.status==='active').length}</strong><span>ACTIVE ORGANIZATIONS</span></div><div><strong>${members.filter(m=>m.status==='active').length}</strong><span>REGISTERED CHARACTERS</span></div></section>
+  <section class="dev-gang-policy"><header><span>NETWORK POLICY</span><strong>${settings.creation_enabled?'CREATION OPEN':'CREATION CLOSED'}</strong></header><form id="devGangSettingsForm"><label><input type="checkbox" name="creation_enabled" ${settings.creation_enabled?'checked':''}/> Allow new gang creation</label><label>Global gang limit<input type="number" name="global_limit" min="1" max="1000" value="${Number(settings.global_limit||100)}"/></label><label>Default roster limit<input type="number" name="default_member_limit" min="2" max="200" value="${Number(settings.default_member_limit||20)}"/></label><label>Creations per account<input type="number" name="max_creations_per_user" min="1" max="20" value="${Number(settings.max_creations_per_user||1)}"/></label><button class="primary">Save gang policy</button></form></section>
+  <section class="dev-gang-directory"><header><div><small>ORGANIZATION DIRECTORY</small><h2>Registered gangs</h2></div><strong>${gangs.length} FILES</strong></header>${gangs.map(g=>{const roster=members.filter(m=>String(m.gang_id)===String(g.id));return `<article style="--gang:${escapeHtml(g.accent_color||'#41e6b0')}"><div class="dev-gang-mark">${escapeHtml(g.name.slice(0,2).toUpperCase())}</div><div class="dev-gang-identity"><small>${escapeHtml(g.status.toUpperCase())} · GANG ${g.id}</small><h3>${escapeHtml(g.name)}</h3><p>Leader: ${escapeHtml(g.leader_character_name)} · CIV ${escapeHtml(g.leader_civ_number||'pending')}</p><span>${escapeHtml(g.description||'No organization statement')}</span></div><div class="dev-gang-roster"><strong>${roster.length}/${g.member_limit}</strong><span>CHARACTERS</span>${roster.map(m=>`<button type="button" data-dev-gang-member="${m.id}" data-status="${escapeHtml(m.status)}"><b>${escapeHtml(m.character_name)}</b><small>${escapeHtml(humanLabel(m.gang_role))} · ${escapeHtml(humanLabel(m.status))}</small></button>`).join('')}</div><div class="dev-gang-actions"><button class="secondary" data-dev-gang-action="${g.locked?'unlock':'lock'}" data-gang-id="${g.id}">${g.locked?'Unlock':'Lock'} gang</button><button class="secondary" data-dev-gang-limit="${g.id}" data-current-limit="${g.member_limit}">Roster limit</button><button class="danger" data-dev-gang-action="delete" data-gang-id="${g.id}">Delete</button></div></article>`}).join('')||'<div class="empty">No gangs registered.</div>'}</section>
+  <section class="dev-gang-pin-ledger"><header><div><small>RECRUITMENT CREDENTIALS</small><h2>Leader-issued PIN ledger</h2></div><strong>${pins.length} ISSUED</strong></header><div class="dev-gang-pin-head"><span>PIN</span><span>GANG</span><span>ISSUER</span><span>CHARACTER</span><span>STATE</span></div>${pins.map(pin=>`<article><code>${escapeHtml(pin.code_hint)}</code><strong>${escapeHtml(pin.gang_name)}</strong><span>${escapeHtml(pin.issued_by_name)} · CIV ${escapeHtml(pin.issued_by_civ_number||'pending')}</span><span>${escapeHtml(pin.issued_by_character_name)}</span><b>${pin.revoked_at?'REVOKED':pin.uses_remaining>0&&new Date(pin.expires_at)>new Date()?`${pin.uses_remaining} USE(S)`:'EXPIRED/USED'}</b></article>`).join('')||'<div class="empty">No recruitment PINs issued.</div>'}</section></div>`;
+}
+
 function renderDevTools() {
   const data = state.cache["dev-tools"] || {};
   const users = data.users || [], sanctions = data.sanctions || [], warnings = data.warnings || [], logs = data.audit_logs || [], codes = data.unlink_codes || [];
@@ -10487,6 +10636,7 @@ function renderDevTools() {
   if (state.devTab === "court-settings") return renderDevCourtSettings(data.court_settings || {});
   if (state.devTab === "market-settings") return renderDevMarketSettings(data.market_settings || {}, users);
   if (state.devTab === "lottery-settings") return renderDevLotterySettings(data.lottery_settings || {});
+  if (state.devTab === "gang-settings") return renderDevGangSettings(data.gang_operations || {});
   if (state.devTab === "mdt-settings") return renderDevMdtSettings(data.ice_settings || {});
   if (state.devTab === "ice-settings") return renderDevIceSettings(data.ice_settings || {});
   if (state.devTab === "admin-2fa") {
@@ -11169,6 +11319,8 @@ function renderDevAccountModal(data) {
             <div><span>Live bank</span><strong>${gameBank ? money(gameBank.balance || 0) : "Awaiting sync"}</strong></div>
             <div><span>Server</span><strong>${escapeHtml(a.server_id || "Unknown")}</strong></div>
             <div><span>Last game sync</span><strong>${escapeHtml(a.last_sync_at || "Not reported")}</strong></div>
+            <div class="dev-citizenship-fact"><span>Faircroft citizenship</span><strong class="${String(a.citizenship_status || "").toLowerCase() === "valid citizen" ? "valid" : "warning"}">${escapeHtml(a.citizenship_status || "Undocumented")}</strong></div>
+            <div><span>Passport credential</span><strong>${escapeHtml(a.passport_number || "Not issued")}</strong></div>
           </div>
         </section>
         <section class="dev-identity-ledger">
@@ -11238,6 +11390,10 @@ function devDetailList(items, mapper) {
 function bindDevWorkspace() {
   bindDevTools();
   bindSystem();
+  $('#devGangSettingsForm')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget;try{await api('/api/dev-tools/gangs/settings',{method:'PATCH',body:{creation_enabled:form.creation_enabled.checked,global_limit:form.global_limit.value,default_member_limit:form.default_member_limit.value,max_creations_per_user:form.max_creations_per_user.value}});toast('Gang governance saved');await refreshDevTools();}catch(error){toast(error.message);}});
+  $$('[data-dev-gang-action]').forEach(button=>button.addEventListener('click',async()=>{const action=button.dataset.devGangAction;if(action==='delete'&&!confirm('Delete this gang and remove every character from its roster?'))return;try{await api(`/api/dev-tools/gangs/${button.dataset.gangId}`,{method:'PATCH',body:{action}});toast('Gang record updated');await refreshDevTools();}catch(error){toast(error.message);}}));
+  $$('[data-dev-gang-limit]').forEach(button=>button.addEventListener('click',async()=>{const limit=prompt('New maximum roster size',button.dataset.currentLimit||'20');if(!limit)return;try{await api(`/api/dev-tools/gangs/${button.dataset.devGangLimit}`,{method:'PATCH',body:{action:'limit',member_limit:limit}});toast('Roster limit updated');await refreshDevTools();}catch(error){toast(error.message);}}));
+  $$('[data-dev-gang-member]').forEach(button=>button.addEventListener('click',async()=>{const current=button.dataset.status;const action=prompt('Member action: lock, unlock, or remove',current==='locked'?'unlock':'lock');if(!action)return;try{await api(`/api/dev-tools/gangs/members/${button.dataset.devGangMember}`,{method:'PATCH',body:{action}});toast('Gang member status updated');await refreshDevTools();}catch(error){toast(error.message);}}));
   $("#devMarketSettingsForm")?.addEventListener("submit", async event => { event.preventDefault(); const form=event.currentTarget; try { await api("/api/dev-tools/market/settings", {method:"PATCH",body:{market_open:form.market_open.checked,ai_enabled:form.ai_enabled.checked,trade_fee_percent:form.trade_fee_percent.value,transfer_fee_percent:form.transfer_fee_percent.value}}); toast("Ravenhood policy saved"); await refreshDevTools(); } catch(error){toast(error.message);} });
   $("#devMarketAutomationForm")?.addEventListener("submit", async event => { event.preventDefault(); const form=event.currentTarget; try { await api("/api/dev-tools/market/settings", {method:"PATCH",body:{autopilot_enabled:form.autopilot_enabled.checked,autopilot_interval_minutes:form.autopilot_interval_minutes.value,volatility_percent:form.volatility_percent.value,gemini_autopilot_enabled:form.gemini_autopilot_enabled.checked,gemini_interval_minutes:form.gemini_interval_minutes.value}}); toast("Market automation saved"); await refreshDevTools(); } catch(error){toast(error.message);} });
   $("[data-market-volatility-cycle]")?.addEventListener("click", async event => { if(!confirm("Run a mixed volatility cycle across every active Ravenhood listing now?")) return; event.currentTarget.disabled=true; try { const result=await api("/api/dev-tools/market/volatility-cycle",{method:"POST",body:"{}"}); toast(`Volatility cycle complete · ${result.updated} listings moved`); await refreshDevTools(); } catch(error){event.currentTarget.disabled=false;toast(error.message);} });

@@ -52,47 +52,41 @@ ANDROID_APK_URL = os.environ.get(
 ).strip()
 ARMA_BRIDGE_API_KEY = os.environ.get("ARMA_BRIDGE_API_KEY", "").strip()
 ARMA_LINK_CODE_TTL_MINUTES = int(os.environ.get("ARMA_LINK_CODE_TTL_MINUTES", "30"))
-SHADOWHAVEN_SFTP_HOST = os.environ.get("LOAFHOSTS_SFTP_HOST", "").strip()
-SHADOWHAVEN_SFTP_PORT = int(os.environ.get("LOAFHOSTS_SFTP_PORT", "2022"))
-SHADOWHAVEN_SFTP_USERNAME = os.environ.get("LOAFHOSTS_SFTP_USERNAME", "").strip()
-SHADOWHAVEN_SFTP_PASSWORD = os.environ.get("LOAFHOSTS_SFTP_PASSWORD", "")
+SHADOWHAVEN_SFTP_HOST = os.environ.get("SHADOWHAVEN_SFTP_HOST", "").strip()
+SHADOWHAVEN_SFTP_PORT = int(os.environ.get("SHADOWHAVEN_SFTP_PORT", "2022"))
+SHADOWHAVEN_SFTP_USERNAME = os.environ.get("SHADOWHAVEN_SFTP_USERNAME", "").strip()
+SHADOWHAVEN_SFTP_PASSWORD = os.environ.get("SHADOWHAVEN_SFTP_PASSWORD", "")
 SHADOWHAVEN_SFTP_PRIVATE_KEY = os.environ.get(
-    "LOAFHOSTS_SFTP_PRIVATE_KEY",
+    "SHADOWHAVEN_SFTP_PRIVATE_KEY",
     "",
 ).strip()
 SHADOWHAVEN_SFTP_PRIVATE_KEY_B64 = os.environ.get(
-    "LOAFHOSTS_SFTP_PRIVATE_KEY_B64",
+    "SHADOWHAVEN_SFTP_PRIVATE_KEY_B64",
     "",
 ).strip()
 SHADOWHAVEN_SFTP_PRIVATE_KEY_PASSPHRASE = os.environ.get(
-    "LOAFHOSTS_SFTP_PRIVATE_KEY_PASSPHRASE",
+    "SHADOWHAVEN_SFTP_PRIVATE_KEY_PASSPHRASE",
     "",
 )
 SHADOWHAVEN_BANK_FILE = os.environ.get(
-    "LOAFHOSTS_BANK_FILE",
-    os.environ.get(
-        "SHADOWHAVEN_BANK_FILE",
-        "profile/profile/.db/FCRPMUSSALO/Banks/00bb0001-1e42-6138-7e90-c04752d4fab6.json",
-    ),
+    "SHADOWHAVEN_BANK_FILE",
+    "profile/profile/.db/FCRPMUSSALO/Banks/00bb0001-1e42-6138-7e90-c04752d4fab6.json",
 ).strip()
 SHADOWHAVEN_BANK_SYNC_SECONDS = max(5, int(os.environ.get("SHADOWHAVEN_BANK_SYNC_SECONDS", "15")))
 SHADOWHAVEN_REPUTATION_FILE = os.environ.get(
-    "LOAFHOSTS_REPUTATION_FILE",
-    os.environ.get("SHADOWHAVEN_REPUTATION_FILE", "profile/profile/MedicalHud/reputation.json"),
+    "SHADOWHAVEN_REPUTATION_FILE", "profile/profile/MedicalHud/reputation.json"
 ).strip()
 SHADOWHAVEN_REPUTATION_SYNC_SECONDS = max(
     15, int(os.environ.get("SHADOWHAVEN_REPUTATION_SYNC_SECONDS", "30"))
 )
 SHADOWHAVEN_CAMERA_EVENTS_FILE = os.environ.get(
-    "LOAFHOSTS_CAMERA_EVENTS_FILE",
-    os.environ.get("SHADOWHAVEN_CAMERA_EVENTS_FILE", "profile/profile/FLUCKCamera/camera_events.json"),
+    "SHADOWHAVEN_CAMERA_EVENTS_FILE", "profile/profile/FLUCKCamera/camera_events.json"
 ).strip()
 SHADOWHAVEN_CAMERA_EVENTS_SYNC_SECONDS = max(
     15, int(os.environ.get("SHADOWHAVEN_CAMERA_EVENTS_SYNC_SECONDS", "20"))
 )
 SHADOWHAVEN_PERSISTENCE_ROOT = os.environ.get(
-    "LOAFHOSTS_PERSISTENCE_ROOT",
-    os.environ.get("SHADOWHAVEN_PERSISTENCE_ROOT", "profile/profile/.db/FCRPMUSSALO"),
+    "SHADOWHAVEN_PERSISTENCE_ROOT", "profile/profile/.db/FCRPMUSSALO"
 ).strip().rstrip("/")
 SHADOWHAVEN_PERSISTENCE_SYNC_SECONDS = max(
     60, int(os.environ.get("SHADOWHAVEN_PERSISTENCE_SYNC_SECONDS", "120"))
@@ -108,10 +102,7 @@ DEFAULT_SHADOWHAVEN_PROPERTY_FILES = [
     "profile/profile/TBS Property Mod/owned-properties.json",
     "profile/profile/TBS Property Mod/rented-properties.json",
 ]
-_configured_property_files = os.environ.get(
-    "LOAFHOSTS_PROPERTY_FILES",
-    os.environ.get("SHADOWHAVEN_PROPERTY_FILES", ""),
-).strip()
+_configured_property_files = os.environ.get("SHADOWHAVEN_PROPERTY_FILES", "").strip()
 if _configured_property_files:
     SHADOWHAVEN_PROPERTY_FILES = [
         file_path.strip()
@@ -119,19 +110,17 @@ if _configured_property_files:
         if file_path.strip()
     ]
 else:
-    _single_property_file = os.environ.get("LOAFHOSTS_PROPERTY_FILE", os.environ.get("SHADOWHAVEN_PROPERTY_FILE", "")).strip()
+    _single_property_file = os.environ.get("SHADOWHAVEN_PROPERTY_FILE", "").strip()
     SHADOWHAVEN_PROPERTY_FILES = [_single_property_file] if _single_property_file else DEFAULT_SHADOWHAVEN_PROPERTY_FILES
 SHADOWHAVEN_PROPERTY_FILE = SHADOWHAVEN_PROPERTY_FILES[0] if SHADOWHAVEN_PROPERTY_FILES else DEFAULT_SHADOWHAVEN_PROPERTY_FILES[0]
 SHADOWHAVEN_PROPERTY_SYNC_SECONDS = max(
     20, int(os.environ.get("SHADOWHAVEN_PROPERTY_SYNC_SECONDS", "60"))
 )
 SHADOWHAVEN_ANTICHEAT_DATABASE_FILE = os.environ.get(
-    "LOAFHOSTS_ANTICHEAT_DATABASE_FILE",
-    os.environ.get("SHADOWHAVEN_ANTICHEAT_DATABASE_FILE", "profile/profile/TB/tb_player_database.json"),
+    "SHADOWHAVEN_ANTICHEAT_DATABASE_FILE", "profile/profile/TB/tb_player_database.json"
 ).strip()
 SHADOWHAVEN_ANTICHEAT_ALT_FILE = os.environ.get(
-    "LOAFHOSTS_ANTICHEAT_ALT_FILE",
-    os.environ.get("SHADOWHAVEN_ANTICHEAT_ALT_FILE", "profile/profile/TB/tb_alt_accounts.json"),
+    "SHADOWHAVEN_ANTICHEAT_ALT_FILE", "profile/profile/TB/tb_alt_accounts.json"
 ).strip()
 SHADOWHAVEN_ANTICHEAT_SYNC_SECONDS = max(
     15, int(os.environ.get("SHADOWHAVEN_ANTICHEAT_SYNC_SECONDS", "30"))
@@ -147,6 +136,10 @@ ARMA_RCON_HOST = os.environ.get("ARMA_RCON_HOST", os.environ.get("RCON_HOST", ""
 ARMA_RCON_PORT = int(os.environ.get("ARMA_RCON_PORT", os.environ.get("RCON_PORT", "19999")))
 ARMA_RCON_PASSWORD = os.environ.get("ARMA_RCON_PASSWORD", os.environ.get("RCON_PASSWORD", ""))
 ARMA_RCON_TIMEOUT_SECONDS = max(1.0, min(float(os.environ.get("ARMA_RCON_TIMEOUT_SECONDS", "5")), 15.0))
+ARMA_A2S_HOST = os.environ.get("ARMA_A2S_HOST", SHADOWHAVEN_SFTP_HOST).strip()
+ARMA_A2S_PORT = int(os.environ.get("ARMA_A2S_PORT", "17777"))
+ARMA_GAME_HOST = os.environ.get("ARMA_GAME_HOST", ARMA_A2S_HOST).strip()
+ARMA_GAME_PORT = int(os.environ.get("ARMA_GAME_PORT", "27015"))
 NAME_CHANGE_LIMIT = 3
 NAME_CHANGE_WINDOW_DAYS = 3
 TREASURY_STIMULUS_AMOUNT = 75000.00
@@ -577,14 +570,14 @@ def sync_shadowhaven_bank_once() -> int:
 
 def shadowhaven_bank_sync_worker() -> None:
     if not has_shadowhaven_sftp_credentials():
-        print("LoafHosts SFTP bank sync disabled: credentials are not configured")
+        print("Shadowhaven SFTP bank sync disabled: credentials are not configured")
         return
     while True:
         try:
             accepted = sync_shadowhaven_bank_once()
-            print(f"LoafHosts SFTP bank sync updated {accepted} balance(s)")
+            print(f"Shadowhaven SFTP bank sync updated {accepted} balance(s)")
         except Exception as exc:
-            print(f"LoafHosts SFTP bank sync failed: {type(exc).__name__}: {exc}")
+            print(f"Shadowhaven SFTP bank sync failed: {type(exc).__name__}: {exc}")
         time.sleep(SHADOWHAVEN_BANK_SYNC_SECONDS)
 
 
@@ -657,14 +650,14 @@ def sync_shadowhaven_reputation_once() -> int:
 
 def shadowhaven_reputation_sync_worker() -> None:
     if not has_shadowhaven_sftp_credentials():
-        print("LoafHosts reputation sync disabled: credentials are not configured")
+        print("Shadowhaven reputation sync disabled: credentials are not configured")
         return
     while True:
         try:
             accepted = sync_shadowhaven_reputation_once()
-            print(f"LoafHosts MedicalHud reputation sync updated {accepted} record(s)")
+            print(f"Shadowhaven MedicalHud reputation sync updated {accepted} record(s)")
         except Exception as exc:
-            print(f"LoafHosts MedicalHud reputation sync failed: {type(exc).__name__}: {exc}")
+            print(f"Shadowhaven MedicalHud reputation sync failed: {type(exc).__name__}: {exc}")
         time.sleep(SHADOWHAVEN_REPUTATION_SYNC_SECONDS)
 
 
@@ -700,6 +693,60 @@ def _camera_value(event: dict[str, Any], *keys: str) -> str:
                 if value is not None and str(value).strip():
                     return str(value).strip()
     return ""
+
+
+def _camera_occupant_candidates(event: dict[str, Any]) -> list[Any]:
+    """Return driver/passenger records from the common FLUCK vehicle payload shapes."""
+    candidates: list[Any] = []
+    vehicle = event.get("vehicle")
+    containers = [event]
+    if isinstance(vehicle, dict):
+        containers.append(vehicle)
+    for container in containers:
+        for key in (
+            "occupants", "Occupants", "passengers", "Passengers", "vehicleOccupants",
+            "VehicleOccupants", "crew", "Crew", "persons", "Persons",
+        ):
+            value = container.get(key)
+            if isinstance(value, list):
+                candidates.extend(value)
+            elif isinstance(value, dict):
+                candidates.extend(value.values())
+        driver = container.get("driver") or container.get("Driver")
+        if driver:
+            candidates.insert(0, driver)
+    return candidates
+
+
+def _camera_occupants(event: dict[str, Any]) -> list[dict[str, str]]:
+    occupants: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for index, value in enumerate(_camera_occupant_candidates(event)):
+        if isinstance(value, str):
+            name, identity_id, role = value.strip(), "", "passenger"
+        elif isinstance(value, dict):
+            name = _camera_value(value, "subjectName", "subject_name", "playerName", "player_name", "displayName", "name")
+            identity_id = _camera_value(
+                value, "identityId", "identity_id", "bohemiaId", "bohemia_id", "bohemiaIdentityId",
+                "uid", "playerUID", "playerUid",
+            )
+            role = _camera_value(value, "role", "seat", "position", "occupantType", "occupant_type") or ("driver" if index == 0 else "passenger")
+        else:
+            continue
+        if not name and not identity_id:
+            continue
+        identity_key = identity_id.casefold()
+        name_key = name.casefold()
+        dedupe_key = (identity_key, name_key)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        occupants.append({
+            "name": name[:160],
+            "identity_id": identity_id[:180],
+            "role": role[:80],
+        })
+    return occupants
 
 
 def extract_shadowhaven_camera_events(payload: Any) -> list[dict[str, str]]:
@@ -786,14 +833,14 @@ def sync_shadowhaven_camera_events_once() -> int:
 
 def shadowhaven_camera_events_sync_worker() -> None:
     if not has_shadowhaven_sftp_credentials():
-        print("LoafHosts FLUCK Camera sync disabled: credentials are not configured")
+        print("Shadowhaven FLUCK Camera sync disabled: credentials are not configured")
         return
     while True:
         try:
             accepted = sync_shadowhaven_camera_events_once()
-            print(f"LoafHosts FLUCK Camera sync updated {accepted} event(s)")
+            print(f"Shadowhaven FLUCK Camera sync updated {accepted} event(s)")
         except Exception as exc:
-            print(f"LoafHosts FLUCK Camera sync failed: {type(exc).__name__}: {exc}")
+            print(f"Shadowhaven FLUCK Camera sync failed: {type(exc).__name__}: {exc}")
         time.sleep(SHADOWHAVEN_CAMERA_EVENTS_SYNC_SECONDS)
 
 
@@ -1019,14 +1066,14 @@ def sync_shadowhaven_anticheat_once() -> tuple[int, int]:
 
 def shadowhaven_anticheat_sync_worker() -> None:
     if not has_shadowhaven_sftp_credentials():
-        print("LoafHosts SFTP anti-cheat sync disabled: credentials are not configured")
+        print("Shadowhaven SFTP anti-cheat sync disabled: credentials are not configured")
         return
     while True:
         try:
             players, groups = sync_shadowhaven_anticheat_once()
-            print(f"LoafHosts SFTP anti-cheat sync updated {players} player(s), {groups} alt group(s)")
+            print(f"Shadowhaven SFTP anti-cheat sync updated {players} player(s), {groups} alt group(s)")
         except Exception as exc:
-            print(f"LoafHosts SFTP anti-cheat sync failed: {type(exc).__name__}: {exc}")
+            print(f"Shadowhaven SFTP anti-cheat sync failed: {type(exc).__name__}: {exc}")
         time.sleep(SHADOWHAVEN_ANTICHEAT_SYNC_SECONDS)
 
 
@@ -1196,7 +1243,7 @@ def sync_shadowhaven_persistence_once() -> tuple[int, dict[str, int]]:
                         upsert_persistence_record_batch(records)
                         records.clear()
                         print(
-                            f"LoafHosts FCRPMUSSALO sync progress: "
+                            f"Shadowhaven FCRPMUSSALO sync progress: "
                             f"{processed} record(s), current category {category}"
                         )
             scan_complete = not pending
@@ -1239,18 +1286,18 @@ def sync_shadowhaven_persistence_once() -> tuple[int, dict[str, int]]:
 
 def shadowhaven_persistence_sync_worker() -> None:
     if not has_shadowhaven_sftp_credentials():
-        print("LoafHosts FCRPMUSSALO sync disabled: credentials are not configured")
+        print("Shadowhaven FCRPMUSSALO sync disabled: credentials are not configured")
         return
     print(
-        f"LoafHosts FCRPMUSSALO sync starting from "
+        f"Shadowhaven FCRPMUSSALO sync starting from "
         f"{SHADOWHAVEN_PERSISTENCE_ROOT}"
     )
     while True:
         try:
             records, categories = sync_shadowhaven_persistence_once()
-            print(f"LoafHosts FCRPMUSSALO sync updated {records} record(s): {categories}")
+            print(f"Shadowhaven FCRPMUSSALO sync updated {records} record(s): {categories}")
         except Exception as exc:
-            print(f"LoafHosts FCRPMUSSALO sync failed: {type(exc).__name__}: {exc}")
+            print(f"Shadowhaven FCRPMUSSALO sync failed: {type(exc).__name__}: {exc}")
         time.sleep(SHADOWHAVEN_PERSISTENCE_SYNC_SECONDS)
 
 
@@ -1393,14 +1440,14 @@ def sync_shadowhaven_properties_once() -> int:
 
 def shadowhaven_property_sync_worker() -> None:
     if not has_shadowhaven_sftp_credentials():
-        print("LoafHosts TBS Property Mod sync disabled: credentials are not configured")
+        print("Shadowhaven TBS Property Mod sync disabled: credentials are not configured")
         return
     while True:
         try:
             accepted = sync_shadowhaven_properties_once()
-            print(f"LoafHosts TBS Property Mod sync updated {accepted} property record(s)")
+            print(f"Shadowhaven TBS Property Mod sync updated {accepted} property record(s)")
         except Exception as exc:
-            print(f"LoafHosts TBS Property Mod sync failed: {type(exc).__name__}: {exc}")
+            print(f"Shadowhaven TBS Property Mod sync failed: {type(exc).__name__}: {exc}")
         time.sleep(SHADOWHAVEN_PROPERTY_SYNC_SECONDS)
 
 
@@ -1429,7 +1476,8 @@ def public_user(user: DbRow) -> dict[str, Any]:
         "name": user["name"],
         "email": user["email"],
         "verified": bool(user["verified"]),
-        "roles": roles_for(user),
+        # gang_leader is intentionally invisible outside staff operations.
+        "roles": [role for role in roles_for(user) if role != "gang_leader"],
         "primary_agency": user["primary_agency"],
         "car_entry_code": user.get("car_entry_code") or "",
         "car_entry_code_required": not bool(str(user.get("car_entry_code") or "").strip()),
@@ -2054,6 +2102,10 @@ SYSTEM_SETTING_DEFAULTS = {
     "lottery_quick_draw_enabled": "1",
     "lottery_quick_draw_interval_minutes": "240",
     "lottery_quick_draw_entries": "1",
+    "gang_creation_enabled": "1",
+    "gang_global_limit": "100",
+    "gang_default_member_limit": "20",
+    "gang_max_creations_per_user": "1",
 }
 APP_VISIBILITY_OPTIONS = (
     ("getting-started", "Getting Started"),
@@ -2071,6 +2123,8 @@ APP_VISIBILITY_OPTIONS = (
     ("bank", "Bank"),
     ("wallstreet", "Ravenhood Markets"),
     ("lottery", "Faircroft Lottery"),
+    ("insurance", "Faircroft Insurance"),
+    ("gangs", "Gang Network"),
     ("messages", "Messages"),
     ("changelog", "Changelog"),
     ("contracts", "Contracts"),
@@ -2363,6 +2417,88 @@ def ensure_schema() -> None:
                 source_version TEXT NOT NULL DEFAULT '',
                 synced_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS insurance_policies (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                character_id INTEGER NOT NULL,
+                policy_number TEXT NOT NULL UNIQUE,
+                policy_type TEXT NOT NULL,
+                coverage_tier TEXT NOT NULL,
+                subject_label TEXT NOT NULL,
+                coverage_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+                premium_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+                deductible_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+                questionnaire TEXT NOT NULL DEFAULT '{}',
+                status TEXT NOT NULL DEFAULT 'active',
+                receipt_code_id INTEGER,
+                issued_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (character_id) REFERENCES user_characters(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS insurance_policies_user_idx
+                ON insurance_policies (user_id, character_id, status);
+
+            CREATE TABLE IF NOT EXISTS gangs (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT NOT NULL DEFAULT '',
+                accent_color TEXT NOT NULL DEFAULT '#41e6b0',
+                leader_user_id INTEGER NOT NULL,
+                leader_character_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                member_limit INTEGER NOT NULL DEFAULT 20,
+                locked INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (leader_user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (leader_character_id) REFERENCES user_characters(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS gang_members (
+                id SERIAL PRIMARY KEY,
+                gang_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                character_id INTEGER NOT NULL,
+                gang_role TEXT NOT NULL DEFAULT 'member',
+                status TEXT NOT NULL DEFAULT 'active',
+                joined_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (gang_id) REFERENCES gangs(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (character_id) REFERENCES user_characters(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS gang_invite_codes (
+                id SERIAL PRIMARY KEY,
+                gang_id INTEGER NOT NULL,
+                code_hash TEXT NOT NULL,
+                code_hint TEXT NOT NULL,
+                issued_by_user_id INTEGER NOT NULL,
+                issued_by_character_id INTEGER NOT NULL,
+                uses_remaining INTEGER NOT NULL DEFAULT 1,
+                expires_at TEXT NOT NULL,
+                revoked_at TEXT,
+                redeemed_by_user_id INTEGER,
+                redeemed_character_id INTEGER,
+                redeemed_at TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (gang_id) REFERENCES gangs(id) ON DELETE CASCADE,
+                FOREIGN KEY (issued_by_user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (issued_by_character_id) REFERENCES user_characters(id) ON DELETE CASCADE,
+                FOREIGN KEY (redeemed_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+                FOREIGN KEY (redeemed_character_id) REFERENCES user_characters(id) ON DELETE SET NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS gang_invite_code_hash_idx
+                ON gang_invite_codes (code_hash, expires_at);
+
+            CREATE UNIQUE INDEX IF NOT EXISTS gang_members_active_character_idx
+                ON gang_members (character_id) WHERE status IN ('active', 'locked');
 
             CREATE TABLE IF NOT EXISTS leaderboard_metric_snapshots (
                 metric_key TEXT NOT NULL,
@@ -4524,6 +4660,10 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "lottery_quick_draw_enabled": str(raw.get("lottery_quick_draw_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "lottery_quick_draw_interval_minutes": max(30, min(1440, int(raw.get("lottery_quick_draw_interval_minutes") or 240))),
         "lottery_quick_draw_entries": max(1, min(5, int(raw.get("lottery_quick_draw_entries") or 1))),
+        "gang_creation_enabled": str(raw.get("gang_creation_enabled") or "1") in ("1", "true", "True", "yes", "on"),
+        "gang_global_limit": max(1, min(1000, int(raw.get("gang_global_limit") or 100))),
+        "gang_default_member_limit": max(2, min(200, int(raw.get("gang_default_member_limit") or 20))),
+        "gang_max_creations_per_user": max(1, min(20, int(raw.get("gang_max_creations_per_user") or 1))),
         "dmv_license_classes": dmv_license_classes,
         "app_visibility": app_visibility,
     }
@@ -5665,6 +5805,8 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         ("properties", "PROPERTIES", "home", False, True),
         ("bank", "BANK", "bank", verified, False),
         ("lottery", "LOTTERY", "trophy", verified, False),
+        ("insurance", "INSURANCE", "insurance", verified, False),
+        ("gangs", "GANG NETWORK", "gang", verified, False),
         ("leaderboards", "Leaderboards", "trophy", verified, False),
         ("wallstreet", "WALLSTREET", "trending", verified, False),
         ("messages", "Messages", "message", verified, False),
@@ -6720,6 +6862,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_citizenship(db, user)
                 elif path == "/api/citizenship/exam" and method == "POST":
                     self.api_citizenship_exam(db, user)
+                elif path == "/api/insurance" and method == "GET":
+                    self.api_insurance(db, user)
+                elif path == "/api/insurance/policies" and method == "POST":
+                    self.api_insurance_create(db, user)
+                elif path == "/api/gangs" and method == "GET":
+                    self.api_gangs(db, user)
+                elif path == "/api/gangs" and method == "POST":
+                    self.api_gang_create(db, user)
+                elif path == "/api/gangs/join" and method == "POST":
+                    self.api_gang_join(db, user)
+                elif path == "/api/gangs/invite" and method == "POST":
+                    self.api_gang_invite(db, user)
+                elif path.startswith("/api/gangs/members/") and method == "PATCH":
+                    self.api_gang_member_update(db, user, self.path_int(path, 3))
                 elif path == "/api/ice/overview" and method == "GET":
                     self.api_ice_overview(db, user)
                 elif path == "/api/ice/camera-events" and method == "GET":
@@ -7032,6 +7188,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_lottery_entry_review(db, user, self.path_int(path, 4))
                 elif path == "/api/dev-tools/lottery/draw" and method == "POST":
                     self.api_dev_lottery_draw(db, user)
+                elif path == "/api/dev-tools/gangs/settings" and method == "PATCH":
+                    self.api_dev_gang_settings(db, user)
+                elif path.startswith("/api/dev-tools/gangs/members/") and method == "PATCH":
+                    self.api_dev_gang_member_update(db, user, self.path_int(path, 4))
+                elif path.startswith("/api/dev-tools/gangs/") and method == "PATCH":
+                    self.api_dev_gang_update(db, user, self.path_int(path, 3))
                 elif path == "/api/dev-tools/sanctions" and method == "POST":
                     self.api_dev_create_sanction(db, user)
                 elif path.startswith("/api/dev-tools/sanctions/") and path.endswith("/revoke") and method == "POST":
@@ -7482,9 +7644,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 l.user_id,
                 u.name AS account_name,
                 u.email AS account_email,
-                u.civ_number AS account_civ_number
+                u.civ_number AS account_civ_number,
+                COALESCE(cr.citizenship_status, 'Undocumented') AS citizenship_status,
+                cr.passport_number
             FROM arma_account_links l
             LEFT JOIN users u ON u.id = l.user_id
+            LEFT JOIN citizenship_records cr ON cr.user_id = u.id
             WHERE l.identity_id <> '' OR l.player_name <> ''
             """,
         )
@@ -7515,6 +7680,49 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 item["linked_account_email"] = match.get("account_email") or ""
                 item["linked_civ_number"] = match.get("account_civ_number") or ""
                 item["linked_player_name"] = match.get("player_name") or ""
+                item["citizenship_status"] = match.get("citizenship_status") or "Undocumented"
+                item["passport_number"] = match.get("passport_number") or ""
+            else:
+                item["citizenship_status"] = "Identity unresolved"
+                item["passport_number"] = ""
+            try:
+                raw_payload = json.loads(str(item.get("raw_payload") or "{}"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                raw_payload = {}
+            occupant_records: list[dict[str, Any]] = []
+            for occupant in _camera_occupants(raw_payload if isinstance(raw_payload, dict) else {}):
+                occupant_identity = str(occupant.get("identity_id") or "").strip().casefold()
+                occupant_name = str(occupant.get("name") or "").strip().casefold()
+                occupant_identity_match = linked_identities.get(occupant_identity) if occupant_identity else None
+                occupant_name_match = linked_names.get(occupant_name) if occupant_name else None
+                occupant_match = occupant_identity_match or occupant_name_match
+                occupant_records.append({
+                    **occupant,
+                    "linked_account": bool(occupant_match),
+                    "linked_match": "identity_id" if occupant_identity_match else ("player_name" if occupant_name_match else ""),
+                    "linked_user_id": occupant_match.get("user_id") if occupant_match else None,
+                    "linked_account_name": (occupant_match.get("account_name") or occupant_match.get("player_name") or "Matched Faircroft account") if occupant_match else "",
+                    "linked_civ_number": occupant_match.get("account_civ_number") if occupant_match else "",
+                    "citizenship_status": (occupant_match.get("citizenship_status") or "Undocumented") if occupant_match else "Identity unresolved",
+                    "passport_number": occupant_match.get("passport_number") if occupant_match else "",
+                })
+            # Older FLUCK exports describe only the driver at the top level. Keep that
+            # identity in the vehicle manifest without inventing passenger records.
+            if not occupant_records and (item.get("subject_name") or item.get("identity_id")):
+                occupant_records.append({
+                    "name": item.get("subject_name") or item.get("linked_player_name") or "Observed driver",
+                    "identity_id": item.get("identity_id") or "",
+                    "role": "driver",
+                    "linked_account": item["linked_account"],
+                    "linked_match": item.get("linked_match") or "",
+                    "linked_user_id": item.get("linked_user_id"),
+                    "linked_account_name": item.get("linked_account_name") or "",
+                    "linked_civ_number": item.get("linked_civ_number") or "",
+                    "citizenship_status": item.get("citizenship_status") or "Identity unresolved",
+                    "passport_number": item.get("passport_number") or "",
+                })
+            item["occupants"] = occupant_records
+            item["occupant_count"] = len(occupant_records)
             camera_id = str(item.get("camera_id") or "Unknown camera").strip() or "Unknown camera"
             camera_record = cameras.setdefault(
                 camera_id,
@@ -7585,9 +7793,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             """
             SELECT u.*, l.id AS link_id, l.server_id, l.identity_id, l.uid,
                    l.rpl_identity, l.platform, l.player_name, l.linked_at,
-                   l.last_seen_at, l.last_sync_at
+                   l.last_seen_at, l.last_sync_at,
+                   COALESCE(cr.citizenship_status, 'Undocumented') AS citizenship_status,
+                   cr.passport_number, cr.issued_at AS passport_issued_at
             FROM users u
             LEFT JOIN arma_account_links l ON l.user_id = u.id
+            LEFT JOIN citizenship_records cr ON cr.user_id = u.id
             WHERE u.id = ?
             """,
             (target_id,),
@@ -7736,6 +7947,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 }
                 applications.append(item)
             stats["applications_pending"] = sum(1 for item in applications if item["status"] in ("submitted", "under_review", "interview_requested"))
+        gang_affiliations = all_rows(db, """SELECT gm.id,gm.user_id,gm.character_id,gm.gang_role,gm.status,
+            g.id AS gang_id,g.name AS gang_name,g.accent_color,c.character_name,u.civ_number,
+            COALESCE(cr.citizenship_status,'Undocumented') AS citizenship_status,cr.passport_number
+            FROM gang_members gm JOIN gangs g ON g.id=gm.gang_id JOIN user_characters c ON c.id=gm.character_id
+            JOIN users u ON u.id=gm.user_id LEFT JOIN citizenship_records cr ON cr.user_id=u.id
+            WHERE gm.status IN ('active','locked') AND g.status='active' ORDER BY g.name,c.character_name""")
+        stats["gang_affiliations"] = len(gang_affiliations)
         self.send_json(
             200,
             {
@@ -7745,6 +7963,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "ordinance_notice": "Faircroft Local Ordinance restricts local police involvement with federal immigration operations. NCIC identity and safety checks remain available; local reports, BOLOs, and warrants are withheld when the restriction is active.",
                 "can_command": can_command,
                 "applications": applications,
+                "gang_affiliations": [dict(row) for row in gang_affiliations],
                 "fluck_camera": self._ice_camera_payload(db),
             },
         )
@@ -7778,6 +7997,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         results = []
         for row in rows:
             item = dict(row)
+            item["gang_affiliations"] = [dict(entry) for entry in all_rows(db, """SELECT g.id AS gang_id,g.name AS gang_name,g.accent_color,gm.gang_role,gm.status,c.character_name
+                FROM gang_members gm JOIN gangs g ON g.id=gm.gang_id JOIN user_characters c ON c.id=gm.character_id
+                WHERE gm.user_id=? AND gm.status IN ('active','locked') AND g.status='active' ORDER BY g.name""", (row["id"],))]
             item["vehicles"] = [
                 dict(vehicle) for vehicle in all_rows(
                     db,
@@ -9815,6 +10037,173 @@ class RoleplayHandler(BaseHTTPRequestHandler):
     def api_apply_job(self, db: Database, user: DbRow | None, job_id: int) -> None:
         self.error(410, "Passive income jobs have been removed from this server.")
         return
+
+    def _consume_bearer_receipt(self, db: Database, user_id: int, raw_code: str) -> DbRow | None:
+        raw_code = str(raw_code or "").strip()
+        if not re.fullmatch(r"\d{4}", raw_code):
+            return None
+        code_hash = hashlib.sha256(raw_code.encode("utf-8")).hexdigest()
+        row = one(db, """SELECT * FROM market_cash_codes WHERE code_hash=?
+            AND (target_user_id IS NULL OR target_user_id=?) AND transaction_type IN ('deposit','universal')
+            AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?""", (code_hash, user_id, now_iso()))
+        if not row:
+            legacy = one(db, """SELECT * FROM myfaircroft_payment_codes WHERE code_hash=?
+                AND (target_user_id IS NULL OR target_user_id=?) AND used_at IS NULL
+                AND revoked_at IS NULL AND expires_at > ?""", (code_hash, user_id, now_iso()))
+            if legacy:
+                db.execute("""INSERT INTO market_cash_codes
+                    (code_hash, code_hint, target_user_id, transaction_type, amount, created_by, expires_at, created_at)
+                    VALUES (?, ?, ?, 'universal', 0, ?, ?, ?) ON CONFLICT(code_hash) DO NOTHING""",
+                    (code_hash, legacy["code_hint"], legacy.get("target_user_id"), legacy["created_by"], legacy["expires_at"], legacy["created_at"]))
+                row = one(db, "SELECT * FROM market_cash_codes WHERE code_hash=? AND used_at IS NULL AND revoked_at IS NULL", (code_hash,))
+        if not row:
+            return None
+        ts = now_iso()
+        db.execute("UPDATE market_cash_codes SET target_user_id=COALESCE(target_user_id,?), used_by=?, used_at=? WHERE id=? AND used_at IS NULL", (user_id, user_id, ts, row["id"]))
+        db.execute("UPDATE myfaircroft_payment_codes SET target_user_id=COALESCE(target_user_id,?), used_by=?, used_at=? WHERE code_hash=? AND used_at IS NULL", (user_id, user_id, ts, code_hash))
+        return row
+
+    def api_insurance(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        policies = all_rows(db, """SELECT p.*, c.character_name FROM insurance_policies p
+            JOIN user_characters c ON c.id=p.character_id WHERE p.user_id=? ORDER BY p.created_at DESC""", (user["id"],))
+        self.send_json(200, {"policies": [dict(row) for row in policies], "characters": [dict(row) for row in all_rows(db,
+            "SELECT id,character_name,is_active FROM user_characters WHERE user_id=? AND status='active' ORDER BY is_active DESC,created_at", (user["id"],))]})
+
+    def api_insurance_create(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        payload = self.read_json()
+        try: character_id = int(payload.get("character_id") or 0)
+        except (TypeError, ValueError): character_id = 0
+        character = one(db, "SELECT * FROM user_characters WHERE id=? AND user_id=? AND status='active'", (character_id, user["id"]))
+        policy_type = str(payload.get("policy_type") or "").strip().lower()
+        tier = str(payload.get("coverage_tier") or "standard").strip().lower()
+        subject = str(payload.get("subject_label") or "").strip()[:120]
+        valid_types = {"vehicle", "property", "life", "business", "general"}
+        tiers = {"essential": (25000, 500, 750), "standard": (100000, 1250, 1500), "premier": (500000, 2500, 3000)}
+        if not character or policy_type not in valid_types or tier not in tiers or not subject:
+            self.error(400, "Select a character, policy, coverage tier, and insured subject."); return
+        receipt = self._consume_bearer_receipt(db, int(user["id"]), str(payload.get("code") or ""))
+        if not receipt:
+            self.error(403, "A valid unused four-digit Faircroft receipt PIN is required after staff receives payment in game."); return
+        coverage, deductible, premium = tiers[tier]
+        issued = utcnow(); expires = issued + dt.timedelta(days=30)
+        policy_number = f"FCI-{issued.strftime('%y%m')}-{secrets.randbelow(900000)+100000}"
+        questionnaire = {key: str(payload.get(key) or "").strip()[:500] for key in ("risk_use", "location", "beneficiary", "notes")}
+        db.execute("""INSERT INTO insurance_policies
+            (user_id,character_id,policy_number,policy_type,coverage_tier,subject_label,coverage_amount,premium_amount,deductible_amount,questionnaire,status,receipt_code_id,issued_at,expires_at,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?,?)""",
+            (user["id"], character_id, policy_number, policy_type, tier, subject, coverage, premium, deductible,
+             json.dumps(questionnaire, separators=(",", ":")), receipt["id"], issued.isoformat(), expires.isoformat(), issued.isoformat(), issued.isoformat()))
+        add_admin_audit(db, int(user["id"]), "insurance.policy.issued", int(user["id"]), {"policy_number": policy_number, "character_id": character_id, "premium": premium})
+        self.send_json(201, {"ok": True, "policy_number": policy_number})
+
+    def _gang_payload(self, db: Database, user: DbRow) -> dict[str, Any]:
+        characters = all_rows(db, "SELECT id,character_name,is_active FROM user_characters WHERE user_id=? AND status='active' ORDER BY is_active DESC,created_at", (user["id"],))
+        memberships = all_rows(db, """SELECT gm.*,g.name AS gang_name,g.description,g.accent_color,g.locked,g.member_limit,
+            c.character_name FROM gang_members gm JOIN gangs g ON g.id=gm.gang_id JOIN user_characters c ON c.id=gm.character_id
+            WHERE gm.user_id=? AND gm.status IN ('active','locked') ORDER BY gm.joined_at""", (user["id"],))
+        gangs: list[dict[str, Any]] = []
+        for membership in memberships:
+            item = dict(membership)
+            item["members"] = [dict(row) for row in all_rows(db, """SELECT gm.id,gm.character_id,gm.gang_role,gm.status,gm.joined_at,c.character_name
+                FROM gang_members gm JOIN user_characters c ON c.id=gm.character_id WHERE gm.gang_id=? ORDER BY CASE gm.gang_role WHEN 'leader' THEN 0 WHEN 'officer' THEN 1 ELSE 2 END,c.character_name""", (membership["gang_id"],))]
+            item["invite_codes"] = [dict(row) for row in all_rows(db, """SELECT id,code_hint,uses_remaining,expires_at,redeemed_at,revoked_at,created_at
+                FROM gang_invite_codes WHERE gang_id=? AND issued_by_user_id=? ORDER BY created_at DESC LIMIT 20""", (membership["gang_id"], user["id"]))] if membership["gang_role"] == "leader" else []
+            gangs.append(item)
+        return {"characters": [dict(x) for x in characters], "memberships": gangs, "settings": {"creation_enabled": get_system_settings(db)["gang_creation_enabled"]}}
+
+    def api_gangs(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err: self.error(403 if user else 401, err); return
+        self.send_json(200, self._gang_payload(db, user))
+
+    def api_gang_create(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err: self.error(403 if user else 401, err); return
+        settings = get_system_settings(db); payload = self.read_json()
+        try: character_id = int(payload.get("character_id") or 0)
+        except (TypeError, ValueError): character_id = 0
+        character = one(db, "SELECT * FROM user_characters WHERE id=? AND user_id=? AND status='active'", (character_id, user["id"]))
+        name = re.sub(r"\s+", " ", str(payload.get("name") or "").strip())[:60]
+        description = str(payload.get("description") or "").strip()[:500]
+        color = str(payload.get("accent_color") or "#41e6b0").strip()[:16]
+        created_count = one(db, "SELECT COUNT(*) AS count FROM gangs WHERE leader_user_id=? AND status='active'", (user["id"],))
+        total = one(db, "SELECT COUNT(*) AS count FROM gangs WHERE status='active'")
+        if not settings["gang_creation_enabled"]: self.error(409, "Gang creation is currently closed."); return
+        if not character or len(name) < 3: self.error(400, "Select the exact character and enter a gang name."); return
+        if one(db, "SELECT id FROM gang_members WHERE character_id=? AND status IN ('active','locked')", (character_id,)): self.error(409, "This character already belongs to a gang."); return
+        if int(created_count["count"] or 0) >= settings["gang_max_creations_per_user"] or int(total["count"] or 0) >= settings["gang_global_limit"]: self.error(409, "The configured gang creation limit has been reached."); return
+        try:
+            gang = db.execute("""INSERT INTO gangs (name,description,accent_color,leader_user_id,leader_character_id,status,member_limit,locked,created_at,updated_at)
+                VALUES (?,?,?,?,?,'active',?,0,?,?) RETURNING id""", (name, description, color, user["id"], character_id, settings["gang_default_member_limit"], now_iso(), now_iso())).fetchone()
+        except Exception:
+            self.error(409, "That gang name is already registered."); return
+        db.execute("INSERT INTO gang_members (gang_id,user_id,character_id,gang_role,status,joined_at,updated_at) VALUES (?,?,?,'leader','active',?,?)", (gang["id"], user["id"], character_id, now_iso(), now_iso()))
+        updated_roles = sorted(set([*roles_for(user), "gang_leader"]))
+        db.execute("UPDATE users SET roles=? WHERE id=?", (json.dumps(updated_roles), user["id"]))
+        add_admin_audit(db, int(user["id"]), "gang.created", int(user["id"]), {"gang_id": gang["id"], "name": name, "character_id": character_id})
+        self.send_json(201, {"ok": True, "gang_id": gang["id"]})
+
+    def api_gang_invite(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err: self.error(403 if user else 401, err); return
+        payload = self.read_json()
+        try: gang_id = int(payload.get("gang_id") or 0); character_id = int(payload.get("character_id") or 0); uses = max(1, min(25, int(payload.get("uses") or 1)))
+        except (TypeError, ValueError): gang_id=character_id=0; uses=1
+        leader = one(db, """SELECT gm.* FROM gang_members gm JOIN gangs g ON g.id=gm.gang_id
+            WHERE gm.gang_id=? AND gm.user_id=? AND gm.character_id=? AND gm.gang_role='leader' AND gm.status='active' AND g.locked=0""", (gang_id, user["id"], character_id))
+        if not leader: self.error(403, "Only the active character registered as gang leader can issue a join PIN."); return
+        raw = ""; code_hash = ""
+        for _attempt in range(40):
+            raw = f"{secrets.randbelow(10000):04d}"
+            code_hash = hashlib.sha256(raw.encode()).hexdigest()
+            if not one(db, "SELECT id FROM gang_invite_codes WHERE code_hash=? AND revoked_at IS NULL AND uses_remaining>0 AND expires_at>?", (code_hash, now_iso())):
+                break
+        else:
+            self.error(503, "A unique gang PIN could not be issued. Try again in a moment."); return
+        expires = (utcnow()+dt.timedelta(minutes=30)).isoformat()
+        db.execute("""INSERT INTO gang_invite_codes (gang_id,code_hash,code_hint,issued_by_user_id,issued_by_character_id,uses_remaining,expires_at,created_at)
+            VALUES (?,?,?,?,?,?,?,?)""", (gang_id, code_hash, raw, user["id"], character_id, uses, expires, now_iso()))
+        self.send_json(201, {"ok": True, "code": raw, "expires_at": expires, "uses": uses})
+
+    def api_gang_join(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err: self.error(403 if user else 401, err); return
+        payload = self.read_json()
+        try: character_id = int(payload.get("character_id") or 0)
+        except (TypeError, ValueError): character_id = 0
+        character = one(db, "SELECT * FROM user_characters WHERE id=? AND user_id=? AND status='active'", (character_id, user["id"]))
+        raw = str(payload.get("code") or "").strip(); code_hash = hashlib.sha256(raw.encode()).hexdigest()
+        invite = one(db, """SELECT i.*,g.member_limit,g.locked,g.status FROM gang_invite_codes i JOIN gangs g ON g.id=i.gang_id
+            WHERE i.code_hash=? AND i.revoked_at IS NULL AND i.uses_remaining>0 AND i.expires_at>? AND g.status='active'""", (code_hash, now_iso()))
+        if not character or not re.fullmatch(r"\d{4}", raw) or not invite: self.error(400, "Select the joining character and enter a valid active four-digit gang PIN."); return
+        if invite["locked"]: self.error(409, "This gang is locked by Faircroft staff."); return
+        if one(db, "SELECT id FROM gang_members WHERE character_id=? AND status IN ('active','locked')", (character_id,)): self.error(409, "This character already belongs to a gang."); return
+        count = one(db, "SELECT COUNT(*) AS count FROM gang_members WHERE gang_id=? AND status IN ('active','locked')", (invite["gang_id"],))
+        if int(count["count"] or 0) >= int(invite["member_limit"]): self.error(409, "This gang has reached its member limit."); return
+        ts=now_iso(); db.execute("INSERT INTO gang_members (gang_id,user_id,character_id,gang_role,status,joined_at,updated_at) VALUES (?,?,?,'member','active',?,?)", (invite["gang_id"], user["id"], character_id, ts, ts))
+        db.execute("UPDATE gang_invite_codes SET uses_remaining=uses_remaining-1,redeemed_by_user_id=?,redeemed_character_id=?,redeemed_at=? WHERE id=?", (user["id"], character_id, ts, invite["id"]))
+        self.send_json(201, {"ok": True})
+
+    def api_gang_member_update(self, db: Database, user: DbRow | None, member_id: int) -> None:
+        err = verified_required(user)
+        if err: self.error(403 if user else 401, err); return
+        member = one(db, "SELECT * FROM gang_members WHERE id=?", (member_id,)); payload=self.read_json()
+        if not member: self.error(404, "Gang member not found."); return
+        leader = one(db, "SELECT id FROM gang_members WHERE gang_id=? AND user_id=? AND gang_role='leader' AND status='active'", (member["gang_id"], user["id"]))
+        if not leader: self.error(403, "Gang leader access required."); return
+        if member["gang_role"] == "leader": self.error(409, "The registered leader cannot be altered from the member roster."); return
+        action=str(payload.get("action") or "").lower(); role=str(payload.get("gang_role") or "member").lower()
+        if action == "remove": db.execute("UPDATE gang_members SET status='removed',updated_at=? WHERE id=?", (now_iso(), member_id))
+        elif action in ("lock","unlock"): db.execute("UPDATE gang_members SET status=?,updated_at=? WHERE id=?", ("locked" if action=="lock" else "active",now_iso(),member_id))
+        elif role in ("member","officer","enforcer","treasurer"): db.execute("UPDATE gang_members SET gang_role=?,updated_at=? WHERE id=?", (role,now_iso(),member_id))
+        else: self.error(400, "Choose a supported member action or gang role."); return
+        self.send_json(200, {"ok": True})
 
     def market_apply_programs(self, db: Database) -> None:
         current = utcnow()
@@ -14874,6 +15263,19 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             db,
             "SELECT * FROM anticheat_sync_status WHERE source_key = 'property_mod'",
         )
+        gang_rows = all_rows(db, """SELECT g.*,u.name AS leader_account,c.character_name AS leader_character,
+            (SELECT COUNT(*) FROM gang_members gm WHERE gm.gang_id=g.id AND gm.status IN ('active','locked')) AS member_count
+            FROM gangs g JOIN users u ON u.id=g.leader_user_id JOIN user_characters c ON c.id=g.leader_character_id
+            ORDER BY CASE g.status WHEN 'active' THEN 0 ELSE 1 END,g.created_at DESC""")
+        gang_members = all_rows(db, """SELECT gm.*,g.name AS gang_name,c.character_name,u.name AS account_name
+            FROM gang_members gm JOIN gangs g ON g.id=gm.gang_id JOIN user_characters c ON c.id=gm.character_id
+            JOIN users u ON u.id=gm.user_id ORDER BY g.name,c.character_name""")
+        gang_codes = all_rows(db, """SELECT i.id,i.gang_id,i.code_hint,i.uses_remaining,i.expires_at,i.revoked_at,i.redeemed_at,i.created_at,
+            g.name AS gang_name,issuer.name AS issued_by_name,ic.character_name AS issued_by_character,
+            redeemer.name AS redeemed_by_name,rc.character_name AS redeemed_character
+            FROM gang_invite_codes i JOIN gangs g ON g.id=i.gang_id JOIN users issuer ON issuer.id=i.issued_by_user_id
+            JOIN user_characters ic ON ic.id=i.issued_by_character_id LEFT JOIN users redeemer ON redeemer.id=i.redeemed_by_user_id
+            LEFT JOIN user_characters rc ON rc.id=i.redeemed_character_id ORDER BY i.created_at DESC LIMIT 500""")
         self.send_json(
             200,
             {
@@ -14980,6 +15382,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "source_files": SHADOWHAVEN_PROPERTY_FILES,
                     "sync": dict(property_sync) if property_sync else {"status": "awaiting_first_sync", "records": 0},
                     "read_only": True,
+                },
+                "gang_operations": {
+                    "gangs": [dict(row) for row in gang_rows],
+                    "members": [dict(row) for row in gang_members],
+                    "invite_codes": [dict(row) for row in gang_codes],
+                    "settings": {
+                        "creation_enabled": system_settings["gang_creation_enabled"],
+                        "global_limit": system_settings["gang_global_limit"],
+                        "default_member_limit": system_settings["gang_default_member_limit"],
+                        "max_creations_per_user": system_settings["gang_max_creations_per_user"],
+                    },
                 },
                 "app_visibility": {
                     "apps": [
@@ -15218,6 +15631,53 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             },
         )
         self.send_json(200, {"ok": True, "experience": get_system_settings(db)})
+
+    def api_dev_gang_settings(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err: self.error(403 if user else 401, err); return
+        payload=self.read_json()
+        values = {
+            "gang_creation_enabled": "1" if bool(payload.get("creation_enabled")) else "0",
+            "gang_global_limit": str(max(1,min(1000,int(payload.get("global_limit") or 100)))),
+            "gang_default_member_limit": str(max(2,min(200,int(payload.get("default_member_limit") or 20)))),
+            "gang_max_creations_per_user": str(max(1,min(20,int(payload.get("max_creations_per_user") or 1)))),
+        }
+        for key,value in values.items(): set_system_setting(db,key,value)
+        add_admin_audit(db,int(user["id"]),"gang.settings.updated",None,values)
+        self.send_json(200,{"ok":True})
+
+    def api_dev_gang_update(self, db: Database, user: DbRow | None, gang_id: int) -> None:
+        err = developer_required(user)
+        if err: self.error(403 if user else 401, err); return
+        gang=one(db,"SELECT * FROM gangs WHERE id=?",(gang_id,)); payload=self.read_json()
+        if not gang: self.error(404,"Gang not found."); return
+        action=str(payload.get("action") or "").lower()
+        if action == "delete":
+            db.execute("UPDATE gangs SET status='deleted',locked=1,updated_at=? WHERE id=?",(now_iso(),gang_id))
+            db.execute("UPDATE gang_members SET status='removed',updated_at=? WHERE gang_id=?",(now_iso(),gang_id))
+            leader_user = one(db, "SELECT id,roles FROM users WHERE id=?", (gang["leader_user_id"],))
+            remaining = one(db, "SELECT id FROM gangs WHERE leader_user_id=? AND status='active' AND id<>?", (gang["leader_user_id"], gang_id))
+            if leader_user and not remaining:
+                db.execute("UPDATE users SET roles=? WHERE id=?", (json.dumps(sorted(role for role in roles_for(leader_user) if role != "gang_leader")), gang["leader_user_id"]))
+        elif action in ("lock","unlock"):
+            db.execute("UPDATE gangs SET locked=?,updated_at=? WHERE id=?",(1 if action=="lock" else 0,now_iso(),gang_id))
+        elif action == "limit":
+            db.execute("UPDATE gangs SET member_limit=?,updated_at=? WHERE id=?",(max(2,min(200,int(payload.get("member_limit") or 20))),now_iso(),gang_id))
+        else: self.error(400,"Choose lock, unlock, limit, or delete."); return
+        add_admin_audit(db,int(user["id"]),f"gang.{action}",gang["leader_user_id"],{"gang_id":gang_id,"gang_name":gang["name"]})
+        self.send_json(200,{"ok":True})
+
+    def api_dev_gang_member_update(self, db: Database, user: DbRow | None, member_id: int) -> None:
+        err = developer_required(user)
+        if err: self.error(403 if user else 401, err); return
+        member=one(db,"SELECT * FROM gang_members WHERE id=?",(member_id,)); payload=self.read_json()
+        if not member: self.error(404,"Member not found."); return
+        action=str(payload.get("action") or "").lower()
+        if action not in ("lock","unlock","remove"): self.error(400,"Choose lock, unlock, or remove."); return
+        status={"lock":"locked","unlock":"active","remove":"removed"}[action]
+        db.execute("UPDATE gang_members SET status=?,updated_at=? WHERE id=?",(status,now_iso(),member_id))
+        add_admin_audit(db,int(user["id"]),f"gang.member.{action}",member["user_id"],{"gang_id":member["gang_id"],"character_id":member["character_id"]})
+        self.send_json(200,{"ok":True})
 
     def api_dev_update_app_visibility(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
