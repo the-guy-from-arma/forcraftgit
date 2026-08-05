@@ -3724,7 +3724,42 @@ function marketChange(security) {
   return before ? ((now - before) / before) * 100 : 0;
 }
 
+function renderLotteryLiveWorkspace() {
+  const data=state.cache.lottery;
+  if(!data)return `<main class="lottery-live-workspace"><div class="empty">Connecting to Faircroft Lottery Live…</div></main>`;
+  const draw=data.draw||{},funding=data.funding||{},entries=data.entries||[],remaining=Math.max(0,Number(data.remaining_today||0));
+  const scheduled=draw.scheduled_at?new Date(draw.scheduled_at):null;
+  const drawLabel=scheduled?scheduled.toLocaleString(undefined,{weekday:"long",month:"long",day:"numeric",hour:"numeric",minute:"2-digit",timeZone:data.timezone}):"Tuesday · 11:59 PM Eastern";
+  const until=Math.max(0,(scheduled?.getTime()||Date.now())-Date.now()),days=Math.floor(until/86400000),hours=Math.floor(until%86400000/3600000),minutes=Math.floor(until%3600000/60000);
+  const pool=Number(funding.available||0),poolLabel=money(pool),ticketNumber=entries[0]?`FC-${String(entries[0].id).padStart(7,"0")}`:`FC-${String(state.session?.user?.civ_number||"000000").padStart(7,"0")}`;
+  const scratch=data.scratch||{},cards=scratch.cards||[],cardsRemaining=Math.max(0,Number(scratch.daily_limit||1)-cards.length),latestCard=cards[cards.length-1];
+  const quick=data.quick_draw||{},quickDraw=quick.draw||{},quickEntries=quick.entries||[],quickRemaining=Math.max(0,Number(quick.daily_limit||0)-quickEntries.length),quickAt=quickDraw.scheduled_at?new Date(quickDraw.scheduled_at):null;
+  return `<main class="lottery-live-workspace">
+    <header class="lottery-live-nav">
+      <div class="lottery-live-brand"><div class="lottery-live-crest"><b>FC</b><i></i></div><span><small>STATE OF FAIRCROFT</small><strong>LOTTERY <em>LIVE</em></strong><b>Official resident draw network</b></span></div>
+      <div class="lottery-live-status"><i></i><span>${data.enabled?"DRAW ENTRIES OPEN":"DRAW ENTRIES PAUSED"}</span><small>${escapeHtml(drawLabel)}</small></div>
+      <nav><button data-refresh-lottery>Refresh live feed</button><button data-close-lottery>Return to RP OS</button></nav>
+    </header>
+    <section class="lottery-live-stage">
+      <div class="lottery-live-grid" aria-hidden="true"></div><div class="lottery-live-glow" aria-hidden="true"></div>
+      <div class="lottery-live-intro"><span>FAIRCROFT COMMUNITY DRAW</span><h1>One city.<br><em>One moment.</em></h1><p>Every verified entry meets in one official weekly drawing. The prize is built by Faircroft and awarded to one resident.</p></div>
+      <section class="lottery-live-pool" aria-label="Current lottery prize pool"><span>CURRENT VERIFIED POOL</span><strong>${poolLabel}</strong><p>${pool>0?"Live total from authorized Faircroft receipts.":"The official prize reservoir is collecting eligible receipts."}</p><div><b>${money(funding.fines)}</b><small>Public-service receipts</small><b>${money(funding.market_fees)}</b><small>Exchange contributions</small></div></section>
+      <section class="lottery-live-chamber" aria-label="Animated Faircroft draw chamber"><div class="lottery-live-ring ring-one"></div><div class="lottery-live-ring ring-two"></div><div class="lottery-live-ring ring-three"></div><span class="lottery-live-ball ball-one">F</span><span class="lottery-live-ball ball-two">C</span><span class="lottery-live-ball ball-three">7</span><span class="lottery-live-ball ball-four">2</span><div class="lottery-live-core"><small>LIVE DRAW CHAMBER</small><strong>${pool>0?poolLabel:"BUILDING"}</strong><span>VERIFIED ENTRY FIELD</span></div><footer><i></i><span>FAIRCROFT LOTTERY CONTROL</span><i></i></footer></section>
+      <aside class="lottery-live-countdown"><span>OFFICIAL DRAW IN</span><div><b>${String(days).padStart(2,"0")}</b><i>:</i><b>${String(hours).padStart(2,"0")}</b><i>:</i><b>${String(minutes).padStart(2,"0")}</b></div><small>DAYS&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;HOURS&nbsp;&nbsp;&nbsp;MINUTES</small><p>${escapeHtml(drawLabel)}</p></aside>
+      <section class="lottery-live-pass"><div class="lottery-live-pass-number"><small>DAILY PASS</small><strong>${remaining}</strong><span>OF ${data.daily_limit} LEFT</span></div><div><small>YOUR VERIFIED ENTRY</small><strong>${data.excluded?"UNAVAILABLE":remaining>0?"Ready to issue":"Recorded today"}</strong><p>${data.excluded?"This account is excluded under current lottery integrity policy.":remaining>0?"Authorize a complimentary entry for the next official draw.":"Your available daily chances have already been added to the field."}</p></div><button data-lottery-enter ${!data.enabled||data.excluded||remaining<=0?"disabled":""}>${remaining>0?"Issue my entry":"Entries recorded"}<b>→</b></button><footer>${ticketNumber} <span></span> VERIFIED CIV FIELD</footer></section>
+    </section>
+    ${data.excluded?`<div class="lottery-live-alert"><strong>Lottery participation unavailable</strong><span>Excluded roles: ${escapeHtml((data.excluded_roles||[]).join(", "))}</span></div>`:""}
+    <section class="lottery-live-ticker"><span>LIVE POOL <b>${poolLabel}</b></span><span>YOUR VERIFIED ENTRIES <b>${entries.length}</b></span><span>NEXT DRAW <b>${escapeHtml(drawLabel)}</b></span><span>DAILY CHANCES <b>${remaining} OF ${data.daily_limit}</b></span></section>
+    <section class="lottery-live-games">
+      <article class="lottery-live-scratch"><header><span>INSTANT PLAY · DAILY</span><h2>Scratch the seal</h2></header><p>Open one official card each day. Select reveals add verified bonus entries to your weekly draw record.</p><div class="lottery-live-scratch-seal"><i>FC</i><span>SEALED</span></div><footer><div><strong>${cardsRemaining}</strong><small>cards still available</small>${latestCard?`<em>${latestCard.bonus_entries?`+${latestCard.bonus_entries} bonus entries recorded`:"Last card: no bonus entry"}</em>`:""}</div><button data-lottery-scratch ${!scratch.enabled||data.excluded||cardsRemaining<=0?"disabled":""}>${cardsRemaining?"Reveal card":"Daily cards complete"}</button></footer></article>
+      <article class="lottery-live-quick"><header><span>LIVE EVENT WINDOW</span><h2>Quick Draw</h2></header><p>Short, verified resident rounds run between the weekly broadcasts. Enter now; the completed draw resolves automatically.</p><div class="lottery-live-quick-orbit"><i></i><i></i><i></i><b>FC</b></div><footer><div><strong>${quickRemaining}</strong><small>entries available this round</small><em>${quickAt?`Next round ${quickAt.toLocaleString()}`:"Preparing next round"}</em></div><button data-lottery-quick-entry ${!quick.enabled||data.excluded||quickRemaining<=0?"disabled":""}>Secure quick entry</button></footer></article>
+    </section>
+    <section class="lottery-live-records"><header><div><span>OFFICIAL ENTRY LEDGER</span><h2>Your current draw record</h2></div><strong>${entries.length} VERIFIED</strong></header>${entries.length?`<ol>${entries.map((entry,index)=>`<li><b>${String(index+1).padStart(2,"0")}</b><span><strong>FC-${String(entry.id).padStart(7,"0")}</strong><small>${new Date(entry.created_at).toLocaleString()}</small></span><em class="${entry.status}">${entry.fraud_flag?"REVIEW REQUIRED":escapeHtml(entry.status.toUpperCase())}</em></li>`).join("")}</ol>`:`<div class="lottery-live-empty"><b>01</b><span><strong>Your first entry becomes a permanent draw record.</strong><small>Issue a daily pass above to join the verified field.</small></span></div>`}</section>
+  </main>`;
+}
+
 function renderLotteryWorkspace() {
+  return renderLotteryLiveWorkspace();
   const data=state.cache.lottery;
   if(!data)return `<main class="lottery-workspace"><div class="empty">Opening Faircroft Lottery...</div></main>`;
   const draw=data.draw||{},funding=data.funding||{},entries=data.entries||[],remaining=Number(data.remaining_today||0);
