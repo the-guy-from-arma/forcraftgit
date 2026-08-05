@@ -3724,6 +3724,40 @@ function marketChange(security) {
   return before ? ((now - before) / before) * 100 : 0;
 }
 
+function renderLotteryCinematicWorkspace() {
+  const data=state.cache.lottery;
+  if(!data)return `<main class="fc-lotto"><div class="empty">Opening Faircroft Lottery Live…</div></main>`;
+  const draw=data.draw||{},funding=data.funding||{},entries=data.entries||[],remaining=Math.max(0,Number(data.remaining_today||0));
+  const scheduled=draw.scheduled_at?new Date(draw.scheduled_at):null;
+  const drawLabel=scheduled?scheduled.toLocaleString(undefined,{weekday:"long",month:"long",day:"numeric",hour:"numeric",minute:"2-digit",timeZone:data.timezone}):"Tuesday · 11:59 PM Eastern";
+  const until=Math.max(0,(scheduled?.getTime()||Date.now())-Date.now()),days=Math.floor(until/86400000),hours=Math.floor(until%86400000/3600000),minutes=Math.floor(until%3600000/60000);
+  const pool=Number(funding.available||0),panel=state.lotteryPanel||"";
+  const scratch=data.scratch||{},cards=scratch.cards||[],cardsRemaining=Math.max(0,Number(scratch.daily_limit||1)-cards.length),latestCard=cards[cards.length-1];
+  const quick=data.quick_draw||{},quickDraw=quick.draw||{},quickEntries=quick.entries||[],quickRemaining=Math.max(0,Number(quick.daily_limit||0)-quickEntries.length),quickAt=quickDraw.scheduled_at?new Date(quickDraw.scheduled_at):null;
+  const panelMarkup=panel?`<section class="fc-lotto-scene" data-lottery-scene>
+    <button class="fc-lotto-scene-close" data-lottery-panel="" aria-label="Close game view">×</button>
+    ${panel==="scratch"?`<div class="fc-lotto-scratch-scene"><span>FAIRCROFT INSTANT</span><h2>Scratch the seal.</h2><p>One official card is waiting behind the gold field. Reveal it to see whether verified bonus entries have been added to your weekly draw.</p><div class="fc-lotto-scratch-card"><div><b>FC</b><span>INSTANT ENTRY</span><i>SCRATCH TO REVEAL</i></div></div>${latestCard?`<strong class="fc-lotto-result">${latestCard.bonus_entries?`+${latestCard.bonus_entries} BONUS ENTRIES RECORDED`:"NO BONUS ON THE LAST CARD"}</strong>`:""}<button data-lottery-scratch ${!scratch.enabled||data.excluded||cardsRemaining<=0?"disabled":""}>${cardsRemaining?"Reveal today’s card":"Return tomorrow"}</button></div>`:""}
+    ${panel==="quick"?`<div class="fc-lotto-quick-scene"><span>FAIRCROFT QUICK DRAW</span><h2>The next round is forming.</h2><div class="fc-lotto-quick-clock"><i></i><b>${quickAt?quickAt.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}):"LIVE"}</b><small>${quickAt?quickAt.toLocaleDateString():"Preparing official field"}</small></div><p>${quickRemaining} verified ${quickRemaining===1?"entry":"entries"} available for this round.</p><button data-lottery-quick-entry ${!quick.enabled||data.excluded||quickRemaining<=0?"disabled":""}>Enter Quick Draw</button></div>`:""}
+    ${panel==="tickets"?`<div class="fc-lotto-ticket-scene"><span>YOUR OFFICIAL LEDGER</span><h2>${entries.length} verified ${entries.length===1?"chance":"chances"} in the field.</h2>${entries.length?`<ol>${entries.map((entry,index)=>`<li><b>${String(index+1).padStart(2,"0")}</b><div><strong>FC-${String(entry.id).padStart(7,"0")}</strong><small>${new Date(entry.created_at).toLocaleString()}</small></div><em>${entry.fraud_flag?"REVIEW REQUIRED":escapeHtml(entry.status.toUpperCase())}</em></li>`).join("")}</ol>`:`<p>Your ledger begins when you issue your first daily entry.</p>`}</div>`:""}
+    ${panel==="about"?`<div class="fc-lotto-about-scene"><span>THE FAIRCROFT DRAW</span><h2>Community value comes home.</h2><p>Eligible public-service receipts and exchange contributions build the official weekly pool. Every chance is attached to a verified CIV identity from entry through final award.</p><dl><div><dt>Public-service receipts</dt><dd>${money(funding.fines)}</dd></div><div><dt>Exchange contributions</dt><dd>${money(funding.market_fees)}</dd></div><div><dt>Authorized allocations</dt><dd>${money(funding.manual)}</dd></div><div><dt>Previous awards</dt><dd>${money(funding.awarded)}</dd></div></dl></div>`:""}
+  </section>`:"";
+  return `<main class="fc-lotto ${panel?"scene-open":""}">
+    <canvas class="fc-lotto-canvas" data-lottery-canvas aria-hidden="true"></canvas>
+    <div class="fc-lotto-aura" aria-hidden="true"></div>
+    <header class="fc-lotto-nav"><div class="fc-lotto-wordmark"><i><b>FC</b></i><span><small>STATE OF FAIRCROFT</small><strong>LOTTERY LIVE</strong><em>OFFICIAL DRAW NETWORK</em></span></div><div class="fc-lotto-onair"><i></i><span>ON AIR</span><small>${data.enabled?"Verified entries open":"Entry window paused"}</small></div><nav><button data-refresh-lottery aria-label="Refresh drawing">↻</button><button data-close-lottery>Exit Lottery</button></nav></header>
+    <section class="fc-lotto-broadcast">
+      <div class="fc-lotto-copy"><span>THE OFFICIAL WEEKLY DRAW</span><h1>THIS COULD<br>BE <em>YOUR</em><br>MOMENT.</h1><p>One resident. One verified field. One Faircroft prize.</p></div>
+      <div class="fc-lotto-jackpot"><span>LIVE FAIRCROFT POOL</span><strong data-lottery-jackpot data-value="${pool}">${money(pool)}</strong><small>${pool>0?"Verified total · updated live":"Prize reservoir now building"}</small><div class="fc-lotto-signal"><i></i><i></i><i></i><i></i><i></i></div></div>
+      <div class="fc-lotto-draw"><span>NEXT OFFICIAL DRAW</span><strong>${String(days).padStart(2,"0")}<i>D</i> ${String(hours).padStart(2,"0")}<i>H</i> ${String(minutes).padStart(2,"0")}<i>M</i></strong><small>${escapeHtml(drawLabel)}</small></div>
+      <div class="fc-lotto-entry"><div><span>TODAY’S PASS</span><strong>${remaining}<small>/ ${data.daily_limit}</small></strong></div><p>${data.excluded?"This identity is not eligible under the current lottery policy.":remaining>0?"Your complimentary verified chance is ready.":"Today’s available entries are already in the draw."}</p><button data-lottery-enter ${!data.enabled||data.excluded||remaining<=0?"disabled":""}>${remaining>0?"Enter the weekly draw":"Entries secured"}<b>→</b></button></div>
+      <div class="fc-lotto-livebar"><span><i></i> LIVE POOL</span><b>${money(pool)}</b><span>VERIFIED FIELD</span><b>${entries.length}</b><span>DAILY ACCESS</span><b>${remaining} REMAINING</b></div>
+    </section>
+    <nav class="fc-lotto-dock"><button class="active" data-lottery-panel=""><i>01</i><span>Weekly Draw</span><small>Live pool and entry</small></button><button data-lottery-panel="scratch"><i>02</i><span>Instant Scratch</span><small>${cardsRemaining} card${cardsRemaining===1?"":"s"} ready</small></button><button data-lottery-panel="quick"><i>03</i><span>Quick Draw</span><small>${quickRemaining} entries available</small></button><button data-lottery-panel="tickets"><i>04</i><span>My Chances</span><small>${entries.length} verified</small></button><button data-lottery-panel="about"><i>05</i><span>How It Works</span><small>Official pool ledger</small></button></nav>
+    <footer class="fc-lotto-footer"><span>FAIRCROFT LOTTERY COMMISSION</span><i></i><span>VERIFIED RESIDENT DRAW · ${escapeHtml(drawLabel)}</span></footer>
+    ${panelMarkup}
+  </main>`;
+}
+
 function renderLotteryLiveWorkspace() {
   const data=state.cache.lottery;
   if(!data)return `<main class="lottery-live-workspace"><div class="empty">Connecting to Faircroft Lottery Live…</div></main>`;
@@ -3759,7 +3793,7 @@ function renderLotteryLiveWorkspace() {
 }
 
 function renderLotteryWorkspace() {
-  return renderLotteryLiveWorkspace();
+  return renderLotteryCinematicWorkspace();
   const data=state.cache.lottery;
   if(!data)return `<main class="lottery-workspace"><div class="empty">Opening Faircroft Lottery...</div></main>`;
   const draw=data.draw||{},funding=data.funding||{},entries=data.entries||[],remaining=Number(data.remaining_today||0);
@@ -3797,8 +3831,24 @@ function renderLotteryWorkspace() {
   </main>`;
 }
 
+function startLotteryCinematicEffects(){
+  if(state.lotteryAnimation)cancelAnimationFrame(state.lotteryAnimation);
+  const canvas=$("[data-lottery-canvas]");
+  if(!canvas)return;
+  const context=canvas.getContext("2d"),reduceMotion=window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  let width=0,height=0,particles=[];
+  const resize=()=>{width=canvas.width=Math.max(1,canvas.clientWidth*window.devicePixelRatio);height=canvas.height=Math.max(1,canvas.clientHeight*window.devicePixelRatio);particles=Array.from({length:reduceMotion?12:38},(_,index)=>({x:Math.random()*width,y:Math.random()*height,r:(7+Math.random()*17)*window.devicePixelRatio,vx:(Math.random()-.5)*.34*window.devicePixelRatio,vy:(Math.random()-.5)*.25*window.devicePixelRatio,label:["F","C","2","7","9",String((index%9)+1)][index%6],phase:Math.random()*6.28}));};
+  resize();
+  const animate=time=>{context.clearRect(0,0,width,height);const glow=context.createRadialGradient(width*.73,height*.44,10,width*.73,height*.44,width*.42);glow.addColorStop(0,"rgba(129,55,208,.16)");glow.addColorStop(1,"rgba(9,7,14,0)");context.fillStyle=glow;context.fillRect(0,0,width,height);particles.forEach((particle,index)=>{particle.x+=particle.vx;particle.y+=particle.vy+Math.sin(time/1200+particle.phase)*.025;if(particle.x<-60)particle.x=width+60;if(particle.x>width+60)particle.x=-60;if(particle.y<-60)particle.y=height+60;if(particle.y>height+60)particle.y=-60;context.beginPath();context.arc(particle.x,particle.y,particle.r,0,Math.PI*2);const gradient=context.createRadialGradient(particle.x-particle.r*.3,particle.y-particle.r*.35,1,particle.x,particle.y,particle.r);gradient.addColorStop(0,"rgba(255,251,223,.92)");gradient.addColorStop(.55,"rgba(246,200,79,.7)");gradient.addColorStop(1,"rgba(128,73,10,.12)");context.fillStyle=gradient;context.fill();context.strokeStyle="rgba(255,224,132,.32)";context.stroke();context.fillStyle="rgba(32,17,2,.62)";context.font=`700 ${Math.max(8,particle.r*.72)}px Inter,Arial`;context.textAlign="center";context.textBaseline="middle";context.fillText(particle.label,particle.x,particle.y+1)});if(!reduceMotion)state.lotteryAnimation=requestAnimationFrame(animate);};
+  animate(0);
+  const jackpot=$("[data-lottery-jackpot]");
+  if(jackpot&&!reduceMotion){const target=Number(jackpot.dataset.value||0),started=performance.now(),duration=1300;const tick=now=>{const progress=Math.min(1,(now-started)/duration),eased=1-Math.pow(1-progress,3);jackpot.textContent=money(target*eased);if(progress<1)requestAnimationFrame(tick);};requestAnimationFrame(tick);}
+}
+
 function bindLotteryWorkspace(){
-  $("[data-close-lottery]")?.addEventListener("click",async()=>{state.activeApp=null;await loadSession();});
+  startLotteryCinematicEffects();
+  $$('[data-lottery-panel]').forEach(button=>button.addEventListener("click",()=>{state.lotteryPanel=button.dataset.lotteryPanel||"";render();}));
+  $("[data-close-lottery]")?.addEventListener("click",async()=>{if(state.lotteryAnimation)cancelAnimationFrame(state.lotteryAnimation);state.lotteryAnimation=null;state.lotteryPanel="";state.activeApp=null;await loadSession();});
   $("[data-refresh-lottery]")?.addEventListener("click",async()=>{await loadAppData("lottery");render();});
   $("[data-lottery-enter]")?.addEventListener("click",async()=>{await api("/api/lottery/entries",{method:"POST",body:"{}"});toast("Official lottery entry recorded");await loadAppData("lottery");render();});
   $("[data-lottery-scratch]")?.addEventListener("click",async()=>{try{const result=await api("/api/lottery/scratch",{method:"POST",body:{}});toast(result.bonus_entries?`Scratch card revealed: +${result.bonus_entries} weekly entry${result.bonus_entries===1?"":"ies"}`:"Scratch card revealed. No bonus entry today.");await loadAppData("lottery");render();}catch(error){toast(error.message);}});
