@@ -36,6 +36,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 DATABASE_MAX_CONNECTIONS = max(2, int(os.environ.get("DATABASE_MAX_CONNECTIONS", "5")))
 DATABASE_CONNECT_TIMEOUT_SECONDS = max(3, int(os.environ.get("DATABASE_CONNECT_TIMEOUT_SECONDS", "10")))
 DATABASE_CONNECTION_SEMAPHORE = threading.BoundedSemaphore(DATABASE_MAX_CONNECTIONS)
+SHADOWHAVEN_SFTP_SESSION_SEMAPHORE = threading.BoundedSemaphore(1)
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-before-production")
 COOKIE_NAME = "rp_session"
 SESSION_DAYS = 7
@@ -480,12 +481,50 @@ def _load_shadowhaven_sftp_private_key() -> paramiko.PKey | None:
     raise RuntimeError("SFTP private key could not be loaded: " + " | ".join(key_errors))
 
 
+class ShadowhavenTransport(paramiko.Transport):
+    """Serialize hosted SFTP sessions and release the slot with the transport."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        SHADOWHAVEN_SFTP_SESSION_SEMAPHORE.acquire()
+        self._shadowhaven_slot_released = False
+        try:
+            super().__init__(*args, **kwargs)
+        except Exception:
+            self._release_shadowhaven_slot()
+            raise
+
+    def _release_shadowhaven_slot(self) -> None:
+        if not self._shadowhaven_slot_released:
+            self._shadowhaven_slot_released = True
+            SHADOWHAVEN_SFTP_SESSION_SEMAPHORE.release()
+
+    def close(self) -> None:
+        try:
+            super().close()
+        finally:
+            self._release_shadowhaven_slot()
+
+
 def connect_shadowhaven_transport() -> paramiko.Transport:
-    transport = paramiko.Transport((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_PORT))
-    if SHADOWHAVEN_SFTP_PASSWORD:
-        transport.connect(username=SHADOWHAVEN_SFTP_USERNAME, password=SHADOWHAVEN_SFTP_PASSWORD)
-        return transport
-    raise RuntimeError("SFTP password login is required")
+    if not SHADOWHAVEN_SFTP_PASSWORD:
+        raise RuntimeError("SFTP password login is required")
+    last_error: Exception | None = None
+    for attempt in range(3):
+        transport = ShadowhavenTransport((SHADOWHAVEN_SFTP_HOST, SHADOWHAVEN_SFTP_PORT))
+        try:
+            transport.connect(username=SHADOWHAVEN_SFTP_USERNAME, password=SHADOWHAVEN_SFTP_PASSWORD)
+            return transport
+        except paramiko.AuthenticationException as exc:
+            last_error = exc
+            transport.close()
+            if attempt < 2:
+                time.sleep(1 + attempt)
+        except Exception:
+            transport.close()
+            raise
+    raise paramiko.AuthenticationException(
+        "Shadow Haven rejected the SFTP password after 3 serialized attempts"
+    ) from last_error
 
 
 def extract_shadowhaven_bank_data(payload: Any) -> tuple[dict[str, Any], str]:
@@ -511,8 +550,13 @@ def sync_shadowhaven_bank_once() -> int:
     try:
         sftp = paramiko.SFTPClient.from_transport(transport)
         try:
-            with sftp.open(SHADOWHAVEN_BANK_FILE, "r") as remote_file:
-                payload = json.loads(remote_file.read().decode("utf-8-sig"))
+            try:
+                with sftp.open(SHADOWHAVEN_BANK_FILE, "r") as remote_file:
+                    payload = json.loads(remote_file.read().decode("utf-8-sig"))
+            except FileNotFoundError as exc:
+                raise FileNotFoundError(
+                    f"Remote bank file not found: {SHADOWHAVEN_BANK_FILE}"
+                ) from exc
         finally:
             sftp.close()
     finally:
@@ -786,8 +830,13 @@ def sync_shadowhaven_camera_events_once() -> int:
     try:
         sftp = paramiko.SFTPClient.from_transport(transport)
         try:
-            with sftp.open(SHADOWHAVEN_CAMERA_EVENTS_FILE, "r") as remote_file:
-                payload = json.loads(remote_file.read().decode("utf-8-sig"))
+            try:
+                with sftp.open(SHADOWHAVEN_CAMERA_EVENTS_FILE, "r") as remote_file:
+                    payload = json.loads(remote_file.read().decode("utf-8-sig"))
+            except FileNotFoundError as exc:
+                raise FileNotFoundError(
+                    f"Remote FLUCK file not found: {SHADOWHAVEN_CAMERA_EVENTS_FILE}"
+                ) from exc
         finally:
             sftp.close()
     finally:
