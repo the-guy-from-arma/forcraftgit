@@ -2125,6 +2125,7 @@ SYSTEM_SETTING_DEFAULTS = {
     "fnn_autopilot_last_cycle": "",
     "dmv_license_classes": "[{\"name\":\"Class D\",\"type\":\"license\",\"active\":true},{\"name\":\"Motorcycle\",\"type\":\"endorsement\",\"active\":true},{\"name\":\"Commercial\",\"type\":\"endorsement\",\"active\":true}]",
     "app_visibility": "{}",
+    "admin_tools_access": "{}",
     "ice_restrict_local_data": "1",
     "market_open": "1",
     "market_transfer_fee_percent": "1.50",
@@ -2181,9 +2182,41 @@ APP_VISIBILITY_OPTIONS = (
     ("fire", "Fire MDT"),
     ("fire-settings", "Fire Settings"),
     ("indeed-admin", "Indeed Admin"),
-    ("admin", "Admin"),
     ("beta-tasks", "Beta Tasks"),
     ("downloads", "Download Our App"),
+)
+
+ADMIN_TOOLS_SECTIONS = (
+    ("dashboard", "Command Center"),
+    ("accounts", "Account Management"),
+    ("intelligence", "Game Intelligence"),
+    ("housing-market", "Housing Market"),
+    ("anticheat", "Anti-Cheat"),
+    ("insurance-claims", "Insurance Claims"),
+    ("enforcement", "Cases"),
+    ("warnings", "Internal Notes"),
+    ("linking", "Account Linking"),
+    ("campaigns", "Active Campaigns"),
+    ("settlement", "Settlement"),
+    ("market-settings", "Stock Market"),
+    ("lottery-settings", "Lottery Settings"),
+    ("gang-settings", "Gang Settings"),
+    ("dmv-settings", "DMV Settings"),
+    ("mdt-settings", "MDT Settings"),
+    ("court-settings", "Court Settings"),
+    ("ice-settings", "ICE Settings"),
+    ("admin-2fa", "Admin 2FA"),
+    ("autopilot", "Auto Pilot"),
+    ("system-update", "System Update"),
+    ("audit", "Activity Log"),
+    ("fnn-settings", "FNN Settings"),
+    ("settings", "Settings"),
+)
+ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS = frozenset(
+    ("dashboard", "accounts", "intelligence", "housing-market", "anticheat", "audit")
+)
+ADMIN_TOOLS_CONFIGURABLE_SECTIONS = frozenset(
+    section_id for section_id, _label in ADMIN_TOOLS_SECTIONS if section_id not in ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS and section_id != "settings"
 )
 
 FAIRCROFT_CITIZENSHIP_QUESTIONS = (
@@ -2476,6 +2509,8 @@ def ensure_schema() -> None:
                 coverage_tier TEXT NOT NULL,
                 subject_label TEXT NOT NULL,
                 coverage_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+                coverage_percent NUMERIC(6,2) NOT NULL DEFAULT 0,
+                protected_bank_balance NUMERIC(18,2) NOT NULL DEFAULT 0,
                 premium_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
                 deductible_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
                 questionnaire TEXT NOT NULL DEFAULT '{}',
@@ -2491,6 +2526,33 @@ def ensure_schema() -> None:
 
             CREATE INDEX IF NOT EXISTS insurance_policies_user_idx
                 ON insurance_policies (user_id, character_id, status);
+
+            CREATE TABLE IF NOT EXISTS insurance_claims (
+                id SERIAL PRIMARY KEY,
+                claim_number TEXT NOT NULL UNIQUE,
+                policy_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                character_id INTEGER NOT NULL,
+                incident_type TEXT NOT NULL DEFAULT 'server_reset',
+                incident_summary TEXT NOT NULL DEFAULT '',
+                bank_balance_snapshot NUMERIC(18,2) NOT NULL DEFAULT 0,
+                coverage_percent NUMERIC(6,2) NOT NULL DEFAULT 0,
+                requested_amount NUMERIC(18,2) NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'pending',
+                review_notes TEXT NOT NULL DEFAULT '',
+                reviewed_by INTEGER,
+                reviewed_at TEXT,
+                paid_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (policy_id) REFERENCES insurance_policies(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (character_id) REFERENCES user_characters(id) ON DELETE CASCADE,
+                FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS insurance_claims_review_idx
+                ON insurance_claims (status, created_at);
 
             CREATE TABLE IF NOT EXISTS gangs (
                 id SERIAL PRIMARY KEY,
@@ -2783,6 +2845,46 @@ def ensure_schema() -> None:
                 ON game_property_records (owner_identity);
             CREATE INDEX IF NOT EXISTS game_property_status_idx
                 ON game_property_records (status, synced_at DESC);
+
+            CREATE TABLE IF NOT EXISTS property_tax_assessments (
+                id SERIAL PRIMARY KEY,
+                property_id TEXT NOT NULL,
+                owner_identity TEXT NOT NULL DEFAULT '',
+                owner_user_id INTEGER,
+                assessed_value NUMERIC(14,2) NOT NULL,
+                tax_rate NUMERIC(7,4) NOT NULL DEFAULT 0.14,
+                amount NUMERIC(14,2) NOT NULL,
+                status TEXT NOT NULL DEFAULT 'unpaid',
+                notes TEXT NOT NULL DEFAULT '',
+                assessed_by INTEGER NOT NULL,
+                assessed_at TEXT NOT NULL,
+                paid_at TEXT,
+                FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL,
+                FOREIGN KEY (assessed_by) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS property_tax_property_idx
+                ON property_tax_assessments (property_id, status);
+
+            CREATE TABLE IF NOT EXISTS property_enforcement_actions (
+                id SERIAL PRIMARY KEY,
+                property_id TEXT NOT NULL,
+                owner_identity TEXT NOT NULL DEFAULT '',
+                owner_user_id INTEGER,
+                business_id INTEGER,
+                assessment_id INTEGER,
+                action TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+                issued_by INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL,
+                FOREIGN KEY (assessment_id) REFERENCES property_tax_assessments(id) ON DELETE SET NULL,
+                FOREIGN KEY (issued_by) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS property_enforcement_property_idx
+                ON property_enforcement_actions (property_id, created_at DESC);
 
             CREATE TABLE IF NOT EXISTS developer_unlink_codes (
                 id SERIAL PRIMARY KEY,
@@ -3512,6 +3614,24 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS press_pass_reason TEXT NOT NULL DEFAULT ''")
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS press_pass_action_at TEXT")
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS press_pass_notice_pending INTEGER NOT NULL DEFAULT 0")
+    db.execute("ALTER TABLE insurance_policies ADD COLUMN IF NOT EXISTS coverage_percent NUMERIC(6,2) NOT NULL DEFAULT 0")
+    db.execute("ALTER TABLE insurance_policies ADD COLUMN IF NOT EXISTS protected_bank_balance NUMERIC(18,2) NOT NULL DEFAULT 0")
+    db.execute("""CREATE TABLE IF NOT EXISTS insurance_claims (
+        id SERIAL PRIMARY KEY, claim_number TEXT NOT NULL UNIQUE, policy_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL, character_id INTEGER NOT NULL,
+        incident_type TEXT NOT NULL DEFAULT 'server_reset', incident_summary TEXT NOT NULL DEFAULT '',
+        bank_balance_snapshot NUMERIC(18,2) NOT NULL DEFAULT 0,
+        coverage_percent NUMERIC(6,2) NOT NULL DEFAULT 0,
+        requested_amount NUMERIC(18,2) NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'pending', review_notes TEXT NOT NULL DEFAULT '',
+        reviewed_by INTEGER, reviewed_at TEXT, paid_at TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        FOREIGN KEY (policy_id) REFERENCES insurance_policies(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (character_id) REFERENCES user_characters(id) ON DELETE CASCADE,
+        FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL
+    )""")
+    db.execute("CREATE INDEX IF NOT EXISTS insurance_claims_review_idx ON insurance_claims (status, created_at)")
     if not one(db, "SELECT setting_key FROM system_settings WHERE setting_key = 'citizenship_grandfathered_at'"):
         grandfathered_at = now_iso()
         for account in all_rows(db, "SELECT id, civ_number FROM users ORDER BY id"):
@@ -4591,6 +4711,14 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         for app_id, _label in APP_VISIBILITY_OPTIONS
     }
     try:
+        admin_tools_access_raw = json.loads(str(raw.get("admin_tools_access") or "{}"))
+    except (TypeError, json.JSONDecodeError):
+        admin_tools_access_raw = {}
+    admin_tools_access = {
+        section_id: bool(admin_tools_access_raw.get(section_id, False))
+        for section_id in ADMIN_TOOLS_CONFIGURABLE_SECTIONS
+    }
+    try:
         application_intake_raw = json.loads(str(raw.get("application_intake") or "{}"))
     except (TypeError, json.JSONDecodeError):
         application_intake_raw = {}
@@ -4715,6 +4843,7 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "gang_max_creations_per_user": max(1, min(20, int(raw.get("gang_max_creations_per_user") or 1))),
         "dmv_license_classes": dmv_license_classes,
         "app_visibility": app_visibility,
+        "admin_tools_access": admin_tools_access,
     }
 
 
@@ -5581,7 +5710,7 @@ def account_management_required(user: DbRow | None) -> str | None:
     return None
 
 
-def developer_required(user: DbRow | None) -> str | None:
+def strict_developer_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
     if not has_any(user, "owner", "dev"):
@@ -5590,11 +5719,7 @@ def developer_required(user: DbRow | None) -> str | None:
 
 
 def fine_settlement_required(user: DbRow | None) -> str | None:
-    if not user:
-        return "Authentication required"
-    if not has_any(user, "owner", "dev"):
-        return "Owner or developer access required"
-    return None
+    return admin_tools_member_required(user)
 
 
 def active_account_block(db: Database, user_id: int) -> DbRow | None:
@@ -5799,6 +5924,77 @@ def press_required(user: DbRow | None) -> str | None:
     return None
 
 
+def admin_tools_member_required(user: DbRow | None) -> str | None:
+    if not user:
+        return "Authentication required"
+    if not has_any(user, "owner", "admin", "dev"):
+        return "Owner, administrator, or developer access required"
+    return None
+
+
+def developer_required(user: DbRow | None) -> str | None:
+    """Authorize an Admin Tools handler after its section route has been checked."""
+    return admin_tools_member_required(user)
+
+
+def admin_tools_effective_sections(db: Database, user: DbRow | None) -> set[str]:
+    if not user:
+        return set()
+    all_sections = {section_id for section_id, _label in ADMIN_TOOLS_SECTIONS}
+    if has_any(user, "owner", "dev"):
+        return all_sections
+    if not has_any(user, "admin"):
+        return set()
+    settings = get_system_settings(db)
+    enabled = {
+        section_id
+        for section_id, is_enabled in settings.get("admin_tools_access", {}).items()
+        if is_enabled and section_id in ADMIN_TOOLS_CONFIGURABLE_SECTIONS
+    }
+    return set(ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS) | enabled
+
+
+def admin_tools_section_required(db: Database, user: DbRow | None, section_id: str) -> str | None:
+    err = admin_tools_member_required(user)
+    if err:
+        return err
+    if section_id not in admin_tools_effective_sections(db, user):
+        return "Development role is required"
+    return None
+
+
+def admin_tools_route_section(path: str) -> str:
+    route_map = (
+        ("/api/dev-tools/accounts/", "accounts"),
+        ("/api/dev-tools/anticheat/", "anticheat"),
+        ("/api/dev-tools/insurance-claims/", "insurance-claims"),
+        ("/api/dev-tools/experience", "campaigns"),
+        ("/api/dev-tools/beta-", "settings"),
+        ("/api/dev-tools/unlink-codes", "linking"),
+        ("/api/dev-tools/emergency-unlink-all", "linking"),
+        ("/api/dev-tools/reset-game-bank-sync", "intelligence"),
+        ("/api/dev-tools/dmv/", "dmv-settings"),
+        ("/api/dev-tools/admin-2fa", "admin-2fa"),
+        ("/api/dev-tools/myfaircroft-payment-codes", "settlement"),
+        ("/api/dev-tools/market/", "market-settings"),
+        ("/api/dev-tools/lottery/", "lottery-settings"),
+        ("/api/dev-tools/gangs/", "gang-settings"),
+        ("/api/dev-tools/sanctions", "enforcement"),
+        ("/api/dev-tools/warnings", "warnings"),
+        ("/api/dev-tools/app-visibility", "settings"),
+        ("/api/dev-tools/application-intake", "settings"),
+        ("/api/dev-tools/admin-access", "settings"),
+        ("/api/dev-tools/fnn-settings", "fnn-settings"),
+        ("/api/dev-tools/press-members/", "fnn-settings"),
+        ("/api/dev-tools/ice-settings", "ice-settings"),
+        ("/api/dev-tools/court/", "court-settings"),
+    )
+    for prefix, section_id in route_map:
+        if path.startswith(prefix):
+            return section_id
+    return "dashboard"
+
+
 def fnn_content_control_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
@@ -5837,8 +6033,8 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
             apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "coming_soon": False, "hidden": False})
         if has_any(user, *ICE_SERVICE_ROLES):
             apps.append({"id": "ice-mdt", "label": "ICE MDT", "icon": "federal", "enabled": True, "coming_soon": False, "hidden": False})
-        if has_any(user, "owner", "dev"):
-            apps.append({"id": "dev-tools", "label": "Dev Tools", "icon": "code", "enabled": True, "coming_soon": False, "hidden": False})
+        if has_any(user, "owner", "admin", "dev"):
+            apps.append({"id": "dev-tools", "label": "Admin Tools", "icon": "code", "enabled": True, "coming_soon": False, "hidden": False})
         visibility = settings.get("app_visibility") or {}
         return [item for item in apps if item["id"] in PROTECTED_APP_IDS or visibility.get(item["id"], True)]
     base = [
@@ -5879,10 +6075,8 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps.append({"id": "fire-settings", "label": "Fire Settings", "icon": "settings", "enabled": True, "hidden": False})
     if has_any(user, "owner", "admin", "dev", INDEED_ADMIN_ROLE, "judge"):
         apps.append({"id": "indeed-admin", "label": "Indeed Admin", "icon": "briefcase", "enabled": True, "hidden": False})
-    if has_any(user, "owner", "admin"):
-        apps.append({"id": "admin", "label": "Admin", "icon": "settings", "enabled": True, "hidden": False})
-    if has_any(user, "owner", "dev"):
-        apps.append({"id": "dev-tools", "label": "Dev Tools", "icon": "code", "enabled": True, "hidden": False})
+    if has_any(user, "owner", "admin", "dev"):
+        apps.append({"id": "dev-tools", "label": "Admin Tools", "icon": "code", "enabled": True, "hidden": False})
     if has_any(user, "beta"):
         apps.append({"id": "beta-tasks", "label": "Beta Tasks", "icon": "target", "enabled": True, "hidden": False})
         apps.append({"id": "downloads", "label": "Download Our App", "icon": "download", "enabled": True, "hidden": False})
@@ -6869,6 +7063,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         try:
             with conn() as db:
                 user = self.current_user(db)
+                if path.startswith("/api/dev-tools"):
+                    section_error = admin_tools_section_required(db, user, admin_tools_route_section(path))
+                    if section_error:
+                        self.error(403 if user else 401, section_error)
+                        return
+                if path.startswith("/api/fine-settlement"):
+                    section_error = admin_tools_section_required(db, user, "settlement")
+                    if section_error:
+                        self.error(403 if user else 401, section_error)
+                        return
                 if user and path not in ("/api/session", "/api/auth/logout"):
                     block = active_account_block(db, int(user["id"]))
                     admin_restriction = active_admin_account_restriction(db, int(user["id"]))
@@ -6915,6 +7119,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_insurance(db, user)
                 elif path == "/api/insurance/policies" and method == "POST":
                     self.api_insurance_create(db, user)
+                elif path == "/api/insurance/claims" and method == "POST":
+                    self.api_insurance_claim_create(db, user)
                 elif path == "/api/gangs" and method == "GET":
                     self.api_gangs(db, user)
                 elif path == "/api/gangs" and method == "POST":
@@ -7179,6 +7385,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_download_package(user, "android")
                 elif path == "/api/dev-tools" and method == "GET":
                     self.api_dev_tools(db, user)
+                elif path.startswith("/api/dev-tools/insurance-claims/") and method == "PATCH":
+                    self.api_dev_insurance_claim(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/dev-tools/anticheat/") and path.endswith("/review") and method == "POST":
                     self.api_dev_review_anticheat_flags(db, user, path.split("/")[4])
                 elif path == "/api/dev-tools/experience" and method == "PATCH":
@@ -7251,6 +7459,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_create_warning(db, user)
                 elif path == "/api/dev-tools/app-visibility" and method == "PATCH":
                     self.api_dev_update_app_visibility(db, user)
+                elif path == "/api/dev-tools/admin-access" and method == "PATCH":
+                    self.api_dev_update_admin_access(db, user)
                 elif path == "/api/dev-tools/application-intake" and method == "PATCH":
                     self.api_dev_update_application_intake(db, user)
                 elif path == "/api/dev-tools/fnn-settings" and method == "PATCH":
@@ -7279,6 +7489,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_fine_settlement(db, user)
                 elif path == "/api/fine-settlement/notices" and method == "POST":
                     self.api_create_settlement_notices(db, user)
+                elif path.startswith("/api/fine-settlement/businesses/") and path.endswith("/license") and method == "PATCH":
+                    self.api_settlement_business_license(db, user, self.path_int(path, 3))
+                elif path == "/api/fine-settlement/property-taxes" and method == "POST":
+                    self.api_create_property_tax(db, user)
+                elif path == "/api/fine-settlement/property-enforcement" and method == "POST":
+                    self.api_property_enforcement(db, user)
                 elif path == "/api/fine-settlement/batches" and method == "POST":
                     self.error(410, "Legacy forced settlement batches are retired. Use MyFaircroft receipt PIN verification.")
                 elif path.startswith("/api/fine-settlement/batches/") and path.endswith("/code") and method == "POST":
@@ -10118,7 +10334,19 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403 if user else 401, err); return
         policies = all_rows(db, """SELECT p.*, c.character_name FROM insurance_policies p
             JOIN user_characters c ON c.id=p.character_id WHERE p.user_id=? ORDER BY p.created_at DESC""", (user["id"],))
-        self.send_json(200, {"policies": [dict(row) for row in policies], "characters": [dict(row) for row in all_rows(db,
+        claims = all_rows(db, """SELECT c.*,p.policy_number,p.coverage_tier,uc.character_name
+            FROM insurance_claims c JOIN insurance_policies p ON p.id=c.policy_id
+            JOIN user_characters uc ON uc.id=c.character_id WHERE c.user_id=? ORDER BY c.created_at DESC""", (user["id"],))
+        bank = one(db, """SELECT b.balance,b.synced_at FROM arma_account_links l
+            JOIN arma_game_bank_balances b ON b.identity_id=l.identity_id
+            WHERE l.user_id=? ORDER BY l.linked_at DESC LIMIT 1""", (user["id"],))
+        self.send_json(200, {"policies": [dict(row) for row in policies], "claims": [dict(row) for row in claims],
+            "bank": dict(bank) if bank else {"balance": 0, "synced_at": None},
+            "tiers": [
+                {"id":"essential","name":"Continuity Essential","premium":3500,"coverage_percent":50},
+                {"id":"preferred","name":"Continuity Preferred","premium":4250,"coverage_percent":70},
+                {"id":"premier","name":"Continuity Premier","premium":5000,"coverage_percent":90}],
+            "characters": [dict(row) for row in all_rows(db,
             "SELECT id,character_name,is_active FROM user_characters WHERE user_id=? AND status='active' ORDER BY is_active DESC,created_at", (user["id"],))]})
 
     def api_insurance_create(self, db: Database, user: DbRow | None) -> None:
@@ -10132,24 +10360,63 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         policy_type = str(payload.get("policy_type") or "").strip().lower()
         tier = str(payload.get("coverage_tier") or "standard").strip().lower()
         subject = str(payload.get("subject_label") or "").strip()[:120]
-        valid_types = {"vehicle", "property", "life", "business", "general"}
-        tiers = {"essential": (25000, 500, 750), "standard": (100000, 1250, 1500), "premier": (500000, 2500, 3000)}
+        valid_types = {"compensation", "vehicle", "property", "life", "business", "general"}
+        tiers = {"essential": (50, 3500), "preferred": (70, 4250), "standard": (70, 4250), "premier": (90, 5000)}
         if not character or policy_type not in valid_types or tier not in tiers or not subject:
             self.error(400, "Select a character, policy, coverage tier, and insured subject."); return
+        if policy_type == "compensation" and one(db, """SELECT id FROM insurance_policies
+            WHERE user_id=? AND policy_type='compensation' AND status='active' AND expires_at>? LIMIT 1""",
+            (user["id"], now_iso())):
+            self.error(409, "An active continuity policy already protects this linked bank account."); return
         receipt = self._consume_bearer_receipt(db, int(user["id"]), str(payload.get("code") or ""))
         if not receipt:
             self.error(403, "A valid unused four-digit Faircroft receipt PIN is required after staff receives payment in game."); return
-        coverage, deductible, premium = tiers[tier]
+        coverage_percent, premium = tiers[tier]
+        bank = one(db, """SELECT b.balance FROM arma_account_links l JOIN arma_game_bank_balances b
+            ON b.identity_id=l.identity_id WHERE l.user_id=? ORDER BY l.linked_at DESC LIMIT 1""", (user["id"],))
+        protected_balance = max(0.0, float(bank["balance"] or 0)) if bank else 0.0
+        coverage = round(protected_balance * coverage_percent / 100.0, 2)
+        deductible = 0
         issued = utcnow(); expires = issued + dt.timedelta(days=30)
         policy_number = f"FCI-{issued.strftime('%y%m')}-{secrets.randbelow(900000)+100000}"
         questionnaire = {key: str(payload.get(key) or "").strip()[:500] for key in ("risk_use", "location", "beneficiary", "notes")}
         db.execute("""INSERT INTO insurance_policies
-            (user_id,character_id,policy_number,policy_type,coverage_tier,subject_label,coverage_amount,premium_amount,deductible_amount,questionnaire,status,receipt_code_id,issued_at,expires_at,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?,?)""",
-            (user["id"], character_id, policy_number, policy_type, tier, subject, coverage, premium, deductible,
+            (user_id,character_id,policy_number,policy_type,coverage_tier,subject_label,coverage_amount,coverage_percent,protected_bank_balance,premium_amount,deductible_amount,questionnaire,status,receipt_code_id,issued_at,expires_at,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?,?)""",
+            (user["id"], character_id, policy_number, policy_type, tier, subject, coverage, coverage_percent, protected_balance, premium, deductible,
              json.dumps(questionnaire, separators=(",", ":")), receipt["id"], issued.isoformat(), expires.isoformat(), issued.isoformat(), issued.isoformat()))
         add_admin_audit(db, int(user["id"]), "insurance.policy.issued", int(user["id"]), {"policy_number": policy_number, "character_id": character_id, "premium": premium})
         self.send_json(201, {"ok": True, "policy_number": policy_number})
+
+    def api_insurance_claim_create(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        payload = self.read_json()
+        try: policy_id = int(payload.get("policy_id") or 0)
+        except (TypeError, ValueError): policy_id = 0
+        policy = one(db, "SELECT * FROM insurance_policies WHERE id=? AND user_id=?", (policy_id, user["id"]))
+        summary = str(payload.get("incident_summary") or "").strip()[:1500]
+        expiry = parse_iso(policy["expires_at"]) if policy else None
+        if not policy or policy["policy_type"] != "compensation" or policy["status"] != "active" or not expiry or expiry <= utcnow():
+            self.error(409, "Select an active continuity policy."); return
+        if len(summary) < 20 or not bool(payload.get("confirmed_reset")):
+            self.error(400, "Confirm the reset or wipe and provide at least 20 characters of claim details."); return
+        if one(db, "SELECT id FROM insurance_claims WHERE policy_id=? AND status IN ('pending','approved')", (policy_id,)):
+            self.error(409, "This policy already has a claim under review."); return
+        bank = one(db, """SELECT b.balance FROM arma_account_links l JOIN arma_game_bank_balances b
+            ON b.identity_id=l.identity_id WHERE l.user_id=? ORDER BY l.linked_at DESC LIMIT 1""", (user["id"],))
+        current_balance = max(0.0, float(bank["balance"] or 0)) if bank else 0.0
+        protected_balance = max(current_balance, float(policy.get("protected_bank_balance") or 0))
+        coverage_percent = float(policy.get("coverage_percent") or {"essential":50,"standard":70,"preferred":70,"premier":90}.get(policy["coverage_tier"], 0))
+        requested = round(protected_balance * coverage_percent / 100.0, 2)
+        ts = now_iso(); claim_number = f"FCIC-{utcnow().strftime('%y%m')}-{secrets.randbelow(900000)+100000}"
+        db.execute("""INSERT INTO insurance_claims
+            (claim_number,policy_id,user_id,character_id,incident_type,incident_summary,bank_balance_snapshot,coverage_percent,requested_amount,status,created_at,updated_at)
+            VALUES (?,?,?,?, 'server_reset', ?,?,?,?,'pending',?,?)""",
+            (claim_number, policy_id, user["id"], policy["character_id"], summary, protected_balance, coverage_percent, requested, ts, ts))
+        add_admin_audit(db, int(user["id"]), "insurance.claim.filed", int(user["id"]), {"claim_number":claim_number,"requested_amount":requested})
+        self.send_json(201, {"ok":True,"claim_number":claim_number,"requested_amount":requested,"status":"pending"})
 
     def _gang_payload(self, db: Database, user: DbRow) -> dict[str, Any]:
         characters = all_rows(db, "SELECT id,character_name,is_active FROM user_characters WHERE user_id=? AND status='active' ORDER BY is_active DESC,created_at", (user["id"],))
@@ -11430,15 +11697,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "open_violations": int(row.get("open_violations") or 0),
             "inspection_count": int(row.get("inspection_count") or 0),
         }
-        if row.get("identity_id"):
-            payload.update(
-                {
-                    "unpaid_tax": round(float(row.get("unpaid_tax") or 0), 2),
-                    "accrued_tax": round(weekly_tax * accrued_weeks, 2),
-                    "accrued_weeks": accrued_weeks,
-                    "tax_available_at": (tax_anchor + dt.timedelta(days=7)).isoformat(),
-                }
-            )
+        payload.update(
+            {
+                "unpaid_tax": round(float(row.get("unpaid_tax") or 0), 2),
+                "accrued_tax": round(weekly_tax * accrued_weeks, 2),
+                "accrued_weeks": accrued_weeks,
+                "tax_available_at": (tax_anchor + dt.timedelta(days=7)).isoformat(),
+            }
+        )
         return payload
 
     def business_staff_rows(self, db: Database) -> list[DbRow]:
@@ -14602,7 +14868,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(201, {"ok": True})
 
     def api_system_settings(self, db: Database, user: DbRow | None) -> None:
-        err = developer_required(user)
+        err = strict_developer_required(user)
         if err:
             self.error(403 if user else 401, err)
             return
@@ -14612,7 +14878,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"settings": settings, "stats": stats, "auto_verified_now": auto_verified})
 
     def api_update_system_settings(self, db: Database, user: DbRow | None) -> None:
-        err = developer_required(user)
+        err = strict_developer_required(user)
         if err:
             self.error(403 if user else 401, err)
             return
@@ -15312,6 +15578,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             db,
             "SELECT * FROM anticheat_sync_status WHERE source_key = 'property_mod'",
         )
+        property_total = len(property_rows)
+        property_owned = sum(1 for row in property_rows if str(row.get("owner_identity") or "").strip())
+        property_available = max(0, property_total - property_owned)
+        housed_accounts = len({int(row["owner_user_id"]) for row in property_rows if row.get("owner_user_id")})
+        resident_accounts = int(account_stats["verified_accounts"] or account_stats["total_accounts"] or 0)
+        unhoused_accounts = max(0, resident_accounts - housed_accounts)
+        houses_needed = max(0, unhoused_accounts - property_available)
+        availability_rate = round((property_available / property_total * 100.0) if property_total else 0.0, 1)
+        occupancy_rate = round((property_owned / property_total * 100.0) if property_total else 0.0, 1)
+        homelessness_rate = round((unhoused_accounts / resident_accounts * 100.0) if resident_accounts else 0.0, 1)
+        coverage_rate = round(min(100.0, (property_available / max(1, unhoused_accounts)) * 100.0), 1)
+        market_pressure = "surplus" if property_available > unhoused_accounts * 1.25 else "balanced" if houses_needed == 0 else "strained" if coverage_rate >= 60 else "critical"
         gang_rows = all_rows(db, """SELECT g.*,u.name AS leader_account,c.character_name AS leader_character,
             (SELECT COUNT(*) FROM gang_members gm WHERE gm.gang_id=g.id AND gm.status IN ('active','locked')) AS member_count
             FROM gangs g JOIN users u ON u.id=g.leader_user_id JOIN user_characters c ON c.id=g.leader_character_id
@@ -15325,6 +15603,19 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             FROM gang_invite_codes i JOIN gangs g ON g.id=i.gang_id JOIN users issuer ON issuer.id=i.issued_by_user_id
             JOIN user_characters ic ON ic.id=i.issued_by_character_id LEFT JOIN users redeemer ON redeemer.id=i.redeemed_by_user_id
             LEFT JOIN user_characters rc ON rc.id=i.redeemed_character_id ORDER BY i.created_at DESC LIMIT 500""")
+        insurance_claims = all_rows(db, """SELECT ic.*,p.policy_number,p.coverage_tier,p.premium_amount,p.subject_label,
+            u.name AS resident_name,u.civ_number,c.character_name,reviewer.name AS reviewed_by_name
+            FROM insurance_claims ic JOIN insurance_policies p ON p.id=ic.policy_id
+            JOIN users u ON u.id=ic.user_id JOIN user_characters c ON c.id=ic.character_id
+            LEFT JOIN users reviewer ON reviewer.id=ic.reviewed_by
+            ORDER BY CASE ic.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 WHEN 'paid' THEN 2 ELSE 3 END,ic.created_at DESC LIMIT 500""")
+        insurance_claim_stats = one(db, """SELECT COUNT(*) AS total,
+            COALESCE(SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END),0) AS pending,
+            COALESCE(SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END),0) AS approved,
+            COALESCE(SUM(CASE WHEN status='paid' THEN 1 ELSE 0 END),0) AS paid,
+            COALESCE(SUM(CASE WHEN status IN ('pending','approved') THEN requested_amount ELSE 0 END),0) AS exposure,
+            COALESCE(SUM(CASE WHEN status='paid' THEN requested_amount ELSE 0 END),0) AS paid_total
+            FROM insurance_claims""") or {}
         self.send_json(
             200,
             {
@@ -15431,6 +15722,21 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "source_files": SHADOWHAVEN_PROPERTY_FILES,
                     "sync": dict(property_sync) if property_sync else {"status": "awaiting_first_sync", "records": 0},
                     "read_only": True,
+                    "market": {
+                        "total_properties": property_total,
+                        "owned_properties": property_owned,
+                        "available_properties": property_available,
+                        "resident_accounts": resident_accounts,
+                        "housed_accounts": housed_accounts,
+                        "unhoused_accounts": unhoused_accounts,
+                        "houses_needed": houses_needed,
+                        "availability_rate": availability_rate,
+                        "occupancy_rate": occupancy_rate,
+                        "homelessness_rate": homelessness_rate,
+                        "coverage_rate": coverage_rate,
+                        "pressure": market_pressure,
+                        "method": "Verified Faircroft accounts compared with linked property owners; one housed account is counted once even when it owns multiple properties.",
+                    },
                 },
                 "gang_operations": {
                     "gangs": [dict(row) for row in gang_rows],
@@ -15443,12 +15749,32 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                         "max_creations_per_user": system_settings["gang_max_creations_per_user"],
                     },
                 },
+                "insurance_claims": {
+                    "claims": [dict(row) for row in insurance_claims],
+                    "stats": {key: float(value or 0) if key in {"exposure","paid_total"} else int(value or 0)
+                              for key, value in insurance_claim_stats.items()},
+                },
                 "app_visibility": {
                     "apps": [
                         {"id": app_id, "label": label, "enabled": app_visibility.get(app_id, True)}
                         for app_id, label in APP_VISIBILITY_OPTIONS
                     ],
                     "protected": sorted(PROTECTED_APP_IDS),
+                },
+                "admin_tools_access": {
+                    "is_developer": has_any(user, "owner", "dev"),
+                    "is_admin": has_any(user, "admin") and not has_any(user, "owner", "dev"),
+                    "effective_sections": sorted(admin_tools_effective_sections(db, user)),
+                    "default_sections": sorted(ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS),
+                    "configurable_sections": [
+                        {
+                            "id": section_id,
+                            "label": label,
+                            "enabled": bool(system_settings["admin_tools_access"].get(section_id, False)),
+                        }
+                        for section_id, label in ADMIN_TOOLS_SECTIONS
+                        if section_id in ADMIN_TOOLS_CONFIGURABLE_SECTIONS
+                    ],
                 },
                 "applications_accepting": system_settings["applications_accepting"],
                 "system_settings": system_settings,
@@ -15789,6 +16115,39 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         add_admin_audit(db, int(user["id"]), "dev.unlink_code.created", details={"code_hint": raw_code[-4:], "expires_at": expires_at.isoformat()})
         self.send_json(201, {"ok": True, "code": raw_code, "expires_at": expires_at.isoformat(), "uses": 1})
 
+    def api_dev_insurance_claim(self, db: Database, user: DbRow | None, claim_id: int) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        claim = one(db, """SELECT ic.*,p.policy_number,u.name AS resident_name FROM insurance_claims ic
+            JOIN insurance_policies p ON p.id=ic.policy_id JOIN users u ON u.id=ic.user_id WHERE ic.id=?""", (claim_id,))
+        if not claim:
+            self.error(404, "Insurance claim not found"); return
+        payload = self.read_json(); action = str(payload.get("action") or "").strip().lower()
+        notes = str(payload.get("review_notes") or "").strip()[:1200]
+        transitions = {"approve": ("pending", "approved"), "deny": ("pending", "denied"), "paid": ("approved", "paid")}
+        if action not in transitions:
+            self.error(400, "Choose approve, deny, or paid."); return
+        required_status, next_status = transitions[action]
+        if claim["status"] != required_status:
+            self.error(409, f"A {claim['status']} claim cannot be marked {next_status}."); return
+        if action == "deny" and len(notes) < 10:
+            self.error(400, "Document the denial reason for the resident."); return
+        ts = now_iso()
+        db.execute("""UPDATE insurance_claims SET status=?,review_notes=?,reviewed_by=?,reviewed_at=?,
+            paid_at=CASE WHEN ?='paid' THEN ? ELSE paid_at END,updated_at=? WHERE id=?""",
+            (next_status, notes, user["id"], ts, next_status, ts, ts, claim_id))
+        titles = {"approved":"Continuity claim approved","denied":"Continuity claim decision","paid":"Continuity compensation completed"}
+        body = {
+            "approved": f"Claim {claim['claim_number']} was approved for {float(claim['requested_amount'] or 0):,.2f}. Staff will complete the in-game compensation handoff.",
+            "denied": f"Claim {claim['claim_number']} was not approved. {notes}",
+            "paid": f"Claim {claim['claim_number']} was recorded as paid for {float(claim['requested_amount'] or 0):,.2f}."
+        }[next_status]
+        add_message(db, int(claim["user_id"]), titles[next_status], body)
+        add_admin_audit(db, int(user["id"]), f"insurance.claim.{next_status}", int(claim["user_id"]),
+            {"claim_number":claim["claim_number"],"requested_amount":float(claim["requested_amount"] or 0),"notes":notes})
+        self.send_json(200, {"ok":True,"status":next_status})
+
     def api_dev_emergency_unlink_all(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
         if err:
@@ -15841,6 +16200,30 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "affected_users": len(affected_user_ids),
             },
         )
+
+    def api_dev_update_admin_access(self, db: Database, user: DbRow | None) -> None:
+        err = strict_developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        sections_payload = payload.get("sections")
+        if not isinstance(sections_payload, dict):
+            self.error(400, "Admin section access must be an object")
+            return
+        access = {
+            section_id: bool(sections_payload.get(section_id, False))
+            for section_id in ADMIN_TOOLS_CONFIGURABLE_SECTIONS
+        }
+        set_system_setting(db, "admin_tools_access", json.dumps(access, separators=(",", ":"), sort_keys=True))
+        add_admin_audit(
+            db,
+            int(user["id"]),
+            "admin_tools.access.updated",
+            details={"enabled_for_admins": sorted(section_id for section_id, enabled in access.items() if enabled)},
+        )
+        self.send_json(200, {"ok": True, "sections": access})
 
     def api_dev_reset_game_bank_sync(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
@@ -17334,13 +17717,97 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     WHERE t.business_id = b.id AND t.status = 'unpaid') AS unpaid_tax
             FROM businesses b
             JOIN users u ON u.id = b.owner_id
-            JOIN arma_account_links l ON l.user_id = u.id
+            LEFT JOIN arma_account_links l ON l.user_id = u.id
             LEFT JOIN arma_game_bank_balances bank ON bank.identity_id = l.identity_id
-            WHERE b.status IN ('active', 'suspended')
-            ORDER BY b.business_name
+            WHERE b.status IN ('active', 'suspended', 'revoked', 'expired')
+            ORDER BY CASE b.status WHEN 'active' THEN 0 WHEN 'suspended' THEN 1 WHEN 'revoked' THEN 2 ELSE 3 END,
+                     unpaid_tax DESC, b.business_name
             """
         )
         tax_licenses = [self.business_license_payload(row) for row in tax_license_rows]
+        property_tax_rows = all_rows(
+            db,
+            """
+            SELECT p.*, l.user_id AS owner_user_id, u.name AS owner_name,
+                   u.civ_number AS owner_civ_number,
+                   (SELECT COALESCE(SUM(a.amount), 0)
+                      FROM property_tax_assessments a
+                     WHERE a.property_id = p.property_id AND a.status = 'unpaid') AS unpaid_property_tax,
+                   (SELECT e.action FROM property_enforcement_actions e
+                     WHERE e.property_id = p.property_id ORDER BY e.id DESC LIMIT 1) AS latest_enforcement
+            FROM game_property_records p
+            LEFT JOIN arma_account_links l
+              ON l.identity_id = p.owner_identity OR l.uid = p.owner_identity
+            LEFT JOIN users u ON u.id = l.user_id
+            WHERE COALESCE(p.owner_identity, '') <> ''
+            ORDER BY u.name, p.name, p.property_id
+            """,
+        )
+        property_tax_accounts: list[dict[str, Any]] = []
+        property_owner_totals: dict[str, dict[str, Any]] = {}
+        for row in property_tax_rows:
+            item = dict(row)
+            price_match = re.search(r"-?[0-9]+(?:\.[0-9]+)?", str(item.get("price_text") or "").replace(",", ""))
+            assessed_value = max(0.0, float(price_match.group(0))) if price_match else 0.0
+            item["source_assessed_value"] = round(assessed_value, 2)
+            item["property_tax_rate"] = 0.14
+            item["projected_tax"] = round(assessed_value * 0.14, 2)
+            item["unpaid_property_tax"] = round(float(item.get("unpaid_property_tax") or 0), 2)
+            item["enforcement_state"] = "clear" if item.get("latest_enforcement") in {None, "release"} else item.get("latest_enforcement")
+            property_tax_accounts.append(item)
+            owner_key = str(item.get("owner_identity") or "unmatched")
+            owner = property_owner_totals.setdefault(owner_key, {
+                "owner_identity": owner_key,
+                "owner_user_id": item.get("owner_user_id"),
+                "owner_name": item.get("owner_name") or "Unmatched game identity",
+                "owner_civ_number": item.get("owner_civ_number"),
+                "property_count": 0,
+                "assessed_value": 0.0,
+                "projected_tax": 0.0,
+                "unpaid_tax": 0.0,
+            })
+            owner["property_count"] += 1
+            owner["assessed_value"] = round(owner["assessed_value"] + assessed_value, 2)
+            owner["projected_tax"] = round(owner["projected_tax"] + item["projected_tax"], 2)
+            owner["unpaid_tax"] = round(owner["unpaid_tax"] + item["unpaid_property_tax"], 2)
+        property_tax_owners = sorted(property_owner_totals.values(), key=lambda item: (-item["unpaid_tax"], -item["property_count"], item["owner_name"]))
+        property_enforcement_counts = one(
+            db,
+            """SELECT
+                COALESCE(SUM(CASE WHEN action = 'lien' THEN 1 ELSE 0 END), 0) AS liens,
+                COALESCE(SUM(CASE WHEN action = 'seize' THEN 1 ELSE 0 END), 0) AS seizures
+                FROM (
+                    SELECT DISTINCT ON (property_id) property_id, action
+                    FROM property_enforcement_actions
+                    ORDER BY property_id, id DESC
+                ) latest""",
+        ) or {}
+        owner_properties: dict[str, list[dict[str, Any]]] = {}
+        owner_user_properties: dict[int, list[dict[str, Any]]] = {}
+        for item in property_tax_accounts:
+            property_summary = {
+                "property_id": item["property_id"],
+                "name": item.get("name") or item["property_id"],
+                "address": item.get("address") or "",
+                "enforcement_state": item["enforcement_state"],
+            }
+            owner_properties.setdefault(str(item.get("owner_identity") or ""), []).append(property_summary)
+            if item.get("owner_user_id"):
+                owner_user_properties.setdefault(int(item["owner_user_id"]), []).append(property_summary)
+        for license_item in tax_licenses:
+            license_item["owner_properties"] = owner_user_properties.get(
+                int(license_item.get("owner_id") or 0),
+                owner_properties.get(str(license_item.get("identity_id") or ""), []),
+            )
+        tax_summary = {
+            "businesses": len(tax_licenses),
+            "active": sum(1 for item in tax_licenses if item.get("status") == "active"),
+            "suspended": sum(1 for item in tax_licenses if item.get("status") == "suspended"),
+            "revoked": sum(1 for item in tax_licenses if item.get("status") == "revoked"),
+            "unpaid_total": round(sum(float(item.get("unpaid_tax") or 0) for item in tax_licenses), 2),
+            "accrued_total": round(sum(float(item.get("accrued_tax") or 0) for item in tax_licenses), 2),
+            "weekly_total": round(sum(float(item.get("weekly_tax") or 0) for item in tax_licenses if item.get("status") == "active"), 2),
+        }
         tax_batches = all_rows(
             db,
             """
@@ -17380,8 +17847,239 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "batches": result_batches,
             "tax_ready": [dict(row) for row in tax_ready],
             "tax_licenses": tax_licenses,
+            "tax_summary": tax_summary,
             "tax_batches": result_tax_batches,
+            "property_tax_accounts": property_tax_accounts,
+            "property_tax_owners": property_tax_owners,
+            "property_tax_rate": 0.14,
+            "property_tax_summary": {
+                "properties": len(property_tax_accounts),
+                "owners": len(property_tax_owners),
+                "assessed_value": round(sum(item["source_assessed_value"] for item in property_tax_accounts), 2),
+                "projected_tax": round(sum(item["projected_tax"] for item in property_tax_accounts), 2),
+                "unpaid_tax": round(sum(item["unpaid_property_tax"] for item in property_tax_accounts), 2),
+                "liens": int(property_enforcement_counts.get("liens") or 0),
+                "seizures": int(property_enforcement_counts.get("seizures") or 0),
+            },
         }
+
+    def api_create_property_tax(self, db: Database, user: DbRow | None) -> None:
+        err = fine_settlement_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        property_id = str(payload.get("property_id") or "").strip()
+        notes = str(payload.get("notes") or "").strip()[:1000]
+        record = one(
+            db,
+            """SELECT p.*, l.user_id AS owner_user_id, u.name AS owner_name
+               FROM game_property_records p
+               LEFT JOIN arma_account_links l ON l.identity_id = p.owner_identity OR l.uid = p.owner_identity
+               LEFT JOIN users u ON u.id = l.user_id
+               WHERE p.property_id = ?""",
+            (property_id,),
+        )
+        if not record or not str(record.get("owner_identity") or "").strip():
+            self.error(404, "An owned property record is required")
+            return
+        existing = one(db, "SELECT id FROM property_tax_assessments WHERE property_id = ? AND status = 'unpaid'", (property_id,))
+        if existing:
+            self.error(409, "This property already has an unpaid tax assessment")
+            return
+        try:
+            assessed_value = float(payload.get("assessed_value") or 0)
+        except (TypeError, ValueError):
+            assessed_value = 0
+        if assessed_value <= 0:
+            match = re.search(r"[0-9]+(?:\.[0-9]+)?", str(record.get("price_text") or "").replace(",", ""))
+            assessed_value = float(match.group(0)) if match else 0
+        if assessed_value <= 0:
+            self.error(400, "Enter the verified assessed property value; the source record does not include one")
+            return
+        assessed_value = round(assessed_value, 2)
+        amount = round(assessed_value * 0.14, 2)
+        ts = now_iso()
+        cursor = db.execute(
+            """INSERT INTO property_tax_assessments
+               (property_id, owner_identity, owner_user_id, assessed_value, tax_rate, amount, status, notes, assessed_by, assessed_at)
+               VALUES (?, ?, ?, ?, 0.14, ?, 'unpaid', ?, ?, ?) RETURNING id""",
+            (property_id, record["owner_identity"], record.get("owner_user_id"), assessed_value, amount, notes, user["id"], ts),
+        )
+        assessment_id = int(cursor.fetchone()["id"])
+        if record.get("owner_user_id"):
+            add_message(
+                db,
+                int(record["owner_user_id"]),
+                "Faircroft property tax assessment",
+                f"A 14% property tax assessment of ${amount:,.2f} was issued for {record.get('name') or property_id} on an assessed value of ${assessed_value:,.2f}.",
+                int(user["id"]),
+            )
+        add_admin_audit(db, int(user["id"]), "property.tax.assessed", record.get("owner_user_id"), {
+            "assessment_id": assessment_id, "property_id": property_id, "assessed_value": assessed_value, "tax_rate": 0.14, "amount": amount,
+        })
+        self.send_json(201, {"ok": True, "assessment_id": assessment_id, "property_id": property_id, "assessed_value": assessed_value, "amount": amount})
+
+    def api_property_enforcement(self, db: Database, user: DbRow | None) -> None:
+        err = fine_settlement_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        property_id = str(payload.get("property_id") or "").strip()
+        action = str(payload.get("action") or "").strip().lower()
+        reason = str(payload.get("reason") or "").strip()[:1000]
+        business_id = int(payload.get("business_id") or 0) or None
+        if action not in {"lien", "seize", "release"}:
+            self.error(400, "Select lien, seize, or release")
+            return
+        if action != "release" and len(reason) < 10:
+            self.error(400, "Enter an enforcement reason of at least 10 characters")
+            return
+        record = one(db, """SELECT p.*, l.user_id AS owner_user_id, u.name AS owner_name
+            FROM game_property_records p
+            LEFT JOIN arma_account_links l ON l.identity_id=p.owner_identity OR l.uid=p.owner_identity
+            LEFT JOIN users u ON u.id=l.user_id WHERE p.property_id=?""", (property_id,))
+        if not record or not record.get("owner_identity"):
+            self.error(404, "Owned property not found")
+            return
+        latest = one(db, "SELECT action FROM property_enforcement_actions WHERE property_id=? ORDER BY id DESC LIMIT 1", (property_id,))
+        current_state = "clear" if not latest or latest["action"] == "release" else str(latest["action"])
+        if action == "seize" and current_state != "lien":
+            self.error(409, "Place a tax lien before seizing this property")
+            return
+        if action == "lien" and current_state != "clear":
+            self.error(409, f"This property is already under {current_state}")
+            return
+        if action == "release" and current_state == "clear":
+            self.error(409, "This property has no active lien or seizure")
+            return
+        assessment_id = None
+        amount = 0.0
+        if business_id:
+            business = one(db, """SELECT b.*, COALESCE(SUM(CASE WHEN t.status='unpaid' THEN t.amount ELSE 0 END),0) AS unpaid_tax
+                FROM businesses b LEFT JOIN business_tax_assessments t ON t.business_id=b.id
+                WHERE b.id=? GROUP BY b.id""", (business_id,))
+            if not business or int(business["owner_id"]) != int(record.get("owner_user_id") or 0):
+                self.error(409, "The selected property does not belong to this business owner")
+                return
+            amount = round(float(business.get("unpaid_tax") or 0), 2)
+            if action != "release" and amount <= 0:
+                self.error(409, "This business has no unpaid tax balance")
+                return
+        else:
+            assessment = one(db, "SELECT id, amount FROM property_tax_assessments WHERE property_id=? AND status='unpaid' ORDER BY id DESC LIMIT 1", (property_id,))
+            if assessment:
+                assessment_id, amount = int(assessment["id"]), round(float(assessment["amount"] or 0), 2)
+            if action != "release" and not assessment:
+                self.error(409, "Issue a property tax assessment before enforcement")
+                return
+        ts = now_iso()
+        db.execute(
+            """INSERT INTO property_enforcement_actions
+               (property_id, owner_identity, owner_user_id, business_id, assessment_id, action, reason, amount, issued_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (property_id, record["owner_identity"], record.get("owner_user_id"), business_id, assessment_id, action, reason or "Released by Faircroft Settlement Authority", amount, user["id"], ts),
+        )
+        if record.get("owner_user_id"):
+            add_message(db, int(record["owner_user_id"]), f"Property enforcement: {action}",
+                f"Faircroft Settlement Authority recorded a {action} on {record.get('name') or property_id}. Balance cited: ${amount:,.2f}. {reason}".strip(), int(user["id"]))
+        add_admin_audit(db, int(user["id"]), f"property.enforcement.{action}", record.get("owner_user_id"), {
+            "property_id": property_id, "business_id": business_id, "assessment_id": assessment_id, "amount": amount, "reason": reason,
+        })
+        self.send_json(200, {"ok": True, "property_id": property_id, "action": action, "previous_state": current_state, "amount": amount})
+
+    def api_settlement_business_license(self, db: Database, user: DbRow | None, business_id: int) -> None:
+        err = fine_settlement_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        business = one(
+            db,
+            """SELECT b.*, owner.name AS owner_name, owner.civ_number AS owner_civ_number,
+                      (SELECT COALESCE(SUM(t.amount), 0) FROM business_tax_assessments t
+                       WHERE t.business_id = b.id AND t.status = 'unpaid') AS unpaid_tax
+               FROM businesses b
+               JOIN users owner ON owner.id = b.owner_id
+               WHERE b.id = ?""",
+            (business_id,),
+        )
+        if not business:
+            self.error(404, "Business license not found")
+            return
+        payload = self.read_json()
+        action = str(payload.get("action") or "").strip().lower()
+        reason = str(payload.get("reason") or "").strip()[:1000]
+        current_status = str(business["status"] or "active").lower()
+        if action not in {"suspend", "revoke", "restore"}:
+            self.error(400, "Select suspend, revoke, or restore")
+            return
+        if action in {"suspend", "revoke"} and len(reason) < 10:
+            self.error(400, "Enter an enforcement reason of at least 10 characters")
+            return
+        if action == "suspend" and current_status != "active":
+            self.error(409, "Only an active business license can be suspended")
+            return
+        if action == "revoke" and current_status == "revoked":
+            self.error(409, "This business license is already revoked")
+            return
+        if action == "restore" and current_status != "suspended":
+            self.error(409, "Only a suspended business license can be restored here")
+            return
+
+        next_status = {"suspend": "suspended", "revoke": "revoked", "restore": "active"}[action]
+        ts = now_iso()
+        db.execute("UPDATE businesses SET status = ?, updated_at = ? WHERE id = ?", (next_status, ts, business_id))
+        unpaid_tax = round(float(business.get("unpaid_tax") or 0), 2)
+        if action in {"suspend", "revoke"}:
+            db.execute(
+                """INSERT INTO business_violations
+                   (business_id, issued_by, severity, violation, penalty, status, created_at)
+                   VALUES (?, ?, ?, ?, ?, 'open', ?)""",
+                (
+                    business_id,
+                    user["id"],
+                    "tax_enforcement",
+                    reason,
+                    f"Business license {next_status}; outstanding business tax ${unpaid_tax:,.2f}",
+                    ts,
+                ),
+            )
+        title = f"Business license {next_status}"
+        body = (
+            f"The {business['business_name']} license ({business['license_number']}) is now {next_status}. "
+            f"Outstanding business tax: ${unpaid_tax:,.2f}."
+            + (f" Reason: {reason}" if reason else " The license was restored by Faircroft Settlement Authority.")
+        )
+        add_message(db, int(business["owner_id"]), title, body, int(user["id"]))
+        add_admin_audit(
+            db,
+            int(user["id"]),
+            f"business.license.{action}",
+            int(business["owner_id"]),
+            {
+                "business_id": business_id,
+                "license_number": business["license_number"],
+                "previous_status": current_status,
+                "status": next_status,
+                "unpaid_tax": unpaid_tax,
+                "reason": reason,
+            },
+        )
+        self.send_json(
+            200,
+            {
+                "ok": True,
+                "business_id": business_id,
+                "business_name": business["business_name"],
+                "previous_status": current_status,
+                "status": next_status,
+                "unpaid_tax": unpaid_tax,
+            },
+        )
 
     def api_create_settlement_notices(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)

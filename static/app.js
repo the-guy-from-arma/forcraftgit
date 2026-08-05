@@ -1832,7 +1832,7 @@ function renderPanel(id) {
     system: "System",
     "indeed-admin": "Indeed Admin",
     admin: "Admin",
-    "dev-tools": "Dev Tools",
+    "dev-tools": "Admin Tools",
     "beta-tasks": "Beta Tasks",
     downloads: "Download Our App",
     leaderboards: "Leaderboards",
@@ -2142,7 +2142,7 @@ function hasFireCommandAccess() {
   return roles.some((role) => ["owner", "fire_chief", "deputy_chief", "fire_marshal"].includes(role));
 }
 
-function renderInsuranceWorkspace() {
+function renderInsuranceWorkspaceLegacy() {
   const data = state.cache.insurance || { policies: [], characters: [] };
   const policies = data.policies || [];
   const selected = policies.find((item) => String(item.id) === String(state.insuranceSelectedPolicy)) || policies[0];
@@ -2161,12 +2161,32 @@ function renderInsuranceWorkspace() {
     </section></main></section>`;
 }
 
+function renderInsuranceWorkspace() {
+  const data=state.cache.insurance||{policies:[],claims:[],characters:[],tiers:[]};
+  const policies=(data.policies||[]).filter(policy=>policy.policy_type==='compensation'),claims=data.claims||[],tiers=data.tiers||[];
+  const selected=policies.find(item=>String(item.id)===String(state.insuranceSelectedPolicy))||policies[0];
+  const active=policies.filter(p=>p.status==='active'), bankBalance=Number(data.bank?.balance||0);
+  const pct=Number(selected?.coverage_percent||({essential:50,preferred:70,standard:70,premier:90}[selected?.coverage_tier]||0));
+  const chars=(data.characters||[]).map(item=>`<option value="${item.id}">${escapeHtml(item.character_name)}${item.is_active?' — active':''}</option>`).join('');
+  const selectedClaims=claims.filter(c=>String(c.policy_id)===String(selected?.id));
+  return `<section class="insurance-workspace insurance-continuity">
+  <header class="insurance-commandbar"><div class="insurance-wordmark"><img src="/static/brand/faircroft-emblem.webp" alt="Faircroft"/><div><small>FAIRCROFT CONTINUITY AUTHORITY</small><strong>Resident Protection Network</strong></div></div><nav><button data-insurance-scroll="protection">Protection</button><button data-insurance-scroll="claims">Claims</button><button data-insurance-scroll="enroll">Enroll</button></nav><div><span class="insurance-secure"><i></i> POLICY NETWORK ONLINE</span><button class="secondary" data-refresh-insurance>Synchronize</button><button class="primary" data-close-insurance>Return to RP OS</button></div></header>
+  <main><section class="continuity-hero"><div class="continuity-hero-copy"><span>OFFICIAL SERVER-WIPE COMPENSATION</span><h1>What you built<br/><em>should not disappear.</em></h1><p>Faircroft Continuity Protection preserves a verified share of your game-bank position when an authorized server reset or wipe occurs.</p><div><button class="primary" data-insurance-scroll="enroll">Protect my balance</button><small>Monthly coverage from ${money(3500)} · Staff-verified claims</small></div></div><div class="continuity-seal"><div><img src="/static/brand/faircroft-emblem.webp" alt=""/><strong>${active.length?`${Math.max(...active.map(p=>Number(p.coverage_percent||0)))}%`:'FC'}</strong><span>${active.length?'MAXIMUM ACTIVE RECOVERY':'CONTINUITY AUTHORITY'}</span></div><i></i><i></i><i></i></div></section>
+  <section class="continuity-statusline"><div><span>Synced game-bank position</span><strong>${money(bankBalance)}</strong></div><div><span>Active policies</span><strong>${active.length}</strong></div><div><span>Claims in review</span><strong>${claims.filter(c=>c.status==='pending').length}</strong></div><div><span>Network status</span><strong class="live">Verified</strong></div></section>
+  <section class="continuity-portfolio" id="protection"><aside><span>YOUR PROTECTION</span><h2>Continuity file</h2><p>Every policy belongs to one exact Faircroft character and renews on a 30-day cycle.</p><nav>${policies.map(p=>`<button class="${selected?.id===p.id?'active':''}" data-insurance-policy="${p.id}"><i></i><span><strong>${escapeHtml(humanLabel(p.coverage_tier))}</strong><small>${escapeHtml(p.character_name)} · ${escapeHtml(p.policy_number)}</small></span><b>${Number(p.coverage_percent||0)}%</b></button>`).join('')||'<em>No policy is active yet.</em>'}</nav></aside><div class="continuity-policy-stage">${selected?`<header><div><span>OFFICIAL CONTINUITY CERTIFICATE</span><h2>${escapeHtml(selected.subject_label)}</h2><p>${escapeHtml(selected.character_name)} · ${escapeHtml(selected.policy_number)}</p></div><strong class="${selected.status==='active'?'live':''}">${escapeHtml(String(selected.status).toUpperCase())}</strong></header><div class="continuity-recovery"><div><span>Protected bank snapshot</span><strong>${money(selected.protected_bank_balance)}</strong><small>Verified at policy issuance</small></div><div class="continuity-recovery-rate"><span>Recovery level</span><strong>${pct}%</strong><i style="--coverage:${pct}%"></i><small>Estimated compensation ${money(selected.coverage_amount)}</small></div></div><dl><div><dt>Monthly premium</dt><dd>${money(selected.premium_amount)}</dd></div><div><dt>Coverage class</dt><dd>${escapeHtml(humanLabel(selected.coverage_tier))}</dd></div><div><dt>Effective</dt><dd>${new Date(selected.issued_at).toLocaleDateString()}</dd></div><div><dt>Renews / expires</dt><dd>${new Date(selected.expires_at).toLocaleDateString()}</dd></div></dl><footer><img src="/static/brand/faircroft-emblem.webp" alt=""/><span>Digitally recorded by the Faircroft Continuity Authority</span><code>${escapeHtml(selected.policy_number.replaceAll('-',''))}</code></footer>`:`<div class="continuity-empty"><span>FC</span><h2>Your continuity file is ready.</h2><p>Select a protection level below to issue the first official policy.</p></div>`}</div></section>
+  <section class="continuity-claims" id="claims"><header><div><span>CLAIM OPERATIONS</span><h2>Recovery ledger</h2><p>Claims remain visible from filing through staff review and final compensation.</p></div><strong>${claims.length} TOTAL</strong></header><div class="continuity-claim-ledger">${claims.map(claim=>`<article><i class="${escapeHtml(claim.status)}"></i><div><small>${escapeHtml(claim.claim_number)}</small><strong>${escapeHtml(claim.character_name)}</strong><span>${escapeHtml(claim.incident_summary)}</span></div><dl><div><dt>Verified basis</dt><dd>${money(claim.bank_balance_snapshot)}</dd></div><div><dt>Recovery</dt><dd>${Number(claim.coverage_percent)}%</dd></div><div><dt>Claim value</dt><dd>${money(claim.requested_amount)}</dd></div></dl><b class="claim-${escapeHtml(claim.status)}">${escapeHtml(humanLabel(claim.status))}</b>${claim.review_notes?`<p>${escapeHtml(claim.review_notes)}</p>`:''}</article>`).join('')||'<div class="continuity-no-claims">No claims filed. Your ledger will appear here after an authorized reset or wipe.</div>'}</div>${selected&&selected.status==='active'?`<form id="insuranceClaimForm" class="continuity-claim-form"><input type="hidden" name="policy_id" value="${selected.id}"/><div><span>FILE A RECOVERY CLAIM</span><h3>${escapeHtml(selected.policy_number)}</h3><p>Use only after an announced server reset or wipe. Filing creates a pending claim for Admin Tools review.</p></div><label>Describe the reset, date, and loss<textarea name="incident_summary" minlength="20" maxlength="1500" required></textarea></label><label class="continuity-confirm"><input type="checkbox" name="confirmed_reset" value="true" required/><span>I confirm an authorized server reset or wipe occurred.</span></label><button class="primary" ${selectedClaims.some(c=>['pending','approved'].includes(c.status))?'disabled':''}>${selectedClaims.some(c=>['pending','approved'].includes(c.status))?'Claim already in review':'Submit protected claim'}</button></form>`:''}</section>
+  <section class="continuity-enrollment" id="enroll"><header><span>CHOOSE YOUR RECOVERY LEVEL</span><h2>One month of protection.<br/>A verified path back.</h2></header><div class="continuity-tier-track">${tiers.map((tier,index)=>`<button type="button" data-insurance-tier="${escapeHtml(tier.id)}" class="${index===1?'featured':''}"><small>0${index+1}</small><span>${escapeHtml(tier.name.replace('Continuity ',''))}</span><strong>${Number(tier.coverage_percent)}<em>%</em></strong><p>of the verified protected game-bank balance</p><b>${money(tier.premium)}<small>/ 30 days</small></b></button>`).join('')}</div><form id="insurancePolicyForm"><input type="hidden" name="policy_type" value="compensation"/><div class="continuity-enroll-fields"><label>Protected character<select name="character_id" required><option value="">Select exact character</option>${chars}</select></label><label>Protection level<select name="coverage_tier" required>${tiers.map(t=>`<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)} · ${Number(t.coverage_percent)}% · ${money(t.premium)}/month</option>`).join('')}</select></label><label>Policy designation<input name="subject_label" value="Server Continuity Compensation" maxlength="120" required/></label><label>Four-digit payment receipt<input name="code" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required placeholder="0000"/><small>Enter only after staff receives the premium in game.</small></label></div><label>Continuity notes<textarea name="notes" maxlength="500"></textarea></label><input type="hidden" name="risk_use" value="Authorized server reset and wipe compensation"/><button class="primary">Issue official continuity certificate</button></form></section>
+  </main></section>`;
+}
+
 function bindInsuranceWorkspace() {
   $(`[data-insurance-policy]`) && $$('[data-insurance-policy]').forEach((button) => button.addEventListener('click', () => { state.insuranceSelectedPolicy = button.dataset.insurancePolicy; render(); }));
   $$('[data-insurance-scroll]').forEach((button) => button.addEventListener('click', () => document.getElementById(button.dataset.insuranceScroll)?.scrollIntoView({behavior:'smooth'})));
   $('[data-close-insurance]')?.addEventListener('click', async () => { state.activeApp=null; await loadSession(); });
   $('[data-refresh-insurance]')?.addEventListener('click', async () => { await loadAppData('insurance'); render(); });
+  $$('[data-insurance-tier]').forEach(button=>button.addEventListener('click',()=>{const select=$('#insurancePolicyForm [name="coverage_tier"]');if(select){select.value=button.dataset.insuranceTier;document.getElementById('enroll')?.scrollIntoView({behavior:'smooth'});}}));
   $('#insurancePolicyForm')?.addEventListener('submit', async (event) => { event.preventDefault(); const button=$('button[type="submit"]',event.currentTarget); if(button)button.disabled=true; try { const result=await api('/api/insurance/policies',{method:'POST',body:Object.fromEntries(new FormData(event.currentTarget))}); toast(`Certificate ${result.policy_number} issued`); state.cache.insurance=await api('/api/insurance'); state.insuranceSelectedPolicy=state.cache.insurance.policies?.[0]?.id; render(); } catch(error){if(button)button.disabled=false;toast(error.message);} });
+  $('#insuranceClaimForm')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,body=Object.fromEntries(new FormData(form));body.confirmed_reset=form.confirmed_reset.checked;try{const result=await api('/api/insurance/claims',{method:'POST',body});toast(`Claim ${result.claim_number} is pending review`);state.cache.insurance=await api('/api/insurance');render();}catch(error){toast(error.message);}});
 }
 
 function renderGangWorkspace() {
@@ -10249,7 +10269,7 @@ function renderDevToolsLegacy() {
   return `
     <div class="stack dev-tools-app">
       <section class="profile-hero dev-tools-hero">
-        <div><p class="eyebrow">Restricted engineering console</p><h3>Developer Tools</h3><p>Account linking support, moderation controls, internal warnings, and immutable staff activity.</p></div>
+        <div><p class="eyebrow">Restricted operations console</p><h3>Admin Tools</h3><p>Account linking support, moderation controls, internal warnings, and immutable staff activity.</p></div>
         <span class="pill amber">DEV</span>
       </section>
       <div class="profile-grid">
@@ -10347,7 +10367,36 @@ function devRuleOptions() {
   ).join("");
 }
 
+const ADMIN_TOOL_NAV = [
+  ["dashboard", "Command Center", "01"], ["accounts", "Account Management", "02"],
+  ["intelligence", "Game Intelligence", "03"], ["housing-market", "Housing Market", "04"],
+  ["anticheat", "Anti-Cheat", "05"], ["insurance-claims", "Insurance Claims", "06"],
+  ["enforcement", "Cases", "07"], ["warnings", "Internal Notes", "08"],
+  ["linking", "Account Linking", "09"], ["campaigns", "Active Campaigns", "10"],
+  ["settlement", "Settlement", "11"], ["market-settings", "Stock Market", "12"],
+  ["lottery-settings", "Lottery Settings", "13"], ["gang-settings", "Gang Settings", "14"],
+  ["dmv-settings", "DMV Settings", "15"], ["mdt-settings", "MDT Settings", "16"],
+  ["court-settings", "Court Settings", "17"], ["ice-settings", "ICE Settings", "18"],
+  ["admin-2fa", "Admin 2FA", "19"], ["autopilot", "Auto Pilot", "20"],
+  ["system-update", "System Update", "21"], ["audit", "Activity Log", "22"],
+  ["fnn-settings", "FNN Settings", "23"], ["settings", "Settings", "24"],
+];
+
+function adminToolAccess() {
+  const access = state.cache["dev-tools"]?.admin_tools_access || {};
+  return {
+    isDeveloper: access.is_developer !== false && !access.is_admin,
+    effective: new Set(access.effective_sections || ADMIN_TOOL_NAV.map(([id]) => id)),
+  };
+}
+
+function canOpenAdminTool(sectionId) {
+  const access = adminToolAccess();
+  return access.isDeveloper || access.effective.has(sectionId);
+}
+
 function renderDevWorkspace() {
+  if (!canOpenAdminTool(state.devTab)) state.devTab = "dashboard";
   const activeTab = {
     dashboard: ["Operations Overview", "Current account-linking and enforcement status"],
     accounts: ["Account Management", "Search, verify, secure, and maintain every resident account"],
@@ -10370,18 +10419,19 @@ function renderDevWorkspace() {
     "market-settings": ["Stock Market Settings", "Operate Ravenhood pricing, settlement receipts, fees, and RP events"],
     "lottery-settings": ["Lottery Settings", "Govern entries, prize funding, role eligibility, fraud review, and weekly drawings"],
     "housing-market": ["Housing Market", "Read-only Shadow Haven property ownership, availability, tenure, locks, and guest access"],
+    "insurance-claims": ["Insurance Claims", "Review verified server-reset and wipe compensation requests"],
     audit: ["Activity Log", "Chronological record of staff actions"],
     settings: ["App Visibility", "Control which application icons appear for users"],
   }[state.devTab] || ["Staff Operations", "Faircroft administrative console"];
   return `<section class="dev-workspace">
     <aside class="dev-sidebar">
-      <div class="dev-brand"><img class="dev-emblem" src="/static/brand/faircroft-emblem.webp" alt="" /><div><strong>Faircroft RP</strong><small>Staff Operations</small></div></div>
+      <div class="dev-brand"><img class="dev-emblem" src="/static/brand/faircroft-emblem.webp" alt="" /><div><strong>Faircroft RP</strong><small>Admin Tools</small></div></div>
       <p class="dev-nav-label">Operations index</p>
-      <nav>${[["dashboard","Command Center"],["accounts","Account Management"],["intelligence","Game Intelligence"],["housing-market","Housing Market"],["anticheat","Anti-Cheat"],["enforcement","Cases"],["warnings","Internal Notes"],["linking","Account Linking"],["campaigns","Active Campaigns"],["settlement","Settlement"],["market-settings","Stock Market"],["lottery-settings","Lottery Settings"],["gang-settings","Gang Settings"],["dmv-settings","DMV Settings"],["mdt-settings","MDT Settings"],["court-settings","Court Settings"],["ice-settings","ICE Settings"],["admin-2fa","Admin 2FA"],["autopilot","Auto Pilot"],["system-update","System Update"],["fnn-settings","FNN Settings"],["audit","Activity Log"],["settings","Settings"]].map(([id,label], index) => `<button class="${state.devTab === id ? "active" : ""}" data-dev-tab="${id}"><small>${String(index + 1).padStart(2, "0")}</small><span>${label}</span><i></i></button>`).join("")}</nav>
+      <nav>${ADMIN_TOOL_NAV.map(([id,label,number]) => { const locked=!canOpenAdminTool(id); return `<button class="${state.devTab === id ? "active" : ""} ${locked ? "locked" : ""}" data-dev-tab="${id}" aria-disabled="${locked}"><small>${number}</small><span>${label}</span><i></i>${locked ? `<b class="dev-nav-lock" aria-hidden="true">LOCKED</b>` : ""}</button>`; }).join("")}</nav>
       <div class="dev-sidebar-footer"><span class="dev-access-dot"></span><div><strong>Authorized Staff</strong><small>${escapeHtml(state.session?.user?.name || "Staff member")}</small></div></div>
     </aside>
     <main class="dev-main">
-      <header class="dev-topbar"><div><span class="dev-topbar-kicker">FC / STAFF OPERATIONS</span><h1>${activeTab[0]}</h1><p>${activeTab[1]}</p></div><div class="dev-toolbar"><span class="dev-system-status"><i></i>Systems nominal</span><button class="secondary" data-refresh-dev>Sync records</button><button class="primary" data-close-dev>Exit workspace</button></div></header>
+      <header class="dev-topbar"><div><span class="dev-topbar-kicker">FC / ADMIN TOOLS</span><h1>${activeTab[0]}</h1><p>${activeTab[1]}</p></div><div class="dev-toolbar"><span class="dev-system-status"><i></i>Systems nominal</span><button class="secondary" data-refresh-dev>Sync records</button><button class="primary" data-close-dev>Exit workspace</button></div></header>
       <div class="dev-content">${renderDevTools()}</div>
     </main>
     ${state.devAccount ? renderDevAccountModal(state.devAccount) : ""}
@@ -10623,6 +10673,11 @@ function renderDevGangSettings(gang) {
   <section class="dev-gang-pin-ledger"><header><div><small>RECRUITMENT CREDENTIALS</small><h2>Leader-issued PIN ledger</h2></div><strong>${pins.length} ISSUED</strong></header><div class="dev-gang-pin-head"><span>PIN</span><span>GANG</span><span>ISSUER</span><span>CHARACTER</span><span>STATE</span></div>${pins.map(pin=>`<article><code>${escapeHtml(pin.code_hint)}</code><strong>${escapeHtml(pin.gang_name)}</strong><span>${escapeHtml(pin.issued_by_name)} · CIV ${escapeHtml(pin.issued_by_civ_number||'pending')}</span><span>${escapeHtml(pin.issued_by_character_name)}</span><b>${pin.revoked_at?'REVOKED':pin.uses_remaining>0&&new Date(pin.expires_at)>new Date()?`${pin.uses_remaining} USE(S)`:'EXPIRED/USED'}</b></article>`).join('')||'<div class="empty">No recruitment PINs issued.</div>'}</section></div>`;
 }
 
+function renderDevInsuranceClaims(data){
+  const claims=data.claims||[],stats=data.stats||{};
+  return `<section class="insurance-claims-command"><header class="claims-command-hero"><div><span>FC / CONTINUITY COMPENSATION COMMAND</span><h2>Insurance Claims</h2><p>Validate protected bank snapshots, authorize recovery, and record the final in-game compensation handoff.</p></div><div class="claims-exposure"><small>OPEN EXPOSURE</small><strong>${money(stats.exposure||0)}</strong><span>${Number(stats.pending||0)} awaiting review</span></div></header><div class="claims-command-line"><div><span>Pending</span><strong>${Number(stats.pending||0)}</strong></div><div><span>Approved</span><strong>${Number(stats.approved||0)}</strong></div><div><span>Completed</span><strong>${Number(stats.paid||0)}</strong></div><div><span>Compensated</span><strong>${money(stats.paid_total||0)}</strong></div></div><section class="claims-review-ledger"><header><span>CLAIM</span><span>RESIDENT / CHARACTER</span><span>VERIFIED BASIS</span><span>RECOVERY</span><span>DECISION</span></header>${claims.map(claim=>`<article><div><i class="${escapeHtml(claim.status)}"></i><small>${escapeHtml(claim.claim_number)}</small><strong>${escapeHtml(claim.policy_number)}</strong><span>${new Date(claim.created_at).toLocaleString()}</span></div><div><strong>${escapeHtml(claim.resident_name)}</strong><span>CIV ${escapeHtml(claim.civ_number||'pending')} · ${escapeHtml(claim.character_name)}</span><small>${escapeHtml(claim.incident_summary)}</small></div><div><strong>${money(claim.bank_balance_snapshot)}</strong><span>${escapeHtml(humanLabel(claim.coverage_tier))} · ${money(claim.premium_amount)}/month</span></div><div><strong>${Number(claim.coverage_percent)}%</strong><span>${money(claim.requested_amount)} requested</span></div><div class="claims-actions"><b class="claim-${escapeHtml(claim.status)}">${escapeHtml(humanLabel(claim.status))}</b>${claim.status==='pending'?`<button class="primary" data-insurance-claim-action="approve" data-claim-id="${claim.id}">Approve</button><button class="danger" data-insurance-claim-action="deny" data-claim-id="${claim.id}">Deny</button>`:claim.status==='approved'?`<button class="primary" data-insurance-claim-action="paid" data-claim-id="${claim.id}">Mark paid</button>`:''}${claim.review_notes?`<small>${escapeHtml(claim.review_notes)}</small>`:''}</div></article>`).join('')||'<div class="claims-empty">No continuity claims have been filed.</div>'}</section><footer><span>CONTROL NOTE</span><p>Approval records the eligibility decision. Mark paid only after the resident receives the authorized compensation in game.</p></footer></section>`;
+}
+
 function renderDevTools() {
   const data = state.cache["dev-tools"] || {};
   const users = data.users || [], sanctions = data.sanctions || [], warnings = data.warnings || [], logs = data.audit_logs || [], codes = data.unlink_codes || [];
@@ -10631,6 +10686,7 @@ function renderDevTools() {
     <div class="dev-view-intro"><div><span>RESIDENT ACCOUNT AUTHORITY</span><h2>Account management</h2><p>The complete administrative account directory is mirrored here for developers. Verify residents, assign roles, recover passwords, apply account enforcement, and maintain sign-in identities.</p></div><strong>${users.length} FILES</strong></div>
     <section class="dev-card dev-account-directory"><div class="dev-card-header"><div><span>CONTROLLED RESIDENT REGISTRY</span><h2>Search every account</h2></div><span class="pill green">LIVE DIRECTORY</span></div>${renderAdminUsers(users)}</section>
   </div>`;
+  if (state.devTab === "insurance-claims") return renderDevInsuranceClaims(data.insurance_claims||{});
   if (state.devTab === "anticheat") return renderDevAntiCheat(data.anti_cheat || {});
   if (state.devTab === "dmv-settings") return renderDevDmvSettings(data.dmv_settings || {});
   if (state.devTab === "court-settings") return renderDevCourtSettings(data.court_settings || {});
@@ -10779,7 +10835,7 @@ function renderDevTools() {
           <label>Estimated completion or status<input name="update_lockdown_eta" maxlength="80" value="${escapeHtml(settings.update_lockdown_eta || "")}" placeholder="Example: Expected completion 8:30 PM EST" /></label>
           <button class="primary" type="submit">${enabled ? "Update maintenance notice" : "Publish limited-service mode"}</button>
         </form>
-        <div class="dev-update-access"><span>AVAILABLE DURING UPDATE</span><strong>Profile · Getting Started · Messages · Changelog · DMV · Authorized MDT · Dev Tools</strong></div>
+        <div class="dev-update-access"><span>AVAILABLE DURING UPDATE</span><strong>Profile · Getting Started · Messages · Changelog · DMV · Authorized MDT · Admin Tools</strong></div>
       </section>
     </div>`;
   }
@@ -10819,8 +10875,21 @@ function renderDevTools() {
   }
   if (state.devTab === "settings") {
     const visibilityApps = data.app_visibility?.apps || [];
+    const adminSections = data.admin_tools_access?.configurable_sections || [];
     const beta = data.beta_program || { recruiting_enabled: false, recruiting_message: "", members: 0, member_roster: [], tasks: [], reports: [] };
     return `<div class="stack beta-operations">
+      <section class="dev-card dev-admin-access-control">
+        <div class="dev-admin-access-heading">
+          <div><p class="eyebrow">Delegated workspace access</p><h2>Administrator section access</h2><p>Command Center, Account Management, Game Intelligence, Housing Market, Anti-Cheat, and Activity Log are always available to administrators. Enable additional sections here when operational duties require them.</p></div>
+          <span class="pill amber">DEVELOPER CONTROLLED</span>
+        </div>
+        <form id="devAdminAccessForm">
+          <div class="dev-admin-access-grid">
+            ${adminSections.map((item) => `<label class="dev-admin-access-row ${item.enabled ? "enabled" : ""}"><span><strong>${escapeHtml(item.label)}</strong><small>${item.enabled ? "Available to administrators" : "Development role required"}</small></span><input type="checkbox" name="${escapeHtml(item.id)}" ${item.enabled ? "checked" : ""}/><i aria-hidden="true"></i></label>`).join("") || `<div class="empty">No delegated sections configured.</div>`}
+          </div>
+          <footer><p>Changes apply immediately and are recorded in Activity Log.</p><button class="primary" type="submit">Save administrator access</button></footer>
+        </form>
+      </section>
       <section class="dev-card beta-command-hero">
         <div class="beta-command-copy"><p class="eyebrow">Release planning</p><h2>Beta Operations</h2><p>Coordinate recruitment, assignments, the testing team, and incoming findings from one focused workspace.</p></div>
         <div class="beta-command-status"><i></i><span>PROGRAM STATUS</span><strong>${beta.recruiting_enabled ? "Recruiting" : "Closed"}</strong></div>
@@ -10875,7 +10944,7 @@ function renderDevTools() {
             </label>`).join("") || `<div class="empty">No configurable applications found.</div>`}
         </div>
         <div class="dev-visibility-footer">
-          <p><strong>Protected:</strong> Profile, Dev Tools, System Settings, and Restriction access cannot be hidden.</p>
+          <p><strong>Protected:</strong> Profile, Admin Tools, System Settings, and Restriction access cannot be hidden.</p>
           <button class="primary" type="submit">Save icon visibility</button>
         </div>
       </form>
@@ -11026,6 +11095,7 @@ function renderDevGameIntelligence(data) {
 
 function renderDevHousingMarket(data) {
   const intel = data.property_intelligence || {};
+  const market = intel.market || {};
   const records = intel.records || [];
   const sync = intel.sync || {};
   const propertyMeta = (property) => {
@@ -11056,6 +11126,7 @@ function renderDevHousingMarket(data) {
   return `<div class="stack dev-ops-view property-intel-console housing-market-console">
     <section class="property-intel-hero housing-market-hero"><div><span class="dev-topbar-kicker">SHADOW HAVEN HOUSING / READ-ONLY MARKET</span><h2>Housing Market</h2><p>Live property market board showing available housing, sold housing, linked owners, tenure, rent payments, lock state, guests, and raw property identifiers from TBS Property Mod.</p></div><div class="property-intel-status"><i class="${sync.status === "synced" ? "live" : "idle"}"></i><strong>${sync.status === "synced" ? "MARKET INDEX ONLINE" : "AWAITING MARKET INDEX"}</strong><small>${escapeHtml(sync.last_success_at || "No completed import")}</small></div></section>
     <section class="property-intel-rail housing-market-rail"><div><span>Total properties</span><strong>${Number(enriched.length || 0).toLocaleString()}</strong></div><div><span>Sold / owned</span><strong>${sold.toLocaleString()}</strong></div><div><span>Available</span><strong>${available.toLocaleString()}</strong></div><div><span>Locked</span><strong>${locked.toLocaleString()}</strong></div><div><span>Guest access</span><strong>${guests.toLocaleString()}</strong></div></section>
+    <section class="housing-market-pressure pressure-${escapeHtml(market.pressure || "balanced")}"><header><div><span>FAIRCROFT HOUSING CONDITIONS</span><h2>${humanLabel(market.pressure || "balanced")} market pressure</h2></div><strong>${Number(market.houses_needed || 0).toLocaleString()}<small>additional homes needed</small></strong></header><div class="housing-pressure-lines"><div><label><span>Inventory availability</span><b>${Number(market.availability_rate || 0).toFixed(1)}%</b></label><i><em style="width:${Math.min(100, Number(market.availability_rate || 0))}%"></em></i></div><div><label><span>Housing demand covered</span><b>${Number(market.coverage_rate || 0).toFixed(1)}%</b></label><i><em style="width:${Math.min(100, Number(market.coverage_rate || 0))}%"></em></i></div><div><label><span>Estimated unhoused rate</span><b>${Number(market.homelessness_rate || 0).toFixed(1)}%</b></label><i><em style="width:${Math.min(100, Number(market.homelessness_rate || 0))}%"></em></i></div></div><footer><b>${Number(market.housed_accounts || 0).toLocaleString()}</b> linked residents housed · <b>${Number(market.unhoused_accounts || 0).toLocaleString()}</b> accounts without a linked property<small>${escapeHtml(market.method || "")}</small></footer></section>
     <section class="dev-card property-intel-registry housing-market-registry"><header class="property-intel-toolbar"><div><span>HOUSING REGISTRY</span><h2>Available and sold properties</h2><p>Owner names appear when the property OwnerUid matches a linked Faircroft account.</p></div><label>Search<input id="devPropertySearch" type="search" value="${escapeHtml(state.devPropertySearch || "")}" placeholder="Property ID, owner, CIV, status" /></label></header><div class="housing-market-table-head"><span>Property</span><span>Market state</span><span>Owner</span><span>Access</span><span>Tenure</span></div><div class="property-intel-table housing-market-table">${visible.map((property) => { const meta = property._meta; return `<article class="housing-market-row ${meta.sold ? "sold" : "available"}"><span><strong>${escapeHtml(property.name || "Unnamed housing record")}</strong><small>${escapeHtml(meta.propertyId || property.property_id || "No property ID")}</small></span><span><b class="property-state ${meta.sold ? "sold" : "available"}">${meta.sold ? "Sold" : "Available"}</b><small>${escapeHtml(property.property_type || "Housing")}</small></span><span><strong>${escapeHtml(meta.ownerLabel)}</strong><small>${escapeHtml(meta.ownerUid || "No OwnerUid filed")}</small></span><span><strong>${String(meta.locked).toLowerCase() === "true" ? "Locked" : String(meta.locked).toLowerCase() === "false" ? "Unlocked" : "Unknown"}</strong><small>${meta.guestUids.length} guest UID${meta.guestUids.length === 1 ? "" : "s"}</small></span><span><strong>${escapeHtml(meta.tenure !== "" ? String(meta.tenure) : "—")}</strong><small>Rent payments ${escapeHtml(meta.rentPayments !== "" ? String(meta.rentPayments) : "—")}</small></span></article>`; }).join("") || `<div class="empty">No housing records match this search.</div>`}</div><footer>Source <code>${escapeHtml(intel.source_file || "profile/profile/TBS Property Mod/properties.json")}</code> · ${escapeHtml(sync.last_success_at ? `Last sync ${sync.last_success_at}` : "Waiting for first sync")}</footer></section>
   </div>`;
 }
@@ -11390,6 +11461,7 @@ function devDetailList(items, mapper) {
 function bindDevWorkspace() {
   bindDevTools();
   bindSystem();
+  $$('[data-insurance-claim-action]').forEach(button=>button.addEventListener('click',async()=>{const action=button.dataset.insuranceClaimAction;let review_notes='';if(action==='deny')review_notes=prompt('Document the denial reason for the resident:')||'';else if(action==='approve')review_notes=prompt('Optional approval note:')||'';else if(action==='paid'&&!confirm('Confirm the authorized compensation was delivered in game?'))return;if(action==='deny'&&review_notes.trim().length<10){toast('A denial reason is required');return;}button.disabled=true;try{await api(`/api/dev-tools/insurance-claims/${button.dataset.claimId}`,{method:'PATCH',body:{action,review_notes}});toast(`Insurance claim marked ${{approve:'approved',deny:'denied',paid:'paid'}[action]||action}`);await refreshDevTools();}catch(error){button.disabled=false;toast(error.message);}}));
   $('#devGangSettingsForm')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget;try{await api('/api/dev-tools/gangs/settings',{method:'PATCH',body:{creation_enabled:form.creation_enabled.checked,global_limit:form.global_limit.value,default_member_limit:form.default_member_limit.value,max_creations_per_user:form.max_creations_per_user.value}});toast('Gang governance saved');await refreshDevTools();}catch(error){toast(error.message);}});
   $$('[data-dev-gang-action]').forEach(button=>button.addEventListener('click',async()=>{const action=button.dataset.devGangAction;if(action==='delete'&&!confirm('Delete this gang and remove every character from its roster?'))return;try{await api(`/api/dev-tools/gangs/${button.dataset.gangId}`,{method:'PATCH',body:{action}});toast('Gang record updated');await refreshDevTools();}catch(error){toast(error.message);}}));
   $$('[data-dev-gang-limit]').forEach(button=>button.addEventListener('click',async()=>{const limit=prompt('New maximum roster size',button.dataset.currentLimit||'20');if(!limit)return;try{await api(`/api/dev-tools/gangs/${button.dataset.devGangLimit}`,{method:'PATCH',body:{action:'limit',member_limit:limit}});toast('Roster limit updated');await refreshDevTools();}catch(error){toast(error.message);}}));
@@ -11558,7 +11630,12 @@ function bindDevWorkspace() {
     } catch (error) { toast(error.message); }
   });
   $$("[data-dev-tab], [data-dev-go]").forEach((button) => button.addEventListener("click", async () => {
-    state.devTab = button.dataset.devTab || button.dataset.devGo;
+    const requestedTab = button.dataset.devTab || button.dataset.devGo;
+    if (!canOpenAdminTool(requestedTab)) {
+      toast("Development role is required");
+      return;
+    }
+    state.devTab = requestedTab;
     if (state.devTab !== "accounts") state.adminAccountId = null;
     if (state.devTab === "settlement") {
       try {
@@ -11735,6 +11812,29 @@ function renderAntiCheatModal(data, uid) {
   </div>`;
 }
 
+function renderBusinessTaxSettlement(data, taxSummary) {
+  const licenses = data.tax_licenses || [];
+  return `<section class="settlement-business-tax-command">
+    <header><div><p class="eyebrow">FAIRCROFT BUSINESS REVENUE</p><h2>Tax & License Enforcement</h2><p>Total every business obligation, issue accrued bills, and enforce the exact license attached to a delinquent company.</p></div><dl><div><dt>Businesses</dt><dd>${Number(taxSummary.businesses || 0)}</dd></div><div><dt>Total unpaid</dt><dd>${money(taxSummary.unpaid_total)}</dd></div><div><dt>Unbilled accrual</dt><dd>${money(taxSummary.accrued_total)}</dd></div><div><dt>Weekly levy</dt><dd>${money(taxSummary.weekly_total)}</dd></div></dl></header>
+    <div class="settlement-tax-status-line"><span><b>${Number(taxSummary.active || 0)}</b> active licenses</span><span><b>${Number(taxSummary.suspended || 0)}</b> suspended</span><span><b>${Number(taxSummary.revoked || 0)}</b> revoked</span><small>Each action is permanently audited and delivered to the registered owner.</small></div>
+    <div class="settlement-business-ledger">${licenses.map((license) => `<article data-tax-business="${license.id}" class="status-${escapeHtml(license.status || "active")}">
+      <div class="settlement-business-identity"><span class="settlement-license-status">${escapeHtml(humanLabel(license.status || "active"))}</span><strong>${escapeHtml(license.business_name)}</strong><small>${escapeHtml(license.license_number)} · ${escapeHtml(license.owner_name)} · CIV ${escapeHtml(license.owner_civ_number || "pending")}</small></div>
+      <dl><div><dt>Weekly</dt><dd>${money(license.weekly_tax)}</dd></div><div><dt>Unpaid tax</dt><dd>${money(license.unpaid_tax)}</dd></div><div><dt>Ready to bill</dt><dd>${money(license.accrued_tax)}</dd></div></dl>
+      <div class="settlement-business-controls"><form data-issue-license-tax="${license.id}" class="inline-form"><input name="notes" placeholder="Optional billing note" /><button ${(license.accrued_weeks || 0) < 1 || license.status === "revoked" ? "disabled" : ""}>Issue ${money(license.accrued_tax || 0)}</button></form><div class="settlement-enforcement"><input data-business-enforcement-reason placeholder="Required reason for suspension or revocation" maxlength="1000" /><button type="button" class="warning" data-business-license-action="suspend" data-business-id="${license.id}" ${license.status !== "active" ? "disabled" : ""}>Suspend</button><button type="button" class="danger" data-business-license-action="revoke" data-business-id="${license.id}" ${license.status === "revoked" ? "disabled" : ""}>Revoke</button>${license.status === "suspended" ? `<button type="button" class="secondary" data-business-license-action="restore" data-business-id="${license.id}">Restore</button>` : ""}</div>${(license.owner_properties || []).length ? `<div class="settlement-property-seizure"><select data-business-property>${license.owner_properties.map((property) => `<option value="${escapeHtml(property.property_id)}">${escapeHtml(property.name)} · ${escapeHtml(humanLabel(property.enforcement_state || "clear"))}</option>`).join("")}</select><input data-business-property-reason placeholder="Tax lien or seizure reason" maxlength="1000" /><button type="button" class="warning" data-property-enforcement-action="lien" data-business-id="${license.id}">Lien property</button><button type="button" class="danger" data-property-enforcement-action="seize" data-business-id="${license.id}">Seize property</button><button type="button" class="secondary" data-property-enforcement-action="release" data-business-id="${license.id}">Release</button></div>` : `<small class="settlement-no-property">No synchronized property belongs to this business owner.</small>`}</div>
+    </article>`).join("") || `<div class="empty">No registered business licenses exist.</div>`}</div>
+  </section>`;
+}
+
+function renderPropertyTaxSettlement(data) {
+  const summary = data.property_tax_summary || {};
+  const owners = data.property_tax_owners || [];
+  const properties = data.property_tax_accounts || [];
+  return `<section class="settlement-property-command"><header><div><p class="eyebrow">FAIRCROFT REAL PROPERTY REVENUE</p><h2>Property Tax & Lien Registry</h2><p>The game property files remain read-only. Assessments, liens, and seizures are exact, audited Faircroft records tied to the synchronized PropertyId.</p></div><dl><div><dt>Owned property</dt><dd>${Number(summary.properties || 0)}</dd></div><div><dt>Projected 14%</dt><dd>${money(summary.projected_tax)}</dd></div><div><dt>Unpaid</dt><dd>${money(summary.unpaid_tax)}</dd></div><div><dt>Liens / seizures</dt><dd>${Number(summary.liens || 0)} / ${Number(summary.seizures || 0)}</dd></div></dl></header>
+    <div class="settlement-property-owner-strip">${owners.map((owner) => `<article><strong>${escapeHtml(owner.owner_name)}</strong><span>${owner.property_count} propert${owner.property_count === 1 ? "y" : "ies"} · CIV ${escapeHtml(owner.owner_civ_number || "unmatched")}</span><b>${money(owner.unpaid_tax)} unpaid</b></article>`).join("") || `<div class="empty">No owned property records are synchronized.</div>`}</div>
+    <div class="settlement-property-ledger">${properties.map((property) => `<article data-settlement-property="${escapeHtml(property.property_id)}" class="state-${escapeHtml(property.enforcement_state || "clear")}"><div><span>${escapeHtml(humanLabel(property.enforcement_state || "clear"))}</span><strong>${escapeHtml(property.name || property.property_id)}</strong><small>${escapeHtml(property.property_id)} · ${escapeHtml(property.owner_name || "Unmatched owner")} · CIV ${escapeHtml(property.owner_civ_number || "unmatched")}</small></div><dl><div><dt>Source value</dt><dd>${property.source_assessed_value ? money(property.source_assessed_value) : "Not filed"}</dd></div><div><dt>14% projection</dt><dd>${property.source_assessed_value ? money(property.projected_tax) : "Enter value"}</dd></div><div><dt>Unpaid</dt><dd>${money(property.unpaid_property_tax)}</dd></div></dl><form data-issue-property-tax><input type="hidden" name="property_id" value="${escapeHtml(property.property_id)}" /><input name="assessed_value" inputmode="decimal" value="${property.source_assessed_value || ""}" placeholder="Verified assessed value" /><input name="notes" placeholder="Assessment note" /><button ${Number(property.unpaid_property_tax || 0) > 0 ? "disabled" : ""}>Issue 14% assessment</button></form><div class="settlement-property-actions"><input data-property-reason placeholder="Required reason for lien or seizure" maxlength="1000" /><button type="button" class="warning" data-property-enforcement-action="lien">Place lien</button><button type="button" class="danger" data-property-enforcement-action="seize">Seize</button><button type="button" class="secondary" data-property-enforcement-action="release">Release</button></div></article>`).join("") || `<div class="empty">No owned properties are available for assessment.</div>`}</div>
+  </section>`;
+}
+
 function renderFineSettlement(embedded = false) {
   const data = state.cache["fine-settlement"] || { unpaid: [], batches: [] };
   const unpaid = data.unpaid || [];
@@ -11743,10 +11843,15 @@ function renderFineSettlement(embedded = false) {
   const taxBatches = data.tax_batches || [];
   const accounts = data.outstanding_accounts || [];
   const history = data.notice_history || [];
+  const taxSummary = data.tax_summary || {};
+  const taxView = state.settlementTab === "taxes";
+  const propertyView = state.settlementTab === "property";
   return `<div class="settlement-command ${embedded ? "dev-settlement-embedded" : ""}">
-    <section class="settlement-command-hero"><div><p class="eyebrow">FAIRCROFT SETTLEMENT AUTHORITY</p><h2>Outstanding Fine Command</h2><p>Review every unpaid filing, deliver official escalation notices, and direct residents to verified four-digit receipt payment in MyFaircroft.</p></div><dl><div><dt>Residents</dt><dd>${accounts.length}</dd></div><div><dt>Open filings</dt><dd>${Number(data.outstanding_count || 0)}</dd></div><div><dt>Outstanding</dt><dd>${money(data.outstanding_total)}</dd></div></dl></section>
-    <nav class="court-tabs"><button class="${state.settlementTab === "fines" ? "active" : ""}" data-settlement-tab="fines">Fine notices</button><button class="${state.settlementTab === "taxes" ? "active" : ""}" data-settlement-tab="taxes">Tax billing</button></nav>
-    ${state.settlementTab === "taxes" ? `<section class="settlement-tax-ledger"><header><p class="eyebrow">REGISTERED LICENSES</p><h3>Issue accrued tax bills</h3><p>Bills go directly to MyFaircroft. Residents complete payment with a four-digit receipt PIN after staff receives the funds in game.</p></header>${(data.tax_licenses || []).map((license) => `<article><div><strong>${escapeHtml(license.business_name)}</strong><span>${escapeHtml(license.license_number)} · ${escapeHtml(license.owner_name)}</span></div><dl><div><dt>Weekly</dt><dd>${money(license.weekly_tax)}</dd></div><div><dt>Unpaid</dt><dd>${money(license.unpaid_tax)}</dd></div></dl><form data-issue-license-tax="${license.id}" class="inline-form"><input name="notes" placeholder="Optional billing note" /><button ${(license.accrued_weeks || 0) < 1 ? "disabled" : ""}>Issue ${money(license.accrued_tax || 0)}</button></form></article>`).join("") || `<div class="empty">No registered business tax bills are ready.</div>`}</section>` : `<div class="settlement-command-grid">
+    <section class="settlement-command-hero"><div><p class="eyebrow">FAIRCROFT SETTLEMENT AUTHORITY</p><h2>${propertyView ? "Real Property Revenue" : taxView ? "Business Revenue Command" : "Outstanding Fine Command"}</h2><p>${propertyView ? "Assess synchronized housing, calculate the statutory 14% levy, and record exact-property liens or seizures." : taxView ? "One authoritative view of business tax exposure, billing, and license enforcement." : "Review every unpaid filing, deliver official escalation notices, and direct residents to verified four-digit receipt payment in MyFaircroft."}</p></div><dl>${propertyView ? `<div><dt>Properties</dt><dd>${Number(data.property_tax_summary?.properties || 0)}</dd></div><div><dt>Owners</dt><dd>${Number(data.property_tax_summary?.owners || 0)}</dd></div><div><dt>Unpaid</dt><dd>${money(data.property_tax_summary?.unpaid_tax)}</dd></div>` : taxView ? `<div><dt>Businesses</dt><dd>${Number(taxSummary.businesses || 0)}</dd></div><div><dt>Total unpaid</dt><dd>${money(taxSummary.unpaid_total)}</dd></div><div><dt>Suspended</dt><dd>${Number(taxSummary.suspended || 0)}</dd></div>` : `<div><dt>Residents</dt><dd>${accounts.length}</dd></div><div><dt>Open filings</dt><dd>${Number(data.outstanding_count || 0)}</dd></div><div><dt>Outstanding</dt><dd>${money(data.outstanding_total)}</dd></div>`}</dl></section>
+    <nav class="court-tabs"><button class="${state.settlementTab === "fines" ? "active" : ""}" data-settlement-tab="fines">Fine notices</button><button class="${state.settlementTab === "taxes" ? "active" : ""}" data-settlement-tab="taxes">Business tax</button><button class="${state.settlementTab === "property" ? "active" : ""}" data-settlement-tab="property">Property tax</button></nav>
+    ${taxView ? renderBusinessTaxSettlement(data, taxSummary) : ""}
+    ${propertyView ? renderPropertyTaxSettlement(data) : ""}
+    ${state.settlementTab === "taxes" ? `<section class="settlement-tax-ledger"><header><p class="eyebrow">REGISTERED LICENSES</p><h3>Issue accrued tax bills</h3><p>Bills go directly to MyFaircroft. Residents complete payment with a four-digit receipt PIN after staff receives the funds in game.</p></header>${(data.tax_licenses || []).map((license) => `<article><div><strong>${escapeHtml(license.business_name)}</strong><span>${escapeHtml(license.license_number)} · ${escapeHtml(license.owner_name)}</span></div><dl><div><dt>Weekly</dt><dd>${money(license.weekly_tax)}</dd></div><div><dt>Unpaid</dt><dd>${money(license.unpaid_tax)}</dd></div></dl><form data-issue-license-tax="${license.id}" class="inline-form"><input name="notes" placeholder="Optional billing note" /><button ${(license.accrued_weeks || 0) < 1 ? "disabled" : ""}>Issue ${money(license.accrued_tax || 0)}</button></form></article>`).join("") || `<div class="empty">No registered business tax bills are ready.</div>`}</section>` : propertyView ? "" : `<div class="settlement-command-grid">
       <form id="settlement-notice-form" class="settlement-notice-composer"><header><p class="eyebrow">OFFICIAL DELIVERY</p><h3>Send a next-login warning</h3><p>The notice remains on the resident screen until acknowledged and is also preserved in Messages.</p></header><fieldset><legend>Escalation preset</legend><label><input type="radio" name="notice_type" value="suspension" checked /><span><b>License suspension</b><small>Warn that driving privileges may be suspended.</small></span></label><label><input type="radio" name="notice_type" value="revocation" /><span><b>License revocation</b><small>Warn that the driving credential may be revoked.</small></span></label><label><input type="radio" name="notice_type" value="warrant" /><span><b>Warrant enforcement</b><small>Warn of an arrest warrant for failure to pay.</small></span></label></fieldset><label>Official note<textarea name="custom_note" rows="3" placeholder="Optional case-specific instruction"></textarea></label><div class="settlement-send-actions"><button type="submit" name="recipient_mode" value="individual">Notify selected residents</button><button type="submit" class="warning" name="recipient_mode" value="bulk">Notify every outstanding account</button></div><aside><b>Verified payment only</b><span>The old server-pause/Codex deduction workflow is retired. Staff receives payment in game, then issues the resident an unassigned four-digit receipt PIN.</span></aside></form>
       <section class="settlement-resident-ledger"><header><div><p class="eyebrow">CURRENT OBLIGATIONS</p><h3>Resident settlement tally</h3></div><span>${accounts.length} ACCOUNTS</span></header>${accounts.map((account) => `<label><input type="checkbox" name="settlement_user_ids" value="${account.user_id}" /><span><strong>${escapeHtml(account.name)}</strong><small>CIV ${escapeHtml(account.civ_number || "pending")} · ${escapeHtml(account.license_status)}</small></span><dl><div><dt>Filings</dt><dd>${account.outstanding_count}</dd></div><div><dt>Balance</dt><dd>${money(account.outstanding_total)}</dd></div></dl></label>`).join("") || `<div class="empty">No outstanding fines are recorded.</div>`}</section>
     </div><section class="settlement-notice-history"><header><p class="eyebrow">DELIVERY LEDGER</p><h3>Recent official notices</h3></header>${history.slice(0, 20).map((notice) => `<article><span class="${notice.acknowledged_at ? "acknowledged" : "pending"}"></span><div><strong>${escapeHtml(notice.recipient_name)}</strong><small>CIV ${escapeHtml(notice.civ_number || "pending")} · ${escapeHtml(humanLabel(notice.notice_type))}</small></div><p>${notice.acknowledged_at ? `Acknowledged ${new Date(notice.acknowledged_at).toLocaleString()}` : "Awaiting acknowledgment"}</p><small>Issued by ${escapeHtml(notice.created_by_name)} · ${new Date(notice.created_at).toLocaleString()}</small></article>`).join("") || `<div class="empty">No settlement warnings have been delivered.</div>`}</section>`}
@@ -11870,6 +11975,58 @@ function bindFineSettlement() {
     toast("Accrued business tax issued");
     state.cache["fine-settlement"] = await api("/api/fine-settlement");
     render();
+  }));
+  $$("[data-business-license-action]").forEach((button) => button.addEventListener("click", async () => {
+    const action = button.dataset.businessLicenseAction;
+    const businessId = Number(button.dataset.businessId);
+    const row = button.closest("[data-tax-business]");
+    const reason = row?.querySelector("[data-business-enforcement-reason]")?.value.trim() || "";
+    if (["suspend", "revoke"].includes(action) && reason.length < 10) return toast("Enter an enforcement reason of at least 10 characters");
+    if (!window.confirm(`${humanLabel(action)} this exact business license? The registered owner will be notified immediately.`)) return;
+    button.disabled = true;
+    try {
+      const result = await api(`/api/fine-settlement/businesses/${businessId}/license`, { method: "PATCH", body: { action, reason } });
+      toast(`${result.business_name} license is now ${humanLabel(result.status)}`);
+      state.cache["fine-settlement"] = await api("/api/fine-settlement");
+      render();
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message);
+    }
+  }));
+  $$('[data-issue-property-tax]').forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const assessedValue = Number(form.assessed_value?.value || 0);
+    if (!(assessedValue > 0)) return toast("Enter the verified assessed property value");
+    const result = await api("/api/fine-settlement/property-taxes", { method: "POST", body: {
+      property_id: form.property_id.value,
+      assessed_value: assessedValue,
+      notes: form.notes?.value || "",
+    }});
+    toast(`Property tax issued: ${money(result.amount)}`);
+    state.cache["fine-settlement"] = await api("/api/fine-settlement");
+    render();
+  }));
+  $$('[data-property-enforcement-action]').forEach((button) => button.addEventListener("click", async () => {
+    const businessRow = button.closest("[data-tax-business]");
+    const propertyRow = button.closest("[data-settlement-property]");
+    const propertyId = businessRow?.querySelector("[data-business-property]")?.value || propertyRow?.dataset.settlementProperty || "";
+    const reason = businessRow?.querySelector("[data-business-property-reason]")?.value.trim() || propertyRow?.querySelector("[data-property-reason]")?.value.trim() || "";
+    const action = button.dataset.propertyEnforcementAction;
+    if (!propertyId) return toast("Select a synchronized property");
+    if (action !== "release" && reason.length < 10) return toast("Enter an enforcement reason of at least 10 characters");
+    if (!window.confirm(`${humanLabel(action)} the exact property ${propertyId}? This action is permanently audited.`)) return;
+    try {
+      const result = await api("/api/fine-settlement/property-enforcement", { method: "POST", body: {
+        property_id: propertyId,
+        action,
+        reason,
+        business_id: Number(button.dataset.businessId || 0) || null,
+      }});
+      toast(`${humanLabel(result.action)} recorded for ${result.property_id}`);
+      state.cache["fine-settlement"] = await api("/api/fine-settlement");
+      render();
+    } catch (error) { toast(error.message); }
   }));
   $("#fine-batch-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -12092,6 +12249,18 @@ function bindDevTools() {
     await api("/api/dev-tools/app-visibility", { method: "PATCH", body: { visibility } });
     toast("Application visibility updated");
     await refreshDevTools();
+  });
+  $("#devAdminAccessForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const sections = {};
+    $$("input[type=\"checkbox\"]", event.currentTarget).forEach((input) => {
+      sections[input.name] = input.checked;
+    });
+    try {
+      await api("/api/dev-tools/admin-access", { method: "PATCH", body: { sections } });
+      toast("Administrator section access updated");
+      await refreshDevTools();
+    } catch (error) { toast(error.message); }
   });
   $("#devApplicationIntakeForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -13104,7 +13273,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.2.2-vehicle-isolation").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.2.2-admin-tools").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {

@@ -4,8 +4,18 @@
     {
       "date": "2026-07-31",
       "version": "0.2.2",
-      "title": "RP OS 0.2.2",
-      "added": [
+    "title": "RP OS 0.2.2",
+    "added": [
+      "Added role-aware Admin Tools access with developer-controlled switches for selectively delegating restricted operational sections to administrators.",
+      "Added server-enforced Admin Tools section authorization so locked administrator sections cannot be accessed by calling their protected endpoints directly.",
+        "Added Faircroft Housing Conditions intelligence with live availability, occupancy, demand coverage, estimated unhoused-account rate, additional-home requirements, and market-pressure status derived from verified accounts and synchronized TBS ownership records.",
+        "Added a Developer Tools Property Tax command with exact-property 14% assessments, owner portfolios, source-value projections, unpaid balances, permanent resident notices, and staff auditing without writing into the game property files.",
+        "Added exact-property tax liens, required lien-before-seizure enforcement, release actions, and business-tax property enforcement restricted to synchronized properties owned by the registered business owner.",
+        "Added Business Tax & License Enforcement inside Developer Tools Settlement Operations, with government-wide unpaid, accrued, and weekly tax totals plus exact-license suspension, revocation, and restoration controls.",
+        "Added permanent tax-enforcement violations, owner notifications, required enforcement reasons, and staff audit records for every business-license action.",
+        "Added Faircroft Continuity Protection with monthly $3,500, $4,250, and $5,000 policy tiers covering 50%, 70%, or 90% of a verified protected game-bank balance after an authorized server reset or wipe.",
+        "Added resident wipe-claim filing with exact character and policy ownership, verified bank snapshots, calculated recovery values, duplicate-review protection, and a persistent pending-to-completed claim ledger.",
+        "Added a Developer Tools Insurance Claims command center with open-exposure totals, resident and character intelligence, protected-balance verification, approval and denial decisions, paid-compensation confirmation, resident notifications, and permanent staff auditing.",
         "Added the Faircroft Insurance Authority application with character-specific vehicle, property, life, business, and general policies, tiered coverage questionnaires, universal four-digit receipt PIN settlement, and official expiring digital insurance certificates.",
         "Added the Faircroft Gang Network with character-bound gang creation and membership, secure four-digit recruitment PINs, private leader command, member ranks, roster control, and strict prevention of cross-character membership leakage.",
         "Added Developer Tools Gang Settings with creation and membership limits, complete organization and recruitment-PIN ledgers, roster governance, member locks, organization shutdown controls, and hidden gang-leader role intelligence.",
@@ -72,7 +82,10 @@
         ,"Added Developer Tools Lottery Settings with drawing controls, daily-entry limits, payout percentages, timezone scheduling, role-based winning weights, role exclusions, supervised drawings, entry review, and fraud flags."
         ,"Added an active scheduled-movement ledger to Ravenhood Stock Market Settings with affected securities, target percentage, schedule timing, live progress, and immediate stop controls."
       ],
-      "changed": [
+    "changed": [
+      "Renamed Developer Tools to Admin Tools, gave administrators the Command Center, Account Management, Game Intelligence, Housing Market, Anti-Cheat, and Activity Log by default, and retained unrestricted access for developers and owners.",
+      "Removed the separate Admin application icon and consolidated account administration into the unified Admin Tools workspace.",
+        "Rebuilt the Insurance application as the official Faircroft Continuity Authority workspace with an animated protection seal, continuous policy certificate, recovery-level presentation, synchronized bank position, claim-status timeline, and responsive enrollment flow instead of stacked policy widgets.",
         "Restored Shadow Haven as the canonical SFTP game-data provider, removed LoafHosts environment-variable overrides, and separated public A2S and game endpoints from Arma's local 0.0.0.0 bind addresses.",
         "Extended the RP OS application registry, visibility controls, responsive full-screen workspaces, and Faircroft navigation iconography for Insurance and the Gang Network without exposing the hidden gang-leader authorization role to residents.",
         "Changed Ravenhood promotional-code administration to show full live promo codes in Developer Tools, expose codes in redemption/audit logs, and add audited hard-delete controls beside Pause and Resume.",
