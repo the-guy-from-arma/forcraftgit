@@ -6290,6 +6290,8 @@ def admin_tools_section_required(db: Database, user: DbRow | None, section_id: s
     err = admin_tools_member_required(user)
     if err:
         return err
+    if section_id == "banking-settings" and not has_any(user, "owner", "dev"):
+        return "Development role is required"
     if section_id not in admin_tools_effective_sections(db, user):
         return "Development role is required"
     return None
@@ -17305,14 +17307,36 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "unlink_codes": [dict(row) for row in codes],
                 "admin_2fa_codes": [dict(row) for row in admin_2fa_codes],
                 "myfaircroft_payment_codes": [dict(row) for row in myfaircroft_payment_codes],
-                "banking": {
+                "banking": ({
                     "testing_mode": BANK_BRIDGE_TEST_MODE,
                     "pin_required": False,
                     "commands": [dict(row) for row in bank_bridge_commands],
                     "pending": sum(1 for row in bank_bridge_commands if row.get("status") == "pending"),
                     "completed": sum(1 for row in bank_bridge_commands if row.get("status") == "completed"),
                     "failed": sum(1 for row in bank_bridge_commands if row.get("status") == "failed"),
-                },
+                    "economy": {
+                        "currency_in_circulation": float(bank_economy.get("currency_in_circulation") or 0),
+                        "average_balance": float(bank_economy.get("average_balance") or 0),
+                        "largest_balance": float(bank_economy.get("largest_balance") or 0),
+                        "bank_accounts": int(bank_economy.get("bank_accounts") or 0),
+                        "funded_accounts": int(bank_economy.get("funded_accounts") or 0),
+                        "empty_accounts": int(bank_economy.get("empty_accounts") or 0),
+                        "linked_accounts": int(linked_bank_accounts.get("linked_accounts") or 0),
+                        "last_synced_at": bank_economy.get("last_synced_at"),
+                        "source": "FCRPMUSSALO/Banks",
+                        "top_unlinked_accounts": [dict(row) for row in wealthiest_unlinked_accounts],
+                        "linked_directory": [dict(row) for row in intelligence_linked_accounts],
+                    },
+                } if has_any(user, "owner", "dev") else {
+                    "testing_mode": False,
+                    "pin_required": True,
+                    "restricted": True,
+                    "commands": [],
+                    "pending": 0,
+                    "completed": 0,
+                    "failed": 0,
+                    "economy": {},
+                }),
                 "beta_program": {
                     "recruiting_enabled": system_settings["beta_recruiting_enabled"],
                     "recruiting_message": system_settings["beta_recruiting_message"],

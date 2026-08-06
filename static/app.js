@@ -11200,8 +11200,15 @@ function renderDevAccountDeletion(data, users) {
 function renderDevBankingSettings(banking, users) {
   const commands = banking.commands || [];
   const linkedUsers = users.filter((account) => account.arma_linked);
+  const economy = banking.economy || {};
+  const linkedDirectory = economy.linked_directory || [];
+  const topUnlinked = economy.top_unlinked_accounts || [];
   return `<div class="stack dev-ops-view dev-banking-settings-view">
     <div class="dev-view-intro"><div><span>CONTROLLED GAME ECONOMY</span><h2>Banking settings</h2><p>Testing-only fund issuance for linked in-game accounts. Normal resident payments and Railway admin 2FA are unchanged.</p></div><strong>${Number(banking.pending || 0)} PENDING</strong></div>
+    <section class="dev-card dev-bank-intelligence"><div class="dev-card-header"><div><span>AUTHORITATIVE GAME BANK MIRROR</span><h2>In-game balances</h2><p>Read-only totals imported from ${escapeHtml(economy.source || "FCRPMUSSALO/Banks")}.</p></div><span class="pill green">${escapeHtml(economy.last_synced_at ? "SYNCED" : "AWAITING SYNC")}</span></div>
+      <div class="dev-banking-metrics"><article><small>Currency in circulation</small><strong>${money(economy.currency_in_circulation || 0)}</strong></article><article><small>Game bank accounts</small><strong>${Number(economy.bank_accounts || 0).toLocaleString()}</strong></article><article><small>Linked accounts</small><strong>${Number(economy.linked_accounts || 0).toLocaleString()}</strong></article><article><small>Largest balance</small><strong>${money(economy.largest_balance || 0)}</strong></article></div>
+      <div class="dev-bank-ledger-grid"><div><header><strong>Linked account balances</strong><span>${linkedDirectory.length} indexed</span></header>${linkedDirectory.slice(0, 50).map((account) => `<div class="dev-bank-ledger-row"><span><b>${escapeHtml(account.account_name || account.player_name || "Linked account")}</b><small>CIV ${escapeHtml(account.civ_number || "pending")} / ${escapeHtml(account.identity_id || "")}</small></span><strong>${money(account.balance || 0)}</strong></div>`).join("") || `<div class="empty">No linked in-game balances have synced yet.</div>`}</div><div><header><strong>Unlinked high balances</strong><span>identity review</span></header>${topUnlinked.slice(0, 10).map((account) => `<div class="dev-bank-ledger-row"><span><b>Unlinked Bohemia identity</b><small>${escapeHtml(account.identity_id || "")}</small></span><strong>${money(account.balance || 0)}</strong></div>`).join("") || `<div class="empty">No unlinked bank records found.</div>`}</div></div>
+    </section>
     <div class="dev-grid-2">
       <section class="dev-card dev-editor-panel"><div class="dev-card-header"><div><span>DEVELOPER COMMAND</span><h2>Issue in-game funds</h2></div><span class="pill amber">TEST MODE</span></div>
         <p class="muted">This creates a server command for the Bank Bridge. It does not edit Railway cash and does not require the four-digit payment PIN.</p>
