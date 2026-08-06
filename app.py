@@ -11085,6 +11085,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 continue
             item = dict(row)
             item["status"] = "claimed"
+            try:
+                numeric_amount = float(item.get("amount") or 0)
+                item["amount"] = int(numeric_amount) if numeric_amount.is_integer() else numeric_amount
+            except (TypeError, ValueError):
+                item["amount"] = 0
             item["target_identity_id"] = item.get("identity_id") or item.get("linked_identity_id") or ""
             claimed.append(item)
         self.send_json(200, {"ok": True, "server_id": server_id, "commands": claimed, "count": len(claimed)})
