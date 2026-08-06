@@ -310,6 +310,10 @@ DbRow = dict[str, Any]
 
 
 ROLE_ALIASES = {
+    "developer": "dev",
+    "development": "dev",
+    "development role": "dev",
+    "development_role": "dev",
     "chief": "fire_chief",
     "cheif": "fire_chief",
     "fire chief": "fire_chief",
@@ -7777,6 +7781,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_download_package(user, "android")
                 elif path == "/api/dev-tools" and method == "GET":
                     self.api_dev_tools(db, user)
+                elif path == "/api/dev-tools/account-deletion/search" and method == "GET":
+                    self.api_dev_account_deletion_search(db, user, query)
                 elif path.startswith("/api/dev-tools/account-deletion/") and method == "GET":
                     self.api_dev_account_deletion_preview(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/dev-tools/account-deletion/") and method == "DELETE":
@@ -9181,6 +9187,31 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         lottery_row = one(db, "SELECT COALESCE(MAX(prize_pool), 0) AS pool FROM lottery_draws WHERE LOWER(status) IN ('scheduled','open')")
         lottery_pool = round(float((lottery_row or {}).get("pool") or 0), 2)
 
+        # The FC Dollar reference is an RP purchasing-power index, not a real
+        # currency peg or promise of redemption. It responds to the same
+        # authoritative statewide aggregates published by this endpoint.
+        public_obligations = round(outstanding_fines + property_tax_due + business_tax_due, 2)
+        housing_assessed_base = round(property_total * 350000.0, 2)
+        resident_market_assets = round(market_held_value + market_cash_value, 2)
+        total_state_assets = round(circulation + resident_market_assets + housing_assessed_base, 2)
+        supply_pressure = min(1.0, circulation / 20000000000.0)
+        obligation_pressure = min(1.0, public_obligations / max(1.0, circulation))
+        funded_coverage = percent(funded, linked) / 100.0
+        housing_coverage = percent(property_owned, property_total) / 100.0
+        market_breadth = percent(gainers, max(1, gainers + decliners + unchanged))
+        market_signal = max(-0.12, min(0.12, market_index_change / 100.0))
+        usd_reference_rate = round(max(0.35, min(1.35,
+            1.05 - (supply_pressure * 0.55) - (obligation_pressure * 0.18)
+            + ((funded_coverage - 0.5) * 0.10) + ((housing_coverage - 0.5) * 0.05)
+            + market_signal
+        )), 4)
+        currency_index = round(usd_reference_rate * 100.0, 2)
+        currency_status = "Strengthening" if currency_index >= 105 else ("Stable" if currency_index >= 85 else "Under pressure")
+        per_verified_resident = round(circulation / max(1, verified), 2)
+        liquidity_ratio = round(resident_market_assets / max(1.0, circulation) * 100.0, 2)
+        obligation_ratio = round(public_obligations / max(1.0, circulation) * 100.0, 3)
+        state_net_position = round(total_state_assets - public_obligations, 2)
+
         self.send_json(200, {
             "generated_at": now_iso(),
             "privacy": "Aggregate public statistics only. Individual balances and resident financial records are never included.",
@@ -9197,8 +9228,19 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "median_balance": median_balance, "distribution": distribution,
                 "funded_rate": percent(funded, linked), "outstanding_fines": outstanding_fines,
                 "property_tax_due": property_tax_due, "business_tax_due": business_tax_due,
-                "public_obligations": round(outstanding_fines + property_tax_due + business_tax_due, 2),
-                "housing_assessed_base": round(property_total * 350000.0, 2), "lottery_pool": lottery_pool,
+                "public_obligations": public_obligations,
+                "housing_assessed_base": housing_assessed_base, "lottery_pool": lottery_pool,
+                "resident_market_assets": resident_market_assets, "total_state_assets": total_state_assets,
+                "state_net_position": state_net_position, "per_verified_resident": per_verified_resident,
+                "liquidity_ratio": liquidity_ratio, "obligation_ratio": obligation_ratio,
+                "supply_utilization": round(supply_pressure * 100.0, 2),
+                "currency": {
+                    "code": "FCD", "symbol": "FC$", "usd_reference_rate": usd_reference_rate,
+                    "usd_per_100_fc": round(usd_reference_rate * 100.0, 2),
+                    "fc_per_usd": round(1.0 / max(0.0001, usd_reference_rate), 4),
+                    "index": currency_index, "status": currency_status, "market_breadth": market_breadth,
+                    "disclaimer": "Internal RP purchasing-power reference only; FC Dollars are not redeemable for real-world currency.",
+                },
             },
             "markets": {
                 "listings": len(securities), "accounts": market_accounts, "held_value": market_held_value,
@@ -16599,6 +16641,55 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "confirmation_phrase": f"DELETE CIV {target.get('civ_number') or target_id}",
         })
 
+    def api_dev_account_deletion_search(
+        self,
+        db: Database,
+        user: DbRow | None,
+        query: dict[str, list[str]],
+    ) -> None:
+        """Search the complete resident directory without arming a deletion."""
+        err = strict_developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        search = str((query.get("q") or [""])[0]).strip()[:160]
+        params: list[Any] = []
+        where = ""
+        if search:
+            pattern = f"%{search.lower()}%"
+            where = """
+                WHERE LOWER(COALESCE(u.name, '')) LIKE ?
+                   OR LOWER(COALESCE(u.email, '')) LIKE ?
+                   OR LOWER(COALESCE(u.civ_number, '')) LIKE ?
+                   OR LOWER(COALESCE(CAST(u.id AS TEXT), '')) LIKE ?
+                   OR LOWER(COALESCE((SELECT l.identity_id FROM arma_account_links l WHERE l.user_id=u.id ORDER BY l.linked_at DESC LIMIT 1), '')) LIKE ?
+                   OR LOWER(COALESCE((SELECT l.player_name FROM arma_account_links l WHERE l.user_id=u.id ORDER BY l.linked_at DESC LIMIT 1), '')) LIKE ?
+            """
+            params = [pattern] * 6
+        rows = all_rows(
+            db,
+            f"""
+            SELECT u.*,
+                   (SELECT l.identity_id FROM arma_account_links l WHERE l.user_id=u.id ORDER BY l.linked_at DESC LIMIT 1) AS linked_arma_id,
+                   (SELECT l.player_name FROM arma_account_links l WHERE l.user_id=u.id ORDER BY l.linked_at DESC LIMIT 1) AS linked_player_name,
+                   (SELECT l.linked_at FROM arma_account_links l WHERE l.user_id=u.id ORDER BY l.linked_at DESC LIMIT 1) AS arma_linked_at
+            FROM users u
+            {where}
+            ORDER BY CASE WHEN u.verified <> 0 THEN 0 ELSE 1 END, LOWER(u.name), u.id
+            LIMIT 150
+            """,
+            tuple(params),
+        )
+        accounts: list[dict[str, Any]] = []
+        for row in rows:
+            account = public_user(row)
+            account["arma_id"] = row.get("linked_arma_id") or ""
+            account["arma_player_name"] = row.get("linked_player_name") or ""
+            account["arma_linked"] = bool(row.get("linked_arma_id"))
+            account["arma_linked_at"] = row.get("arma_linked_at")
+            accounts.append(account)
+        self.send_json(200, {"accounts": accounts, "query": search, "count": len(accounts)})
+
     def api_dev_delete_account(self, db: Database, user: DbRow | None, target_id: int) -> None:
         err = strict_developer_required(user)
         if err:
@@ -17301,6 +17392,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "warnings": [dict(row) for row in warnings],
                 "audit_logs": [dict(row) for row in audit_logs],
                 "account_deletion": {
+                    "accounts": [dict(row) for row in users] if strict_developer_required(user) is None else [],
                     "records": [dict(row) for row in deletion_records],
                     "total_deleted": deletion_total,
                 },

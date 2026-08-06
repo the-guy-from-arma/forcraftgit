@@ -1593,6 +1593,10 @@ function statsSignal(label, value, detail, tone = "cyan") {
   return `<article class="stats-signal ${tone}"><small>${escapeHtml(label)}</small><strong>${escapeHtml(String(value))}</strong><span>${escapeHtml(detail)}</span></article>`;
 }
 
+function statsFullMoney(value) {
+  return `FC$${Number(value || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+}
+
 function renderStatsWorkspaceLegacy() {
   const data = state.cache.stats || {};
   const population = data.population || {};
@@ -1678,6 +1682,7 @@ function renderStatsWorkspace() {
   const nav = [["overview", "State signal"], ["safety", "Crime & justice"], ["economy", "Economy & markets"], ["community", "Infrastructure"], ["activity", "Server life"]];
   const marketChanges = (markets.movers || []).map(item => Number(item.change || 0));
   const statePulse = [population.active_rate, courts.completion_rate, housing.occupancy_rate, mobility.insurance_rate, fire.clearance_rate, commerce.active_rate, economy.funded_rate, population.link_rate];
+  const currency = economy.currency || {};
 
   const overview = `<section class="stats-story stats-command-story">
     <div class="stats-live-stage">
@@ -1687,13 +1692,13 @@ function renderStatsWorkspace() {
     <div class="stats-signal-run">
       ${statsSignal("Verified residents", Number(population.verified || 0).toLocaleString(), `${statsPercent(population.link_rate)} game-linked`)}
       ${statsSignal("Crime rate", Number(safety.crime_rate_per_100 || 0).toFixed(1), "filings per 100 residents", "red")}
-      ${statsSignal("Economy in circulation", money(economy.circulation), `${Number(economy.funded_accounts || 0)} funded accounts`, "gold")}
+      ${statsSignal("Economy in circulation", statsFullMoney(economy.circulation), `${Number(economy.funded_accounts || 0)} funded accounts`, "gold")}
       ${statsSignal("Securities held", money(markets.held_value), `${Number(markets.listings || 0)} active listings`, "green")}
       ${statsSignal("Housing occupancy", statsPercent(housing.occupancy_rate), `${Number(housing.available || 0)} properties available`, "violet")}
     </div>
     <div class="stats-command-grid">
       <article class="stats-command-panel safety"><header><span>PUBLIC SAFETY</span><strong>${Number(safety.total_filings || 0).toLocaleString()} filings</strong></header><div class="stats-dual-number"><p><small>VIOLENT</small><b>${Number(safety.violent || 0).toLocaleString()}</b><em>${statsPercent(safety.violent_share)}</em></p><i></i><p><small>NON-VIOLENT</small><b>${Number(safety.nonviolent || 0).toLocaleString()}</b><em>${statsPercent(safety.nonviolent_share)}</em></p></div><footer><span>${Number(safety.active_warrants || 0)} active warrants</span><span>${Number(safety.bookings || 0)} bookings</span><span class="${Number(safety.monthly_change || 0) > 0 ? "up" : "down"}">${Number(safety.monthly_change || 0) > 0 ? "+" : ""}${Number(safety.monthly_change || 0).toFixed(1)}% this month</span></footer></article>
-      <article class="stats-command-panel economy"><header><span>ECONOMIC SYSTEM</span><strong>${money(markets.resident_assets)}</strong></header>${statsSparkline(marketChanges, "green")}<footer><span>${money(economy.public_obligations)} public obligations</span><span>${Number(markets.gainers || 0)} advancing / ${Number(markets.decliners || 0)} declining</span><span>${money(markets.volume)} trade volume</span></footer></article>
+      <article class="stats-command-panel economy"><header><span>ECONOMIC SYSTEM</span><strong>${statsFullMoney(economy.circulation)}</strong></header>${statsSparkline(marketChanges, "green")}<footer><span>${money(economy.public_obligations)} public obligations</span><span>${Number(markets.gainers || 0)} advancing / ${Number(markets.decliners || 0)} declining</span><span>${money(markets.volume)} trade volume</span></footer></article>
       <article class="stats-command-panel systems"><header><span>STATE SYSTEMS</span><strong>${statsPercent(fire.clearance_rate)} response clearance</strong></header><div class="stats-system-lines"><p><span>Courts</span><i><b style="--fill:${Number(courts.completion_rate || 0)}%"></b></i><em>${statsPercent(courts.completion_rate)}</em></p><p><span>DMV coverage</span><i><b style="--fill:${Number(mobility.insurance_rate || 0)}%"></b></i><em>${statsPercent(mobility.insurance_rate)}</em></p><p><span>Commerce</span><i><b style="--fill:${Number(commerce.active_rate || 0)}%"></b></i><em>${statsPercent(commerce.active_rate)}</em></p><p><span>Housing</span><i><b style="--fill:${Number(housing.occupancy_rate || 0)}%"></b></i><em>${statsPercent(housing.occupancy_rate)}</em></p></div></article>
     </div>
   </section>`;
@@ -1707,10 +1712,15 @@ function renderStatsWorkspace() {
   </section>`;
 
   const economyView = `<section class="stats-story stats-intelligence-story economy">
-    <header class="stats-chapter-head"><span>02 / ECONOMY & MARKETS</span><h2>Capital in motion.<br><em>Public value, privately held.</em></h2><p>Bank circulation, resident securities, market breadth, taxes, fines, and housing value—without exposing any individual account.</p><aside><strong>${money(economy.circulation)}</strong><small>verified game-bank circulation</small><b>${Number(economy.funded_accounts || 0)} synchronized accounts</b></aside></header>
+    <header class="stats-chapter-head"><span>02 / ECONOMY & MARKETS</span><h2>Capital in motion.<br><em>Public value, privately held.</em></h2><p>Bank circulation, resident securities, market breadth, taxes, fines, and housing value—without exposing any individual account.</p><aside><strong>${statsFullMoney(economy.circulation)}</strong><small>verified game-bank circulation</small><b>${Number(economy.funded_accounts || 0)} synchronized accounts</b></aside></header>
+    <div class="stats-currency-stage">
+      <section><span>FAIRCROFT DOLLAR / PURCHASING POWER</span><div class="stats-currency-quote"><small>1 FC$</small><strong>&asymp; $${Number(currency.usd_reference_rate || 0).toFixed(4)}</strong><em>USD reference</em></div><p>${escapeHtml(currency.status || "Awaiting index")} &middot; Index ${Number(currency.index || 0).toFixed(2)}</p><i><b style="--currency-index:${Math.max(0, Math.min(100, Number(currency.index || 0)))}%"></b></i></section>
+      <aside><div><span>100 FC$ reference</span><strong>$${Number(currency.usd_per_100_fc || 0).toFixed(2)} USD</strong></div><div><span>1 USD reference</span><strong>${Number(currency.fc_per_usd || 0).toFixed(4)} FC$</strong></div><div><span>Per verified resident</span><strong>${statsFullMoney(economy.per_verified_resident)}</strong></div><div><span>Exchange breadth</span><strong>${statsPercent(currency.market_breadth)}</strong></div></aside>
+      <footer>${escapeHtml(currency.disclaimer || "Internal RP purchasing-power reference only.")}</footer>
+    </div>
     <div class="stats-market-stage"><section><span>FCX / EXCHANGE SIGNAL</span><h3>${money(markets.held_value)}</h3><p>Current value of resident-held securities</p>${statsSparkline(marketChanges, Number(markets.index_change || 0) >= 0 ? "green" : "red")}<footer><strong class="${Number(markets.index_change || 0) >= 0 ? "up" : "down"}">${Number(markets.index_change || 0) >= 0 ? "+" : ""}${Number(markets.index_change || 0).toFixed(2)}%</strong><span>${Number(markets.listings || 0)} listed securities</span><span>${Number(markets.trades || 0).toLocaleString()} executions</span></footer></section><aside><p><span>Resident market assets</span><strong>${money(markets.resident_assets)}</strong></p><p><span>Executed trade volume</span><strong>${money(markets.volume)}</strong></p><p><span>Buying power on exchange</span><strong>${money(markets.cash_value)}</strong></p><p><span>Market fees collected</span><strong>${money(markets.fees)}</strong></p></aside></div>
     <div class="stats-market-tape">${(markets.movers || []).map(item => `<article><span>${escapeHtml(item.ticker)}</span><strong>${money(item.price)}</strong><em class="${Number(item.change || 0) >= 0 ? "up" : "down"}">${Number(item.change || 0) >= 0 ? "+" : ""}${Number(item.change || 0).toFixed(2)}%</em><small>${escapeHtml(item.name)}</small></article>`).join("") || `<p>Exchange quotes are awaiting synchronization.</p>`}</div>
-    <div class="stats-economy-ledger"><section><header><span>HOUSEHOLD ECONOMY</span><strong>${statsPercent(economy.funded_rate)} funded</strong></header><div class="stats-benchmark"><div><span>Average bank position</span><strong>${money(economy.average_balance)}</strong></div><i><b></b></i><div><span>Median bank position</span><strong>${money(economy.median_balance)}</strong></div></div>${statsDistribution(economy.distribution)}</section><section><header><span>PUBLIC OBLIGATIONS</span><strong>${money(economy.public_obligations)}</strong></header><dl><div><dt>Outstanding fines</dt><dd>${money(economy.outstanding_fines)}</dd></div><div><dt>Property tax due</dt><dd>${money(economy.property_tax_due)}</dd></div><div><dt>Business tax due</dt><dd>${money(economy.business_tax_due)}</dd></div><div><dt>Lottery pool</dt><dd>${money(economy.lottery_pool)}</dd></div><div><dt>Housing assessed base</dt><dd>${money(economy.housing_assessed_base)}</dd></div></dl></section></div>
+    <div class="stats-economy-ledger"><section><header><span>HOUSEHOLD ECONOMY</span><strong>${statsPercent(economy.funded_rate)} funded</strong></header><div class="stats-benchmark"><div><span>Average bank position</span><strong>${money(economy.average_balance)}</strong></div><i><b></b></i><div><span>Median bank position</span><strong>${money(economy.median_balance)}</strong></div></div>${statsDistribution(economy.distribution)}</section><section><header><span>STATE BALANCE SHEET</span><strong>${money(economy.state_net_position)}</strong></header><dl><div><dt>Total modeled assets</dt><dd>${money(economy.total_state_assets)}</dd></div><div><dt>Resident market assets</dt><dd>${money(economy.resident_market_assets)}</dd></div><div><dt>Housing assessed base</dt><dd>${money(economy.housing_assessed_base)}</dd></div><div><dt>Public obligations</dt><dd>${money(economy.public_obligations)}</dd></div><div><dt>Obligation load</dt><dd>${Number(economy.obligation_ratio || 0).toFixed(3)}%</dd></div><div><dt>Market liquidity</dt><dd>${Number(economy.liquidity_ratio || 0).toFixed(2)}%</dd></div><div><dt>Lottery pool</dt><dd>${money(economy.lottery_pool)}</dd></div></dl></section></div>
     <div class="stats-privacy-seal"><span>${iconSvg.shield}</span><div><strong>Resident financial privacy enforced</strong><p>Only statewide totals, distribution bands, and exchange aggregates are published. No personal balance is present in this dataset.</p></div></div>
   </section>`;
 
@@ -11168,7 +11178,8 @@ function renderDevAccountDeletion(data, users) {
   const impact = preview?.impact?.records || {};
   const records = data.records || [];
   const currentId = Number(state.session?.user?.id || 0);
-  const directory = users.map((user) => {
+  const directoryUsers = state.devDeletionSearchResults ?? data.accounts ?? users;
+  const directory = directoryUsers.map((user) => {
     const protectedAccount = Number(user.id) === currentId || (user.roles || []).includes("owner");
     return `<button type="button" class="account-deletion-row" data-deletion-account="${user.id}" data-deletion-search="${escapeHtml(`${user.name} ${user.email} ${user.civ_number || ""} ${user.arma_id || ""}`.toLowerCase())}">
       <span class="account-deletion-ident"><i>${escapeHtml(String(user.name || "?").slice(0, 1).toUpperCase())}</i><b>${escapeHtml(user.name)}</b><small>CIV ${escapeHtml(user.civ_number || "pending")} · ${escapeHtml(user.email)}</small></span>
@@ -11184,9 +11195,9 @@ function renderDevAccountDeletion(data, users) {
   }).join("");
   return `<div class="account-deletion-command">
     <header class="account-deletion-hero"><div><span>FC / RESTRICTED IDENTITY AUTHORITY</span><h2>Account Deletion Command</h2><p>Review the full account footprint before permanently removing a resident identity. Every completed deletion leaves a non-editable evidence record.</p></div><div class="account-deletion-clearance"><i></i><small>ACCESS CLASS</small><strong>DEVELOPER ONLY</strong><span>Permanent action channel</span></div></header>
-    <div class="account-deletion-status"><div><small>RESIDENT DIRECTORY</small><strong>${users.length}</strong><span>current accounts</span></div><div><small>PERMANENT LEDGER</small><strong>${Number(data.total_deleted || records.length)}</strong><span>completed deletions</span></div><p><b>Scope:</b> This removes the Faircroft RP OS account and its linked application records. It does not erase external Arma server JSON files.</p></div>
+    <div class="account-deletion-status"><div><small>RESIDENT DIRECTORY</small><strong>${directoryUsers.length}</strong><span>${state.devDeletionQuery ? "matching accounts" : "current accounts"}</span></div><div><small>PERMANENT LEDGER</small><strong>${Number(data.total_deleted || records.length)}</strong><span>completed deletions</span></div><p><b>Scope:</b> This removes the Faircroft RP OS account and its linked application records. It does not erase external Arma server JSON files.</p></div>
     <section class="account-deletion-console">
-      <aside class="account-deletion-directory"><header><div><small>01 / TARGET DIRECTORY</small><h3>Select an account</h3></div><input id="accountDeletionSearch" placeholder="Name, email, CIV, or Arma ID" autocomplete="off" /></header><div>${directory || `<p class="empty">No resident accounts found.</p>`}</div></aside>
+      <aside class="account-deletion-directory"><header><div><small>01 / TARGET DIRECTORY</small><h3>Select an account</h3></div><form id="accountDeletionSearchForm"><input id="accountDeletionSearch" name="q" value="${escapeHtml(state.devDeletionQuery || "")}" placeholder="Name, email, CIV, Arma name, or ID" autocomplete="off" /><button class="secondary" type="submit">Search accounts</button>${state.devDeletionQuery ? `<button class="secondary" type="button" data-clear-deletion-search>Clear</button>` : ""}</form></header><div>${directory || `<p class="empty">No account matched this search.</p>`}</div></aside>
       <main class="account-deletion-inspector">${account ? `<header><button type="button" data-close-deletion-preview>×</button><small>02 / IMPACT AUTHORIZATION</small><h3>${escapeHtml(account.name)}</h3><p>CIV ${escapeHtml(account.civ_number || "pending")} · ${escapeHtml(account.email)}</p></header>
         <div class="account-deletion-identity"><div><small>ACCOUNT</small><strong>#${account.id}</strong></div><div><small>ARMA IDENTITY</small><strong>${escapeHtml(account.arma_id || "Not linked")}</strong></div><div><small>ROLES</small><strong>${escapeHtml((account.roles || []).join(", "))}</strong></div></div>
         <div class="account-deletion-impact"><div><small>CASCADE PREVIEW</small><strong>${Number(preview.impact?.total_records || 0)}</strong><span>linked records identified</span></div><ul>${impactLines}</ul></div>
@@ -12269,7 +12280,11 @@ function bindDevWorkspace() {
     }
     state.devTab = requestedTab;
     if (state.devTab !== "accounts") state.adminAccountId = null;
-    if (state.devTab !== "account-deletion") state.devDeletionPreview = null;
+    if (state.devTab !== "account-deletion") {
+      state.devDeletionPreview = null;
+      state.devDeletionQuery = "";
+      state.devDeletionSearchResults = null;
+    }
     if (state.devTab === "settlement") {
       try {
         state.cache["fine-settlement"] = await api("/api/fine-settlement");
@@ -12947,6 +12962,23 @@ function bindDevTools() {
     $$("[data-deletion-account]").forEach((row) => {
       row.hidden = Boolean(query) && !String(row.dataset.deletionSearch || "").includes(query);
     });
+  });
+  $("#accountDeletionSearchForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const query = String(new FormData(event.currentTarget).get("q") || "").trim();
+    try {
+      const result = await api(`/api/dev-tools/account-deletion/search?q=${encodeURIComponent(query)}`);
+      state.devDeletionQuery = query;
+      state.devDeletionSearchResults = result.accounts || [];
+      state.devDeletionPreview = null;
+      render();
+    } catch (error) { toast(error.message); }
+  });
+  $("[data-clear-deletion-search]")?.addEventListener("click", () => {
+    state.devDeletionQuery = "";
+    state.devDeletionSearchResults = null;
+    state.devDeletionPreview = null;
+    render();
   });
   $$('[data-deletion-account]').forEach((button) => button.addEventListener('click', async () => {
     try {
@@ -13969,7 +14001,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.2.2-admin-tools").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.2.2-account-deletion-search").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {
