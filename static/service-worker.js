@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v022-dmv-car-link-reset";
+const CACHE = "faircroft-rp-v022-stats-intelligence-2";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.2.2-dmv-car-link-reset",
+  "/static/styles.css?v=0.2.2-stats-intelligence-2",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.2.2-dmv-car-link-reset",
+  "/static/app.js?v=0.2.2-stats-intelligence-2",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
   "/static/brand/platforms/playstation.svg",

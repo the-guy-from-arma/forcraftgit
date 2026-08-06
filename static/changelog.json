@@ -6,6 +6,8 @@
       "version": "0.2.2",
     "title": "RP OS 0.2.2",
     "added": [
+      "Added Statewide Intelligence 2.0 with detailed violent and non-violent crime families, traffic-enforcement categories, active warrants and BOLOs, court disposition flow, Fire and EMS incident mix, monthly crime movement, and per-capita public-safety rates.",
+      "Added privacy-safe economic and market intelligence covering game-bank circulation, resident-held securities value, exchange assets, executed volume, market breadth and movers, public obligations, taxes, fines, housing assessed value, and the active lottery pool.",
       "Added a controlled Developer Tools DMV car-link reset beside the identity and money migration controls, clearing resident vehicle attachments, registrations, insurance links, and stale Railway vehicle mirrors while preserving driver licenses and authoritative game-server save files.",
       "Added the public Faircroft Statistics Bureau application with live statewide views for population, server activity, public safety, courts, Fire and EMS, housing, mobility, commerce, and economic health.",
       "Added a privacy-enforced public statistics API that publishes only totals, averages, medians, rates, and distribution bands while withholding resident names, CIV numbers, account identifiers, and individual bank balances.",
@@ -104,6 +106,7 @@
         ,"Added an active scheduled-movement ledger to Ravenhood Stock Market Settings with affected securities, target percentage, schedule timing, live progress, and immediate stop controls."
       ],
     "changed": [
+      "Rebuilt the public Stats application as an animated Faircroft statewide command experience with a live signal wire, traced data visualizations, detailed intelligence chapters, responsive operational layouts, and significantly denser public insight without exposing resident records.",
       "Rebuilt Faircroft Continuity Protection as a cinematic resident asset-defense command with a live recovery shield, synchronized exposure telemetry, character-specific protection loadouts, animated policy intelligence, and a responsive activation experience that preserves all policy, claim, and four-digit receipt workflows.",
       "Changed Admin Tools navigation so Account Deletion remains visible but greyed out for administrators and cannot be delegated through administrator section-access switches.",
       "Changed the weekly lottery from complimentary automatic entries to purchased, resident-selected number lines funded exclusively through the recurring Lottery Wallet.",

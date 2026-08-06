@@ -8985,12 +8985,89 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             if row.get("kind") == "criminal" and any(term in f"{row.get('category', '')} {row.get('charge_title', '')}".lower() for term in violent_terms)
         )
         nonviolent_count = max(0, criminal_count - violent_count)
+
+        def grouped_legal_activity(rows: list[DbRow], kind: str, groups: list[tuple[str, tuple[str, ...]]]) -> list[dict[str, Any]]:
+            totals = {label: 0 for label, _ in groups}
+            fallback = "Other violent" if kind == "violent" else "Other non-violent"
+            totals[fallback] = 0
+            for filing in rows:
+                if filing.get("kind") != "criminal":
+                    continue
+                haystack = f"{filing.get('category', '')} {filing.get('charge_title', '')}".lower()
+                is_violent = any(term in haystack for term in violent_terms)
+                if (kind == "violent") != is_violent:
+                    continue
+                matched = next((label for label, terms in groups if any(term in haystack for term in terms)), fallback)
+                totals[matched] = totals.get(matched, 0) + int(filing.get("count") or 0)
+            total = sum(totals.values())
+            return [
+                {"label": label, "count": value, "percent": percent(value, total)}
+                for label, value in sorted(totals.items(), key=lambda item: (-item[1], item[0]))
+                if value
+            ]
+
+        violent_categories = grouped_legal_activity(filing_rows, "violent", [
+            ("Homicide", ("murder", "homicide", "manslaughter")),
+            ("Assault & battery", ("assault", "battery", "violent")),
+            ("Robbery", ("robbery",)),
+            ("Weapons offenses", ("weapon", "firearm", "gun")),
+            ("Kidnapping", ("kidnap", "abduction", "hostage")),
+            ("Sexual violence", ("sexual", "rape")),
+        ])
+        nonviolent_categories = grouped_legal_activity(filing_rows, "nonviolent", [
+            ("Property crime", ("burglary", "theft", "larceny", "stolen", "trespass", "vandal", "property")),
+            ("Narcotics", ("drug", "narcotic", "controlled substance", "possession")),
+            ("Financial crime", ("fraud", "money", "tax", "counterfeit", "embezzle")),
+            ("Public order", ("disorder", "public", "noise", "loiter", "peace")),
+            ("Obstruction", ("obstruction", "resist", "evad", "false statement")),
+            ("Vehicle crime", ("vehicle", "driving", "traffic", "license")),
+        ])
+        citation_groups = [
+            ("Speed & moving", ("speed", "moving", "lane", "signal", "stop sign", "right of way")),
+            ("License & registration", ("license", "registration", "permit")),
+            ("Equipment", ("equipment", "light", "tint", "inspection", "tire")),
+            ("Insurance", ("insurance",)),
+            ("Parking", ("parking", "parked")),
+            ("Unsafe operation", ("reckless", "careless", "distracted", "unsafe", "dui", "dwi")),
+        ]
+        citation_category_totals = {label: 0 for label, _ in citation_groups}
+        citation_category_totals["Other traffic"] = 0
+        for filing in filing_rows:
+            if filing.get("kind") != "citation":
+                continue
+            haystack = f"{filing.get('category', '')} {filing.get('charge_title', '')}".lower()
+            label = next((name for name, terms in citation_groups if any(term in haystack for term in terms)), "Other traffic")
+            citation_category_totals[label] += int(filing.get("count") or 0)
+        citation_categories = [
+            {"label": label, "count": value, "percent": percent(value, citation_count)}
+            for label, value in sorted(citation_category_totals.items(), key=lambda item: (-item[1], item[0]))
+            if value
+        ]
+
+        month_start = dt.datetime.now(dt.timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        previous_month_start = (month_start - dt.timedelta(days=1)).replace(day=1)
+        current_criminal = count(
+            "SELECT COUNT(*) AS count FROM citations c JOIN charge_catalog catalog ON catalog.id = c.charge_id WHERE catalog.kind = 'criminal' AND c.created_at >= ? AND c.record_expunged_at IS NULL",
+            (month_start.isoformat(),),
+        )
+        previous_criminal = count(
+            "SELECT COUNT(*) AS count FROM citations c JOIN charge_catalog catalog ON catalog.id = c.charge_id WHERE catalog.kind = 'criminal' AND c.created_at >= ? AND c.created_at < ? AND c.record_expunged_at IS NULL",
+            (previous_month_start.isoformat(), month_start.isoformat()),
+        )
+        crime_change = round(((current_criminal - previous_criminal) / previous_criminal * 100.0), 1) if previous_criminal else (100.0 if current_criminal else 0.0)
         bookings = count("SELECT COUNT(*) AS count FROM mdt_bookings")
         active_bolos = count("SELECT COUNT(*) AS count FROM mdt_bolos WHERE status = 'active'")
+        active_warrants = count("SELECT COUNT(*) AS count FROM cid_warrants WHERE LOWER(status) = 'active'")
         completed_cases = count("SELECT COUNT(*) AS count FROM citations WHERE decided_at IS NOT NULL AND record_expunged_at IS NULL")
         open_cases = count("SELECT COUNT(*) AS count FROM citations WHERE decided_at IS NULL AND record_expunged_at IS NULL")
         guilty_cases = count("SELECT COUNT(*) AS count FROM citations WHERE disposition IN ('guilty','plea_agreement','liable') AND record_expunged_at IS NULL")
         dismissed_cases = count("SELECT COUNT(*) AS count FROM citations WHERE disposition IN ('dismissed','not_guilty') AND record_expunged_at IS NULL")
+        contested_cases = count("SELECT COUNT(*) AS count FROM citations WHERE LOWER(status) IN ('contested','appealed') AND record_expunged_at IS NULL")
+        outstanding_fines_row = one(
+            db,
+            "SELECT COALESCE(SUM(fine_amount), 0) AS total FROM citations WHERE record_expunged_at IS NULL AND LOWER(status) NOT IN ('paid','dismissed','void','expunged')",
+        )
+        outstanding_fines = round(float((outstanding_fines_row or {}).get("total") or 0), 2)
 
         incident_rows = all_rows(db, "SELECT department, call_type, status, COUNT(*) AS count FROM panic_alerts GROUP BY department, call_type, status")
         fire_incidents = sum(int(row["count"] or 0) for row in incident_rows if str(row.get("department") or "").lower() == "fire")
@@ -9001,6 +9078,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             for row in incident_rows
             if str(row.get("department") or "").lower() in ("fire", "ems") and str(row.get("status") or "").lower() in ("cleared", "resolved", "closed")
         )
+        emergency_types: dict[str, int] = {}
+        for row in incident_rows:
+            if str(row.get("department") or "").lower() not in ("fire", "ems"):
+                continue
+            raw_type = str(row.get("call_type") or "Other response").strip()
+            label = raw_type if raw_type else "Other response"
+            emergency_types[label] = emergency_types.get(label, 0) + int(row.get("count") or 0)
+        emergency_mix = [
+            {"label": label, "count": value, "percent": percent(value, emergency_total)}
+            for label, value in sorted(emergency_types.items(), key=lambda item: (-item[1], item[0]))[:8]
+        ]
 
         property_total = count("SELECT COUNT(*) AS count FROM game_property_records")
         property_owned = count("SELECT COUNT(*) AS count FROM game_property_records WHERE owner_identity <> '' AND LOWER(status) NOT IN ('available','vacant')")
@@ -9019,6 +9107,47 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         active_businesses = count("SELECT COUNT(*) AS count FROM businesses WHERE LOWER(status) = 'active'")
         business_violations = count("SELECT COUNT(*) AS count FROM business_violations WHERE LOWER(status) = 'open'")
 
+        property_tax_row = one(db, "SELECT COALESCE(SUM(amount), 0) AS total FROM property_tax_assessments WHERE LOWER(status) = 'unpaid'")
+        business_tax_row = one(db, "SELECT COALESCE(SUM(amount), 0) AS total FROM business_tax_assessments WHERE LOWER(status) = 'unpaid'")
+        property_tax_due = round(float((property_tax_row or {}).get("total") or 0), 2)
+        business_tax_due = round(float((business_tax_row or {}).get("total") or 0), 2)
+
+        securities = all_rows(db, "SELECT ticker, name, sector, security_type, price, previous_price FROM market_securities WHERE active = 1 ORDER BY ticker")
+        market_held_row = one(
+            db,
+            """SELECT COALESCE(SUM(h.quantity * s.price), 0) AS held_value
+               FROM market_holdings h JOIN market_securities s ON s.id = h.security_id
+               WHERE s.active = 1""",
+        )
+        market_cash_row = one(db, "SELECT COALESCE(SUM(cash_balance), 0) AS cash_value, COUNT(*) AS accounts FROM market_accounts WHERE LOWER(status) = 'active'")
+        market_order_row = one(db, "SELECT COUNT(*) AS trades, COALESCE(SUM(gross_amount), 0) AS volume, COALESCE(SUM(fee_amount), 0) AS fees FROM market_orders")
+        market_held_value = round(float((market_held_row or {}).get("held_value") or 0), 2)
+        market_cash_value = round(float((market_cash_row or {}).get("cash_value") or 0), 2)
+        market_accounts = int((market_cash_row or {}).get("accounts") or 0)
+        market_trades = int((market_order_row or {}).get("trades") or 0)
+        market_volume = round(float((market_order_row or {}).get("volume") or 0), 2)
+        market_fees = round(float((market_order_row or {}).get("fees") or 0), 2)
+        market_movers: list[dict[str, Any]] = []
+        gainers = decliners = unchanged = 0
+        index_current = index_previous = 0.0
+        for security in securities:
+            current = float(security.get("price") or 0)
+            previous = float(security.get("previous_price") or current or 0)
+            change = round(((current - previous) / previous * 100.0), 2) if previous else 0.0
+            gainers += int(change > 0)
+            decliners += int(change < 0)
+            unchanged += int(change == 0)
+            index_current += current
+            index_previous += previous
+            market_movers.append({
+                "ticker": str(security.get("ticker") or ""), "name": str(security.get("name") or ""),
+                "sector": str(security.get("sector") or "General"), "price": round(current, 2), "change": change,
+            })
+        market_movers.sort(key=lambda item: abs(float(item["change"])), reverse=True)
+        market_index_change = round(((index_current - index_previous) / index_previous * 100.0), 2) if index_previous else 0.0
+        lottery_row = one(db, "SELECT COALESCE(MAX(prize_pool), 0) AS pool FROM lottery_draws WHERE LOWER(status) IN ('scheduled','open')")
+        lottery_pool = round(float((lottery_row or {}).get("pool") or 0), 2)
+
         self.send_json(200, {
             "generated_at": now_iso(),
             "privacy": "Aggregate public statistics only. Individual balances and resident financial records are never included.",
@@ -9033,7 +9162,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "economy": {
                 "funded_accounts": funded, "circulation": circulation, "average_balance": average_balance,
                 "median_balance": median_balance, "distribution": distribution,
-                "funded_rate": percent(funded, linked),
+                "funded_rate": percent(funded, linked), "outstanding_fines": outstanding_fines,
+                "property_tax_due": property_tax_due, "business_tax_due": business_tax_due,
+                "public_obligations": round(outstanding_fines + property_tax_due + business_tax_due, 2),
+                "housing_assessed_base": round(property_total * 350000.0, 2), "lottery_pool": lottery_pool,
+            },
+            "markets": {
+                "listings": len(securities), "accounts": market_accounts, "held_value": market_held_value,
+                "cash_value": market_cash_value, "resident_assets": round(market_held_value + market_cash_value, 2),
+                "trades": market_trades, "volume": market_volume, "fees": market_fees,
+                "gainers": gainers, "decliners": decliners, "unchanged": unchanged,
+                "index_value": round(index_current, 2), "index_change": market_index_change,
+                "movers": market_movers[:8],
             },
             "gameplay": {
                 "total_hours": round(sum(playtime_seconds) / 3600, 1),
@@ -9051,17 +9191,23 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "criminal": criminal_count, "parking": parking_count, "violent": violent_count,
                 "nonviolent": nonviolent_count, "violent_share": percent(violent_count, criminal_count),
                 "nonviolent_share": percent(nonviolent_count, criminal_count), "bookings": bookings,
-                "active_bolos": active_bolos,
+                "active_bolos": active_bolos, "active_warrants": active_warrants,
+                "crime_rate_per_100": round(criminal_count / max(1, verified) * 100.0, 1),
+                "current_month": current_criminal, "previous_month": previous_criminal, "monthly_change": crime_change,
+                "violent_categories": violent_categories, "nonviolent_categories": nonviolent_categories,
+                "citation_categories": citation_categories,
             },
             "courts": {
                 "open": open_cases, "completed": completed_cases, "guilty": guilty_cases,
                 "dismissed_or_not_guilty": dismissed_cases,
+                "contested": contested_cases,
                 "completion_rate": percent(completed_cases, open_cases + completed_cases),
                 "finding_rate": percent(guilty_cases, completed_cases),
             },
             "fire_ems": {
                 "total": emergency_total, "fire": fire_incidents, "ems": ems_incidents,
                 "cleared": emergency_cleared, "clearance_rate": percent(emergency_cleared, emergency_total),
+                "open": max(0, emergency_total - emergency_cleared), "mix": emergency_mix,
             },
             "housing": {
                 "total": property_total, "owned": property_owned, "available": property_available,
