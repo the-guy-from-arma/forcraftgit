@@ -52,6 +52,7 @@ ANDROID_APK_URL = os.environ.get(
     "https://github.com/the-guy-from-arma/forcraftgit/releases/latest/download/Faircroft-RP.apk",
 ).strip()
 ARMA_BRIDGE_API_KEY = os.environ.get("ARMA_BRIDGE_API_KEY", "").strip()
+BANK_BRIDGE_TEST_MODE = os.environ.get("BANK_BRIDGE_TEST_MODE", "0").lower() in ("1", "true", "yes", "on")
 ARMA_LINK_CODE_TTL_MINUTES = int(os.environ.get("ARMA_LINK_CODE_TTL_MINUTES", "30"))
 SHADOWHAVEN_SFTP_HOST = os.environ.get("SHADOWHAVEN_SFTP_HOST", "").strip()
 SHADOWHAVEN_SFTP_PORT = int(os.environ.get("SHADOWHAVEN_SFTP_PORT", "2022"))
@@ -3021,6 +3022,29 @@ def ensure_schema() -> None:
                 FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (used_by) REFERENCES users(id) ON DELETE SET NULL
             );
+
+            CREATE TABLE IF NOT EXISTS bank_bridge_commands (
+                id SERIAL PRIMARY KEY,
+                command_id TEXT NOT NULL UNIQUE,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                server_id TEXT NOT NULL DEFAULT 'default',
+                operation TEXT NOT NULL,
+                target_user_id INTEGER NOT NULL,
+                identity_id TEXT NOT NULL DEFAULT '',
+                amount NUMERIC(14,2) NOT NULL,
+                currency TEXT NOT NULL DEFAULT 'cash',
+                reason TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                requested_by INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                claimed_at TEXT,
+                completed_at TEXT,
+                result_json TEXT NOT NULL DEFAULT '{}',
+                FOREIGN KEY (target_user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (requested_by) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS bank_bridge_commands_pending_idx
+                ON bank_bridge_commands (server_id, status, created_at);
 
             CREATE TABLE IF NOT EXISTS account_sanctions (
                 id SERIAL PRIMARY KEY,
@@ -6285,6 +6309,7 @@ def admin_tools_route_section(path: str) -> str:
         ("/api/dev-tools/dmv/", "dmv-settings"),
         ("/api/dev-tools/admin-2fa", "admin-2fa"),
         ("/api/dev-tools/myfaircroft-payment-codes", "settlement"),
+        ("/api/dev-tools/banking/", "banking-settings"),
         ("/api/dev-tools/market/", "market-settings"),
         ("/api/dev-tools/lottery/", "lottery-settings"),
         ("/api/dev-tools/gangs/", "gang-settings"),
@@ -7248,7 +7273,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin", "*"))
         self.send_header("Access-Control-Allow-Credentials", "true")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, X-Server-ID")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
         self.end_headers()
 
@@ -7542,6 +7567,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_arma_events(db)
                 elif path == "/api/arma/game-database/banks" and method == "POST":
                     self.api_arma_game_banks(db)
+                elif path == "/api/arma/bank-commands" and method == "GET":
+                    self.api_arma_bank_commands(db, query)
+                elif path.startswith("/api/arma/bank-commands/") and method == "POST":
+                    self.api_arma_bank_command_result(db, path.split("/")[4])
                 elif path == "/api/jobs" and method == "GET":
                     self.api_jobs(db, user)
                 elif path == "/api/jobs/department-applications" and method == "POST":
@@ -7780,6 +7809,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_generate_admin_2fa_code(db, user)
                 elif path == "/api/dev-tools/myfaircroft-payment-codes" and method == "POST":
                     self.api_dev_generate_myfaircroft_payment_code(db, user)
+                elif path == "/api/dev-tools/banking/issue-funds" and method == "POST":
+                    self.api_dev_issue_bank_funds(db, user)
                 elif path == "/api/dev-tools/market/codes" and method == "POST":
                     self.api_dev_market_code(db, user)
                 elif path == "/api/dev-tools/market/settings" and method == "PATCH":
@@ -10972,6 +11003,87 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 linked += 1
             accepted += 1
         self.send_json(200, {"ok": True, "accepted": accepted, "matched_linked_accounts": linked, "synced_at": synced_at})
+
+    def api_arma_bank_commands(self, db: Database, query: dict[str, list[str]] | None = None) -> None:
+        """Claim pending developer banking commands for the isolated Bank Bridge addon."""
+        err = self.bridge_error()
+        if err:
+            self.error(403, err)
+            return
+        query = query or {}
+        server_id = str(self.headers.get("X-Server-ID") or (query.get("server_id") or [""])[0] or "default").strip()[:80] or "default"
+        rows = all_rows(
+            db,
+            """
+            SELECT c.*, u.name AS target_name, u.civ_number, l.identity_id AS linked_identity_id
+            FROM bank_bridge_commands c
+            JOIN users u ON u.id = c.target_user_id
+            LEFT JOIN arma_account_links l ON l.user_id = c.target_user_id
+            WHERE c.server_id = ? AND c.status = 'pending'
+            ORDER BY c.created_at, c.id
+            LIMIT 25
+            """,
+            (server_id,),
+        )
+        claimed: list[dict[str, Any]] = []
+        claimed_at = now_iso()
+        for row in rows:
+            claimed_row = one(
+                db,
+                "UPDATE bank_bridge_commands SET status='claimed', claimed_at=? WHERE id=? AND status='pending' RETURNING id",
+                (claimed_at, row["id"]),
+            )
+            if not claimed_row:
+                continue
+            item = dict(row)
+            item["status"] = "claimed"
+            item["target_identity_id"] = item.get("identity_id") or item.get("linked_identity_id") or ""
+            claimed.append(item)
+        self.send_json(200, {"ok": True, "server_id": server_id, "commands": claimed, "count": len(claimed)})
+
+    def api_arma_bank_command_result(self, db: Database, command_id: str) -> None:
+        err = self.bridge_error()
+        if err:
+            self.error(403, err)
+            return
+        command_id = str(command_id or "").strip()[:120]
+        payload = self.read_json()
+        status = str(payload.get("status") or "").strip().lower()
+        if status not in ("completed", "failed", "retry"):
+            self.error(400, "Command result status must be completed, failed, or retry")
+            return
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            result = {"message": str(payload.get("message") or "")[:500]}
+        row = one(db, "SELECT * FROM bank_bridge_commands WHERE command_id=?", (command_id,))
+        if not row:
+            self.error(404, "Bank bridge command was not found")
+            return
+        if row["status"] == "completed":
+            self.send_json(200, {"ok": True, "command_id": command_id, "status": "completed", "idempotent": True})
+            return
+        if row["status"] not in ("claimed", "pending"):
+            self.error(409, f"Command is already {row['status']}")
+            return
+        if status == "retry":
+            db.execute(
+                """
+                UPDATE bank_bridge_commands
+                SET status='pending', claimed_at=NULL, result_json=?
+                WHERE command_id=? AND status IN ('claimed','pending')
+                """,
+                (json.dumps(result, separators=(",", ":"), default=str)[:4000], command_id),
+            )
+        else:
+            db.execute(
+                """
+                UPDATE bank_bridge_commands
+                SET status=?, completed_at=?, result_json=?
+                WHERE command_id=? AND status IN ('claimed','pending')
+                """,
+                (status, now_iso(), json.dumps(result, separators=(",", ":"), default=str)[:4000], command_id),
+            )
+        self.send_json(200, {"ok": True, "command_id": command_id, "status": status})
 
     def api_jobs(self, db: Database, user: DbRow | None) -> None:
         if not user:
@@ -16591,6 +16703,98 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "deletion_record_id": int(deletion_record["id"]),
         })
 
+    def api_dev_issue_bank_funds(self, db: Database, user: DbRow | None) -> None:
+        """Create a developer-only in-game credit command without consuming admin 2FA."""
+        err = strict_developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        if not BANK_BRIDGE_TEST_MODE:
+            self.error(409, "Bank Bridge testing mode is disabled on Railway")
+            return
+        payload = self.read_json()
+        try:
+            target_user_id = int(payload.get("target_user_id") or 0)
+        except (TypeError, ValueError):
+            target_user_id = 0
+        try:
+            amount = round(float(payload.get("amount") or 0), 2)
+        except (TypeError, ValueError):
+            amount = 0.0
+        reason = str(payload.get("reason") or "").strip()
+        server_id = str(payload.get("server_id") or "default").strip()[:80] or "default"
+        currency = str(payload.get("currency") or "cash").strip().lower()[:32] or "cash"
+        idempotency_key = str(payload.get("idempotency_key") or secrets.token_urlsafe(24)).strip()[:160]
+        if target_user_id <= 0 or amount <= 0 or amount > 10_000_000:
+            self.error(400, "Choose an account and an amount between 0.01 and 10,000,000.00")
+            return
+        if amount != int(amount):
+            self.error(400, "In-game bank credits must be a whole number")
+            return
+        if currency != "bank":
+            self.error(400, "This testing action only issues the authoritative in-game bank balance")
+            return
+        if len(reason) < 8 or len(reason) > 500:
+            self.error(400, "A fund-issuance reason between 8 and 500 characters is required")
+            return
+        target = one(
+            db,
+            """
+            SELECT u.id, u.name, u.civ_number, l.identity_id
+            FROM users u LEFT JOIN arma_account_links l ON l.user_id=u.id
+            WHERE u.id=?
+            """,
+            (target_user_id,),
+        )
+        if not target:
+            self.error(404, "Target account was not found")
+            return
+        identity_id = str(target.get("identity_id") or "").strip()
+        if not identity_id:
+            self.error(409, "The target account must have a linked Bohemia identity before in-game funds can be issued")
+            return
+        existing = one(db, "SELECT * FROM bank_bridge_commands WHERE idempotency_key=?", (idempotency_key,))
+        if existing:
+            self.send_json(200, {"ok": True, "command": dict(existing), "idempotent": True})
+            return
+        command_id = f"fc-bank-{secrets.token_urlsafe(18)}"
+        created_at = now_iso()
+        db.execute(
+            """
+            INSERT INTO bank_bridge_commands
+            (command_id,idempotency_key,server_id,operation,target_user_id,identity_id,amount,currency,reason,status,requested_by,created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,'pending',?,?)
+            """,
+            (command_id, idempotency_key, server_id, "issue_funds", target_user_id, identity_id, amount, currency, reason, int(user["id"]), created_at),
+        )
+        add_admin_audit(
+            db,
+            int(user["id"]),
+            "bank_bridge.issue_funds_requested",
+            target_user_id,
+            {"command_id": command_id, "amount": amount, "currency": currency, "server_id": server_id, "reason": reason},
+        )
+        self.send_json(
+            202,
+            {
+                "ok": True,
+                "command": {
+                    "command_id": command_id,
+                    "server_id": server_id,
+                    "operation": "issue_funds",
+                    "target_user_id": target_user_id,
+                    "target_name": target["name"],
+                    "target_civ_number": target.get("civ_number") or "",
+                    "identity_id": identity_id,
+                    "amount": amount,
+                    "currency": currency,
+                    "reason": reason,
+                    "status": "pending",
+                    "created_at": created_at,
+                },
+            },
+        )
+
     def api_dev_tools(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
         if err:
@@ -16770,6 +16974,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             LEFT JOIN users target ON target.id = c.target_user_id
             LEFT JOIN users used ON used.id = c.used_by
             ORDER BY c.created_at DESC LIMIT 200
+            """,
+        )
+        bank_bridge_commands = all_rows(
+            db,
+            """
+            SELECT c.*, target.name AS target_name, target.civ_number,
+                   requester.name AS requested_by_name
+            FROM bank_bridge_commands c
+            JOIN users target ON target.id=c.target_user_id
+            JOIN users requester ON requester.id=c.requested_by
+            ORDER BY c.created_at DESC
+            LIMIT 200
             """,
         )
         beta_tasks = all_rows(db, "SELECT * FROM beta_tasks ORDER BY active DESC, updated_at DESC LIMIT 100")
@@ -17089,6 +17305,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "unlink_codes": [dict(row) for row in codes],
                 "admin_2fa_codes": [dict(row) for row in admin_2fa_codes],
                 "myfaircroft_payment_codes": [dict(row) for row in myfaircroft_payment_codes],
+                "banking": {
+                    "testing_mode": BANK_BRIDGE_TEST_MODE,
+                    "pin_required": False,
+                    "commands": [dict(row) for row in bank_bridge_commands],
+                    "pending": sum(1 for row in bank_bridge_commands if row.get("status") == "pending"),
+                    "completed": sum(1 for row in bank_bridge_commands if row.get("status") == "completed"),
+                    "failed": sum(1 for row in bank_bridge_commands if row.get("status") == "failed"),
+                },
                 "beta_program": {
                     "recruiting_enabled": system_settings["beta_recruiting_enabled"],
                     "recruiting_message": system_settings["beta_recruiting_message"],

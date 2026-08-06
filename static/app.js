@@ -10840,7 +10840,7 @@ const ADMIN_TOOL_NAV = [
   ["anticheat", "Anti-Cheat", "05"], ["insurance-claims", "Insurance Claims", "06"],
   ["enforcement", "Cases", "07"], ["warnings", "Internal Notes", "08"],
   ["linking", "Account Linking", "09"], ["campaigns", "Active Campaigns", "10"],
-  ["settlement", "Settlement", "11"], ["market-settings", "Stock Market", "12"],
+  ["settlement", "Settlement", "11"], ["banking-settings", "Banking Settings", "12"], ["market-settings", "Stock Market", "13"],
   ["lottery-settings", "Lottery Settings", "13"], ["gang-settings", "Gang Settings", "14"],
   ["dmv-settings", "DMV Settings", "15"], ["mdt-settings", "MDT Settings", "16"],
   ["court-settings", "Court Settings", "17"], ["ice-settings", "ICE Settings", "18"],
@@ -10875,6 +10875,7 @@ function renderDevWorkspace() {
     anticheat: ["Anti-Cheat Intelligence", "Live presence, detection history, and linked identity analysis"],
     campaigns: ["Active Campaigns", "Schedule banners, events, promotions, and entrance bulletins"],
     settlement: ["Settlement Operations", "Suspend licenses and process controlled fine and tax batches"],
+    "banking-settings": ["Banking Settings", "Issue controlled in-game test funds through the Bank Bridge"],
     "dmv-settings": ["DMV Settings", "Manage driver credentials, endorsements, and restoration fees"],
     "mdt-settings": ["MDT Settings", "Control local law-enforcement access and interagency information boundaries"],
     "court-settings": ["Court Settings", "Secure court-record maintenance and audited resets"],
@@ -11196,6 +11197,31 @@ function renderDevAccountDeletion(data, users) {
   </div>`;
 }
 
+function renderDevBankingSettings(banking, users) {
+  const commands = banking.commands || [];
+  const linkedUsers = users.filter((account) => account.arma_linked);
+  return `<div class="stack dev-ops-view dev-banking-settings-view">
+    <div class="dev-view-intro"><div><span>CONTROLLED GAME ECONOMY</span><h2>Banking settings</h2><p>Testing-only fund issuance for linked in-game accounts. Normal resident payments and Railway admin 2FA are unchanged.</p></div><strong>${Number(banking.pending || 0)} PENDING</strong></div>
+    <div class="dev-grid-2">
+      <section class="dev-card dev-editor-panel"><div class="dev-card-header"><div><span>DEVELOPER COMMAND</span><h2>Issue in-game funds</h2></div><span class="pill amber">TEST MODE</span></div>
+        <p class="muted">This creates a server command for the Bank Bridge. It does not edit Railway cash and does not require the four-digit payment PIN.</p>
+        ${banking.testing_mode ? `<form id="devBankIssueFundsForm" class="form-grid">
+          <label class="wide">Linked account<select name="target_user_id" required><option value="">Select linked account</option>${linkedUsers.map((account) => `<option value="${account.id}">${escapeHtml(account.name)} · ${escapeHtml(account.civ_number || "CIV pending")} · ${escapeHtml(account.arma_id || "")}</option>`).join("")}</select></label>
+          <label>Amount<input name="amount" type="number" min="1" max="10000000" step="1" placeholder="0" required /></label>
+          <label>Destination<select name="currency"><option value="bank">Authoritative in-game bank</option></select></label>
+          <label class="wide">Reason<textarea name="reason" minlength="8" maxlength="500" placeholder="Document why these test funds are being issued." required></textarea></label>
+          <label class="wide dev-certify"><input type="checkbox" required /> I understand this creates an auditable in-game fund issuance command.</label>
+          <button class="primary wide" type="submit">Queue fund issuance</button>
+        </form>` : `<div class="empty">Bank Bridge testing mode is disabled. Set <code>BANK_BRIDGE_TEST_MODE=1</code> in Railway before issuing test funds.</div>`}
+      </section>
+      <section class="dev-card dev-record-panel"><div class="dev-card-header"><div><span>BRIDGE STATUS</span><h2>Command ledger</h2></div><strong>${commands.length}</strong></div>
+        <div class="dev-banking-summary"><span><b>${Number(banking.pending || 0)}</b> Pending</span><span><b>${Number(banking.completed || 0)}</b> Completed</span><span><b>${Number(banking.failed || 0)}</b> Failed</span></div>
+        <div class="dev-record-list">${commands.slice(0, 40).map((command) => `<article class="dev-banking-command"><div><small>${escapeHtml(command.created_at || "")} · ${escapeHtml(command.requested_by_name || "Developer")}</small><strong>${escapeHtml(command.target_name || "Account")} · ${money(command.amount || 0)}</strong><p>${escapeHtml(command.reason || "")}</p></div><span class="dev-record-status ${command.status === "completed" ? "closed" : command.status === "failed" ? "danger" : ""}">${escapeHtml(command.status || "pending")}</span></article>`).join("") || `<div class="empty">No fund commands issued</div>`}</div>
+      </section>
+    </div>
+  </div>`;
+}
+
 function renderDevTools() {
   const data = state.cache["dev-tools"] || {};
   const users = data.users || [], sanctions = data.sanctions || [], warnings = data.warnings || [], logs = data.audit_logs || [], codes = data.unlink_codes || [];
@@ -11205,6 +11231,7 @@ function renderDevTools() {
     <section class="dev-card dev-account-directory"><div class="dev-card-header"><div><span>CONTROLLED RESIDENT REGISTRY</span><h2>Search every account</h2></div><span class="pill green">LIVE DIRECTORY</span></div>${renderAdminUsers(users)}</section>
   </div>`;
   if (state.devTab === "account-deletion") return renderDevAccountDeletion(data.account_deletion || {}, users);
+  if (state.devTab === "banking-settings") return renderDevBankingSettings(data.banking || {}, users);
   if (state.devTab === "insurance-claims") return renderDevInsuranceClaims(data.insurance_claims||{});
   if (state.devTab === "anticheat") return renderDevAntiCheat(data.anti_cheat || {});
   if (state.devTab === "dmv-settings") return renderDevDmvSettings(data.dmv_settings || {});
@@ -12085,6 +12112,20 @@ function bindDevWorkspace() {
     try {
       state.generatedMyFaircroftCode = await api("/api/dev-tools/myfaircroft-payment-codes", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
       toast("MyFaircroft receipt code issued");
+      await refreshDevTools();
+    } catch (error) { toast(error.message); }
+  });
+  $("#devBankIssueFundsForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const body = Object.fromEntries(new FormData(form).entries());
+    const amount = Number(body.amount || 0);
+    if (!(amount > 0)) { toast("Enter a valid amount"); return; }
+    if (!window.confirm(`Queue ${money(amount)} for the linked in-game account?`)) return;
+    try {
+      const result = await api("/api/dev-tools/banking/issue-funds", { method: "POST", body });
+      toast(`Fund issuance queued · ${result.command?.command_id || "awaiting bridge"}`);
+      form.reset();
       await refreshDevTools();
     } catch (error) { toast(error.message); }
   });
