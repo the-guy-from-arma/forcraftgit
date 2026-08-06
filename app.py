@@ -2177,6 +2177,7 @@ APP_VISIBILITY_OPTIONS = (
     ("my-faircroft", "MyFaircroft"),
     ("fnn", "Faircroft News Now"),
     ("leaderboards", "Leaderboards"),
+    ("stats", "Faircroft Statistics"),
     ("citizenship", "Citizenship & Passport"),
     ("ice-mdt", "ICE MDT"),
     ("press", "Press Desk"),
@@ -2700,6 +2701,26 @@ def ensure_schema() -> None:
                 FOREIGN KEY (opened_by) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL
             );
+
+            CREATE TABLE IF NOT EXISTS ice_warrants (
+                id SERIAL PRIMARY KEY,
+                warrant_number TEXT NOT NULL UNIQUE,
+                subject_user_id INTEGER NOT NULL,
+                subject_character_id INTEGER,
+                status TEXT NOT NULL DEFAULT 'active',
+                priority TEXT NOT NULL DEFAULT 'high',
+                probable_cause TEXT NOT NULL,
+                created_by INTEGER,
+                issued_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                closed_at TEXT,
+                FOREIGN KEY (subject_user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (subject_character_id) REFERENCES user_characters(id) ON DELETE SET NULL,
+                FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_ice_warrants_active_subject
+            ON ice_warrants(subject_user_id) WHERE status = 'active';
 
             CREATE TABLE IF NOT EXISTS fluck_camera_events (
                 event_id TEXT PRIMARY KEY,
@@ -6372,6 +6393,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         ("gangs", "GANG NETWORK", "gang", verified, False),
         ("realty", "FAIRCROFT REALTY", "realty", verified, False),
         ("leaderboards", "Leaderboards", "trophy", verified, False),
+        ("stats", "STATS", "stats", verified, False),
         ("wallstreet", "WALLSTREET", "trending", verified, False),
         ("messages", "Messages", "message", verified, False),
         ("changelog", "Changelog", "scroll", True, False),
@@ -7432,6 +7454,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_fnn(db, user)
                 elif path == "/api/leaderboards" and method == "GET":
                     self.api_leaderboards(db, user)
+                elif path == "/api/stats" and method == "GET":
+                    self.api_stats(db, user)
                 elif path == "/api/leaderboards/perks" and method == "POST":
                     self.api_leaderboard_perk(db, user)
                 elif path == "/api/citizenship" and method == "GET":
@@ -7464,6 +7488,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_ice_search(db, user, query)
                 elif path == "/api/ice/cases" and method == "POST":
                     self.api_ice_create_case(db, user)
+                elif path == "/api/ice/warrants" and method == "POST":
+                    self.api_ice_create_warrant(db, user)
                 elif path.startswith("/api/ice/cases/") and method == "PATCH":
                     self.api_ice_update_case(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/ice/applications/") and method == "PATCH":
@@ -7748,6 +7774,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_reset_game_bank_sync(db, user)
                 elif path == "/api/dev-tools/dmv/reset-imported-vehicles" and method == "POST":
                     self.api_dev_reset_imported_vehicles(db, user)
+                elif path == "/api/dev-tools/dmv/clear-account-links" and method == "POST":
+                    self.api_dev_clear_dmv_car_links(db, user)
                 elif path == "/api/dev-tools/admin-2fa" and method == "POST":
                     self.api_dev_generate_admin_2fa_code(db, user)
                 elif path == "/api/dev-tools/myfaircroft-payment-codes" and method == "POST":
@@ -8412,9 +8440,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not account:
             self.error(404, "Account not found")
             return
-        if not account.get("link_id"):
-            self.error(409, "This account does not have an active Arma link")
-            return
         sanctions = all_rows(
             db,
             """
@@ -8517,9 +8542,35 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             LIMIT 150
             """,
         )
+        undocumented_people = all_rows(
+            db,
+            """
+            SELECT u.id, u.name, u.civ_number, u.profile_photo,
+                   'Undocumented' AS citizenship_status,
+                   character.id AS character_id, character.character_name,
+                   warrant.id AS warrant_id, warrant.warrant_number,
+                   warrant.status AS warrant_status, warrant.priority AS warrant_priority,
+                   warrant.issued_at AS warrant_issued_at
+            FROM users u
+            LEFT JOIN user_characters character ON character.id = (
+                SELECT c.id FROM user_characters c
+                WHERE c.user_id = u.id AND c.status = 'active'
+                ORDER BY c.is_active DESC, c.updated_at DESC, c.id DESC LIMIT 1
+            )
+            LEFT JOIN ice_warrants warrant
+                   ON warrant.subject_user_id = u.id AND warrant.status = 'active'
+            WHERE NOT EXISTS (
+                SELECT 1 FROM citizenship_records citizenship
+                WHERE citizenship.user_id = u.id
+                  AND LOWER(citizenship.citizenship_status) = 'valid citizen'
+            )
+            ORDER BY CASE WHEN warrant.id IS NULL THEN 0 ELSE 1 END, LOWER(u.name), u.id
+            LIMIT 500
+            """,
+        )
         stats = {
             "valid_citizens": int(one(db, "SELECT COUNT(*) AS count FROM citizenship_records WHERE LOWER(citizenship_status) = 'valid citizen'")["count"]),
-            "undocumented": int(one(db, "SELECT COUNT(*) AS count FROM users u WHERE NOT EXISTS (SELECT 1 FROM citizenship_records c WHERE c.user_id = u.id AND LOWER(c.citizenship_status) = 'valid citizen')")["count"]),
+            "undocumented": len(undocumented_people),
             "open_cases": sum(1 for item in cases if item["status"] in ("open", "detained")),
         }
         can_command = has_any(user, "ice_commander")
@@ -8569,6 +8620,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "ordinance_notice": "Faircroft Local Ordinance restricts local police involvement with federal immigration operations. NCIC identity and safety checks remain available; local reports, BOLOs, and warrants are withheld when the restriction is active.",
                 "can_command": can_command,
                 "applications": applications,
+                "undocumented_people": [dict(row) for row in undocumented_people],
                 "gang_affiliations": [dict(row) for row in gang_affiliations],
                 "fluck_camera": self._ice_camera_payload(db),
             },
@@ -8650,6 +8702,95 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         ).fetchone()
         self.send_json(201, {"ok": True, "id": int(created["id"]), "case_number": created["case_number"]})
 
+    def api_ice_create_warrant(self, db: Database, user: DbRow | None) -> None:
+        err = ice_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        try:
+            subject_id = int(payload.get("subject_user_id") or 0)
+        except (TypeError, ValueError):
+            subject_id = 0
+        subject = one(
+            db,
+            """
+            SELECT u.id, u.name, u.civ_number,
+                   COALESCE(c.citizenship_status, 'Undocumented') AS citizenship_status
+            FROM users u
+            LEFT JOIN citizenship_records c ON c.user_id = u.id
+            WHERE u.id = ?
+            """,
+            (subject_id,),
+        )
+        if not subject:
+            self.error(404, "Federal subject was not found")
+            return
+        if str(subject.get("citizenship_status") or "").strip().lower() == "valid citizen":
+            self.error(409, "A federal immigration warrant cannot be issued to a valid Faircroft citizen")
+            return
+        existing = one(
+            db,
+            "SELECT id, warrant_number, status, issued_at FROM ice_warrants WHERE subject_user_id = ? AND status = 'active' ORDER BY issued_at DESC LIMIT 1",
+            (subject_id,),
+        )
+        if existing:
+            self.send_json(200, {"ok": True, "already_active": True, "warrant": dict(existing)})
+            return
+        character = one(
+            db,
+            """
+            SELECT id, character_name FROM user_characters
+            WHERE user_id = ? AND status = 'active'
+            ORDER BY is_active DESC, updated_at DESC, id DESC LIMIT 1
+            """,
+            (subject_id,),
+        )
+        probable_cause = (
+            "Faircroft citizenship registry reports no valid citizenship credential. "
+            "Federal identity verification and immigration-status enforcement authorized."
+        )
+        ts = now_iso()
+        created = db.execute(
+            """
+            INSERT INTO ice_warrants
+                (warrant_number, subject_user_id, subject_character_id, status, priority,
+                 probable_cause, created_by, issued_at, updated_at)
+            VALUES (?, ?, ?, 'active', 'high', ?, ?, ?, ?)
+            RETURNING id, warrant_number, status, priority, issued_at
+            """,
+            (
+                generate_record_number(db, "ice_warrants", "warrant_number", "ICE-W"),
+                subject_id,
+                int(character["id"]) if character else None,
+                probable_cause,
+                int(user["id"]),
+                ts,
+                ts,
+            ),
+        ).fetchone()
+        add_admin_audit(
+            db,
+            int(user["id"]),
+            "ice.warrant.issued",
+            subject_id,
+            {
+                "warrant_number": created["warrant_number"],
+                "character_id": int(character["id"]) if character else None,
+                "character_name": character.get("character_name") if character else "",
+                "citizenship_status": subject.get("citizenship_status") or "Undocumented",
+            },
+        )
+        add_message(
+            db,
+            subject_id,
+            "Federal immigration warrant issued",
+            f"Faircroft Immigration & Customs Enforcement issued warrant {created['warrant_number']} to your active identity record.",
+            int(user["id"]),
+        )
+        self.send_json(201, {"ok": True, "already_active": False, "warrant": dict(created)})
+
     def api_ice_update_case(self, db: Database, user: DbRow | None, case_id: int) -> None:
         err = ice_required(user)
         if err:
@@ -8698,6 +8839,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if action in ("interview", "approve") and (score != 20 or total != 20):
             self.error(409, "Only a perfect 20/20 qualification result may advance")
             return
+        citizenship = one(
+            db,
+            "SELECT citizenship_status FROM citizenship_records WHERE user_id = ?",
+            (application["user_id"],),
+        )
+        if action in ("interview", "approve") and (
+            not citizenship
+            or str(citizenship.get("citizenship_status") or "").strip().lower() != "valid citizen"
+        ):
+            self.error(409, "This candidate is undocumented and cannot advance to ICE interview, training, or appointment")
+            return
         notes = str(payload.get("reviewer_notes") or "").strip()[:1500]
         status = status_map[action]
         ts = now_iso()
@@ -8728,6 +8880,206 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         body = body_map[action] + (f"\n\nCommander notes: {notes}" if notes else "")
         add_message(db, application["user_id"], subject_map[action], body, user["id"])
         self.send_json(200, {"ok": True, "status": status, "role_granted": action == "approve"})
+
+    def api_stats(self, db: Database, user: DbRow | None) -> None:
+        """Return public, statewide aggregates without exposing resident-level records."""
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+
+        def count(sql: str, params: tuple[Any, ...] = ()) -> int:
+            row = one(db, sql, params)
+            return int((row or {}).get("count") or 0)
+
+        def percent(part: float, whole: float) -> float:
+            return round((float(part) / float(whole) * 100.0), 1) if whole else 0.0
+
+        registered = count("SELECT COUNT(*) AS count FROM users")
+        verified = count("SELECT COUNT(*) AS count FROM users WHERE verified = 1")
+        linked = count("SELECT COUNT(DISTINCT user_id) AS count FROM arma_account_links")
+        online = count("SELECT COUNT(*) AS count FROM anticheat_players WHERE is_online = 1")
+        known_players = count("SELECT COUNT(*) AS count FROM anticheat_players")
+        thirty_days_ago = (utcnow() - dt.timedelta(days=30)).isoformat()
+        active_30d = count("SELECT COUNT(*) AS count FROM anticheat_players WHERE last_seen_at >= ?", (thirty_days_ago,))
+        player_telemetry = all_rows(db, "SELECT reported_system, raw_payload FROM anticheat_players")
+        playtime_seconds: list[int] = []
+        gameplay_totals = {"sessions": 0, "kills": 0, "deaths": 0, "suicides": 0}
+        for player in player_telemetry:
+            try:
+                raw = json.loads(str(player.get("raw_payload") or "{}"))
+                if not isinstance(raw, dict):
+                    raw = {}
+                playtime_seconds.append(max(0, int(float(raw.get("totalPlaytimeSeconds") or 0))))
+                for field, source_key in (("sessions", "sessionCount"), ("kills", "kills"), ("deaths", "deaths"), ("suicides", "suicides")):
+                    gameplay_totals[field] += max(0, int(float(raw.get(source_key) or 0)))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                playtime_seconds.append(0)
+
+        platform_labels = {
+            "1": "Xbox",
+            "2": "PlayStation",
+            "3": "PC",
+            "xbox": "Xbox",
+            "xboxone": "Xbox",
+            "xboxseries": "Xbox",
+            "playstation": "PlayStation",
+            "ps4": "PlayStation",
+            "ps5": "PlayStation",
+            "pc": "PC",
+            "windows": "PC",
+            "steam": "PC",
+        }
+        platform_counts: dict[str, int] = {}
+        for player in player_telemetry:
+            raw_platform = str(player.get("reported_system") or "").strip()
+            label = platform_labels.get(raw_platform.lower(), raw_platform or "Unknown")
+            platform_counts[label] = platform_counts.get(label, 0) + 1
+        platform_total = sum(platform_counts.values())
+        platforms = [
+            {
+                "label": label,
+                "count": platform_count,
+                "percent": percent(platform_count, platform_total),
+            }
+            for label, platform_count in sorted(platform_counts.items(), key=lambda item: (-item[1], item[0]))
+        ]
+
+        balances = [float(row.get("balance") or 0) for row in all_rows(db, "SELECT balance FROM arma_game_bank_balances ORDER BY balance")]
+        funded = len(balances)
+        circulation = round(sum(balances), 2)
+        average_balance = round(circulation / funded, 2) if funded else 0.0
+        median_balance = 0.0
+        if funded:
+            middle = funded // 2
+            median_balance = round(balances[middle] if funded % 2 else (balances[middle - 1] + balances[middle]) / 2, 2)
+        economy_bands = [
+            ("Establishing", 0, 100000),
+            ("Growing", 100000, 1000000),
+            ("Established", 1000000, 10000000),
+            ("High capital", 10000000, None),
+        ]
+        distribution = []
+        for label, floor, ceiling in economy_bands:
+            band_count = sum(1 for balance in balances if balance >= floor and (ceiling is None or balance < ceiling))
+            distribution.append({"label": label, "count": band_count, "percent": percent(band_count, funded)})
+
+        filing_rows = all_rows(
+            db,
+            """SELECT catalog.kind, c.category, c.charge_title, COUNT(*) AS count
+               FROM citations c JOIN charge_catalog catalog ON catalog.id = c.charge_id
+               WHERE c.record_expunged_at IS NULL
+               GROUP BY catalog.kind, c.category, c.charge_title""",
+        )
+        citation_count = sum(int(row["count"] or 0) for row in filing_rows if row.get("kind") == "citation")
+        criminal_count = sum(int(row["count"] or 0) for row in filing_rows if row.get("kind") == "criminal")
+        parking_count = sum(
+            int(row["count"] or 0)
+            for row in filing_rows
+            if row.get("kind") == "citation" and "parking" in f"{row.get('category', '')} {row.get('charge_title', '')}".lower()
+        )
+        violent_terms = ("assault", "murder", "homicide", "robbery", "kidnap", "weapon", "battery", "manslaughter", "violent")
+        violent_count = sum(
+            int(row["count"] or 0)
+            for row in filing_rows
+            if row.get("kind") == "criminal" and any(term in f"{row.get('category', '')} {row.get('charge_title', '')}".lower() for term in violent_terms)
+        )
+        nonviolent_count = max(0, criminal_count - violent_count)
+        bookings = count("SELECT COUNT(*) AS count FROM mdt_bookings")
+        active_bolos = count("SELECT COUNT(*) AS count FROM mdt_bolos WHERE status = 'active'")
+        completed_cases = count("SELECT COUNT(*) AS count FROM citations WHERE decided_at IS NOT NULL AND record_expunged_at IS NULL")
+        open_cases = count("SELECT COUNT(*) AS count FROM citations WHERE decided_at IS NULL AND record_expunged_at IS NULL")
+        guilty_cases = count("SELECT COUNT(*) AS count FROM citations WHERE disposition IN ('guilty','plea_agreement','liable') AND record_expunged_at IS NULL")
+        dismissed_cases = count("SELECT COUNT(*) AS count FROM citations WHERE disposition IN ('dismissed','not_guilty') AND record_expunged_at IS NULL")
+
+        incident_rows = all_rows(db, "SELECT department, call_type, status, COUNT(*) AS count FROM panic_alerts GROUP BY department, call_type, status")
+        fire_incidents = sum(int(row["count"] or 0) for row in incident_rows if str(row.get("department") or "").lower() == "fire")
+        ems_incidents = sum(int(row["count"] or 0) for row in incident_rows if str(row.get("department") or "").lower() == "ems")
+        emergency_total = fire_incidents + ems_incidents
+        emergency_cleared = sum(
+            int(row["count"] or 0)
+            for row in incident_rows
+            if str(row.get("department") or "").lower() in ("fire", "ems") and str(row.get("status") or "").lower() in ("cleared", "resolved", "closed")
+        )
+
+        property_total = count("SELECT COUNT(*) AS count FROM game_property_records")
+        property_owned = count("SELECT COUNT(*) AS count FROM game_property_records WHERE owner_identity <> '' AND LOWER(status) NOT IN ('available','vacant')")
+        property_available = count("SELECT COUNT(*) AS count FROM game_property_records WHERE owner_identity = '' OR LOWER(status) IN ('available','vacant')")
+        property_rented = count("SELECT COUNT(*) AS count FROM game_property_records WHERE LOWER(status) IN ('rented','rental','leased')")
+        housed_residents = count("SELECT COUNT(DISTINCT owner_identity) AS count FROM game_property_records WHERE owner_identity <> ''")
+
+        licenses_total = count("SELECT COUNT(*) AS count FROM dmv_records")
+        licenses_valid = count("SELECT COUNT(*) AS count FROM dmv_records WHERE LOWER(license_status) = 'valid'")
+        licenses_suspended = count("SELECT COUNT(*) AS count FROM dmv_records WHERE LOWER(license_status) = 'suspended'")
+        licenses_revoked = count("SELECT COUNT(*) AS count FROM dmv_records WHERE LOWER(license_status) = 'revoked'")
+        vehicles = count("SELECT COUNT(*) AS count FROM dmv_vehicles")
+        insured_vehicles = count("SELECT COUNT(*) AS count FROM dmv_vehicles WHERE LOWER(insurance_status) = 'active'")
+
+        businesses = count("SELECT COUNT(*) AS count FROM businesses")
+        active_businesses = count("SELECT COUNT(*) AS count FROM businesses WHERE LOWER(status) = 'active'")
+        business_violations = count("SELECT COUNT(*) AS count FROM business_violations WHERE LOWER(status) = 'open'")
+
+        self.send_json(200, {
+            "generated_at": now_iso(),
+            "privacy": "Aggregate public statistics only. Individual balances and resident financial records are never included.",
+            "population": {
+                "registered": registered, "verified": verified, "linked": linked, "online": online,
+                "known_players": known_players, "active_30d": active_30d,
+                "verification_rate": percent(verified, registered), "link_rate": percent(linked, registered),
+                "active_rate": percent(active_30d, registered),
+                "average_server_hours": round(sum(playtime_seconds) / max(1, len(playtime_seconds)) / 3600, 1),
+                "platforms": platforms,
+            },
+            "economy": {
+                "funded_accounts": funded, "circulation": circulation, "average_balance": average_balance,
+                "median_balance": median_balance, "distribution": distribution,
+                "funded_rate": percent(funded, linked),
+            },
+            "gameplay": {
+                "total_hours": round(sum(playtime_seconds) / 3600, 1),
+                "average_hours": round(sum(playtime_seconds) / max(1, len(playtime_seconds)) / 3600, 1),
+                "sessions": gameplay_totals["sessions"],
+                "average_sessions": round(gameplay_totals["sessions"] / max(1, known_players), 1),
+                "kills": gameplay_totals["kills"],
+                "deaths": gameplay_totals["deaths"],
+                "suicides": gameplay_totals["suicides"],
+                "community_kd": round(gameplay_totals["kills"] / max(1, gameplay_totals["deaths"]), 2),
+                "live_share": percent(online, known_players),
+            },
+            "public_safety": {
+                "total_filings": citation_count + criminal_count, "citations": citation_count,
+                "criminal": criminal_count, "parking": parking_count, "violent": violent_count,
+                "nonviolent": nonviolent_count, "violent_share": percent(violent_count, criminal_count),
+                "nonviolent_share": percent(nonviolent_count, criminal_count), "bookings": bookings,
+                "active_bolos": active_bolos,
+            },
+            "courts": {
+                "open": open_cases, "completed": completed_cases, "guilty": guilty_cases,
+                "dismissed_or_not_guilty": dismissed_cases,
+                "completion_rate": percent(completed_cases, open_cases + completed_cases),
+                "finding_rate": percent(guilty_cases, completed_cases),
+            },
+            "fire_ems": {
+                "total": emergency_total, "fire": fire_incidents, "ems": ems_incidents,
+                "cleared": emergency_cleared, "clearance_rate": percent(emergency_cleared, emergency_total),
+            },
+            "housing": {
+                "total": property_total, "owned": property_owned, "available": property_available,
+                "rented": property_rented, "housed_residents": housed_residents,
+                "occupancy_rate": percent(property_owned, property_total),
+                "resident_coverage": percent(housed_residents, verified),
+            },
+            "mobility": {
+                "licenses": licenses_total, "valid": licenses_valid, "suspended": licenses_suspended,
+                "revoked": licenses_revoked, "valid_rate": percent(licenses_valid, licenses_total),
+                "vehicles": vehicles, "insured_vehicles": insured_vehicles,
+                "insurance_rate": percent(insured_vehicles, vehicles),
+            },
+            "commerce": {
+                "businesses": businesses, "active": active_businesses, "open_violations": business_violations,
+                "active_rate": percent(active_businesses, businesses),
+            },
+        })
 
     def api_leaderboards(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -10531,6 +10883,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not settings["application_intake"].get(department_key, settings["applications_accepting"]):
             self.error(403, f"{posting['label']} applications are not being accepted at this time. Please try again later. Sincerely, Faircroft Government.")
             return
+        if posting.get("form_type") == "ice_exam":
+            citizenship = one(
+                db,
+                "SELECT citizenship_status FROM citizenship_records WHERE user_id = ?",
+                (user["id"],),
+            )
+            if (
+                not citizenship
+                or str(citizenship.get("citizenship_status") or "").strip().lower() != "valid citizen"
+            ):
+                self.error(403, "ICE Agent applications require valid Faircroft citizenship. Undocumented applicants are not eligible.")
+                return
         existing = one(
             db,
             """
@@ -10899,7 +11263,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
     def market_payload(self, db: Database, user: DbRow) -> dict[str, Any]:
         self.market_apply_programs(db)
         settings = get_system_settings(db)
-        account = one(db, "SELECT * FROM market_accounts WHERE user_id = ?", (user["id"],))
+        account = one(db, "SELECT * FROM market_accounts WHERE user_id = ? FOR UPDATE", (user["id"],))
         securities = all_rows(db, "SELECT * FROM market_securities WHERE active = 1 ORDER BY security_type, ticker")
         holdings: list[DbRow] = []
         orders: list[DbRow] = []
@@ -10951,26 +11315,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not account:
             self.error(409, "Create your Ravenhood account first."); return
         payload = self.read_json(); tx_type = str(payload.get("transaction_type") or "").lower()
-        try: amount = round(float(payload.get("amount") or 0), 2)
-        except (TypeError, ValueError): amount = 0
         raw_code = str(payload.get("code") or "").strip()
-        if tx_type not in ("deposit", "withdrawal") or amount <= 0 or len(raw_code) != 4:
-            self.error(400, "Transaction type, positive amount, and four-digit receipt code are required."); return
+        if tx_type not in ("deposit", "withdrawal") or len(raw_code) != 4:
+            self.error(400, "Transaction type and four-digit stock receipt PIN are required."); return
         code_hash = hashlib.sha256(raw_code.encode("utf-8")).hexdigest()
         code = one(db, """SELECT * FROM market_cash_codes WHERE code_hash=? AND (target_user_id IS NULL OR target_user_id=?)
-            AND transaction_type IN (?, 'universal') AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?""",
+            AND transaction_type IN (?, 'universal') AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ? FOR UPDATE""",
             (code_hash, user["id"], tx_type, now_iso()))
         if not code:
-            legacy = one(db, """SELECT * FROM myfaircroft_payment_codes WHERE code_hash=? AND (target_user_id IS NULL OR target_user_id=?)
-                AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?""", (code_hash, user["id"], now_iso()))
-            if legacy:
-                db.execute("""INSERT INTO market_cash_codes
-                    (code_hash, code_hint, target_user_id, transaction_type, amount, created_by, expires_at, created_at)
-                    VALUES (?, ?, ?, 'universal', 0, ?, ?, ?) ON CONFLICT(code_hash) DO NOTHING""",
-                    (code_hash, legacy["code_hint"], legacy.get("target_user_id"), legacy["created_by"], legacy["expires_at"], legacy["created_at"]))
-                code = one(db, "SELECT * FROM market_cash_codes WHERE code_hash=? AND used_at IS NULL AND revoked_at IS NULL", (code_hash,))
-        if not code:
-            self.error(400, "Receipt code is invalid, expired, or already used."); return
+            self.error(400, "Stock receipt PIN is invalid, expired, or already used."); return
+        amount = round(float(code["amount"] or 0), 2)
+        if amount <= 0:
+            self.error(409, "This stock PIN has no authorized amount. Ask a developer to issue a new amount-bound PIN."); return
         balance = float(account["cash_balance"] or 0)
         if tx_type == "withdrawal" and balance < amount:
             self.error(409, "Insufficient settled cash. Sell holdings before requesting this withdrawal."); return
@@ -10978,7 +11334,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         ts = now_iso()
         db.execute("UPDATE market_accounts SET cash_balance=?, updated_at=? WHERE id=?", (round(new_balance, 2), ts, account["id"]))
         db.execute("UPDATE market_cash_codes SET target_user_id=COALESCE(target_user_id,?), used_by=?, used_at=? WHERE id=? AND used_at IS NULL", (user["id"], user["id"], ts, code["id"]))
-        db.execute("UPDATE myfaircroft_payment_codes SET target_user_id=COALESCE(target_user_id,?), used_by=?, used_at=? WHERE code_hash=? AND used_at IS NULL", (user["id"], user["id"], ts, code_hash))
         db.execute("INSERT INTO market_cash_transactions (account_id, code_id, transaction_type, amount, processed_by, created_at) VALUES (?, ?, ?, ?, ?, ?)", (account["id"], code["id"], tx_type, amount, code["created_by"], ts))
         self.send_json(200, {"ok": True, "balance": round(new_balance, 2), "transaction_type": tx_type, "amount": amount})
 
@@ -11142,7 +11497,43 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         quick_draw = ensure_quick_draw(db, settings)
         quick_entries = [dict(row) for row in all_rows(db, "SELECT * FROM lottery_quick_draw_entries WHERE draw_id=? AND user_id=? ORDER BY entry_number", (quick_draw["id"], user["id"]))]
         quick_latest = one(db, "SELECT d.*,u.name AS winner_name,u.civ_number AS winner_civ FROM lottery_quick_draws d LEFT JOIN users u ON u.id=d.winner_user_id WHERE d.status='completed' ORDER BY d.completed_at DESC LIMIT 1")
-        self.send_json(200, {"enabled": settings["lottery_enabled"], "draw": dict(draw), "funding": funding, "player_pool": lottery_player_pool_status(db, settings), "wallet": wallet, "wallet_transactions": wallet_transactions, "prices": {"weekly_ticket": settings["lottery_ticket_price"], "scratch": settings["lottery_scratch_price"], "quick_draw": settings["lottery_quick_draw_price"]}, "entries": [dict(row) for row in entries], "entries_today": today_count, "daily_limit": settings["lottery_daily_entries"], "remaining_today": 0, "role_weight": weight, "excluded": bool(excluded), "excluded_roles": excluded, "latest_result": dict(latest) if latest else None, "latest_special_prizes": latest_prizes, "timezone": settings["lottery_timezone"], "scratch": {"enabled": settings["lottery_scratch_enabled"], "daily_limit": settings["lottery_scratch_daily_cards"], "cards": scratch_cards, "price": settings["lottery_scratch_price"]}, "quick_draw": {"enabled": settings["lottery_quick_draw_enabled"], "draw": dict(quick_draw), "daily_limit": settings["lottery_quick_draw_ticket_limit"], "entries": quick_entries, "price": settings["lottery_quick_draw_price"], "prize": settings["lottery_quick_draw_prize"], "latest_result": dict(quick_latest) if quick_latest else None}})
+        weekly_history = all_rows(db, """SELECT e.*,d.draw_key,d.scheduled_at,d.status AS draw_status,d.winning_numbers,
+            d.winning_entry_id,d.payout_amount,d.completed_at
+            FROM lottery_entries e JOIN lottery_draws d ON d.id=e.draw_id
+            WHERE e.user_id=? ORDER BY e.created_at DESC,e.id DESC LIMIT 250""", (user["id"],))
+        quick_history = all_rows(db, """SELECT e.*,d.draw_key,d.scheduled_at,d.status AS draw_status,d.winning_numbers,
+            d.winning_entry_id,d.completed_at
+            FROM lottery_quick_draw_entries e JOIN lottery_quick_draws d ON d.id=e.draw_id
+            WHERE e.user_id=? ORDER BY e.created_at DESC,e.id DESC LIMIT 250""", (user["id"],))
+        purchased_tickets: list[dict[str, Any]] = []
+        for game_name, history_rows in (("weekly", weekly_history), ("quick", quick_history)):
+            for history_row in history_rows:
+                item = dict(history_row)
+                is_complete = str(item.get("draw_status") or "scheduled") == "completed"
+                is_winner = is_complete and int(item.get("winning_entry_id") or 0) == int(item["id"])
+                needs_review = game_name == "weekly" and bool(item.get("fraud_flag"))
+                result = "review" if needs_review and not is_complete else ("winner" if is_winner else ("not_winner" if is_complete else "active"))
+                purchased_tickets.append({
+                    "id": int(item["id"]),
+                    "game": game_name,
+                    "ticket_number": f"{'FCW' if game_name == 'weekly' else 'FCQ'}-{int(item['id']):07d}",
+                    "entry_number": int(item.get("entry_number") or 0),
+                    "pick_numbers": lottery_saved_numbers(item.get("pick_numbers")),
+                    "ticket_cost": float(item.get("ticket_cost") or 0),
+                    "purchased_at": item.get("created_at"),
+                    "draw_key": item.get("draw_key"),
+                    "draw_at": item.get("scheduled_at"),
+                    "draw_status": item.get("draw_status"),
+                    "winning_numbers": lottery_saved_numbers(item.get("winning_numbers")),
+                    "result": result,
+                    "prize_amount": float(item.get("payout_amount") or 0) if game_name == "weekly" and is_winner else (float(settings["lottery_quick_draw_prize"] or 0) if is_winner else 0),
+                    "completed_at": item.get("completed_at"),
+                })
+        purchased_tickets.sort(key=lambda item: str(item.get("purchased_at") or ""), reverse=True)
+        active_ticket_count = sum(1 for item in purchased_tickets if item["result"] in {"active", "review"})
+        winning_ticket_count = sum(1 for item in purchased_tickets if item["result"] == "winner")
+        losing_ticket_count = sum(1 for item in purchased_tickets if item["result"] == "not_winner")
+        self.send_json(200, {"enabled": settings["lottery_enabled"], "draw": dict(draw), "funding": funding, "player_pool": lottery_player_pool_status(db, settings), "wallet": wallet, "wallet_transactions": wallet_transactions, "prices": {"weekly_ticket": settings["lottery_ticket_price"], "scratch": settings["lottery_scratch_price"], "quick_draw": settings["lottery_quick_draw_price"]}, "entries": [dict(row) for row in entries], "entries_today": today_count, "daily_limit": settings["lottery_daily_entries"], "remaining_today": 0, "role_weight": weight, "excluded": bool(excluded), "excluded_roles": excluded, "latest_result": dict(latest) if latest else None, "latest_special_prizes": latest_prizes, "timezone": settings["lottery_timezone"], "purchased_tickets": {"items": purchased_tickets, "active": active_ticket_count, "winners": winning_ticket_count, "not_winners": losing_ticket_count}, "scratch": {"enabled": settings["lottery_scratch_enabled"], "daily_limit": settings["lottery_scratch_daily_cards"], "cards": scratch_cards, "price": settings["lottery_scratch_price"]}, "quick_draw": {"enabled": settings["lottery_quick_draw_enabled"], "draw": dict(quick_draw), "daily_limit": settings["lottery_quick_draw_ticket_limit"], "entries": quick_entries, "price": settings["lottery_quick_draw_price"], "prize": settings["lottery_quick_draw_prize"], "latest_result": dict(quick_latest) if quick_latest else None}})
 
     def api_lottery_entry(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -17229,6 +17620,82 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "next_sync_seconds": SHADOWHAVEN_PERSISTENCE_SYNC_SECONDS,
         })
 
+    def api_dev_clear_dmv_car_links(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        if str(payload.get("confirmation") or "").strip().upper() != "CLEAR ALL DMV CAR LINKS":
+            self.error(400, "Type CLEAR ALL DMV CAR LINKS to authorize the DMV vehicle-link reset")
+            return
+
+        vehicle_snapshot = one(
+            db,
+            """SELECT COUNT(*) AS records,
+                      COUNT(DISTINCT user_id) AS residents,
+                      SUM(CASE WHEN LOWER(registration_status) = 'active' THEN 1 ELSE 0 END) AS active_registrations,
+                      SUM(CASE WHEN LOWER(insurance_status) = 'active' THEN 1 ELSE 0 END) AS active_insurance
+                 FROM dmv_vehicles""",
+        ) or {}
+        affected_users = [int(row["user_id"]) for row in all_rows(db, "SELECT DISTINCT user_id FROM dmv_vehicles")]
+        cached_count = int(one(
+            db, "SELECT COUNT(*) AS count FROM game_persistence_records WHERE LOWER(category) = 'vehicles'"
+        )["count"] or 0)
+        cleared_records = int(vehicle_snapshot.get("records") or 0)
+        cleared_residents = int(vehicle_snapshot.get("residents") or 0)
+        cleared_registrations = int(vehicle_snapshot.get("active_registrations") or 0)
+        cleared_insurance = int(vehicle_snapshot.get("active_insurance") or 0)
+        ts = now_iso()
+
+        db.execute("DELETE FROM dmv_vehicles")
+        # Clear the Railway vehicle mirror as well so a resident cannot be
+        # immediately reattached from a stale cached source record. The game
+        # server save files remain untouched and can be imported on the next
+        # authoritative SFTP synchronization.
+        db.execute("DELETE FROM game_persistence_records WHERE LOWER(category) = 'vehicles'")
+        for record in all_rows(db, "SELECT user_id FROM dmv_records ORDER BY user_id"):
+            account_id = int(record["user_id"])
+            unlinked_plate = f"UNL{account_id:09d}"[-12:]
+            db.execute(
+                """UPDATE dmv_records
+                      SET vehicle_make = 'Unregistered', vehicle_model = 'Vehicle', vehicle_color = 'Unassigned',
+                          plate = ?, registration_status = 'Pending', insurance_status = 'Pending', updated_at = ?
+                    WHERE user_id = ?""",
+                (unlinked_plate, ts, account_id),
+            )
+        for account_id in affected_users:
+            add_message(
+                db,
+                account_id,
+                "DMV vehicle link cleared",
+                "Your previous vehicle attachment, registration, and insurance link were cleared during a controlled DMV migration. Your driver license was not changed. Newly synchronized vehicles must be assigned, registered, and insured again.",
+                int(user["id"]),
+            )
+        add_admin_audit(
+            db,
+            int(user["id"]),
+            "dmv.vehicle_account_links.reset",
+            details={
+                "deleted_vehicle_records": cleared_records,
+                "affected_residents": cleared_residents,
+                "cleared_active_registrations": cleared_registrations,
+                "cleared_active_insurance": cleared_insurance,
+                "cleared_cached_source_records": cached_count,
+                "preserved_scope": "driver_licenses_and_authoritative_game_save_files",
+            },
+        )
+        self.send_json(200, {
+            "ok": True,
+            "cleared_vehicle_records": cleared_records,
+            "affected_residents": cleared_residents,
+            "cleared_registrations": cleared_registrations,
+            "cleared_insurance": cleared_insurance,
+            "cleared_cached_records": cached_count,
+            "status": "awaiting_new_vehicle_sync",
+        })
+
     def api_dev_generate_admin_2fa_code(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
         if err:
@@ -17264,13 +17731,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         try:
             target_user_id = None
             expiry = max(5, min(int(payload.get("expiry_minutes") or 30), 120))
+            amount = round(float(payload.get("amount") or 0), 2)
         except (TypeError, ValueError):
-            self.error(400, "Enter a valid expiry window."); return
+            self.error(400, "Enter a valid stock amount and expiry window."); return
         tx_type = str(payload.get("transaction_type") or "").lower()
-        confirmation = str(payload.get("confirmation") or "").strip().upper()
-        required = "MONEY RECEIVED" if tx_type == "deposit" else "WITHDRAWAL APPROVED"
-        if tx_type not in ("deposit", "withdrawal") or confirmation != required:
-            self.error(400, f"Confirm {required} only after the in-game handoff is complete."); return
+        if tx_type not in ("deposit", "withdrawal"):
+            self.error(400, "Choose whether the PIN records received funds or an approved withdrawal."); return
+        if amount <= 0 or amount > 1_000_000_000:
+            self.error(400, "Enter the exact approved stock transaction amount."); return
         raw_code = ""; code_hash = ""
         for _ in range(30):
             raw_code = f"{secrets.randbelow(10000):04d}"; code_hash = hashlib.sha256(raw_code.encode("utf-8")).hexdigest()
@@ -17279,13 +17747,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             if not market_match and not myfc_match: break
         created = utcnow(); expires = created + dt.timedelta(minutes=expiry)
         db.execute("""INSERT INTO market_cash_codes (code_hash, code_hint, target_user_id, transaction_type, amount, created_by, expires_at, created_at)
-            VALUES (?, ?, ?, ?, 0, ?, ?, ?)""", (code_hash, raw_code[-2:], target_user_id, tx_type, user["id"], expires.isoformat(), created.isoformat()))
-        db.execute("""INSERT INTO myfaircroft_payment_codes
-            (code_hash, code_hint, target_user_id, authorized_amount, created_by, expires_at, created_at)
-            VALUES (?, ?, NULL, 0, ?, ?, ?) ON CONFLICT(code_hash) DO NOTHING""",
-            (code_hash, raw_code[-2:], user["id"], expires.isoformat(), created.isoformat()))
-        add_admin_audit(db, int(user["id"]), f"market.{tx_type}.code_created", target_user_id, {"expires_at": expires.isoformat(), "unassigned": True, "amount_bound": False})
-        self.send_json(201, {"ok": True, "code": raw_code, "transaction_type": tx_type, "unassigned": True, "expires_at": expires.isoformat()})
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", (code_hash, raw_code[-2:], target_user_id, tx_type, amount, user["id"], expires.isoformat(), created.isoformat()))
+        add_admin_audit(db, int(user["id"]), f"market.{tx_type}.code_created", target_user_id, {"expires_at": expires.isoformat(), "unassigned": True, "amount_bound": True, "amount": amount})
+        self.send_json(201, {"ok": True, "code": raw_code, "transaction_type": tx_type, "amount": amount, "unassigned": True, "expires_at": expires.isoformat()})
 
     def api_dev_market_promotion(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
@@ -18287,6 +18751,19 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 account.get("identity_id") or "",
             ),
         )
+        federal_warrants = all_rows(
+            db,
+            """
+            SELECT w.*, issuer.name AS created_by_name, character.character_name
+            FROM ice_warrants w
+            LEFT JOIN users issuer ON issuer.id = w.created_by
+            LEFT JOIN user_characters character ON character.id = w.subject_character_id
+            WHERE w.subject_user_id = ?
+            ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.issued_at DESC
+            LIMIT 50
+            """,
+            (account["id"],),
+        )
         response_account = public_user(account)
         response_account.update(
             {
@@ -18299,6 +18776,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "linked_at": account.get("linked_at"),
                 "last_seen_at": account.get("last_seen_at"),
                 "last_sync_at": account.get("last_sync_at"),
+                "citizenship_status": account.get("citizenship_status") or "Undocumented",
+                "passport_number": account.get("passport_number") or "",
             }
         )
         self.send_json(
@@ -18313,6 +18792,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "jobs": [dict(row) for row in jobs],
                 "citations": [dict(row) for row in citations],
                 "properties": [dict(row) for row in properties],
+                "federal_warrants": [dict(row) for row in federal_warrants],
                 "anti_cheat": dict(anticheat_record) if anticheat_record else {
                     "detected_system": account.get("platform") or "Unknown",
                     "reported_system": "",

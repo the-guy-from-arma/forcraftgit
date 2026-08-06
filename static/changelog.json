@@ -6,6 +6,14 @@
       "version": "0.2.2",
     "title": "RP OS 0.2.2",
     "added": [
+      "Added a controlled Developer Tools DMV car-link reset beside the identity and money migration controls, clearing resident vehicle attachments, registrations, insurance links, and stale Railway vehicle mirrors while preserving driver licenses and authoritative game-server save files.",
+      "Added the public Faircroft Statistics Bureau application with live statewide views for population, server activity, public safety, courts, Fire and EMS, housing, mobility, commerce, and economic health.",
+      "Added a privacy-enforced public statistics API that publishes only totals, averages, medians, rates, and distribution bands while withholding resident names, CIV numbers, account identifiers, and individual bank balances.",
+      "Added animated statewide intelligence views with public-safety filing classifications, violent and non-violent crime shares, court throughput, emergency clearance rates, housing occupancy, vehicle compliance, business activity, platform mix, and average tracked server time.",
+      "Added a public Server Life intelligence view using aggregate leaderboard telemetry for collective playtime, verified sessions, live participation, thirty-day activity, kills, deaths, suicides, and the community-wide combat ratio without publishing player identities.",
+      "Added a dedicated ICE undocumented-resident enforcement roster opened directly from the live undocumented count, with identity search, active-character correlation, citizenship and passport status, linked profile access, and active federal-warrant visibility.",
+      "Added a separate audited ICE warrant ledger with one-click issuance from the enforcement roster or linked ICE profile, duplicate-active-warrant protection, subject notification, probable cause, issuing officer, and character-specific identity attachment.",
+      "Added a permanent Faircroft Lottery Purchased Tickets area that keeps Weekly Pick 5 and Quick Draw lines visible after purchase, separates active tickets from completed drawings, and records selected numbers, official winning numbers, purchase cost, draw time, winner or non-winner status, and awarded prize value.",
       "Added a developer-only Account Deletion Command dashboard with resident search, protected-account status, linked-record impact previews, typed confirmation, and permanent deletion authorization.",
       "Added a non-editable account deletion evidence ledger that preserves the deleted identity snapshot, linked Arma identity, reason, affected-record totals, authorizing developer, and timestamp after the account is removed.",
       "Added the Faircroft Lottery Wallet with a configurable recurring $10 daily play credit that is isolated from game-bank currency and carries forward for future tickets.",
@@ -180,6 +188,9 @@
         ,"Changed all newly issued MyFaircroft and Ravenhood four-digit receipt PINs to unassigned bearer codes that permanently record the issuing administrator and first eligible resident who redeems them."
       ],
     "fixed": [
+      "Fixed ICE recruitment eligibility so undocumented residents are denied before an application record is created, with citizenship checked again before command may advance, interview, or appoint a candidate.",
+      "Fixed Ravenhood stock-funding PIN issuance so developers can bind the exact approved deposit or withdrawal amount to a one-click four-digit stock PIN without selecting a resident or typing an authorization phrase; redemption applies that locked amount to the first eligible resident and permanently records both issuer and redeemer.",
+      "Fixed Ravenhood promotion redemption so Redeem into my portfolio uses a persistent submit controller, visibly reports progress and validation errors, refreshes the authoritative account immediately, and confirms the credited cash or securities on success.",
       "Fixed MyFaircroft, Realty, and Settlement rental-property filters triggering PostgreSQL placeholder errors when loading resident tax and property records.",
       "Fixed permanent account removal to preserve restrictive government and financial authorship records by reassigning their staff attribution to the authorizing developer before cascading account deletion.",
         "Fixed lottery prestige-point redemptions so each resident can add no more than five prestige entries to the same weekly drawing, with the limit enforced under a database lock to prevent rapid duplicate submissions.",
