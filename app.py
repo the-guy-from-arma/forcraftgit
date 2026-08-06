@@ -2224,6 +2224,7 @@ ADMIN_TOOLS_SECTIONS = (
     ("linking", "Account Linking"),
     ("campaigns", "Active Campaigns"),
     ("settlement", "Settlement"),
+    ("banking-settings", "Banking Settings"),
     ("market-settings", "Stock Market"),
     ("lottery-settings", "Lottery Settings"),
     ("gang-settings", "Gang Settings"),
@@ -2240,7 +2241,7 @@ ADMIN_TOOLS_SECTIONS = (
     ("account-deletion", "Account Deletion"),
 )
 ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS = frozenset(
-    ("dashboard", "accounts", "intelligence", "housing-market", "anticheat", "audit")
+    ("dashboard", "accounts", "intelligence", "housing-market", "anticheat", "audit", "banking-settings")
 )
 ADMIN_TOOLS_DEVELOPER_ONLY_SECTIONS = frozenset(("account-deletion",))
 ADMIN_TOOLS_CONFIGURABLE_SECTIONS = frozenset(
@@ -6299,8 +6300,6 @@ def admin_tools_section_required(db: Database, user: DbRow | None, section_id: s
     err = admin_tools_member_required(user)
     if err:
         return err
-    if section_id == "banking-settings" and not has_any(user, "owner", "dev"):
-        return "Development role is required"
     if section_id not in admin_tools_effective_sections(db, user):
         return "Development role is required"
     return None
@@ -16803,7 +16802,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
 
     def api_dev_issue_bank_funds(self, db: Database, user: DbRow | None) -> None:
         """Create a developer-only in-game credit command without consuming admin 2FA."""
-        err = strict_developer_required(user)
+        err = admin_tools_member_required(user)
         if err:
             self.error(403 if user else 401, err)
             return
