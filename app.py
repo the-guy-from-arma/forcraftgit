@@ -17085,6 +17085,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             LIMIT 200
             """,
         )
+        for command in bank_bridge_commands:
+            raw_result = command.get("result_json") or "{}"
+            try:
+                parsed_result = json.loads(raw_result) if isinstance(raw_result, str) else raw_result
+            except (TypeError, json.JSONDecodeError):
+                parsed_result = {}
+            if not isinstance(parsed_result, dict):
+                parsed_result = {}
+            command["result"] = parsed_result
+            command["failure_reason"] = str(parsed_result.get("message") or parsed_result.get("error") or "").strip()[:500]
         beta_tasks = all_rows(db, "SELECT * FROM beta_tasks ORDER BY active DESC, updated_at DESC LIMIT 100")
         beta_reports = all_rows(
             db,
