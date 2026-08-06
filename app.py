@@ -2144,6 +2144,11 @@ SYSTEM_SETTING_DEFAULTS = {
     "market_gemini_last_tick": "",
     "lottery_enabled": "1",
     "lottery_daily_entries": "3",
+    "lottery_daily_credit": "10.00",
+    "lottery_ticket_price": "2.00",
+    "lottery_scratch_price": "3.00",
+    "lottery_quick_draw_price": "1.00",
+    "lottery_quick_draw_prize": "5.00",
     "lottery_draw_weekday": "1",
     "lottery_draw_time": "23:59",
     "lottery_timezone": "America/New_York",
@@ -2153,8 +2158,9 @@ SYSTEM_SETTING_DEFAULTS = {
     "lottery_scratch_enabled": "1",
     "lottery_scratch_daily_cards": "1",
     "lottery_quick_draw_enabled": "1",
-    "lottery_quick_draw_interval_minutes": "240",
+    "lottery_quick_draw_interval_minutes": "30",
     "lottery_quick_draw_entries": "1",
+    "lottery_quick_draw_ticket_limit": "25",
     "lottery_player_pool_enabled": "1",
     "lottery_player_pool_direction": "increase",
     "lottery_player_pool_rate_per_minute": "100.00",
@@ -2220,12 +2226,17 @@ ADMIN_TOOLS_SECTIONS = (
     ("audit", "Activity Log"),
     ("fnn-settings", "FNN Settings"),
     ("settings", "Settings"),
+    ("account-deletion", "Account Deletion"),
 )
 ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS = frozenset(
     ("dashboard", "accounts", "intelligence", "housing-market", "anticheat", "audit")
 )
+ADMIN_TOOLS_DEVELOPER_ONLY_SECTIONS = frozenset(("account-deletion",))
 ADMIN_TOOLS_CONFIGURABLE_SECTIONS = frozenset(
-    section_id for section_id, _label in ADMIN_TOOLS_SECTIONS if section_id not in ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS and section_id != "settings"
+    section_id for section_id, _label in ADMIN_TOOLS_SECTIONS
+    if section_id not in ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS
+    and section_id not in ADMIN_TOOLS_DEVELOPER_ONLY_SECTIONS
+    and section_id != "settings"
 )
 
 FAIRCROFT_CITIZENSHIP_QUESTIONS = (
@@ -3047,6 +3058,25 @@ def ensure_schema() -> None:
                 FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE SET NULL,
                 FOREIGN KEY (target_user_id) REFERENCES users(id) ON DELETE SET NULL
             );
+
+            CREATE TABLE IF NOT EXISTS account_deletion_records (
+                id SERIAL PRIMARY KEY,
+                deleted_user_id INTEGER NOT NULL,
+                deleted_name TEXT NOT NULL,
+                deleted_email TEXT NOT NULL,
+                deleted_civ_number TEXT NOT NULL DEFAULT '',
+                deleted_roles TEXT NOT NULL DEFAULT '[]',
+                deleted_arma_id TEXT NOT NULL DEFAULT '',
+                reason TEXT NOT NULL,
+                impact_summary TEXT NOT NULL DEFAULT '{}',
+                deleted_by INTEGER,
+                deleted_by_name TEXT NOT NULL,
+                deleted_at TEXT NOT NULL,
+                FOREIGN KEY (deleted_by) REFERENCES users(id) ON DELETE SET NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_account_deletion_records_deleted_at
+            ON account_deletion_records(deleted_at);
 
             CREATE TABLE IF NOT EXISTS jobs (
                 id SERIAL PRIMARY KEY,
@@ -4032,6 +4062,8 @@ def ensure_migrations(db: Database) -> None:
             entry_number INTEGER NOT NULL,
             role_weight NUMERIC(8,4) NOT NULL DEFAULT 1,
             source TEXT NOT NULL DEFAULT 'standard',
+            pick_numbers TEXT NOT NULL DEFAULT '[]',
+            ticket_cost NUMERIC(12,2) NOT NULL DEFAULT 0,
             status TEXT NOT NULL DEFAULT 'eligible',
             fraud_flag INTEGER NOT NULL DEFAULT 0,
             fraud_reason TEXT NOT NULL DEFAULT '',
@@ -4046,6 +4078,9 @@ def ensure_migrations(db: Database) -> None:
         """
     )
     db.execute("ALTER TABLE lottery_entries ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'standard'")
+    db.execute("ALTER TABLE lottery_entries ADD COLUMN IF NOT EXISTS pick_numbers TEXT NOT NULL DEFAULT '[]'")
+    db.execute("ALTER TABLE lottery_entries ADD COLUMN IF NOT EXISTS ticket_cost NUMERIC(12,2) NOT NULL DEFAULT 0")
+    db.execute("ALTER TABLE lottery_draws ADD COLUMN IF NOT EXISTS winning_numbers TEXT NOT NULL DEFAULT '[]'")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS lottery_fund_adjustments (
@@ -4107,6 +4142,9 @@ def ensure_migrations(db: Database) -> None:
             status TEXT NOT NULL DEFAULT 'sealed',
             outcome TEXT NOT NULL DEFAULT '',
             bonus_entries INTEGER NOT NULL DEFAULT 0,
+            promo_id INTEGER,
+            reward_summary TEXT NOT NULL DEFAULT '',
+            purchase_cost NUMERIC(12,2) NOT NULL DEFAULT 0,
             revealed_at TEXT,
             created_at TEXT NOT NULL,
             UNIQUE(user_id, card_date, card_number),
@@ -4114,6 +4152,9 @@ def ensure_migrations(db: Database) -> None:
         )
         """
     )
+    db.execute("ALTER TABLE lottery_scratch_cards ADD COLUMN IF NOT EXISTS promo_id INTEGER")
+    db.execute("ALTER TABLE lottery_scratch_cards ADD COLUMN IF NOT EXISTS reward_summary TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE lottery_scratch_cards ADD COLUMN IF NOT EXISTS purchase_cost NUMERIC(12,2) NOT NULL DEFAULT 0")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS lottery_quick_draws (
@@ -4123,6 +4164,7 @@ def ensure_migrations(db: Database) -> None:
             status TEXT NOT NULL DEFAULT 'scheduled',
             winning_entry_id INTEGER,
             winner_user_id INTEGER,
+            winning_numbers TEXT NOT NULL DEFAULT '[]',
             completed_at TEXT,
             created_at TEXT NOT NULL,
             FOREIGN KEY (winner_user_id) REFERENCES users(id) ON DELETE SET NULL
@@ -4136,10 +4178,39 @@ def ensure_migrations(db: Database) -> None:
             draw_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
             entry_number INTEGER NOT NULL,
+            pick_numbers TEXT NOT NULL DEFAULT '[]',
+            ticket_cost NUMERIC(12,2) NOT NULL DEFAULT 0,
             status TEXT NOT NULL DEFAULT 'eligible',
             created_at TEXT NOT NULL,
             UNIQUE(draw_id, user_id, entry_number),
             FOREIGN KEY (draw_id) REFERENCES lottery_quick_draws(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute("ALTER TABLE lottery_quick_draws ADD COLUMN IF NOT EXISTS winning_numbers TEXT NOT NULL DEFAULT '[]'")
+    db.execute("ALTER TABLE lottery_quick_draw_entries ADD COLUMN IF NOT EXISTS pick_numbers TEXT NOT NULL DEFAULT '[]'")
+    db.execute("ALTER TABLE lottery_quick_draw_entries ADD COLUMN IF NOT EXISTS ticket_cost NUMERIC(12,2) NOT NULL DEFAULT 0")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS lottery_wallets (
+            user_id INTEGER PRIMARY KEY,
+            balance NUMERIC(12,2) NOT NULL DEFAULT 0,
+            last_daily_credit TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS lottery_wallet_transactions (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            amount NUMERIC(12,2) NOT NULL,
+            transaction_type TEXT NOT NULL,
+            detail TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
         """
@@ -4933,6 +5004,11 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "market_gemini_last_tick": str(raw.get("market_gemini_last_tick") or "")[:80],
         "lottery_enabled": str(raw.get("lottery_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "lottery_daily_entries": max(1, min(20, int(raw.get("lottery_daily_entries") or 3))),
+        "lottery_daily_credit": max(0.0, min(1000.0, float(raw.get("lottery_daily_credit") or 10))),
+        "lottery_ticket_price": max(0.01, min(1000.0, float(raw.get("lottery_ticket_price") or 2))),
+        "lottery_scratch_price": max(0.01, min(1000.0, float(raw.get("lottery_scratch_price") or 3))),
+        "lottery_quick_draw_price": max(0.01, min(1000.0, float(raw.get("lottery_quick_draw_price") or 1))),
+        "lottery_quick_draw_prize": max(0.01, min(10000.0, float(raw.get("lottery_quick_draw_prize") or 5))),
         "lottery_draw_weekday": max(0, min(6, int(raw.get("lottery_draw_weekday") or 1))),
         "lottery_draw_time": str(raw.get("lottery_draw_time") or "23:59")[:5],
         "lottery_timezone": str(raw.get("lottery_timezone") or "America/New_York")[:80],
@@ -4942,8 +5018,9 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "lottery_scratch_enabled": str(raw.get("lottery_scratch_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "lottery_scratch_daily_cards": max(1, min(5, int(raw.get("lottery_scratch_daily_cards") or 1))),
         "lottery_quick_draw_enabled": str(raw.get("lottery_quick_draw_enabled") or "1") in ("1", "true", "True", "yes", "on"),
-        "lottery_quick_draw_interval_minutes": max(30, min(1440, int(raw.get("lottery_quick_draw_interval_minutes") or 240))),
+        "lottery_quick_draw_interval_minutes": max(5, min(1440, int(raw.get("lottery_quick_draw_interval_minutes") or 30))),
         "lottery_quick_draw_entries": max(1, min(5, int(raw.get("lottery_quick_draw_entries") or 1))),
+        "lottery_quick_draw_ticket_limit": max(1, min(100, int(raw.get("lottery_quick_draw_ticket_limit") or 25))),
         "lottery_player_pool_enabled": str(raw.get("lottery_player_pool_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "lottery_player_pool_direction": "decrease" if str(raw.get("lottery_player_pool_direction") or "increase").lower() == "decrease" else "increase",
         "lottery_player_pool_rate_per_minute": max(0.0, min(1000000.0, float(raw.get("lottery_player_pool_rate_per_minute") or 100))),
@@ -4998,16 +5075,83 @@ def lottery_player_pool_status(db: Database, settings: dict[str, Any] | None = N
     online_players = int(online_row["count"] or 0) if online_row else 0
     rate = float(settings["lottery_player_pool_rate_per_minute"] or 0)
     sign = -1 if settings["lottery_player_pool_direction"] == "decrease" else 1
-    per_minute = round(online_players * rate * sign, 2)
+    # A live population curve keeps an empty server stationary, gives even one
+    # connected resident visible movement, and progressively accelerates as the
+    # verified anti-cheat population grows.
+    population_multiplier = min(4.0, 1.0 + max(0, online_players - 1) * 0.12) if online_players else 0.0
+    per_minute = round(online_players * rate * population_multiplier * sign, 2)
     return {
         "enabled": bool(settings["lottery_player_pool_enabled"]),
         "online_players": online_players,
         "direction": settings["lottery_player_pool_direction"],
         "rate_per_player_minute": round(rate, 2),
+        "population_multiplier": round(population_multiplier, 2),
         "change_per_minute": per_minute,
         "change_per_second": round(per_minute / 60.0, 4),
         "last_tick": settings["lottery_player_pool_last_tick"],
     }
+
+
+def lottery_pick_numbers(raw: Any, count: int, minimum: int, maximum: int) -> list[int]:
+    if not isinstance(raw, list):
+        raise ValueError(f"Select exactly {count} lottery numbers.")
+    try:
+        numbers = [int(value) for value in raw]
+    except (TypeError, ValueError):
+        raise ValueError("Lottery picks must be whole numbers.")
+    if len(numbers) != count or len(set(numbers)) != count:
+        raise ValueError(f"Select exactly {count} different lottery numbers.")
+    if any(number < minimum or number > maximum for number in numbers):
+        raise ValueError(f"Lottery numbers must be between {minimum} and {maximum}.")
+    return sorted(numbers)
+
+
+def lottery_random_numbers(count: int, minimum: int, maximum: int) -> list[int]:
+    available = list(range(minimum, maximum + 1))
+    chosen: list[int] = []
+    for _ in range(count):
+        index = secrets.randbelow(len(available))
+        chosen.append(available.pop(index))
+    return sorted(chosen)
+
+
+def lottery_wallet_snapshot(db: Database, user_id: int, settings: dict[str, Any], apply_daily_credit: bool = True) -> dict[str, Any]:
+    today = utcnow().astimezone(ZoneInfo(settings["lottery_timezone"])).date().isoformat()
+    db.execute("INSERT INTO lottery_wallets (user_id,balance,last_daily_credit,updated_at) VALUES (?,0,'',?) ON CONFLICT(user_id) DO NOTHING", (user_id, now_iso()))
+    wallet = one(db, "SELECT * FROM lottery_wallets WHERE user_id=? FOR UPDATE", (user_id,))
+    credited = 0.0
+    if apply_daily_credit and str(wallet["last_daily_credit"] or "") != today:
+        credited = float(settings["lottery_daily_credit"] or 0)
+        db.execute("UPDATE lottery_wallets SET balance=balance+?,last_daily_credit=?,updated_at=? WHERE user_id=?", (credited, today, now_iso(), user_id))
+        if credited:
+            db.execute("INSERT INTO lottery_wallet_transactions (user_id,amount,transaction_type,detail,created_at) VALUES (?,?,'daily_credit','Daily Faircroft Lottery play balance',?)", (user_id, credited, now_iso()))
+        wallet = one(db, "SELECT * FROM lottery_wallets WHERE user_id=?", (user_id,))
+    return {
+        "balance": round(float(wallet["balance"] or 0), 2),
+        "daily_credit": round(float(settings["lottery_daily_credit"] or 0), 2),
+        "last_daily_credit": str(wallet["last_daily_credit"] or ""),
+        "credited_now": round(credited, 2),
+    }
+
+
+def lottery_saved_numbers(raw: Any) -> list[int]:
+    try:
+        parsed = json.loads(str(raw or "[]"))
+        return [int(value) for value in parsed] if isinstance(parsed, list) else []
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+
+
+def lottery_wallet_charge(db: Database, user_id: int, settings: dict[str, Any], amount: float, transaction_type: str, detail: str) -> float:
+    wallet = lottery_wallet_snapshot(db, user_id, settings, True)
+    amount = round(max(0.0, float(amount)), 2)
+    if wallet["balance"] + 0.0001 < amount:
+        raise ValueError(f"This purchase costs ${amount:,.2f}. Your lottery balance is ${wallet['balance']:,.2f}.")
+    updated = one(db, "UPDATE lottery_wallets SET balance=balance-?,updated_at=? WHERE user_id=? AND balance>=? RETURNING balance", (amount, now_iso(), user_id, amount))
+    if not updated:
+        raise ValueError("Your lottery balance changed. Refresh and try again.")
+    db.execute("INSERT INTO lottery_wallet_transactions (user_id,amount,transaction_type,detail,created_at) VALUES (?,?,?, ?,?)", (user_id, -amount, transaction_type[:40], detail[:240], now_iso()))
+    return round(float(updated["balance"] or 0), 2)
 
 
 def run_lottery_player_pool_tick(db: Database, settings: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -5144,27 +5288,6 @@ def ensure_lottery_draw(db: Database, settings: dict[str, Any] | None = None) ->
     return one(db, "SELECT * FROM lottery_draws WHERE draw_key=?", (key,))
 
 
-def award_lottery_bonus_entries(db: Database, user_id: int, amount: int, source: str) -> int:
-    """Attach non-purchasable game rewards to the scheduled weekly draw."""
-    settings = get_system_settings(db)
-    draw = ensure_lottery_draw(db, settings)
-    today = utcnow().astimezone(ZoneInfo(settings["lottery_timezone"])).date().isoformat()
-    # Entry numbers are unique per resident and calendar date, even when a draw
-    # rolls over during that date. Lock the resident while allocating the range
-    # so two simultaneous rewards cannot select the same next number.
-    one(db, "SELECT id FROM users WHERE id=? FOR UPDATE", (user_id,))
-    next_number = int(one(db, "SELECT COALESCE(MAX(entry_number),0) AS maximum FROM lottery_entries WHERE user_id=? AND entry_date=?", (user_id, today))["maximum"] or 0)
-    created = 0
-    for offset in range(max(0, amount)):
-        next_number += 1
-        db.execute(
-            "INSERT INTO lottery_entries (draw_id,user_id,entry_date,entry_number,role_weight,source,created_at) VALUES (?,?,?,?,? ,?,?)",
-            (draw["id"], user_id, today, next_number, 1, source[:40], now_iso()),
-        )
-        created += 1
-    return created
-
-
 def quick_draw_next_at(settings: dict[str, Any], after: dt.datetime | None = None) -> dt.datetime:
     interval = int(settings["lottery_quick_draw_interval_minutes"])
     current = (after or utcnow()).astimezone(ZoneInfo(settings["lottery_timezone"]))
@@ -5191,14 +5314,19 @@ def run_due_quick_draws(db: Database, settings: dict[str, Any] | None = None) ->
     due = all_rows(db, "SELECT * FROM lottery_quick_draws WHERE status='scheduled' AND scheduled_at<=? ORDER BY scheduled_at", (now_iso(),))
     for draw in due:
         entries = all_rows(db, "SELECT * FROM lottery_quick_draw_entries WHERE draw_id=? AND status='eligible' ORDER BY id", (draw["id"],))
-        winner = entries[secrets.randbelow(len(entries))] if entries else None
+        winning_numbers = lottery_random_numbers(3, 0, 9)
+        exact = [entry for entry in entries if lottery_saved_numbers(entry.get("pick_numbers")) == winning_numbers]
+        winner = exact[secrets.randbelow(len(exact))] if exact else None
         db.execute(
-            "UPDATE lottery_quick_draws SET status='completed',winning_entry_id=?,winner_user_id=?,completed_at=? WHERE id=? AND status='scheduled'",
-            (winner["id"] if winner else None, winner["user_id"] if winner else None, now_iso(), draw["id"]),
+            "UPDATE lottery_quick_draws SET status='completed',winning_numbers=?,winning_entry_id=?,winner_user_id=?,completed_at=? WHERE id=? AND status='scheduled'",
+            (json.dumps(winning_numbers), winner["id"] if winner else None, winner["user_id"] if winner else None, now_iso(), draw["id"]),
         )
         if winner:
-            award_lottery_bonus_entries(db, int(winner["user_id"]), 1, "quick_draw_bonus")
-            add_message(db, winner["user_id"], "Faircroft Quick Draw Winner", "Your Quick Draw entry was selected. A bonus entry has been added to your next official Faircroft Lottery drawing.")
+            prize = float(settings["lottery_quick_draw_prize"] or 5)
+            lottery_wallet_snapshot(db, int(winner["user_id"]), settings, False)
+            db.execute("UPDATE lottery_wallets SET balance=balance+?,updated_at=? WHERE user_id=?", (prize, now_iso(), winner["user_id"]))
+            db.execute("INSERT INTO lottery_wallet_transactions (user_id,amount,transaction_type,detail,created_at) VALUES (?,?,'quick_draw_win',?,?)", (winner["user_id"], prize, f"Quick Draw winning numbers: {', '.join(map(str, winning_numbers))}", now_iso()))
+            add_message(db, winner["user_id"], "Faircroft Quick Draw Winner", f"Your numbers matched {', '.join(map(str, winning_numbers))}. ${prize:,.2f} was added to your Faircroft Lottery balance.")
     ensure_quick_draw(db, settings)
 
 
@@ -5209,16 +5337,11 @@ def run_due_lottery_draws(db: Database) -> None:
     for draw in all_rows(db, "SELECT * FROM lottery_draws WHERE status='scheduled' AND scheduled_at<=? ORDER BY scheduled_at", (now_iso(),)):
         entries = all_rows(db, "SELECT * FROM lottery_entries WHERE draw_id=? AND status='eligible' AND fraud_flag=0 ORDER BY id", (draw["id"],))
         funding = lottery_funding_snapshot(db, settings)
-        winner = None
-        if entries and funding["available"] > 0:
-            weights = [max(1, int(float(entry["role_weight"] or 1) * 100)) for entry in entries]
-            pick = secrets.randbelow(sum(weights))
-            for entry, weight in zip(entries, weights):
-                if pick < weight:
-                    winner = entry; break
-                pick -= weight
+        winning_numbers = lottery_random_numbers(5, 1, 49)
+        exact = [entry for entry in entries if lottery_saved_numbers(entry.get("pick_numbers")) == winning_numbers]
+        winner = exact[secrets.randbelow(len(exact))] if exact and funding["available"] > 0 else None
         payout = round(funding["available"] * settings["lottery_payout_percent"] / 100, 2) if winner else 0
-        db.execute("""UPDATE lottery_draws SET status='completed',source_fines=?,source_market_fees=?,prize_pool=?,payout_amount=?,winning_entry_id=?,winner_user_id=?,completed_at=? WHERE id=? AND status='scheduled'""", (funding["fines"], funding["market_fees"], funding["available"], payout, winner["id"] if winner else None, winner["user_id"] if winner else None, now_iso(), draw["id"]))
+        db.execute("""UPDATE lottery_draws SET status='completed',winning_numbers=?,source_fines=?,source_market_fees=?,prize_pool=?,payout_amount=?,winning_entry_id=?,winner_user_id=?,completed_at=? WHERE id=? AND status='scheduled'""", (json.dumps(winning_numbers), funding["fines"], funding["market_fees"], funding["available"], payout, winner["id"] if winner else None, winner["user_id"] if winner else None, now_iso(), draw["id"]))
         if winner:
             add_message(db, winner["user_id"], "Faircroft Lottery Winner", f"Your CIV entry was selected in the Faircroft Lottery. Prize authorization: ${payout:,.2f}. A developer will coordinate the verified in-game settlement.")
             surprise_prizes = all_rows(db, "SELECT * FROM lottery_special_prizes WHERE status='active' ORDER BY id")
@@ -6129,6 +6252,7 @@ def admin_tools_section_required(db: Database, user: DbRow | None, section_id: s
 
 def admin_tools_route_section(path: str) -> str:
     route_map = (
+        ("/api/dev-tools/account-deletion/", "account-deletion"),
         ("/api/dev-tools/accounts/", "accounts"),
         ("/api/dev-tools/anticheat/", "anticheat"),
         ("/api/dev-tools/insurance-claims/", "insurance-claims"),
@@ -6157,6 +6281,28 @@ def admin_tools_route_section(path: str) -> str:
         if path.startswith(prefix):
             return section_id
     return "dashboard"
+
+
+def account_deletion_impact(db: Database, target_id: int) -> dict[str, Any]:
+    """Return a compact, auditable preview of records affected by account deletion."""
+    checks = (
+        ("characters", "SELECT COUNT(*) AS count FROM user_characters WHERE user_id = ?", (target_id,)),
+        ("arma_links", "SELECT COUNT(*) AS count FROM arma_account_links WHERE user_id = ?", (target_id,)),
+        ("messages", "SELECT COUNT(*) AS count FROM messages WHERE recipient_id = ? OR sender_id = ?", (target_id, target_id)),
+        ("citations", "SELECT COUNT(*) AS count FROM citations WHERE civ_id = ? OR officer_id = ?", (target_id, target_id)),
+        ("applications", "SELECT COUNT(*) AS count FROM department_applications WHERE user_id = ?", (target_id,)),
+        ("vehicles", "SELECT COUNT(*) AS count FROM dmv_vehicles WHERE user_id = ?", (target_id,)),
+        ("businesses", "SELECT COUNT(*) AS count FROM businesses WHERE owner_id = ?", (target_id,)),
+        ("properties", "SELECT COUNT(*) AS count FROM properties WHERE owner_id = ?", (target_id,)),
+        ("lottery_entries", "SELECT COUNT(*) AS count FROM lottery_entries WHERE user_id = ?", (target_id,)),
+        ("sanctions", "SELECT COUNT(*) AS count FROM account_sanctions WHERE user_id = ?", (target_id,)),
+        ("internal_notes", "SELECT COUNT(*) AS count FROM account_internal_warnings WHERE user_id = ?", (target_id,)),
+    )
+    records: dict[str, int] = {}
+    for label, sql, params in checks:
+        row = one(db, sql, params)
+        records[label] = int(row["count"] if row else 0)
+    return {"records": records, "total_records": sum(records.values())}
 
 
 def fnn_content_control_required(user: DbRow | None) -> str | None:
@@ -7574,6 +7720,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_download_package(user, "android")
                 elif path == "/api/dev-tools" and method == "GET":
                     self.api_dev_tools(db, user)
+                elif path.startswith("/api/dev-tools/account-deletion/") and method == "GET":
+                    self.api_dev_account_deletion_preview(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/dev-tools/account-deletion/") and method == "DELETE":
+                    self.api_dev_delete_account(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/dev-tools/insurance-claims/") and method == "PATCH":
                     self.api_dev_insurance_claim(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/dev-tools/anticheat/") and path.endswith("/review") and method == "POST":
@@ -9020,7 +9170,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "progress_percent": tier_percent,
             "ranked_boards": sum(1 for board_rows in ranked_boards.values() if any(int(row.get("user_id") or 0) == int(user["id"]) for row in board_rows)),
             "perks": [
-                {"type": "lottery_entry", "cost": 250, "label": "Bonus lottery entry", "detail": "Add one verified chance to the next Faircroft drawing."},
+                {"type": "lottery_entry", "cost": 250, "label": "Lottery ticket credit", "detail": "Receive enough Lottery Wallet credit to choose one weekly number line. Limited to five prestige credits per drawing."},
                 {"type": "stock_share", "cost": 750, "label": "Starter stock share", "detail": "Receive one free share in the active Faircroft market."},
             ],
         }
@@ -9082,14 +9232,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         payload = self.read_json()
         perk_type = str(payload.get("perk_type") or "").strip().lower()
         perks = {
-            "lottery_entry": (250, "Bonus Faircroft Lottery entry"),
+            "lottery_entry": (250, "Faircroft Lottery ticket credit"),
             "stock_share": (750, "One free share in the active Faircroft market"),
         }
         if perk_type not in perks:
             self.error(400, "Choose a valid leaderboard perk.")
             return
         cost, reward_label = perks[perk_type]
-        progress = one(db, "SELECT * FROM leaderboard_progress WHERE user_id=?", (user["id"],))
+        # Serialize point spending so rapid clicks cannot award a perk before a
+        # competing request has committed its point deduction.
+        progress = one(db, "SELECT * FROM leaderboard_progress WHERE user_id=? FOR UPDATE", (user["id"],))
         if not progress or int(progress["season_points"] or 0) < cost:
             self.error(409, f"You need {cost:,} rank points for this perk.")
             return
@@ -9104,12 +9256,22 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 self.error(403, "This account is excluded from lottery participation by role policy.")
                 return
             draw = ensure_lottery_draw(db, settings)
-            today = utcnow().astimezone(ZoneInfo(settings["lottery_timezone"])).date().isoformat()
             one(db, "SELECT id FROM users WHERE id=? FOR UPDATE", (user["id"],))
-            next_number = int(one(db, "SELECT COALESCE(MAX(entry_number),0) AS maximum FROM lottery_entries WHERE user_id=? AND entry_date=?", (user["id"], today))["maximum"] or 0) + 1
-            weight = max([settings["lottery_role_weights"].get(role, 1.0) for role in roles_for(user)] or [1.0])
-            db.execute("INSERT INTO lottery_entries (draw_id,user_id,entry_date,entry_number,role_weight,source,created_at) VALUES (?,?,?,?,?,'leaderboard_perk',?)", (draw["id"], user["id"], today, next_number, weight, now_iso()))
-            summary = f"Bonus lottery entry FC-{next_number:02d}"
+            legacy_count = int(one(db, "SELECT COUNT(*) AS count FROM lottery_entries WHERE draw_id=? AND user_id=? AND source='leaderboard_perk'", (draw["id"], user["id"]))["count"] or 0)
+            credit_count = int(one(db, """SELECT COUNT(*) AS count FROM lottery_wallet_transactions
+                WHERE user_id=? AND transaction_type='prestige_lottery_credit' AND created_at>=?""",
+                (user["id"], draw["created_at"]))["count"] or 0)
+            prestige_count = legacy_count + credit_count
+            if prestige_count >= 5:
+                self.error(409, "You have already redeemed the maximum of five prestige lottery credits for this drawing.")
+                return
+            lottery_wallet_snapshot(db, int(user["id"]), settings, False)
+            credit = round(float(settings["lottery_ticket_price"]), 2)
+            ts = now_iso()
+            db.execute("UPDATE lottery_wallets SET balance=balance+?,updated_at=? WHERE user_id=?", (credit, ts, user["id"]))
+            db.execute("INSERT INTO lottery_wallet_transactions (user_id,amount,transaction_type,detail,created_at) VALUES (?,?,?,?,?)",
+                (user["id"], credit, "prestige_lottery_credit", f"Prestige weekly ticket credit {prestige_count + 1}/5", ts))
+            summary = f"${credit:,.2f} Lottery Wallet credit ({prestige_count + 1}/5 this drawing)"
         else:
             security = one(db, "SELECT * FROM market_securities WHERE active<>0 ORDER BY id LIMIT 1")
             if not security:
@@ -10965,16 +11127,22 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         roles = roles_for(user); excluded = sorted(set(roles) & set(settings["lottery_excluded_roles"]))
         weight = max([settings["lottery_role_weights"].get(role, 1.0) for role in roles] or [1.0])
         today = utcnow().astimezone(ZoneInfo(settings["lottery_timezone"])).date().isoformat()
+        wallet = lottery_wallet_snapshot(db, int(user["id"]), settings, True)
+        wallet_transactions = [dict(row) for row in all_rows(db, "SELECT * FROM lottery_wallet_transactions WHERE user_id=? ORDER BY created_at DESC LIMIT 20", (user["id"],))]
         entries = all_rows(db, "SELECT * FROM lottery_entries WHERE draw_id=? AND user_id=? ORDER BY created_at DESC", (draw["id"], user["id"]))
         today_count = sum(1 for entry in entries if entry["entry_date"] == today and str(entry.get("source") or "standard") == "standard")
         funding = lottery_funding_snapshot(db, settings)
         latest = one(db, """SELECT d.*,u.name AS winner_name,u.civ_number AS winner_civ FROM lottery_draws d LEFT JOIN users u ON u.id=d.winner_user_id WHERE d.status='completed' ORDER BY d.completed_at DESC LIMIT 1""")
         latest_prizes = [dict(row) for row in all_rows(db, "SELECT prize_name,prize_type,provider,display_value,quantity,sponsor FROM lottery_special_prizes WHERE draw_id=? AND status='awarded' ORDER BY id", (latest["id"],))] if latest else []
-        scratch_cards = [dict(row) for row in all_rows(db, "SELECT * FROM lottery_scratch_cards WHERE user_id=? AND card_date=? ORDER BY card_number", (user["id"], today))]
+        scratch_cards = [dict(row) for row in all_rows(db, """SELECT c.*,p.code_plain AS promo_code,p.reward_type,p.cash_amount,p.share_quantity,s.ticker
+            FROM lottery_scratch_cards c
+            LEFT JOIN market_promo_codes p ON p.id=c.promo_id
+            LEFT JOIN market_securities s ON s.id=p.security_id
+            WHERE c.user_id=? AND c.card_date=? ORDER BY c.card_number""", (user["id"], today))]
         quick_draw = ensure_quick_draw(db, settings)
         quick_entries = [dict(row) for row in all_rows(db, "SELECT * FROM lottery_quick_draw_entries WHERE draw_id=? AND user_id=? ORDER BY entry_number", (quick_draw["id"], user["id"]))]
         quick_latest = one(db, "SELECT d.*,u.name AS winner_name,u.civ_number AS winner_civ FROM lottery_quick_draws d LEFT JOIN users u ON u.id=d.winner_user_id WHERE d.status='completed' ORDER BY d.completed_at DESC LIMIT 1")
-        self.send_json(200, {"enabled": settings["lottery_enabled"], "draw": dict(draw), "funding": funding, "player_pool": lottery_player_pool_status(db, settings), "entries": [dict(row) for row in entries], "entries_today": today_count, "daily_limit": settings["lottery_daily_entries"], "remaining_today": max(0, settings["lottery_daily_entries"]-today_count), "role_weight": weight, "excluded": bool(excluded), "excluded_roles": excluded, "latest_result": dict(latest) if latest else None, "latest_special_prizes": latest_prizes, "timezone": settings["lottery_timezone"], "scratch": {"enabled": settings["lottery_scratch_enabled"], "daily_limit": settings["lottery_scratch_daily_cards"], "cards": scratch_cards}, "quick_draw": {"enabled": settings["lottery_quick_draw_enabled"], "draw": dict(quick_draw), "daily_limit": settings["lottery_quick_draw_entries"], "entries": quick_entries, "latest_result": dict(quick_latest) if quick_latest else None}})
+        self.send_json(200, {"enabled": settings["lottery_enabled"], "draw": dict(draw), "funding": funding, "player_pool": lottery_player_pool_status(db, settings), "wallet": wallet, "wallet_transactions": wallet_transactions, "prices": {"weekly_ticket": settings["lottery_ticket_price"], "scratch": settings["lottery_scratch_price"], "quick_draw": settings["lottery_quick_draw_price"]}, "entries": [dict(row) for row in entries], "entries_today": today_count, "daily_limit": settings["lottery_daily_entries"], "remaining_today": 0, "role_weight": weight, "excluded": bool(excluded), "excluded_roles": excluded, "latest_result": dict(latest) if latest else None, "latest_special_prizes": latest_prizes, "timezone": settings["lottery_timezone"], "scratch": {"enabled": settings["lottery_scratch_enabled"], "daily_limit": settings["lottery_scratch_daily_cards"], "cards": scratch_cards, "price": settings["lottery_scratch_price"]}, "quick_draw": {"enabled": settings["lottery_quick_draw_enabled"], "draw": dict(quick_draw), "daily_limit": settings["lottery_quick_draw_ticket_limit"], "entries": quick_entries, "price": settings["lottery_quick_draw_price"], "prize": settings["lottery_quick_draw_prize"], "latest_result": dict(quick_latest) if quick_latest else None}})
 
     def api_lottery_entry(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -10987,18 +11155,24 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         roles = roles_for(user); excluded = sorted(set(roles) & set(settings["lottery_excluded_roles"]))
         if excluded:
             self.error(403, "This account is excluded from lottery participation by role policy."); return
+        payload = self.read_json()
+        try:
+            picks = lottery_pick_numbers(payload.get("numbers"), 5, 1, 49)
+        except ValueError as exc:
+            self.error(400, str(exc)); return
         draw = ensure_lottery_draw(db, settings); today = utcnow().astimezone(ZoneInfo(settings["lottery_timezone"])).date().isoformat()
         # Serialize this resident's daily entry allocation. The database key is
         # (user_id, entry_date, entry_number), not draw_id, so draw rollover and
         # fast repeated requests must share one daily number sequence.
         one(db, "SELECT id FROM users WHERE id=? FOR UPDATE", (user["id"],))
-        count = int(one(db, "SELECT COUNT(*) AS count FROM lottery_entries WHERE user_id=? AND entry_date=? AND source='standard'", (user["id"], today))["count"] or 0)
-        if count >= settings["lottery_daily_entries"]:
-            self.error(409, "All daily lottery entries have already been submitted."); return
+        try:
+            balance = lottery_wallet_charge(db, int(user["id"]), settings, settings["lottery_ticket_price"], "weekly_ticket", f"Weekly picks: {', '.join(map(str, picks))}")
+        except ValueError as exc:
+            self.error(409, str(exc)); return
         weight = max([settings["lottery_role_weights"].get(role, 1.0) for role in roles] or [1.0])
         next_number = int(one(db, "SELECT COALESCE(MAX(entry_number),0) AS maximum FROM lottery_entries WHERE user_id=? AND entry_date=?", (user["id"], today))["maximum"] or 0) + 1
-        db.execute("INSERT INTO lottery_entries (draw_id,user_id,entry_date,entry_number,role_weight,source,created_at) VALUES (?,?,?,?,?,'standard',?)", (draw["id"], user["id"], today, next_number, weight, now_iso()))
-        self.send_json(201, {"ok": True, "entry_number": next_number, "remaining_today": settings["lottery_daily_entries"]-count-1})
+        db.execute("INSERT INTO lottery_entries (draw_id,user_id,entry_date,entry_number,role_weight,source,pick_numbers,ticket_cost,created_at) VALUES (?,?,?,?,?,'purchased',?,?,?)", (draw["id"], user["id"], today, next_number, weight, json.dumps(picks), settings["lottery_ticket_price"], now_iso()))
+        self.send_json(201, {"ok": True, "entry_number": next_number, "numbers": picks, "wallet_balance": balance})
 
     def api_lottery_scratch(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -11012,17 +11186,40 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if excluded:
             self.error(403, "This account is excluded from lottery participation by role policy."); return
         today = utcnow().astimezone(ZoneInfo(settings["lottery_timezone"])).date().isoformat()
+        one(db, "SELECT id FROM users WHERE id=? FOR UPDATE", (user["id"],))
         existing = all_rows(db, "SELECT * FROM lottery_scratch_cards WHERE user_id=? AND card_date=? ORDER BY card_number", (user["id"], today))
         if len(existing) >= settings["lottery_scratch_daily_cards"]:
             self.error(409, "All daily scratch cards have already been revealed."); return
-        roll = secrets.randbelow(1000)
-        outcome, bonus = ("jackpot", 3) if roll < 10 else (("bonus", 1) if roll < 180 else ("no_win", 0))
+        try:
+            balance = lottery_wallet_charge(db, int(user["id"]), settings, settings["lottery_scratch_price"], "scratch_purchase", f"Instant Scratch #{len(existing) + 1}")
+        except ValueError as exc:
+            self.error(409, str(exc)); return
+        securities = all_rows(db, "SELECT id,ticker,name FROM market_securities WHERE active=1 ORDER BY id")
+        reward_type = "stock" if securities and secrets.randbelow(100) < 45 else "cash"
+        security = secrets.choice(securities) if reward_type == "stock" else None
+        cash_amount = secrets.choice((250, 500, 750, 1000, 1500, 2500)) if reward_type == "cash" else 0
+        share_quantity = secrets.choice((1, 1, 1, 2, 2, 3)) if reward_type == "stock" else 0
+        reward_summary = f"{share_quantity} share{'s' if share_quantity != 1 else ''} of {security['ticker']}" if security else f"${cash_amount:,.2f} Ravenhood buying power"
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        while True:
+            raw_code = "FCX-SCR-" + "".join(secrets.choice(alphabet) for _ in range(4)) + "-" + "".join(secrets.choice(alphabet) for _ in range(4))
+            code_hash = hashlib.sha256(raw_code.replace("-", "").encode("utf-8")).hexdigest()
+            if not one(db, "SELECT id FROM market_promo_codes WHERE code_hash=?", (code_hash,)):
+                break
+        created = utcnow()
+        expires = created + dt.timedelta(days=30)
+        db.execute("""INSERT INTO market_promo_codes
+            (campaign_name,code_hash,code_hint,code_plain,reward_type,cash_amount,security_id,share_quantity,bundle_size,max_redemptions,expires_at,created_by,created_at)
+            VALUES (?,?,?,?,?,?,?,?,0,1,?,?,?)""", (f"Faircroft Instant Scratch #{len(existing) + 1}", code_hash, raw_code[-4:], raw_code, reward_type,
+            cash_amount, security["id"] if security else None, share_quantity, expires.isoformat(), user["id"], created.isoformat()))
+        promo = one(db, "SELECT id FROM market_promo_codes WHERE code_hash=?", (code_hash,))
         number = len(existing) + 1
-        db.execute("INSERT INTO lottery_scratch_cards (user_id,card_date,card_number,status,outcome,bonus_entries,revealed_at,created_at) VALUES (?,?,?,'revealed',?,?,?,?)", (user["id"], today, number, outcome, bonus, now_iso(), now_iso()))
-        if bonus:
-            award_lottery_bonus_entries(db, int(user["id"]), bonus, "scratch_bonus")
-            add_message(db, user["id"], "Faircroft Lottery Scratch", f"Your scratch card revealed {bonus} bonus official drawing {'entry' if bonus == 1 else 'entries'}. They are now attached to your next weekly drawing.")
-        self.send_json(201, {"ok": True, "outcome": outcome, "bonus_entries": bonus, "card_number": number})
+        db.execute("""INSERT INTO lottery_scratch_cards
+            (user_id,card_date,card_number,status,outcome,bonus_entries,promo_id,reward_summary,purchase_cost,revealed_at,created_at)
+            VALUES (?,?,?,'revealed',?,0,?,?,?,?,?)""", (user["id"], today, number, reward_type, promo["id"], reward_summary, settings["lottery_scratch_price"], created.isoformat(), created.isoformat()))
+        add_message(db, user["id"], "Faircroft Instant Scratch", f"Your scratch card revealed {reward_summary}. Redeem code {raw_code} in Ravenhood.")
+        add_admin_audit(db, int(user["id"]), "lottery.scratch.promotion.created", int(user["id"]), {"promo_id": promo["id"], "code": raw_code, "reward": reward_summary})
+        self.send_json(201, {"ok": True, "outcome": reward_type, "bonus_entries": 0, "card_number": number, "promo_id": promo["id"], "promo_code": raw_code, "reward_type": reward_type, "reward_summary": reward_summary, "wallet_balance": balance})
 
     def api_lottery_quick_draw_entry(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -11035,13 +11232,23 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         excluded = sorted(set(roles_for(user)) & set(settings["lottery_excluded_roles"]))
         if excluded:
             self.error(403, "This account is excluded from lottery participation by role policy."); return
+        payload = self.read_json()
+        try:
+            picks = lottery_pick_numbers(payload.get("numbers"), 3, 0, 9)
+        except ValueError as exc:
+            self.error(400, str(exc)); return
         run_due_quick_draws(db, settings)
         draw = ensure_quick_draw(db, settings)
+        one(db, "SELECT id FROM users WHERE id=? FOR UPDATE", (user["id"],))
         count = int(one(db, "SELECT COUNT(*) AS count FROM lottery_quick_draw_entries WHERE draw_id=? AND user_id=?", (draw["id"], user["id"]))["count"] or 0)
-        if count >= settings["lottery_quick_draw_entries"]:
-            self.error(409, "Your Quick Draw entry is already recorded for this round."); return
-        db.execute("INSERT INTO lottery_quick_draw_entries (draw_id,user_id,entry_number,created_at) VALUES (?,?,?,?)", (draw["id"], user["id"], count + 1, now_iso()))
-        self.send_json(201, {"ok": True, "entry_number": count + 1, "remaining": settings["lottery_quick_draw_entries"] - count - 1})
+        if count >= settings["lottery_quick_draw_ticket_limit"]:
+            self.error(409, "You reached the Quick Draw ticket limit for this round."); return
+        try:
+            balance = lottery_wallet_charge(db, int(user["id"]), settings, settings["lottery_quick_draw_price"], "quick_draw_ticket", f"Quick Draw picks: {', '.join(map(str, picks))}")
+        except ValueError as exc:
+            self.error(409, str(exc)); return
+        db.execute("INSERT INTO lottery_quick_draw_entries (draw_id,user_id,entry_number,pick_numbers,ticket_cost,created_at) VALUES (?,?,?,?,?,?)", (draw["id"], user["id"], count + 1, json.dumps(picks), settings["lottery_quick_draw_price"], now_iso()))
+        self.send_json(201, {"ok": True, "entry_number": count + 1, "numbers": picks, "remaining": settings["lottery_quick_draw_ticket_limit"] - count - 1, "wallet_balance": balance})
 
     def api_bank(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -12535,7 +12742,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                LEFT JOIN realty_property_assignments a ON a.property_id=p.property_id
                LEFT JOIN realty_listings active ON active.property_id=p.property_id AND active.status IN ('draft','active')
                WHERE COALESCE(a.owner_user_id,l.user_id)=?
-               ORDER BY CASE WHEN p.status='rented' OR LOWER(p.source_file) LIKE '%rented%' THEN 1 ELSE 0 END, p.name, p.property_id""",
+               ORDER BY CASE WHEN p.status='rented' OR POSITION('rented' IN LOWER(COALESCE(p.source_file, ''))) > 0 THEN 1 ELSE 0 END, p.name, p.property_id""",
             (user_id,),
         )
         result = []
@@ -12693,7 +12900,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             FROM property_tax_assessments assessment
             JOIN game_property_records property ON property.property_id = assessment.property_id
             WHERE assessment.owner_user_id = ?
-              AND LOWER(COALESCE(property.source_file, '')) NOT LIKE '%rented%'
+              AND POSITION('rented' IN LOWER(COALESCE(property.source_file, ''))) = 0
             ORDER BY assessment.assessed_at DESC
             """,
             (user["id"],),
@@ -15707,6 +15914,146 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         })
         self.send_json(200, {"ok": True, "player_uid": uid, "reviewed_at": ts})
 
+    def api_dev_account_deletion_preview(self, db: Database, user: DbRow | None, target_id: int) -> None:
+        err = strict_developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        target = one(
+            db,
+            """
+            SELECT u.*, l.identity_id AS linked_arma_id, l.linked_at AS arma_linked_at
+            FROM users u LEFT JOIN arma_account_links l ON l.user_id = u.id
+            WHERE u.id = ?
+            """,
+            (target_id,),
+        )
+        if not target:
+            self.error(404, "Account not found")
+            return
+        protected_reason = ""
+        if target_id == int(user["id"]):
+            protected_reason = "You cannot delete the account you are signed in with."
+        elif has_any(target, "owner"):
+            protected_reason = "Owner accounts are protected from deletion."
+        account = public_user(target)
+        account["arma_id"] = target.get("linked_arma_id") or ""
+        account["arma_linked_at"] = target.get("arma_linked_at")
+        self.send_json(200, {
+            "account": account,
+            "impact": account_deletion_impact(db, target_id),
+            "deletable": not bool(protected_reason),
+            "protected_reason": protected_reason,
+            "confirmation_phrase": f"DELETE CIV {target.get('civ_number') or target_id}",
+        })
+
+    def api_dev_delete_account(self, db: Database, user: DbRow | None, target_id: int) -> None:
+        err = strict_developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        target = one(
+            db,
+            """
+            SELECT u.*, l.identity_id AS linked_arma_id
+            FROM users u LEFT JOIN arma_account_links l ON l.user_id = u.id
+            WHERE u.id = ?
+            """,
+            (target_id,),
+        )
+        if not target:
+            self.error(404, "Account not found")
+            return
+        if target_id == int(user["id"]):
+            self.error(400, "You cannot delete the account you are signed in with")
+            return
+        if has_any(target, "owner"):
+            self.error(403, "Owner accounts are protected from deletion")
+            return
+        payload = self.read_json()
+        reason = str(payload.get("reason") or "").strip()
+        confirmation = str(payload.get("confirmation") or "").strip().upper()
+        expected = f"DELETE CIV {target.get('civ_number') or target_id}".upper()
+        if len(reason) < 12:
+            self.error(400, "Document a deletion reason of at least 12 characters")
+            return
+        if confirmation != expected:
+            self.error(400, f"Type {expected} to authorize deletion")
+            return
+
+        impact = account_deletion_impact(db, target_id)
+        deleted_at = now_iso()
+        deletion_record = db.execute(
+            """
+            INSERT INTO account_deletion_records (
+                deleted_user_id, deleted_name, deleted_email, deleted_civ_number,
+                deleted_roles, deleted_arma_id, reason, impact_summary,
+                deleted_by, deleted_by_name, deleted_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
+            """,
+            (
+                target_id, target["name"], target["email"], target.get("civ_number") or "",
+                json.dumps(roles_for(target), separators=(",", ":")), target.get("linked_arma_id") or "",
+                reason, json.dumps(impact, separators=(",", ":")), int(user["id"]), user["name"], deleted_at,
+            ),
+        ).fetchone()
+
+        # Preserve official history authored by the departing account. Several
+        # legacy CASCADE keys would otherwise erase records belonging to others.
+        for table, column in (
+            ("lottery_fund_adjustments", "created_by"),
+            ("lottery_special_prizes", "created_by"),
+            ("fine_settlement_batches", "created_by"),
+            ("business_tax_assessments", "assessed_by"),
+            ("business_tax_settlement_batches", "created_by"),
+            ("gang_invite_codes", "issued_by_user_id"),
+            ("ice_cases", "opened_by"),
+            ("property_tax_assessments", "assessed_by"),
+            ("property_enforcement_actions", "issued_by"),
+            ("developer_unlink_codes", "created_by"),
+            ("admin_2fa_codes", "created_by"),
+            ("account_sanctions", "created_by"),
+            ("account_internal_warnings", "created_by"),
+            ("citations", "officer_id"),
+            ("mdt_bookings", "officer_id"),
+            ("business_reviews", "reviewer_id"),
+            ("business_inspections", "inspector_id"),
+            ("business_violations", "issued_by"),
+            ("rp_contracts", "poster_id"),
+            ("panic_alerts", "officer_id"),
+            ("dispatch_call_units", "assigned_by"),
+            ("dispatch_call_notes", "author_id"),
+            ("cad_after_call_reports", "officer_id"),
+            ("press_reports", "author_id"),
+            ("mdt_bolos", "created_by"),
+            ("cid_investigations", "lead_id"),
+            ("cid_investigation_notes", "author_id"),
+            ("cid_warrants", "created_by"),
+            ("cid_internal_affairs", "created_by"),
+            ("cid_internal_affairs_notes", "author_id"),
+        ):
+            db.execute(f"UPDATE {table} SET {column} = ? WHERE {column} = ?", (int(user["id"]), target_id))
+
+        add_admin_audit(db, int(user["id"]), "account.permanently_deleted", target_id, {
+            "deletion_record_id": int(deletion_record["id"]),
+            "deleted_user_id": target_id,
+            "deleted_name": target["name"],
+            "deleted_email": target["email"],
+            "deleted_civ_number": target.get("civ_number") or "",
+            "deleted_arma_id": target.get("linked_arma_id") or "",
+            "reason": reason,
+            "impact": impact,
+        })
+        db.execute("DELETE FROM users WHERE id = ?", (target_id,))
+        self.send_json(200, {
+            "ok": True,
+            "deleted_user_id": target_id,
+            "deleted_name": target["name"],
+            "deletion_record_id": int(deletion_record["id"]),
+        })
+
     def api_dev_tools(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
         if err:
@@ -15849,6 +16196,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             LIMIT 1000
             """,
         )
+        deletion_records: list[DbRow] = []
+        deletion_total = 0
+        if strict_developer_required(user) is None:
+            deletion_records = all_rows(
+                db,
+                """
+                SELECT r.*, COALESCE(actor.name, r.deleted_by_name) AS actor_name
+                FROM account_deletion_records r
+                LEFT JOIN users actor ON actor.id = r.deleted_by
+                ORDER BY r.deleted_at DESC LIMIT 150
+                """,
+            )
+            deletion_total_row = one(db, "SELECT COUNT(*) AS count FROM account_deletion_records")
+            deletion_total = int((deletion_total_row or {}).get("count") or 0)
         admin_2fa_codes = all_rows(
             db,
             """
@@ -16184,6 +16545,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "recent_links": [dict(row) for row in recent_links],
                 "warnings": [dict(row) for row in warnings],
                 "audit_logs": [dict(row) for row in audit_logs],
+                "account_deletion": {
+                    "records": [dict(row) for row in deletion_records],
+                    "total_deleted": deletion_total,
+                },
                 "unlink_codes": [dict(row) for row in codes],
                 "admin_2fa_codes": [dict(row) for row in admin_2fa_codes],
                 "myfaircroft_payment_codes": [dict(row) for row in myfaircroft_payment_codes],
@@ -16421,7 +16786,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 },
                 "lottery_settings": {
                     "enabled": system_settings["lottery_enabled"],
-                    "daily_entries": system_settings["lottery_daily_entries"],
+                    "daily_credit": system_settings["lottery_daily_credit"],
+                    "ticket_price": system_settings["lottery_ticket_price"],
+                    "scratch_price": system_settings["lottery_scratch_price"],
+                    "quick_draw_price": system_settings["lottery_quick_draw_price"],
+                    "quick_draw_prize": system_settings["lottery_quick_draw_prize"],
+                    "quick_draw_ticket_limit": system_settings["lottery_quick_draw_ticket_limit"],
                     "draw_weekday": system_settings["lottery_draw_weekday"],
                     "draw_time": system_settings["lottery_draw_time"],
                     "timezone": system_settings["lottery_timezone"],
@@ -17132,11 +17502,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403 if user else 401, err); return
         payload = self.read_json()
         try:
-            daily_entries = max(1, min(20, int(payload.get("daily_entries") or 3)))
+            daily_credit = max(0.0, min(1000.0, float(payload.get("daily_credit") or 10)))
+            ticket_price = max(0.01, min(1000.0, float(payload.get("ticket_price") or 2)))
+            scratch_price = max(0.01, min(1000.0, float(payload.get("scratch_price") or 3)))
+            quick_draw_price = max(0.01, min(1000.0, float(payload.get("quick_draw_price") or 1)))
+            quick_draw_prize = max(0.01, min(1000000.0, float(payload.get("quick_draw_prize") or 5)))
+            quick_draw_ticket_limit = max(1, min(100, int(payload.get("quick_draw_ticket_limit") or 25)))
             payout_percent = max(1.0, min(100.0, float(payload.get("payout_percent") or 100)))
             scratch_daily_cards = max(1, min(5, int(payload.get("scratch_daily_cards") or 1)))
-            quick_draw_interval_minutes = max(30, min(1440, int(payload.get("quick_draw_interval_minutes") or 240)))
-            quick_draw_entries = max(1, min(5, int(payload.get("quick_draw_entries") or 1)))
+            quick_draw_interval_minutes = max(5, min(1440, int(payload.get("quick_draw_interval_minutes") or 30)))
             draw_weekday = max(0, min(6, int(payload.get("draw_weekday") or 1)))
             ZoneInfo(str(payload.get("timezone") or "America/New_York"))
             if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", str(payload.get("draw_time") or "")):
@@ -17148,7 +17522,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(400, "Lottery settings contain an invalid schedule, timezone, or role policy."); return
         for key, value in {
             "lottery_enabled": "1" if payload.get("enabled") else "0",
-            "lottery_daily_entries": str(daily_entries), "lottery_draw_weekday": str(draw_weekday),
+            "lottery_daily_credit": str(round(daily_credit, 2)),
+            "lottery_ticket_price": str(round(ticket_price, 2)),
+            "lottery_scratch_price": str(round(scratch_price, 2)),
+            "lottery_quick_draw_price": str(round(quick_draw_price, 2)),
+            "lottery_quick_draw_prize": str(round(quick_draw_prize, 2)),
+            "lottery_quick_draw_ticket_limit": str(quick_draw_ticket_limit),
+            "lottery_draw_weekday": str(draw_weekday),
             "lottery_draw_time": str(payload.get("draw_time")), "lottery_timezone": str(payload.get("timezone"))[:80],
             "lottery_payout_percent": str(payout_percent), "lottery_role_weights": json.dumps(cleaned_weights),
             "lottery_excluded_roles": json.dumps(excluded_roles),
@@ -17156,7 +17536,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "lottery_scratch_daily_cards": str(scratch_daily_cards),
             "lottery_quick_draw_enabled": "1" if payload.get("quick_draw_enabled") else "0",
             "lottery_quick_draw_interval_minutes": str(quick_draw_interval_minutes),
-            "lottery_quick_draw_entries": str(quick_draw_entries),
         }.items(): set_system_setting(db, key, value)
         ensure_lottery_draw(db, get_system_settings(db))
         self.send_json(200, {"ok": True})
@@ -18318,7 +18697,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
               ON l.identity_id = p.owner_identity OR l.uid = p.owner_identity
             LEFT JOIN users u ON u.id = COALESCE(ra.owner_user_id,l.user_id)
             WHERE (COALESCE(p.owner_identity, '') <> '' OR ra.owner_user_id IS NOT NULL)
-              AND LOWER(COALESCE(p.source_file, '')) NOT LIKE '%rented%'
+              AND POSITION('rented' IN LOWER(COALESCE(p.source_file, ''))) = 0
             ORDER BY u.name, p.name, p.property_id
             """,
         )
@@ -19533,23 +19912,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"ok": True})
 
     def api_admin_delete_user(self, db: Database, user: DbRow | None, target_id: int) -> None:
-        err = owner_required(user)
-        if err:
-            self.error(403 if user else 401, err)
-            return
-        assert user is not None
-        target = one(db, "SELECT * FROM users WHERE id = ?", (target_id,))
-        if not target:
-            self.error(404, "User not found")
-            return
-        if target_id == user["id"]:
-            self.error(400, "You cannot delete the account you are signed in with")
-            return
-        if has_any(target, "owner"):
-            self.error(403, "Owner accounts cannot be deleted from the account panel")
-            return
-        db.execute("DELETE FROM users WHERE id = ?", (target_id,))
-        self.send_json(200, {"ok": True})
+        self.error(410, "Account removal has moved to the developer-only Account Deletion command")
 
     def api_admin_jobs(self, db: Database, user: DbRow | None) -> None:
         err = admin_required(user)

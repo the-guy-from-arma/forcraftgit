@@ -6,6 +6,13 @@
       "version": "0.2.2",
     "title": "RP OS 0.2.2",
     "added": [
+      "Added a developer-only Account Deletion Command dashboard with resident search, protected-account status, linked-record impact previews, typed confirmation, and permanent deletion authorization.",
+      "Added a non-editable account deletion evidence ledger that preserves the deleted identity snapshot, linked Arma identity, reason, affected-record totals, authorizing developer, and timestamp after the account is removed.",
+      "Added the Faircroft Lottery Wallet with a configurable recurring $10 daily play credit that is isolated from game-bank currency and carries forward for future tickets.",
+      "Added resident-selected Weekly Pick 5 tickets with five unique numbers from 1 through 49, exact-match official drawings, permanent ticket ledgers, and configurable per-line pricing.",
+      "Added frequent Quick Draw rounds with resident-selected three-digit lines, configurable scheduling, per-round purchase limits, exact-match results, and automatic Lottery Wallet prizes.",
+      "Added wallet-funded Faircroft Instant Scratch purchases while preserving the physical scratch-to-reveal experience and single-use Ravenhood cash or stock reward codes.",
+      "Added interactive Faircroft Instant Scratch tickets that residents physically clear with a pointer or finger to reveal a single-use Ravenhood cash or stock reward code, with every generated code retained in Stock Market Settings for staff audit.",
       "Added a server-authoritative Faircroft Lottery attendance engine that reads the live Anti-Cheat player roster and adjusts the prize pool by elapsed seconds using the verified online-player count.",
       "Added Developer Tools Lottery controls for enabling player-driven pool movement, selecting increase or decrease behavior, setting the per-player per-minute rate, viewing live per-second and per-minute velocity, and auditing recent timed accruals.",
       "Added direct MyFaircroft property-tax bill payment using the same unassigned, audited four-digit receipt PIN authority used for fines, business taxes, and Ravenhood, with paid receipts contributing to the Faircroft Lottery fund.",
@@ -89,6 +96,10 @@
         ,"Added an active scheduled-movement ledger to Ravenhood Stock Market Settings with affected securities, target percentage, schedule timing, live progress, and immediate stop controls."
       ],
     "changed": [
+      "Rebuilt Faircroft Continuity Protection as a cinematic resident asset-defense command with a live recovery shield, synchronized exposure telemetry, character-specific protection loadouts, animated policy intelligence, and a responsive activation experience that preserves all policy, claim, and four-digit receipt workflows.",
+      "Changed Admin Tools navigation so Account Deletion remains visible but greyed out for administrators and cannot be delegated through administrator section-access switches.",
+      "Changed the weekly lottery from complimentary automatic entries to purchased, resident-selected number lines funded exclusively through the recurring Lottery Wallet.",
+      "Changed live lottery pool growth to a sliding anti-cheat attendance curve: zero verified players pauses growth, one player moves the pool slowly, and additional verified players progressively increase its velocity.",
       "Changed the public Faircroft Lottery broadcast to display verified players online, live prize velocity, and a smoothly advancing jackpot amount tied to the configured attendance rate.",
       "Changed residential property-tax assessment to a fixed $350,000 Faircroft basis with one-click authorized 12%, 14%, and 18% rate controls, producing exact bills of $42,000, $49,000, or $63,000 without manual valuation entry.",
       "Rebuilt Admin Tools Housing Market as an owner-centered property command dashboard that consolidates every synchronized residence under one resident portfolio, adds expandable asset drawers and direct intelligence access, and separates vacant inventory from ownership records.",
@@ -168,7 +179,10 @@
         ,"Rebuilt the Faircroft citizen passport as a presentation-grade digital booklet with an official embossed cover, security artwork, portrait and ghost image, bilingual identity fields, verification hologram, holder signature, ten-year validity, issuing authority, live registry authentication, and machine-readable travel-document zone."
         ,"Changed all newly issued MyFaircroft and Ravenhood four-digit receipt PINs to unassigned bearer codes that permanently record the issuing administrator and first eligible resident who redeems them."
       ],
-      "fixed": [
+    "fixed": [
+      "Fixed MyFaircroft, Realty, and Settlement rental-property filters triggering PostgreSQL placeholder errors when loading resident tax and property records.",
+      "Fixed permanent account removal to preserve restrictive government and financial authorship records by reassigning their staff attribution to the authorizing developer before cascading account deletion.",
+        "Fixed lottery prestige-point redemptions so each resident can add no more than five prestige entries to the same weekly drawing, with the limit enforced under a database lock to prevent rapid duplicate submissions.",
         "Fixed Faircroft Lottery entry submissions colliding after a same-day drawing rollover by allocating entry numbers across the resident's full calendar day and serializing concurrent requests, while keeping bonus entries separate from the complimentary daily limit.",
         "Fixed the ICE MDT FLUCK Camera System opening to a blank workspace by removing a stale legacy visibility rule that hid the redesigned operations center, tightening the selector to the active module boundary, and safely normalizing camera and occupant payload collections.",
         "Fixed property-tax ownership isolation so rented-property source records are excluded from the taxable deed inventory, resident bills, liens, seizures, owner totals, and enforcement endpoints.",
