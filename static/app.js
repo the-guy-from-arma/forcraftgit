@@ -10,6 +10,7 @@ let activeActionConfirm = false;
 let deferredPwaInstallPrompt = null;
 let sessionRefreshTimer = null;
 let sessionRefreshInFlight = false;
+let marketLiveRefreshTimer = null;
 
 const state = {
   boot: {
@@ -38,6 +39,7 @@ const state = {
   marketPromoSubmitting: false,
   marketPromoError: "",
   marketTheme: localStorage.getItem("rp.market.theme") || "dark",
+  marketRange: "1D",
   generatedAdmin2faCode: null,
   fineSettlementCode: null,
   taxSettlementCode: null,
@@ -4366,7 +4368,7 @@ function bindLotteryWorkspace(){
   $("[data-lottery-quick-entry]")?.addEventListener("click",async()=>{try{const numbers=[...document.querySelectorAll('[data-lottery-number="quick"].selected')].map(item=>Number(item.dataset.number));await api("/api/lottery/quick-draw/entries",{method:"POST",body:{numbers}});toast(`Quick Draw line ${numbers.join(" - ")} purchased`);await loadAppData("lottery");render();}catch(error){toast(error.message);}});
 }
 
-function renderMarketWorkspace() {
+function renderMarketWorkspaceV11() {
   const data=state.cache.wallstreet;
   if(!data)return `<main class="market-workspace"><div class="empty">Opening Ravenhood Markets...</div></main>`;
   if(!data.account)return renderMarketWorkspaceLegacy();
@@ -4412,6 +4414,113 @@ function renderMarketWorkspace() {
       </section>
       <aside class="market-v11-ticket"><section><header><div><small>ORDER ENTRY</small><h2>${escapeHtml(selected.ticker||"—")}</h2><p>${escapeHtml(selected.name||"")}</p></div><i class="${data.market_open?"open":""}"></i></header><form data-market-order><input type="hidden" name="ticker" value="${escapeHtml(selected.ticker||"")}"/><label>Action<select name="side"><option value="buy">Buy shares</option><option value="sell">Sell shares</option></select></label><label>Quantity<input name="quantity" type="number" min="0.000001" step="0.000001" required placeholder="0.000000"/></label><dl><div><dt>Market price</dt><dd>${money(currentPrice)}</dd></div><div><dt>Commission</dt><dd>${Number(data.trade_fee_percent||0).toFixed(2)}%</dd></div><div><dt>Buying power</dt><dd>${money(cash)}</dd></div><div><dt>Owned</dt><dd>${heldQuantity.toLocaleString(undefined,{maximumFractionDigits:4})}</dd></div></dl><button class="market-primary" ${data.market_open?"":"disabled"}>Review order</button><p>Review the quantity, price, and commission before execution.</p></form></section><section class="market-v11-movers"><header><small>MARKET PULSE</small><b>Largest moves</b></header>${movers.map(item=>`<button type="button" data-market-ticker="${escapeHtml(item.ticker)}"><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}</small></span><strong>${money(item.price)}<i class="${marketChange(item)>=0?"up":"down"}">${marketChange(item)>=0?"+":""}${marketChange(item).toFixed(2)}%</i></strong></button>`).join("")}</section><section class="market-v11-activity"><header><small>EXECUTIONS</small><b>Recent activity</b></header>${recentOrders.length?recentOrders.map(order=>`<p><span>${escapeHtml(String(order.side||"").toUpperCase())} ${escapeHtml(order.ticker)}</span><strong>${money(order.gross_amount)}</strong></p>`).join(""):`<p>No completed orders yet.</p>`}</section></aside>
     </section>${renderMarketDialog(data,stockOptions)}
+  </main>`;
+}
+
+function renderMarketWorkspace() {
+  const data = state.cache.wallstreet;
+  if (!data) return `<main class="market-workspace market-v12"><div class="empty">Connecting to the Ravenhood exchange...</div></main>`;
+  if (!data.account) return renderMarketWorkspaceLegacy();
+
+  const account = data.account;
+  const securities = data.securities || [];
+  const holdings = data.holdings || [];
+  const selected = securities.find(item => item.ticker === state.marketTicker) || securities[0] || {};
+  state.marketTicker = selected.ticker || "";
+  const range = ["1D", "1W", "1M", "1Y"].includes(state.marketRange) ? state.marketRange : "1D";
+  state.marketRange = range;
+  const rangeMs = {"1D": 864e5, "1W": 6048e5, "1M": 2592e6, "1Y": 31536e6}[range];
+  const now = Date.now();
+  const rawHistory = (data.price_history?.[selected.ticker] || [])
+    .map(row => ({price: Number(row.price || 0), time: Date.parse(row.recorded_at || ""), source: row.source || "market"}))
+    .filter(row => row.price > 0 && Number.isFinite(row.time))
+    .sort((a, b) => a.time - b.time);
+  let history = rawHistory.filter(row => row.time >= now - rangeMs);
+  if (history.length < 2) history = rawHistory.slice(-Math.max(2, {"1D": 48, "1W": 96, "1M": 180, "1Y": 400}[range]));
+  const currentPrice = Number(selected.price || 0);
+  const previousPrice = Number(selected.previous_price || currentPrice);
+  if (!history.length) history = [{price: previousPrice, time: now - Math.min(rangeMs, 3600000), source: "opening"}, {price: currentPrice, time: now, source: "live"}];
+  if (history.length === 1) history.unshift({price: previousPrice, time: history[0].time - 60000, source: "opening"});
+  if (Math.abs(history.at(-1).price - currentPrice) > .00001) history.push({price: currentPrice, time: now, source: "live"});
+
+  const prices = history.map(row => row.price);
+  const periodOpen = prices[0] || currentPrice;
+  const periodHigh = Math.max(...prices, currentPrice);
+  const periodLow = Math.min(...prices, currentPrice);
+  const periodChange = periodOpen ? (currentPrice / periodOpen - 1) * 100 : 0;
+  const returns = prices.slice(1).map((price, index) => prices[index] ? price / prices[index] - 1 : 0);
+  const meanReturn = returns.length ? returns.reduce((sum, value) => sum + value, 0) / returns.length : 0;
+  const variance = returns.length ? returns.reduce((sum, value) => sum + Math.pow(value - meanReturn, 2), 0) / returns.length : 0;
+  const observedVolatility = Math.sqrt(variance);
+  const projectedMove = Math.max(-.06, Math.min(.06, meanReturn * Math.min(6, Math.max(2, returns.length))));
+  const projection = Array.from({length: 7}, (_, index) => {
+    const progress = (index + 1) / 7;
+    const mean = currentPrice * (1 + projectedMove * progress);
+    const spread = currentPrice * Math.max(.006, observedVolatility * 1.8) * Math.sqrt(progress);
+    return {mean, high: mean + spread, low: Math.max(.01, mean - spread)};
+  });
+  const allChartPrices = prices.concat(projection.flatMap(point => [point.mean, point.high, point.low]));
+  const chartLow = Math.min(...allChartPrices);
+  const chartHigh = Math.max(...allChartPrices);
+  const chartSpan = Math.max(.01, chartHigh - chartLow, currentPrice * .015);
+  const paddedLow = Math.max(.01, chartLow - chartSpan * .13);
+  const paddedHigh = chartHigh + chartSpan * .13;
+  const yFor = price => 300 - ((price - paddedLow) / Math.max(.0001, paddedHigh - paddedLow)) * 260;
+  const actualEndX = 1080;
+  const historyPoints = history.map((row, index) => `${(35 + index / Math.max(1, history.length - 1) * (actualEndX - 35)).toFixed(1)},${yFor(row.price).toFixed(1)}`).join(" ");
+  const projectionPoints = [`${actualEndX},${yFor(currentPrice).toFixed(1)}`, ...projection.map((point, index) => `${(actualEndX + (index + 1) / 7 * 350).toFixed(1)},${yFor(point.mean).toFixed(1)}`)].join(" ");
+  const projectionBand = [
+    `${actualEndX},${yFor(currentPrice).toFixed(1)}`,
+    ...projection.map((point, index) => `${(actualEndX + (index + 1) / 7 * 350).toFixed(1)},${yFor(point.high).toFixed(1)}`),
+    ...projection.slice().reverse().map((point, reverseIndex) => `${(actualEndX + (7 - reverseIndex) / 7 * 350).toFixed(1)},${yFor(point.low).toFixed(1)}`),
+  ].join(" ");
+  const projectedPrice = projection.at(-1)?.mean || currentPrice;
+  const totalInvested = Number(data.portfolio_value || 0);
+  const cash = Number(account.cash_balance || 0);
+  const netValue = totalInvested + cash;
+  const totalCost = holdings.reduce((sum, row) => sum + Number(row.quantity || 0) * Number(row.average_cost || 0), 0);
+  const portfolioReturn = totalInvested - totalCost;
+  const selectedHolding = holdings.find(row => row.ticker === selected.ticker);
+  const heldQuantity = Number(selectedHolding?.quantity || 0);
+  const heldValue = heldQuantity * currentPrice;
+  const rangePosition = periodHigh > periodLow ? (currentPrice - periodLow) / (periodHigh - periodLow) * 100 : 50;
+  const movers = [...securities].sort((a, b) => Math.abs(marketChange(b)) - Math.abs(marketChange(a)));
+  const hotPicks = movers.slice(0, 5);
+  const stockOptions = securities.map(item => `<option value="${escapeHtml(item.ticker)}">${escapeHtml(item.ticker)} · ${escapeHtml(item.name)}</option>`).join("");
+  const labels = {"1D": ["OPEN", "10 AM", "NOON", "2 PM", "NOW"], "1W": ["MON", "TUE", "WED", "THU", "FRI"], "1M": ["WEEK 1", "WEEK 2", "WEEK 3", "NOW"], "1Y": ["AUG", "NOV", "FEB", "MAY", "NOW"]}[range];
+  const lastTick = history.at(-1)?.time ? new Date(history.at(-1).time).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"}) : "Awaiting tick";
+  const historyStatus = history.length < 4 ? "Building verified history" : `${history.length} verified quote ticks`;
+  const holdingRows = holdings.map((row, index) => {
+    const quantity = Number(row.quantity || 0);
+    const value = quantity * Number(row.price || 0);
+    const cost = quantity * Number(row.average_cost || 0);
+    const result = value - cost;
+    return `<button type="button" class="${row.ticker === selected.ticker ? "active" : ""}" data-market-ticker="${escapeHtml(row.ticker)}"><span>${String(index + 1).padStart(2, "0")}</span><div><b>${escapeHtml(row.ticker)}</b><small>${escapeHtml(row.name)}</small></div><em>${quantity.toLocaleString(undefined, {maximumFractionDigits: 4})} shares</em><strong>${money(value)}<small class="${result >= 0 ? "up" : "down"}">${result >= 0 ? "+" : ""}${money(result)}</small></strong></button>`;
+  }).join("");
+  const directoryRows = securities.map(item => {
+    const change = marketChange(item);
+    const itemHistory = (data.price_history?.[item.ticker] || []).slice(-12).map(point => Number(point.price || 0)).filter(Boolean);
+    const min = Math.min(...itemHistory, Number(item.price || 0));
+    const max = Math.max(...itemHistory, Number(item.price || 0));
+    const span = Math.max(.001, max - min);
+    const spark = (itemHistory.length ? itemHistory : [Number(item.previous_price || item.price || 0), Number(item.price || 0)]).map((price, index, list) => `${index / Math.max(1, list.length - 1) * 76},${22 - (price - min) / span * 18}`).join(" ");
+    return `<button type="button" class="${item.ticker === selected.ticker ? "active" : ""}" data-market-ticker="${escapeHtml(item.ticker)}"><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}</small></span><em>${escapeHtml(item.sector || "Market")}</em><svg viewBox="0 0 76 24" preserveAspectRatio="none"><polyline points="${spark}"/></svg><strong>${money(item.price)}<small class="${change >= 0 ? "up" : "down"}">${change >= 0 ? "+" : ""}${change.toFixed(2)}%</small></strong></button>`;
+  }).join("");
+
+  return `<main class="market-workspace market-v12 market-v12-${state.marketTheme === "light" ? "light" : "dark"}">
+    <header class="market-v12-top"><button class="market-v12-brand" type="button" data-market-overview><span>RH</span><div><b>Ravenhood</b><small>Faircroft Exchange · FCX</small></div></button><nav><button data-market-overview>Market</button><button data-market-portfolio>Portfolio</button><button data-market-dialog="deposit">Cash desk</button><button data-market-dialog="transfer">Transfer</button><button data-market-dialog="promo">Rewards</button></nav><div><em class="${data.market_open ? "open" : "closed"}"><i></i>${data.market_open ? "Market open" : "Market closed"}</em><button data-market-theme>${state.marketTheme === "light" ? "Dark" : "Light"}</button><button data-refresh-market>Sync</button><button data-close-market>Exit</button></div></header>
+    <div class="market-v12-tape"><div>${securities.concat(securities).map(item => `<button data-market-ticker="${escapeHtml(item.ticker)}"><b>${escapeHtml(item.ticker)}</b><span>${money(item.price)}</span><i class="${marketChange(item) >= 0 ? "up" : "down"}">${marketChange(item) >= 0 ? "+" : ""}${marketChange(item).toFixed(2)}%</i></button>`).join("")}</div></div>
+    <section class="market-v12-shell">
+      <aside class="market-v12-rail"><section><small>ACCOUNT EQUITY</small><strong>${money(netValue)}</strong><span class="${portfolioReturn >= 0 ? "up" : "down"}">${portfolioReturn >= 0 ? "+" : ""}${money(portfolioReturn)} return</span><i><b style="width:${Math.max(3, Math.min(100, netValue ? totalInvested / netValue * 100 : 0)).toFixed(1)}%"></b></i></section><nav><button data-market-overview class="active"><i>⌁</i>Trade desk</button><button data-market-portfolio><i>◫</i>My portfolio <b>${holdings.length}</b></button><button data-market-dialog="deposit"><i>＋</i>Add funds</button><button data-market-dialog="withdrawal"><i>−</i>Withdraw</button><button data-market-dialog="promo"><i>◇</i>Redeem reward</button></nav><section class="market-v12-watch"><header><small>HOT PICKS</small><b>Market pulse</b></header>${hotPicks.map(item => `<button data-market-ticker="${escapeHtml(item.ticker)}"><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}</small></span><strong>${money(item.price)}<i class="${marketChange(item) >= 0 ? "up" : "down"}">${marketChange(item) >= 0 ? "+" : ""}${marketChange(item).toFixed(2)}%</i></strong></button>`).join("")}</section></aside>
+      <section class="market-v12-desk">
+        <header class="market-v12-instrument"><div><small>${escapeHtml(selected.sector || "FAIRCROFT MARKET")} · ${escapeHtml(humanLabel(selected.security_type || "stock"))}</small><h1>${escapeHtml(selected.ticker || "—")}<span>${escapeHtml(selected.name || "Select a listing")}</span></h1><p>${escapeHtml(selected.description || `${selected.name || selected.ticker} trades on the Faircroft Exchange.`)}</p></div><aside><small>LIVE QUOTE</small><strong>${money(currentPrice)}</strong><em class="${periodChange >= 0 ? "up" : "down"}">${periodChange >= 0 ? "+" : ""}${periodChange.toFixed(2)}% · ${range}</em><span>Updated ${lastTick}</span></aside></header>
+        <div class="market-v12-quote-strip"><div><small>Open</small><b>${money(periodOpen)}</b></div><div><small>${range} range</small><b>${money(periodLow)} — ${money(periodHigh)}</b></div><div><small>Your position</small><b>${heldQuantity ? `${heldQuantity.toLocaleString(undefined, {maximumFractionDigits: 4})} shares` : "Not held"}</b></div><div><small>Bid / ask</small><b>${money(currentPrice * .9985)} / ${money(currentPrice * 1.0015)}</b></div></div>
+        <section class="market-v12-chart-panel"><header><div><small>LIVE MARKET CANVAS</small><h2>${escapeHtml(selected.ticker || "—")} price action</h2><p><i></i>${historyStatus}<span data-market-live-clock>Live sync armed</span></p></div><nav>${["1D", "1W", "1M", "1Y"].map(item => `<button class="${range === item ? "active" : ""}" data-market-range="${item}">${item}</button>`).join("")}</nav></header><div class="market-v12-chart ${periodChange >= 0 ? "positive" : "negative"}"><div class="grid"></div><div class="y-axis"><span>${money(paddedHigh)}</span><span>${money((paddedHigh + paddedLow) / 2)}</span><span>${money(paddedLow)}</span></div><svg viewBox="0 0 1500 340" preserveAspectRatio="none"><defs><linearGradient id="marketV12Area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".34"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/><linearGradient id="marketV12Band" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#6bc5ff" stop-opacity=".22"/><stop offset="1" stop-color="#6bc5ff" stop-opacity=".03"/></linearGradient></defs><polygon class="actual-area" points="35,310 ${historyPoints} ${actualEndX},310"/><polygon class="forecast-band" points="${projectionBand}"/><polyline class="actual-line" points="${historyPoints}"/><polyline class="forecast-line" points="${projectionPoints}"/><line class="forecast-divider" x1="${actualEndX}" y1="24" x2="${actualEndX}" y2="310"/><circle class="live-dot" cx="${actualEndX}" cy="${yFor(currentPrice).toFixed(1)}" r="7"/></svg><div class="x-axis">${labels.map(label => `<span>${label}</span>`).join("")}<span>EST. OUTLOOK</span></div><div class="market-v12-chart-key"><span><i></i>Verified quote</span><span><i></i>Estimated range</span></div></div><footer><div><small>${range} LOW</small><b>${money(periodLow)}</b></div><i><b style="left:${Math.max(2, Math.min(98, rangePosition)).toFixed(1)}%"></b></i><div><small>${range} HIGH</small><b>${money(periodHigh)}</b></div><div><small>ESTIMATED PATH</small><b class="${projectedPrice >= currentPrice ? "up" : "down"}">${money(projectedPrice)}</b></div></footer></section>
+        <section class="market-v12-portfolio" id="marketPortfolioDesk"><header><div><small>RAVENHOOD ACCOUNT</small><h2>Your portfolio</h2><p>Live holdings, cost basis, and unrealized performance.</p></div><div><strong>${money(totalInvested)}</strong><span>invested · ${money(cash)} buying power</span></div></header><div class="market-v12-holdings">${holdingRows || `<article><b>No open positions</b><p>Choose a hot pick or browse the exchange to begin.</p></article>`}</div></section>
+        <section class="market-v12-directory"><header><div><small>EXCHANGE SCANNER</small><h2>All listed opportunities</h2></div><span>${securities.length} securities · live repricing</span></header><div class="market-v12-directory-head"><span>Company</span><span>Sector</span><span>Trend</span><span>Last / move</span></div><div>${directoryRows}</div></section>
+      </section>
+      <aside class="market-v12-order"><header><small>ORDER TICKET</small><h2>${escapeHtml(selected.ticker || "—")}</h2><p>${escapeHtml(selected.name || "")}</p><i class="${data.market_open ? "open" : ""}"></i></header><form data-market-order><input type="hidden" name="ticker" value="${escapeHtml(selected.ticker || "")}"/><label>Action<select name="side"><option value="buy">Buy shares</option><option value="sell">Sell shares</option></select></label><label>Quantity<input name="quantity" type="number" min="0.000001" step="0.000001" placeholder="0.000000" required/></label><dl><div><dt>Market price</dt><dd>${money(currentPrice)}</dd></div><div><dt>Commission</dt><dd>${Number(data.trade_fee_percent || 0).toFixed(2)}%</dd></div><div><dt>Buying power</dt><dd>${money(cash)}</dd></div><div><dt>Position value</dt><dd>${money(heldValue)}</dd></div></dl><button class="market-primary" ${data.market_open ? "" : "disabled"}>Review order</button><small>Price and fee are confirmed before execution.</small></form><section><small>POSITION OUTLOOK</small><strong class="${projectedPrice >= currentPrice ? "up" : "down"}">${projectedPrice >= currentPrice ? "+" : ""}${((projectedPrice / Math.max(.01, currentPrice) - 1) * 100).toFixed(2)}%</strong><p>Statistical direction from verified quotes. This is an estimate, not a recorded trade.</p></section></aside>
+    </section>${renderMarketDialog(data, stockOptions)}
   </main>`;
 }
 
@@ -4540,7 +4649,7 @@ function bindMarketWorkspace() {
       if (control.matches("[data-market-theme]")) { state.marketTheme = state.marketTheme === "light" ? "dark" : "light"; localStorage.setItem("rp.market.theme", state.marketTheme); render(); return; }
       if (control.matches("[data-refresh-market]")) { state.cache.wallstreet = await api("/api/wallstreet"); render(); return; }
       if (control.matches("[data-create-market-account]")) { await api("/api/wallstreet/account", {method:"POST", body:JSON.stringify({})}); toast("Ravenhood account opened"); await loadAppData("wallstreet"); render(); return; }
-      if (control.matches("[data-close-market]")) { state.activeApp = null; state.marketDialog = null; state.marketTransferRecipient = null; state.marketPromoSuccess = null; render(); await loadSession(); }
+      if (control.matches("[data-close-market]")) { if (marketLiveRefreshTimer) clearInterval(marketLiveRefreshTimer); marketLiveRefreshTimer = null; state.activeApp = null; state.marketDialog = null; state.marketTransferRecipient = null; state.marketPromoSuccess = null; render(); await loadSession(); }
     });
     app.addEventListener("submit", async event => {
       const form = event.target instanceof Element ? event.target.closest("[data-market-promo]") : null;
@@ -4580,6 +4689,24 @@ function bindMarketWorkspace() {
   $("[data-market-order]")?.addEventListener("submit", async event => { event.preventDefault(); const body=Object.fromEntries(new FormData(event.currentTarget)); await api("/api/wallstreet/orders",{method:"POST",body:JSON.stringify(body)}); toast("Order executed"); await loadAppData("wallstreet"); render(); });
   $("[data-market-cash]")?.addEventListener("submit", async event => { event.preventDefault(); const body=Object.fromEntries(new FormData(event.currentTarget)); const result=await api("/api/wallstreet/cash",{method:"POST",body:JSON.stringify(body)}); toast(`${humanLabel(body.transaction_type)} confirmed: ${money(result.amount)}`); state.marketDialog=null; await loadAppData("wallstreet"); render(); });
   $("[data-market-transfer]")?.addEventListener("submit", async event => { event.preventDefault(); const body=Object.fromEntries(new FormData(event.currentTarget)); await api("/api/wallstreet/transfers",{method:"POST",body:JSON.stringify(body)}); toast(`Shares transferred to CIV ${body.recipient_civ_number}`); state.marketDialog=null; state.marketTransferRecipient=null; await loadAppData("wallstreet"); render(); });
+  if (marketLiveRefreshTimer) clearInterval(marketLiveRefreshTimer);
+  marketLiveRefreshTimer = setInterval(async () => {
+    if (state.activeApp !== "wallstreet" || state.marketDialog || document.hidden) return;
+    try {
+      const prior = (state.cache.wallstreet?.securities || []).find(item => item.ticker === state.marketTicker);
+      const priorPrice = Number(prior?.price || 0);
+      const next = await api("/api/wallstreet");
+      const current = (next.securities || []).find(item => item.ticker === state.marketTicker);
+      const currentPrice = Number(current?.price || 0);
+      state.cache.wallstreet = next;
+      const clock = $("[data-market-live-clock]");
+      if (clock) clock.textContent = `Synced ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
+      if (Math.abs(currentPrice - priorPrice) > 0.00001) render();
+    } catch (_) {
+      const clock = $("[data-market-live-clock]");
+      if (clock) clock.textContent = "Sync retry pending";
+    }
+  }, 12000);
 }
 
 function renderBankOnlineV2(data, credit, userName, identitySuffix, creditScore, creditProgress, creditRating, refreshedAt, syncLabel) {

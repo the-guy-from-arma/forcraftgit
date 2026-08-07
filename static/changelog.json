@@ -110,6 +110,7 @@
       ],
     "changed": [
       "Rebuilt Ravenhood as a focused investment workstation with a clear account summary, selected-security research view, compact portfolio ledger, exchange discovery directory, persistent order ticket, and responsive mobile trading flow.",
+      "Rebuilt Ravenhood into a responsive live exchange desk with a compact navigation rail, animated market tape, ranked Hot Picks, selected-instrument research, portfolio ledger, sparkline market scanner, and a persistent order ticket that collapses cleanly for phones and tablets.",
       "Expanded Statewide Intelligence economy reporting with a state balance sheet, total modeled assets, net position, resident market assets, per-resident liquidity, obligation load, and market liquidity.",
       "Rebuilt the public Stats application as an animated Faircroft statewide command experience with a live signal wire, traced data visualizations, detailed intelligence chapters, responsive operational layouts, and significantly denser public insight without exposing resident records.",
       "Rebuilt Faircroft Continuity Protection as a cinematic resident asset-defense command with a live recovery shield, synchronized exposure telemetry, character-specific protection loadouts, animated policy intelligence, and a responsive activation experience that preserves all policy, claim, and four-digit receipt workflows.",
@@ -197,6 +198,7 @@
       ],
     "fixed": [
       "Replaced Ravenhood's decorative synthetic chart with recorded price history, explicit projected momentum, period open/high/low/current values, a range-position marker, truthful observation counts, and cache-safe delivery of the new interface.",
+      "Fixed Ravenhood live pricing so the workspace polls verified market quotes every 12 seconds, displays the latest synchronization time, redraws only when the authoritative price changes, and plots projected high, mean, and low paths on the same scale as recorded trades.",
       "Fixed large Statewide Intelligence currency totals being cut off with ellipses in overview and economy panels.",
       "Fixed Account Deletion searches returning no residents by separating directory lookup from the general Admin Tools payload while preserving owner, self-account, preview, and permanent-deletion safeguards.",
       "Fixed ICE recruitment eligibility so undocumented residents are denied before an application record is created, with citizenship checked again before command may advance, interview, or appoint a candidate.",
