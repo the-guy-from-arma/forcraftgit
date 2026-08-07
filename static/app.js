@@ -4418,6 +4418,10 @@ function renderMarketWorkspaceV11() {
 }
 
 function renderMarketWorkspace() {
+  // The V12 SVG stage can render blank after some Chromium/PWA restores.
+  // Use the proven interactive exchange desk while that composition is rebuilt.
+  return renderMarketWorkspaceV11();
+
   const data = state.cache.wallstreet;
   if (!data) return `<main class="market-workspace market-v12"><div class="empty">Connecting to the Ravenhood exchange...</div></main>`;
   if (!data.account) return renderMarketWorkspaceLegacy();
