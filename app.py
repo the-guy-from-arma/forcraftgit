@@ -11908,7 +11908,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             db,
             """
             SELECT e.id, e.provider_event_id, e.sport, e.league, e.home_team, e.away_team,
-                   e.starts_at, e.status, e.score_json, e.synced_at
+                   e.starts_at, e.status, e.score_json, e.raw_json, e.synced_at
             FROM sportsbook_events e
             WHERE e.status IN ('scheduled','live')
             ORDER BY CASE WHEN e.status='live' THEN 0 ELSE 1 END, e.starts_at
@@ -11936,7 +11936,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 item["score"] = json.loads(item.get("score_json") or "{}")
             except (TypeError, json.JSONDecodeError):
                 item["score"] = {}
+            try:
+                raw_market = json.loads(item.get("raw_json") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                raw_market = {}
+            item["question"] = str(raw_market.get("_faircroft_event_title") or item.get("home_team") or "Prediction market").strip()
+            item["market_condition"] = str(raw_market.get("yes_sub_title") or raw_market.get("subtitle") or raw_market.get("title") or item.get("away_team") or "YES").strip()
+            item["event_subtitle"] = str(raw_market.get("_faircroft_event_subtitle") or "").strip()
             item.pop("score_json", None)
+            item.pop("raw_json", None)
             item["markets"] = by_event.get(int(event["id"]), [])
             payload_events.append(item)
         bets = all_rows(
@@ -12152,23 +12160,53 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         creates a synthetic Faircroft event whose stake remains in the Arma
         in-game bank.
         """
-        query = urlencode({"status": "open", "limit": "1000"})
-        request = urllib.request.Request(
-            f"{KALSHI_BASE_URL}/markets?{query}",
-            headers={"Accept": "application/json", "User-Agent": "FaircroftMarkets/1.0"},
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=10) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            return {"inserted": 0, "errors": [f"Kalshi: HTTP {exc.code}"]}
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            return {"inserted": 0, "errors": [f"Kalshi: {type(exc).__name__}"]}
-        markets = payload.get("markets") if isinstance(payload, dict) else payload
-        if not isinstance(markets, list):
-            return {"inserted": 0, "errors": ["Kalshi returned no markets list"]}
+        markets: list[dict[str, Any]] = []
+        cursor = ""
+        fetch_errors: list[str] = []
+        for _page in range(5):
+            query_values = {"status": "open", "limit": "200", "with_nested_markets": "true"}
+            if cursor:
+                query_values["cursor"] = cursor
+            request = urllib.request.Request(
+                f"{KALSHI_BASE_URL}/events?{urlencode(query_values)}",
+                headers={"Accept": "application/json", "User-Agent": "FaircroftMarkets/1.0"},
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=12) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                fetch_errors.append(f"Kalshi events: HTTP {exc.code}")
+                break
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                fetch_errors.append(f"Kalshi events: {type(exc).__name__}")
+                break
+            event_records = payload.get("events") if isinstance(payload, dict) else []
+            if not isinstance(event_records, list):
+                fetch_errors.append("Kalshi returned no events list")
+                break
+            for parent in event_records:
+                if not isinstance(parent, dict):
+                    continue
+                event_title = str(parent.get("title") or "").strip()
+                event_subtitle = str(parent.get("sub_title") or parent.get("subtitle") or "").strip()
+                event_category = str(parent.get("category") or "").strip()
+                event_series = str(parent.get("series_ticker") or "").strip()
+                for nested in parent.get("markets") or []:
+                    if not isinstance(nested, dict) or str(nested.get("status") or "open").lower() not in ("open", "active"):
+                        continue
+                    market = dict(nested)
+                    market["_faircroft_event_title"] = event_title
+                    market["_faircroft_event_subtitle"] = event_subtitle
+                    market["_faircroft_event_category"] = event_category
+                    market["_faircroft_event_series"] = event_series
+                    markets.append(market)
+            cursor = str(payload.get("cursor") or "") if isinstance(payload, dict) else ""
+            if not cursor:
+                break
+        if not markets:
+            return {"inserted": 0, "errors": fetch_errors or ["Kalshi returned no open nested markets"]}
         inserted = 0
-        errors: list[str] = []
+        errors: list[str] = list(fetch_errors)
         allowed_categories = set(KALSHI_CATEGORIES)
         skipped_category = 0
         skipped_series = 0
@@ -12177,7 +12215,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         for market in markets:
             if not isinstance(market, dict):
                 continue
-            raw_category = str(market.get("category") or "").strip()
+            raw_category = str(market.get("category") or market.get("_faircroft_event_category") or "").strip()
             category = raw_category.lower().replace("_", "-") or "other"
             # Kalshi does not consistently include category metadata on the
             # public /markets response. Never reject a market solely because
@@ -12186,12 +12224,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 skipped_category += 1
                 continue
             ticker = str(market.get("ticker") or "").strip()
-            title = str(market.get("title") or market.get("subtitle") or market.get("yes_sub_title") or "").strip()
+            title = str(market.get("_faircroft_event_title") or market.get("title") or market.get("subtitle") or market.get("yes_sub_title") or "").strip()
+            condition = str(market.get("yes_sub_title") or market.get("subtitle") or market.get("title") or "YES").strip()
             close_time = str(market.get("close_time") or market.get("expected_expiration_time") or "").strip()
             if not ticker or not title or not close_time:
                 skipped_missing += 1
                 continue
-            series = str(market.get("series_ticker") or "").strip()
+            series = str(market.get("series_ticker") or market.get("_faircroft_event_series") or "").strip()
             if KALSHI_SERIES_TICKERS and series not in KALSHI_SERIES_TICKERS:
                 skipped_series += 1
                 continue
@@ -12226,7 +12265,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                   sport=EXCLUDED.sport, league=EXCLUDED.league, home_team=EXCLUDED.home_team,
                   away_team=EXCLUDED.away_team, starts_at=EXCLUDED.starts_at,
                   status='scheduled', raw_json=EXCLUDED.raw_json, synced_at=EXCLUDED.synced_at
-            """, (ticker, category, "Kalshi", title, "Prediction market", close_time, json.dumps(market, separators=(",", ":"), default=str), ts))
+            """, (ticker, category, "Kalshi", title, condition, close_time, json.dumps(market, separators=(",", ":"), default=str), ts))
             row = one(db, "SELECT id FROM sportsbook_events WHERE provider_event_id=?", (ticker,))
             if not row:
                 continue
