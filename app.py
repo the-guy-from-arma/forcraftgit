@@ -11967,6 +11967,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not isinstance(markets, list):
             return {"inserted": 0, "errors": ["Kalshi returned no markets list"]}
         inserted = 0
+        errors: list[str] = []
         allowed_categories = set(KALSHI_CATEGORIES)
         for market in markets:
             if not isinstance(market, dict):
