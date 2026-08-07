@@ -4521,7 +4521,7 @@ function renderMarketWorkspace() {
       </section>
       <aside class="market-v12-order"><header><small>ORDER TICKET</small><h2>${escapeHtml(selected.ticker || "—")}</h2><p>${escapeHtml(selected.name || "")}</p><i class="${data.market_open ? "open" : ""}"></i></header><form data-market-order><input type="hidden" name="ticker" value="${escapeHtml(selected.ticker || "")}"/><label>Action<select name="side"><option value="buy">Buy shares</option><option value="sell">Sell shares</option></select></label><label>Quantity<input name="quantity" type="number" min="0.000001" step="0.000001" placeholder="0.000000" required/></label><dl><div><dt>Market price</dt><dd>${money(currentPrice)}</dd></div><div><dt>Commission</dt><dd>${Number(data.trade_fee_percent || 0).toFixed(2)}%</dd></div><div><dt>Buying power</dt><dd>${money(cash)}</dd></div><div><dt>Position value</dt><dd>${money(heldValue)}</dd></div></dl><button class="market-primary" ${data.market_open ? "" : "disabled"}>Review order</button><small>Price and fee are confirmed before execution.</small></form><section><small>POSITION OUTLOOK</small><strong class="${projectedPrice >= currentPrice ? "up" : "down"}">${projectedPrice >= currentPrice ? "+" : ""}${((projectedPrice / Math.max(.01, currentPrice) - 1) * 100).toFixed(2)}%</strong><p>Statistical direction from verified quotes. This is an estimate, not a recorded trade.</p></section></aside>
     </section>${renderMarketDialog(data, stockOptions)}
-  </main>`;
+  </main>`.replace("<linearGradient id=\"marketV12Band\"", "</linearGradient><linearGradient id=\"marketV12Band\"");
 }
 
 function renderMarketWorkspaceV10() {
