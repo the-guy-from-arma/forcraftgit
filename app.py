@@ -2193,6 +2193,8 @@ SYSTEM_SETTING_DEFAULTS = {
     "lottery_player_pool_direction": "increase",
     "lottery_player_pool_rate_per_minute": "100.00",
     "lottery_player_pool_last_tick": "",
+    "insurance_claim_auto_approve_seconds": "180",
+    "insurance_tiers": "{\"essential\":{\"coverage_percent\":50,\"premium\":3500},\"preferred\":{\"coverage_percent\":70,\"premium\":4250},\"premier\":{\"coverage_percent\":90,\"premium\":5000}}",
     "gang_creation_enabled": "1",
     "gang_global_limit": "100",
     "gang_default_member_limit": "20",
@@ -3856,6 +3858,10 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS press_pass_notice_pending INTEGER NOT NULL DEFAULT 0")
     db.execute("ALTER TABLE insurance_policies ADD COLUMN IF NOT EXISTS coverage_percent NUMERIC(6,2) NOT NULL DEFAULT 0")
     db.execute("ALTER TABLE insurance_policies ADD COLUMN IF NOT EXISTS protected_bank_balance NUMERIC(18,2) NOT NULL DEFAULT 0")
+    db.execute("ALTER TABLE insurance_policies ADD COLUMN IF NOT EXISTS bank_command_id TEXT")
+    db.execute("ALTER TABLE insurance_policies ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'completed'")
+    db.execute("ALTER TABLE insurance_claims ADD COLUMN IF NOT EXISTS auto_approve_at TEXT")
+    db.execute("ALTER TABLE insurance_claims ADD COLUMN IF NOT EXISTS payout_command_id TEXT")
     db.execute("""CREATE TABLE IF NOT EXISTS insurance_claims (
         id SERIAL PRIMARY KEY, claim_number TEXT NOT NULL UNIQUE, policy_id INTEGER NOT NULL,
         user_id INTEGER NOT NULL, character_id INTEGER NOT NULL,
@@ -5133,6 +5139,18 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         lottery_excluded_roles = [str(role).strip().lower() for role in json.loads(str(raw.get("lottery_excluded_roles") or "[]")) if str(role).strip()]
     except (TypeError, json.JSONDecodeError):
         lottery_excluded_roles = []
+    try:
+        configured_insurance_tiers = json.loads(str(raw.get("insurance_tiers") or SYSTEM_SETTING_DEFAULTS["insurance_tiers"]))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        configured_insurance_tiers = {}
+    insurance_tiers = {}
+    for tier_name, fallback in (("essential", (50, 3500)), ("preferred", (70, 4250)), ("premier", (90, 5000))):
+        item = configured_insurance_tiers.get(tier_name) if isinstance(configured_insurance_tiers, dict) else None
+        try: coverage_percent = max(1.0, min(100.0, float((item or {}).get("coverage_percent", fallback[0]))))
+        except (TypeError, ValueError): coverage_percent = float(fallback[0])
+        try: premium = max(0.01, min(1000000000.0, float((item or {}).get("premium", fallback[1]))))
+        except (TypeError, ValueError): premium = float(fallback[1])
+        insurance_tiers[tier_name] = {"coverage_percent": coverage_percent, "premium": round(premium, 2)}
     return {
         "autopilot_verify_enabled": str(raw.get("autopilot_verify_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "autopilot_verify_minutes": minutes,
@@ -5203,6 +5221,8 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "lottery_player_pool_direction": "decrease" if str(raw.get("lottery_player_pool_direction") or "increase").lower() == "decrease" else "increase",
         "lottery_player_pool_rate_per_minute": max(0.0, min(1000000.0, float(raw.get("lottery_player_pool_rate_per_minute") or 100))),
         "lottery_player_pool_last_tick": str(raw.get("lottery_player_pool_last_tick") or "")[:80],
+        "insurance_claim_auto_approve_seconds": max(180, min(604800, int(raw.get("insurance_claim_auto_approve_seconds") or 180))),
+        "insurance_tiers": insurance_tiers,
         "gang_creation_enabled": str(raw.get("gang_creation_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "gang_global_limit": max(1, min(1000, int(raw.get("gang_global_limit") or 100))),
         "gang_default_member_limit": max(2, min(200, int(raw.get("gang_default_member_limit") or 20))),
@@ -6477,6 +6497,7 @@ def admin_tools_route_section(path: str) -> str:
         ("/api/dev-tools/accounts/", "accounts"),
         ("/api/dev-tools/anticheat/", "anticheat"),
         ("/api/dev-tools/insurance-claims/", "insurance-claims"),
+        ("/api/dev-tools/insurance/settings", "insurance-claims"),
         ("/api/dev-tools/experience", "campaigns"),
         ("/api/dev-tools/beta-", "settings"),
         ("/api/dev-tools/unlink-codes", "linking"),
@@ -8050,6 +8071,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_update_fnn_settings(db, user)
                 elif path == "/api/dev-tools/ice-settings" and method == "PATCH":
                     self.api_dev_update_ice_settings(db, user)
+                elif path == "/api/dev-tools/insurance/settings" and method == "PATCH":
+                    self.api_dev_insurance_settings(db, user)
                 elif path == "/api/dev-tools/dmv/classes" and method == "PATCH":
                     self.api_dev_update_dmv_classes(db, user)
                 elif path == "/api/dev-tools/dmv/bulk" and method == "POST":
@@ -11232,6 +11255,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         # The bridge polls this endpoint even when a resident is offline. Use
         # that same heartbeat to release payouts after the configured delay.
         self.settle_sportsbook_bets(db)
+        self.run_due_insurance_claims(db)
         query = query or {}
         server_id = str(self.headers.get("X-Server-ID") or (query.get("server_id") or [""])[0] or "default").strip()[:80] or "default"
         rows = all_rows(
@@ -11359,6 +11383,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             elif status == "failed":
                 db.execute("UPDATE lottery_scratch_cards SET status='rejected' WHERE id=?", (scratch["id"],))
                 add_admin_audit(db, int(scratch["user_id"]), "lottery.scratch.ticket.failed", int(row["target_user_id"]), {"command_id": command_id, "ticket_id": scratch["id"], "result": result})
+        insurance_policy = one(db, "SELECT id, user_id FROM insurance_policies WHERE bank_command_id=?", (command_id,))
+        insurance_claim = one(db, "SELECT id, user_id, claim_number FROM insurance_claims WHERE payout_command_id=?", (command_id,))
+        if insurance_policy:
+            policy_status = "active" if status == "completed" else "payment_failed" if status == "failed" else "pending_payment"
+            db.execute("UPDATE insurance_policies SET status=?, payment_status=?, updated_at=? WHERE id=?", (policy_status, "completed" if status == "completed" else "failed" if status == "failed" else "pending", now_iso(), insurance_policy["id"]))
+            add_admin_audit(db, int(insurance_policy["user_id"]), "insurance.policy.payment.result", int(row["target_user_id"]), {"command_id": command_id, "policy_id": insurance_policy["id"], "status": status, "result": result})
+        if insurance_claim:
+            if status == "completed":
+                db.execute("UPDATE insurance_claims SET status='paid', paid_at=?, updated_at=? WHERE id=? AND status='approved'", (now_iso(), now_iso(), insurance_claim["id"]))
+            elif status == "failed":
+                db.execute("UPDATE insurance_claims SET review_notes=CASE WHEN review_notes='' THEN 'Bank Bridge payout failed.' ELSE review_notes END, updated_at=? WHERE id=? AND status='approved'", (now_iso(), insurance_claim["id"]))
+            add_admin_audit(db, int(insurance_claim["user_id"]), "insurance.claim.payout.result", int(row["target_user_id"]), {"command_id": command_id, "claim_number": insurance_claim["claim_number"], "status": status, "result": result})
         self.send_json(200, {"ok": True, "command_id": command_id, "status": status})
 
     def api_jobs(self, db: Database, user: DbRow | None) -> None:
@@ -11580,10 +11616,30 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("UPDATE myfaircroft_payment_codes SET target_user_id=COALESCE(target_user_id,?), used_by=?, used_at=? WHERE code_hash=? AND used_at IS NULL", (user_id, user_id, ts, code_hash))
         return row
 
+    def queue_insurance_bank_command(self, db: Database, user_id: int, amount: float, operation: str, reason: str) -> str | None:
+        link = one(db, "SELECT identity_id FROM arma_account_links WHERE user_id=? AND identity_id IS NOT NULL AND identity_id<>''", (user_id,))
+        if not link or amount <= 0:
+            return None
+        command_id = f"fc-insurance-{operation}-{secrets.token_urlsafe(18)}"
+        db.execute("INSERT INTO bank_bridge_commands (command_id,idempotency_key,server_id,operation,target_user_id,identity_id,amount,currency,reason,status,requested_by,created_at) VALUES (?,?,?,?,?,?,?,'bank',?,'pending',?,?)", (command_id, f"insurance-{operation}-{secrets.token_urlsafe(18)}", "default", operation, user_id, str(link["identity_id"]), round(amount, 2), reason, user_id, now_iso()))
+        return command_id
+
+    def run_due_insurance_claims(self, db: Database) -> None:
+        settings = get_system_settings(db)
+        due = all_rows(db, "SELECT c.*,p.policy_number FROM insurance_claims c JOIN insurance_policies p ON p.id=c.policy_id WHERE c.status='pending' AND c.auto_approve_at IS NOT NULL AND c.auto_approve_at<=? ORDER BY c.created_at LIMIT 100", (now_iso(),))
+        for claim in due:
+            payout_command = self.queue_insurance_bank_command(db, int(claim["user_id"]), float(claim["requested_amount"] or 0), "issue_funds", f"Insurance claim payout {claim['claim_number']}")
+            ts = now_iso()
+            db.execute("UPDATE insurance_claims SET status='approved',review_notes=?,reviewed_at=?,reviewed_by=NULL,payout_command_id=?,updated_at=? WHERE id=? AND status='pending'", ("Automatically approved after the configured review window.", ts, payout_command, ts, claim["id"]))
+            add_message(db, int(claim["user_id"]), "Insurance claim approved", f"Claim {claim['claim_number']} was automatically approved. The ${float(claim['requested_amount'] or 0):,.2f} in-game payout is queued through Bank Bridge.")
+            add_admin_audit(db, int(claim["user_id"]), "insurance.claim.auto_approved", int(claim["user_id"]), {"claim_number": claim["claim_number"], "amount": float(claim["requested_amount"] or 0), "payout_command_id": payout_command})
+
     def api_insurance(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
         if err:
             self.error(403 if user else 401, err); return
+        self.run_due_insurance_claims(db)
+        settings = get_system_settings(db)
         policies = all_rows(db, """SELECT p.*, c.character_name FROM insurance_policies p
             JOIN user_characters c ON c.id=p.character_id WHERE p.user_id=? ORDER BY p.created_at DESC""", (user["id"],))
         claims = all_rows(db, """SELECT c.*,p.policy_number,p.coverage_tier,uc.character_name
@@ -11595,9 +11651,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"policies": [dict(row) for row in policies], "claims": [dict(row) for row in claims],
             "bank": dict(bank) if bank else {"balance": 0, "synced_at": None},
             "tiers": [
-                {"id":"essential","name":"Continuity Essential","premium":3500,"coverage_percent":50},
-                {"id":"preferred","name":"Continuity Preferred","premium":4250,"coverage_percent":70},
-                {"id":"premier","name":"Continuity Premier","premium":5000,"coverage_percent":90}],
+                {"id":"essential","name":"Continuity Essential",**settings["insurance_tiers"]["essential"]},
+                {"id":"preferred","name":"Continuity Preferred",**settings["insurance_tiers"]["preferred"]},
+                {"id":"premier","name":"Continuity Premier",**settings["insurance_tiers"]["premier"]}],
             "characters": [dict(row) for row in all_rows(db,
             "SELECT id,character_name,is_active FROM user_characters WHERE user_id=? AND status='active' ORDER BY is_active DESC,created_at", (user["id"],))]})
 
@@ -11606,6 +11662,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err); return
         payload = self.read_json()
+        settings = get_system_settings(db)
         try: character_id = int(payload.get("character_id") or 0)
         except (TypeError, ValueError): character_id = 0
         character = one(db, "SELECT * FROM user_characters WHERE id=? AND user_id=? AND status='active'", (character_id, user["id"]))
@@ -11613,32 +11670,40 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         tier = str(payload.get("coverage_tier") or "standard").strip().lower()
         subject = str(payload.get("subject_label") or "").strip()[:120]
         valid_types = {"compensation", "vehicle", "property", "life", "business", "general"}
-        tiers = {"essential": (50, 3500), "preferred": (70, 4250), "standard": (70, 4250), "premier": (90, 5000)}
+        configured_tiers = settings["insurance_tiers"]
+        tiers = {name: (float(item["coverage_percent"]), float(item["premium"])) for name, item in configured_tiers.items()}
+        tiers["standard"] = tiers.get("preferred", (70, 4250))
         if not character or policy_type not in valid_types or tier not in tiers or not subject:
             self.error(400, "Select a character, policy, coverage tier, and insured subject."); return
         if policy_type == "compensation" and one(db, """SELECT id FROM insurance_policies
             WHERE user_id=? AND policy_type='compensation' AND status='active' AND expires_at>? LIMIT 1""",
             (user["id"], now_iso())):
             self.error(409, "An active continuity policy already protects this linked bank account."); return
-        receipt = self._consume_bearer_receipt(db, int(user["id"]), str(payload.get("code") or ""))
-        if not receipt:
-            self.error(403, "A valid unused four-digit Faircroft receipt PIN is required after staff receives payment in game."); return
         coverage_percent, premium = tiers[tier]
         bank = one(db, """SELECT b.balance FROM arma_account_links l JOIN arma_game_bank_balances b
             ON b.identity_id=l.identity_id WHERE l.user_id=? ORDER BY l.linked_at DESC LIMIT 1""", (user["id"],))
+        pending = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM bank_bridge_commands WHERE target_user_id=? AND operation='debit_funds' AND status IN ('pending','claimed') AND reason LIKE 'Insurance premium %'", (user["id"],))
+        available = float(bank["balance"] or 0) - float((pending or {}).get("total") or 0) if bank else None
+        if available is None:
+            self.error(409, "Your linked Arma bank snapshot is not available yet."); return
+        if available + 0.0001 < premium:
+            self.error(409, f"Insufficient in-game funds for this premium. Available: ${available:,.2f}."); return
         protected_balance = max(0.0, float(bank["balance"] or 0)) if bank else 0.0
         coverage = round(protected_balance * coverage_percent / 100.0, 2)
         deductible = 0
         issued = utcnow(); expires = issued + dt.timedelta(days=30)
         policy_number = f"FCI-{issued.strftime('%y%m')}-{secrets.randbelow(900000)+100000}"
         questionnaire = {key: str(payload.get(key) or "").strip()[:500] for key in ("risk_use", "location", "beneficiary", "notes")}
+        payment_command = self.queue_insurance_bank_command(db, int(user["id"]), premium, "debit_funds", f"Insurance premium {policy_number}")
+        if not payment_command:
+            self.error(409, "Link your Arma account before purchasing insurance."); return
         db.execute("""INSERT INTO insurance_policies
-            (user_id,character_id,policy_number,policy_type,coverage_tier,subject_label,coverage_amount,coverage_percent,protected_bank_balance,premium_amount,deductible_amount,questionnaire,status,receipt_code_id,issued_at,expires_at,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?,?)""",
+            (user_id,character_id,policy_number,policy_type,coverage_tier,subject_label,coverage_amount,coverage_percent,protected_bank_balance,premium_amount,deductible_amount,questionnaire,status,receipt_code_id,bank_command_id,payment_status,issued_at,expires_at,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'pending_payment',NULL,?,'pending',?,?,?,?)""",
             (user["id"], character_id, policy_number, policy_type, tier, subject, coverage, coverage_percent, protected_balance, premium, deductible,
-             json.dumps(questionnaire, separators=(",", ":")), receipt["id"], issued.isoformat(), expires.isoformat(), issued.isoformat(), issued.isoformat()))
+             json.dumps(questionnaire, separators=(",", ":")), payment_command, issued.isoformat(), expires.isoformat(), issued.isoformat(), issued.isoformat()))
         add_admin_audit(db, int(user["id"]), "insurance.policy.issued", int(user["id"]), {"policy_number": policy_number, "character_id": character_id, "premium": premium})
-        self.send_json(201, {"ok": True, "policy_number": policy_number})
+        self.send_json(201, {"ok": True, "policy_number": policy_number, "status": "pending_payment", "command_id": payment_command})
 
     def api_insurance_claim_create(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -11663,12 +11728,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         coverage_percent = float(policy.get("coverage_percent") or {"essential":50,"standard":70,"preferred":70,"premier":90}.get(policy["coverage_tier"], 0))
         requested = round(protected_balance * coverage_percent / 100.0, 2)
         ts = now_iso(); claim_number = f"FCIC-{utcnow().strftime('%y%m')}-{secrets.randbelow(900000)+100000}"
+        auto_approve_at = (utcnow() + dt.timedelta(seconds=int(get_system_settings(db)["insurance_claim_auto_approve_seconds"]))).isoformat()
         db.execute("""INSERT INTO insurance_claims
-            (claim_number,policy_id,user_id,character_id,incident_type,incident_summary,bank_balance_snapshot,coverage_percent,requested_amount,status,created_at,updated_at)
-            VALUES (?,?,?,?, 'server_reset', ?,?,?,?,'pending',?,?)""",
-            (claim_number, policy_id, user["id"], policy["character_id"], summary, protected_balance, coverage_percent, requested, ts, ts))
+            (claim_number,policy_id,user_id,character_id,incident_type,incident_summary,bank_balance_snapshot,coverage_percent,requested_amount,status,auto_approve_at,created_at,updated_at)
+            VALUES (?,?,?,?, 'server_reset', ?,?,?,?,'pending',?,?,?)""",
+            (claim_number, policy_id, user["id"], policy["character_id"], summary, protected_balance, coverage_percent, requested, auto_approve_at, ts, ts))
         add_admin_audit(db, int(user["id"]), "insurance.claim.filed", int(user["id"]), {"claim_number":claim_number,"requested_amount":requested})
-        self.send_json(201, {"ok":True,"claim_number":claim_number,"requested_amount":requested,"status":"pending"})
+        self.send_json(201, {"ok":True,"claim_number":claim_number,"requested_amount":requested,"status":"pending","auto_approve_at":auto_approve_at})
 
     def _gang_payload(self, db: Database, user: DbRow) -> dict[str, Any]:
         characters = all_rows(db, "SELECT id,character_name,is_active FROM user_characters WHERE user_id=? AND status='active' ORDER BY is_active DESC,created_at", (user["id"],))
@@ -18220,6 +18286,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 },
                 "insurance_claims": {
                     "claims": [dict(row) for row in insurance_claims],
+                    "settings": {"auto_approve_seconds": system_settings["insurance_claim_auto_approve_seconds"], "tiers": system_settings["insurance_tiers"]},
                     "stats": {key: float(value or 0) if key in {"exposure","paid_total"} else int(value or 0)
                               for key, value in insurance_claim_stats.items()},
                 },
@@ -18602,6 +18669,28 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         add_admin_audit(db, int(user["id"]), "dev.unlink_code.created", details={"code_hint": raw_code[-4:], "expires_at": expires_at.isoformat()})
         self.send_json(201, {"ok": True, "code": raw_code, "expires_at": expires_at.isoformat(), "uses": 1})
+
+    def api_dev_insurance_settings(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        payload = self.read_json()
+        try: seconds = int(payload.get("auto_approve_seconds") or 180)
+        except (TypeError, ValueError): seconds = 180
+        seconds = max(180, min(604800, seconds))
+        tiers = {}
+        for name, fallback in (("essential", (50, 3500)), ("preferred", (70, 4250)), ("premier", (90, 5000))):
+            try: coverage = float(payload.get(f"{name}_coverage_percent") or fallback[0])
+            except (TypeError, ValueError): coverage = fallback[0]
+            try: premium = float(payload.get(f"{name}_premium") or fallback[1])
+            except (TypeError, ValueError): premium = fallback[1]
+            if not (1 <= coverage <= 100 and 0.01 <= premium <= 1_000_000_000):
+                self.error(400, "Coverage must be 1–100% and premiums must be positive."); return
+            tiers[name] = {"coverage_percent": round(coverage, 2), "premium": round(premium, 2)}
+        set_system_setting(db, "insurance_claim_auto_approve_seconds", str(seconds))
+        set_system_setting(db, "insurance_tiers", json.dumps(tiers, separators=(",", ":"), sort_keys=True))
+        add_admin_audit(db, int(user["id"]), "insurance.settings.updated", details={"auto_approve_seconds": seconds, "tiers": tiers})
+        self.send_json(200, {"ok": True, "auto_approve_seconds": seconds, "tiers": tiers})
 
     def api_dev_insurance_claim(self, db: Database, user: DbRow | None, claim_id: int) -> None:
         err = developer_required(user)
