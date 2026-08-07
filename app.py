@@ -17544,6 +17544,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "reason": reason,
             "impact": impact,
         })
+        # Explicitly sever the Arma identity before removing the resident. The
+        # foreign-key cascade is a safety net, but this also marks claimed link
+        # codes unlinked and clears the legacy users.arma_id mirror so no bridge
+        # or reconnect lookup can treat the deleted account as linked.
+        linked_arma_id = str(target.get("linked_arma_id") or "").strip()
+        db.execute("DELETE FROM arma_account_links WHERE user_id = ?", (target_id,))
+        if linked_arma_id:
+            db.execute("UPDATE arma_link_codes SET status='unlinked' WHERE (claimed_by=? OR identity_id=?) AND status='claimed'", (target_id, linked_arma_id))
+        else:
+            db.execute("UPDATE arma_link_codes SET status='unlinked' WHERE claimed_by=? AND status='claimed'", (target_id,))
+        db.execute("UPDATE users SET arma_id = NULL WHERE id = ?", (target_id,))
         db.execute("DELETE FROM users WHERE id = ?", (target_id,))
         self.send_json(200, {
             "ok": True,
