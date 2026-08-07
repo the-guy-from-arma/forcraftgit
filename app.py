@@ -134,7 +134,7 @@ SPORTS_DATA_API_KEY = os.environ.get("SPORTS_DATA_API_KEY", "").strip()
 SPORTS_DATA_BASE_URL = os.environ.get("SPORTS_DATA_BASE_URL", "https://api.the-odds-api.com/v4").strip().rstrip("/")
 KALSHI_MARKET_DATA_ENABLED = os.environ.get("KALSHI_MARKET_DATA_ENABLED", "1").lower() in ("1", "true", "yes", "on")
 KALSHI_BASE_URL = os.environ.get("KALSHI_BASE_URL", "https://external-api.kalshi.com/trade-api/v2").strip().rstrip("/")
-KALSHI_POLL_SECONDS = max(15, int(os.environ.get("KALSHI_POLL_SECONDS", "30")))
+KALSHI_POLL_SECONDS = max(120, int(os.environ.get("KALSHI_POLL_SECONDS", "300")))
 KALSHI_SERIES_TICKERS = tuple(key.strip() for key in os.environ.get("KALSHI_SERIES_TICKERS", "").split(",") if key.strip())
 KALSHI_CATEGORIES = tuple(key.strip().lower() for key in os.environ.get("KALSHI_CATEGORIES", "").split(",") if key.strip())
 SPORTSBOOK_PAYOUT_DELAY_SECONDS = max(3, int(os.environ.get("SPORTSBOOK_PAYOUT_DELAY_SECONDS", "5")))
@@ -2198,6 +2198,7 @@ SYSTEM_SETTING_DEFAULTS = {
     "insurance_claim_auto_approve_seconds": "180",
     "insurance_state_of_emergency": "0",
     "insurance_tiers": "{\"essential\":{\"coverage_percent\":50,\"premium\":3500},\"preferred\":{\"coverage_percent\":70,\"premium\":4250},\"premier\":{\"coverage_percent\":90,\"premium\":5000}}",
+    "sportsbook_last_sync_at": "",
     "gang_creation_enabled": "1",
     "gang_global_limit": "100",
     "gang_default_member_limit": "20",
@@ -5236,6 +5237,7 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "insurance_claim_auto_approve_seconds": max(180, min(604800, int(raw.get("insurance_claim_auto_approve_seconds") or 180))),
         "insurance_state_of_emergency": str(raw.get("insurance_state_of_emergency") or "0") in ("1", "true", "True", "yes", "on"),
         "insurance_tiers": insurance_tiers,
+        "sportsbook_last_sync_at": str(raw.get("sportsbook_last_sync_at") or "")[:80],
         "gang_creation_enabled": str(raw.get("gang_creation_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "gang_global_limit": max(1, min(1000, int(raw.get("gang_global_limit") or 100))),
         "gang_default_member_limit": max(2, min(200, int(raw.get("gang_default_member_limit") or 20))),
@@ -5513,8 +5515,17 @@ def market_automation_worker() -> None:
                 if settings["market_gemini_autopilot_enabled"] and settings["market_ai_enabled"] and GEMINI_API_KEY:
                     last_ai = parse_iso(settings["market_gemini_last_tick"]) if settings["market_gemini_last_tick"] else None
                     if not last_ai or (current - last_ai).total_seconds() >= settings["market_gemini_interval_minutes"] * 60:
-                        market_gemini_adjustment_cycle(db)
-                        set_system_setting(db, "market_gemini_last_tick", current.isoformat())
+                        try:
+                            market_gemini_adjustment_cycle(db)
+                            set_system_setting(db, "market_gemini_last_tick", current.isoformat())
+                        except urllib.error.HTTPError as exc:
+                            # A quota response should not be retried every 15 seconds.
+                            # Advance the scheduler and wait for the configured interval.
+                            if exc.code == 429:
+                                set_system_setting(db, "market_gemini_last_tick", current.isoformat())
+                                print(f"Market automation paused after Gemini rate limit; next review in {settings['market_gemini_interval_minutes']} minute(s)")
+                            else:
+                                raise
         except Exception as exc:
             print(f"Market automation error: {type(exc).__name__}: {exc}")
         time.sleep(15)
@@ -12163,7 +12174,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         markets: list[dict[str, Any]] = []
         cursor = ""
         fetch_errors: list[str] = []
-        for _page in range(5):
+        for _page in range(2):
             query_values = {"status": "open", "limit": "200", "with_nested_markets": "true"}
             if cursor:
                 query_values["cursor"] = cursor
@@ -18553,6 +18564,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "provider_configured": KALSHI_MARKET_DATA_ENABLED if SPORTS_DATA_PROVIDER == "kalshi" else bool(SPORTS_DATA_API_KEY),
                     "base_url": KALSHI_BASE_URL if SPORTS_DATA_PROVIDER == "kalshi" else SPORTS_DATA_BASE_URL,
                     "sport_keys": list(KALSHI_SERIES_TICKERS) if SPORTS_DATA_PROVIDER == "kalshi" else list(SPORTS_DATA_SPORT_KEYS),
+                    "last_sync_at": system_settings["sportsbook_last_sync_at"],
+                    "poll_seconds": KALSHI_POLL_SECONDS,
                     "event_count": int(one(db, "SELECT COUNT(*) AS count FROM sportsbook_events WHERE status IN ('scheduled','live')")["count"] or 0),
                     "live_count": int(one(db, "SELECT COUNT(*) AS count FROM sportsbook_events WHERE status='live'")["count"] or 0),
                     "open_market_count": int(one(db, "SELECT COUNT(*) AS count FROM sportsbook_markets WHERE status='open'")["count"] or 0),
@@ -21836,6 +21849,31 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"ok": True})
 
 
+def sportsbook_sync_worker() -> None:
+    """Refresh provider state and settle tickets without blocking app opens."""
+    time.sleep(12)
+    while True:
+        try:
+            if SPORTS_BETTING_ENABLED and SPORTS_DATA_PROVIDER == "kalshi" and KALSHI_MARKET_DATA_ENABLED:
+                with conn() as db:
+                    settings = get_system_settings(db)
+                    current = utcnow()
+                    last_sync = parse_iso(settings["sportsbook_last_sync_at"]) if settings["sportsbook_last_sync_at"] else None
+                    if not last_sync or (current - last_sync).total_seconds() >= KALSHI_POLL_SECONDS:
+                        # Claim the interval before making network requests so multiple
+                        # Railway replicas do not intentionally start the same cycle.
+                        set_system_setting(db, "sportsbook_last_sync_at", current.isoformat())
+                        worker_handler = RoleplayHandler.__new__(RoleplayHandler)
+                        result = worker_handler.sync_sportsbook_events(db)
+                        if result.get("errors"):
+                            print(f"Kalshi background sync completed with notice: {result['errors'][0]}")
+                        else:
+                            print(f"Kalshi background sync updated {int(result.get('inserted') or 0)} market(s)")
+        except Exception as exc:
+            print(f"Kalshi background sync error: {type(exc).__name__}: {exc}")
+        time.sleep(min(60, KALSHI_POLL_SECONDS))
+
+
 def main() -> None:
     schema_ready = False
     for attempt in range(1, 31):
@@ -21881,6 +21919,7 @@ def main() -> None:
     ).start()
     threading.Thread(target=lottery_worker, name="faircroft-lottery", daemon=True).start()
     threading.Thread(target=market_automation_worker, name="ravenhood-market-automation", daemon=True).start()
+    threading.Thread(target=sportsbook_sync_worker, name="faircroft-sportsbook-sync", daemon=True).start()
     port = int(os.environ.get("PORT", "8080"))
     host = os.environ.get("HOST", "0.0.0.0")
     server = ThreadingHTTPServer((host, port), RoleplayHandler)
