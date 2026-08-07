@@ -129,10 +129,16 @@ SHADOWHAVEN_ANTICHEAT_SYNC_SECONDS = max(
 )
 ANTICHEAT_LIVE_TTL_SECONDS = max(90, int(os.environ.get("ANTICHEAT_LIVE_TTL_SECONDS", "900")))
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-SPORTS_DATA_PROVIDER = os.environ.get("SPORTS_DATA_PROVIDER", "the_odds_api").strip().lower()
+SPORTS_DATA_PROVIDER = os.environ.get("SPORTS_DATA_PROVIDER", "kalshi").strip().lower()
 SPORTS_DATA_API_KEY = os.environ.get("SPORTS_DATA_API_KEY", "").strip()
 SPORTS_DATA_BASE_URL = os.environ.get("SPORTS_DATA_BASE_URL", "https://api.the-odds-api.com/v4").strip().rstrip("/")
-SPORTS_BETTING_ENABLED = os.environ.get("SPORTS_BETTING_ENABLED", "0").lower() in ("1", "true", "yes", "on")
+KALSHI_MARKET_DATA_ENABLED = os.environ.get("KALSHI_MARKET_DATA_ENABLED", "0").lower() in ("1", "true", "yes", "on")
+KALSHI_BASE_URL = os.environ.get("KALSHI_BASE_URL", "https://external-api.kalshi.com/trade-api/v2").strip().rstrip("/")
+KALSHI_POLL_SECONDS = max(15, int(os.environ.get("KALSHI_POLL_SECONDS", "30")))
+KALSHI_SERIES_TICKERS = tuple(key.strip() for key in os.environ.get("KALSHI_SERIES_TICKERS", "").split(",") if key.strip())
+KALSHI_CATEGORIES = tuple(key.strip().lower() for key in os.environ.get("KALSHI_CATEGORIES", "politics,sports,technology,entertainment,video-games").split(",") if key.strip())
+SPORTSBOOK_PAYOUT_DELAY_SECONDS = max(3, int(os.environ.get("SPORTSBOOK_PAYOUT_DELAY_SECONDS", "5")))
+SPORTS_BETTING_ENABLED = os.environ.get("SPORTS_BETTING_ENABLED", "1" if KALSHI_MARKET_DATA_ENABLED else "0").lower() in ("1", "true", "yes", "on")
 SPORTS_DATA_SPORT_KEYS = tuple(
     key.strip() for key in os.environ.get(
         "SPORTS_DATA_SPORT_KEYS",
@@ -3113,6 +3119,8 @@ def ensure_schema() -> None:
             );
             CREATE INDEX IF NOT EXISTS sportsbook_bets_user_idx
                 ON sportsbook_bets (user_id, created_at DESC);
+            ALTER TABLE sportsbook_bets ADD COLUMN IF NOT EXISTS payout_command_id TEXT NOT NULL DEFAULT '';
+            ALTER TABLE sportsbook_bets ADD COLUMN IF NOT EXISTS payout_eligible_at TEXT;
 
             CREATE TABLE IF NOT EXISTS sportsbook_bet_legs (
                 id SERIAL PRIMARY KEY,
@@ -11156,6 +11164,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403, err)
             return
+        # The bridge polls this endpoint even when a resident is offline. Use
+        # that same heartbeat to release payouts after the configured delay.
+        self.settle_sportsbook_bets(db)
         query = query or {}
         server_id = str(self.headers.get("X-Server-ID") or (query.get("server_id") or [""])[0] or "default").strip()[:80] or "default"
         rows = all_rows(
@@ -11237,11 +11248,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         # A sportsbook wager is accepted only after the authoritative in-game
         # bank bridge confirms the debit. Keep this transition tied to the
         # bridge result so Railway cash can never be mistaken for game funds.
-        bet_status = "accepted" if status == "completed" else "rejected" if status == "failed" else "awaiting_debit"
-        db.execute(
-            "UPDATE sportsbook_bets SET status=?, result_json=? WHERE wallet_command_id=?",
-            (bet_status, json.dumps(result, separators=(",", ":"), default=str)[:4000], command_id),
-        )
+        bet = one(db, "SELECT id, payout_command_id FROM sportsbook_bets WHERE wallet_command_id=? OR payout_command_id=?", (command_id, command_id))
+        if bet:
+            is_payout = str(bet.get("payout_command_id") or "") == command_id
+            bet_status = ("paid" if status == "completed" else "payout_failed" if status == "failed" else "won") if is_payout else ("accepted" if status == "completed" else "rejected" if status == "failed" else "awaiting_debit")
+            db.execute("UPDATE sportsbook_bets SET status=?, result_json=? WHERE id=?", (bet_status, json.dumps(result, separators=(",", ":"), default=str)[:4000], bet["id"]))
+            add_admin_audit(db, int(row["requested_by"]), "sportsbook.payout.completed" if is_payout and status == "completed" else "sportsbook.command.result", int(row["target_user_id"]), {"bet_id": int(bet["id"]), "command_id": command_id, "status": status, "result": result})
+            if status == "completed" and not is_payout:
+                self.settle_sportsbook_bets(db)
         self.send_json(200, {"ok": True, "command_id": command_id, "status": status})
 
     def api_jobs(self, db: Database, user: DbRow | None) -> None:
@@ -11686,7 +11700,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(401, "Authentication required")
             return
         sync_result = {"inserted": 0, "errors": []}
-        if SPORTS_DATA_API_KEY and (query.get("refresh") or [""])[0] == "1":
+        provider_ready = SPORTS_DATA_PROVIDER == "kalshi" and KALSHI_MARKET_DATA_ENABLED or bool(SPORTS_DATA_API_KEY)
+        if provider_ready and (query.get("refresh") or [""])[0] == "1":
             sync_result = self.sync_sportsbook_events(db)
         events = all_rows(
             db,
@@ -11734,14 +11749,19 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             except (TypeError, json.JSONDecodeError):
                 bet["result"] = {}
             bet.pop("result_json", None)
+        link = one(db, "SELECT identity_id FROM arma_account_links WHERE user_id=?", (user["id"],))
+        snapshot = one(db, "SELECT balance, synced_at FROM arma_game_bank_balances WHERE identity_id=?", (link["identity_id"],)) if link else None
+        reserved = one(db, "SELECT COALESCE(SUM(stake),0) AS total FROM sportsbook_bets WHERE user_id=? AND status IN ('awaiting_debit','accepted','won_pending_payout')", (user["id"],))
+        wallet = {"balance": round(float(snapshot.get("balance") or 0), 2), "reserved": round(float((reserved or {}).get("total") or 0), 2), "available": round(float(snapshot.get("balance") or 0) - float((reserved or {}).get("total") or 0), 2), "synced_at": snapshot.get("synced_at")} if snapshot else {"balance": None, "reserved": 0, "available": None, "synced_at": None}
         self.send_json(200, {
             "enabled": SPORTS_BETTING_ENABLED,
-            "provider_configured": bool(SPORTS_DATA_API_KEY),
+            "provider_configured": provider_ready,
             "provider": SPORTS_DATA_PROVIDER,
             "sports": ["soccer", "baseball", "basketball", "tennis"],
             "events": payload_events,
             "bets": [dict(bet) for bet in bets],
-            "notice": "Sports data provider is not configured yet." if not SPORTS_DATA_API_KEY else "",
+            "wallet": wallet,
+            "notice": "Kalshi market data is not enabled yet." if SPORTS_DATA_PROVIDER == "kalshi" and not KALSHI_MARKET_DATA_ENABLED else "Sports data provider is not configured yet." if not provider_ready else "",
             "sync": sync_result,
         })
 
@@ -11767,6 +11787,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         identity = one(db, "SELECT identity_id FROM arma_account_links WHERE user_id=?", (user["id"],))
         if not identity or not str(identity.get("identity_id") or "").strip():
             self.error(409, "Link your Arma account before placing an in-game wager")
+            return
+        snapshot = one(db, "SELECT balance, synced_at FROM arma_game_bank_balances WHERE identity_id=?", (str(identity["identity_id"]),))
+        if not snapshot:
+            self.error(409, "Your read-only in-game bank snapshot is not available yet")
+            return
+        reserved = one(db, "SELECT COALESCE(SUM(stake),0) AS total FROM sportsbook_bets WHERE user_id=? AND status IN ('awaiting_debit','accepted','won_pending_payout')", (user["id"],))
+        available = round(float(snapshot.get("balance") or 0) - float((reserved or {}).get("total") or 0), 2)
+        if stake > available:
+            self.error(409, f"Insufficient available in-game balance. Snapshot available: {available:.2f}")
             return
         normalized = []
         combined = 1.0
@@ -11803,9 +11832,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("UPDATE sportsbook_bets SET wallet_command_id=? WHERE id=?", (command_id, bet_id))
         idempotency = f"sportsbook-bet-{bet_id}"
         db.execute("INSERT INTO bank_bridge_commands (command_id,idempotency_key,server_id,operation,target_user_id,identity_id,amount,currency,reason,status,requested_by,created_at) VALUES (?,?,?,?,?,?,?,'bank',?,'pending',?,?)", (command_id, idempotency, "default", "debit_funds", user["id"], str(identity["identity_id"]), stake, f"Sportsbook wager FC-{bet_id:07d}", user["id"], created))
+        add_admin_audit(db, int(user["id"]), "sportsbook.wager.placed", int(user["id"]), {"bet_id": bet_id, "stake": stake, "combined_odds": round(combined, 4), "potential_payout": potential, "command_id": command_id, "legs": len(normalized)})
         self.send_json(202, {"ok": True, "bet": {"id": bet_id, "stake": stake, "combined_odds": round(combined, 4), "potential_payout": potential, "status": "awaiting_debit", "wallet_command_id": command_id}})
 
     def sync_sportsbook_events(self, db: Database) -> dict[str, Any]:
+        if SPORTS_DATA_PROVIDER == "kalshi":
+            return self.sync_kalshi_markets(db)
         if not SPORTS_DATA_API_KEY:
             return {"inserted": 0, "errors": ["SPORTS_DATA_API_KEY is not configured"]}
         inserted = 0
@@ -11911,6 +11943,155 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 status = "completed" if completed else "live"
                 db.execute("UPDATE sportsbook_events SET status=?, score_json=?, synced_at=? WHERE provider_event_id=?", (status, json.dumps(score_map, separators=(",", ":"), default=str), now_iso(), provider_id))
         return {"inserted": inserted, "errors": errors[:12]}
+
+    def sync_kalshi_markets(self, db: Database) -> dict[str, Any]:
+        """Mirror public Kalshi prediction markets as Faircroft-only picks.
+
+        This never submits Kalshi orders. It imports public YES/NO prices and
+        creates a synthetic Faircroft event whose stake remains in the Arma
+        in-game bank.
+        """
+        query = urlencode({"status": "open", "limit": "1000"})
+        request = urllib.request.Request(
+            f"{KALSHI_BASE_URL}/markets?{query}",
+            headers={"Accept": "application/json", "User-Agent": "FaircroftMarkets/1.0"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            return {"inserted": 0, "errors": [f"Kalshi: HTTP {exc.code}"]}
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return {"inserted": 0, "errors": [f"Kalshi: {type(exc).__name__}"]}
+        markets = payload.get("markets") if isinstance(payload, dict) else payload
+        if not isinstance(markets, list):
+            return {"inserted": 0, "errors": ["Kalshi returned no markets list"]}
+        inserted = 0
+        allowed_categories = set(KALSHI_CATEGORIES)
+        for market in markets:
+            if not isinstance(market, dict):
+                continue
+            category = str(market.get("category") or "other").strip().lower().replace("_", "-")
+            if allowed_categories and category not in allowed_categories and not any(part in category for part in allowed_categories):
+                continue
+            ticker = str(market.get("ticker") or "").strip()
+            title = str(market.get("title") or market.get("subtitle") or "").strip()
+            close_time = str(market.get("close_time") or market.get("expected_expiration_time") or "").strip()
+            if not ticker or not title or not close_time:
+                continue
+            series = str(market.get("series_ticker") or "").strip()
+            if KALSHI_SERIES_TICKERS and series not in KALSHI_SERIES_TICKERS:
+                continue
+            yes_raw = market.get("yes_bid_dollars", market.get("yes_bid"))
+            no_raw = market.get("no_bid_dollars", market.get("no_bid"))
+            try:
+                yes_price = float(yes_raw or 0)
+                no_price = float(no_raw or 0)
+                if yes_price > 1: yes_price /= 100
+                if no_price > 1: no_price /= 100
+            except (TypeError, ValueError):
+                continue
+            if not (0 < yes_price < 1 and 0 < no_price < 1):
+                continue
+            # One Faircroft event per Kalshi market, with synthetic YES/NO legs.
+            ts = now_iso()
+            db.execute("""
+                INSERT INTO sportsbook_events
+                (provider_event_id,sport,league,home_team,away_team,starts_at,status,score_json,raw_json,synced_at)
+                VALUES (?,?,?,?,?,?,'scheduled','{}',?,?)
+                ON CONFLICT (provider_event_id) DO UPDATE SET
+                  sport=EXCLUDED.sport, league=EXCLUDED.league, home_team=EXCLUDED.home_team,
+                  away_team=EXCLUDED.away_team, starts_at=EXCLUDED.starts_at,
+                  status='scheduled', raw_json=EXCLUDED.raw_json, synced_at=EXCLUDED.synced_at
+            """, (ticker, category, "Kalshi", title, "Prediction market", close_time, json.dumps(market, separators=(",", ":"), default=str), ts))
+            row = one(db, "SELECT id FROM sportsbook_events WHERE provider_event_id=?", (ticker,))
+            if not row:
+                continue
+            event_id = int(row["id"])
+            for key, label, price in (("yes", "YES", yes_price), ("no", "NO", no_price)):
+                decimal = round(1 / price, 4)
+                american = round(100 * (decimal - 1)) if price < 0.5 else round(-100 * price / max(0.0001, 1 - price))
+                db.execute("""
+                    INSERT INTO sportsbook_markets
+                    (event_id,market_key,selection_key,selection_label,american_odds,decimal_odds,status,updated_at)
+                    VALUES (?,?,?,?,?,?, 'open', ?)
+                    ON CONFLICT (event_id,market_key,selection_key) DO UPDATE SET
+                      selection_label=EXCLUDED.selection_label, american_odds=EXCLUDED.american_odds,
+                      decimal_odds=EXCLUDED.decimal_odds, status='open', updated_at=EXCLUDED.updated_at
+                """, (event_id, "kalshi_binary", key, label, american, decimal, ts))
+            inserted += 1
+        # Pull settled markets separately so accepted Faircroft tickets can
+        # resolve and queue their in-game payout commands.
+        settled_request = urllib.request.Request(
+            f"{KALSHI_BASE_URL}/markets?{urlencode({'status': 'settled', 'limit': '1000'})}",
+            headers={"Accept": "application/json", "User-Agent": "FaircroftMarkets/1.0"},
+        )
+        try:
+            with urllib.request.urlopen(settled_request, timeout=10) as response:
+                settled_payload = json.loads(response.read().decode("utf-8"))
+            for market in (settled_payload.get("markets") if isinstance(settled_payload, dict) else []) or []:
+                ticker = str(market.get("ticker") or "").strip()
+                result = str(market.get("result") or market.get("settlement_result") or "").strip().lower()
+                if ticker and result in ("yes", "no"):
+                    db.execute("UPDATE sportsbook_events SET status='completed', raw_json=?, synced_at=? WHERE provider_event_id=?", (json.dumps(market, separators=(",", ":"), default=str), now_iso(), ticker))
+        except urllib.error.HTTPError as exc:
+            errors.append(f"Kalshi settled: HTTP {exc.code}")
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            errors.append(f"Kalshi settled: {type(exc).__name__}")
+        self.settle_sportsbook_bets(db)
+        return {"inserted": inserted, "errors": errors[:12]}
+
+    def settle_sportsbook_bets(self, db: Database) -> int:
+        """Resolve completed Kalshi-backed tickets and queue game-bank payouts."""
+        settled = 0
+        bets = all_rows(db, "SELECT * FROM sportsbook_bets WHERE status IN ('accepted','won_pending_payout') AND (payout_command_id='' OR payout_command_id IS NULL) ORDER BY id LIMIT 100")
+        for bet in bets:
+            if str(bet.get("status")) == "won_pending_payout":
+                eligible_at = parse_iso(str(bet.get("payout_eligible_at") or "")) if bet.get("payout_eligible_at") else None
+                if eligible_at and eligible_at > utcnow():
+                    continue
+                link = one(db, "SELECT identity_id FROM arma_account_links WHERE user_id=?", (bet["user_id"],))
+                if not link or not str(link.get("identity_id") or "").strip():
+                    continue
+                now = now_iso()
+                command_id = f"fc-sports-payout-{secrets.token_urlsafe(18)}"
+                db.execute("UPDATE sportsbook_bets SET payout_command_id=? WHERE id=? AND status='won_pending_payout'", (command_id, bet["id"]))
+                db.execute("INSERT INTO bank_bridge_commands (command_id,idempotency_key,server_id,operation,target_user_id,identity_id,amount,currency,reason,status,requested_by,created_at) VALUES (?,?,?,?,?,?,?,'bank',?,'pending',?,?)", (command_id, f"sportsbook-payout-{bet['id']}", "default", "issue_funds", bet["user_id"], str(link["identity_id"]), float(bet["potential_payout"]), f"Sportsbook payout FC-{int(bet['id']):07d}", bet["user_id"], now))
+                add_admin_audit(db, int(bet["user_id"]), "sportsbook.payout.queued", int(bet["user_id"]), {"bet_id": int(bet["id"]), "amount": float(bet["potential_payout"]), "command_id": command_id})
+                settled += 1
+                continue
+            legs = all_rows(db, "SELECT l.*, e.status AS event_status, e.raw_json FROM sportsbook_bet_legs l JOIN sportsbook_events e ON e.id=l.event_id WHERE l.bet_id=?", (bet["id"],))
+            if not legs or any(str(leg.get("event_status")) != "completed" for leg in legs):
+                continue
+            outcomes = []
+            complete = True
+            for leg in legs:
+                try:
+                    raw = json.loads(leg.get("raw_json") or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    raw = {}
+                result = str(raw.get("result") or raw.get("settlement_result") or "").strip().lower()
+                if result not in ("yes", "no"):
+                    complete = False
+                    break
+                outcomes.append(result == str(leg.get("selection_key") or "").lower())
+            if not complete:
+                continue
+            now = now_iso()
+            if not all(outcomes):
+                db.execute("UPDATE sportsbook_bets SET status='lost', settled_at=? WHERE id=?", (now, bet["id"]))
+                add_admin_audit(db, int(bet["user_id"]), "sportsbook.wager.lost", int(bet["user_id"]), {"bet_id": int(bet["id"]), "legs": len(legs)})
+                settled += 1
+                continue
+            link = one(db, "SELECT identity_id FROM arma_account_links WHERE user_id=?", (bet["user_id"],))
+            if not link or not str(link.get("identity_id") or "").strip():
+                continue
+            command_id = f"fc-sports-payout-{secrets.token_urlsafe(18)}"
+            eligible_at = (utcnow() + dt.timedelta(seconds=SPORTSBOOK_PAYOUT_DELAY_SECONDS)).isoformat()
+            db.execute("UPDATE sportsbook_bets SET status='won_pending_payout', settled_at=?, payout_eligible_at=? WHERE id=?", (now, eligible_at, bet["id"]))
+            add_admin_audit(db, int(bet["user_id"]), "sportsbook.payout.scheduled", int(bet["user_id"]), {"bet_id": int(bet["id"]), "amount": float(bet["potential_payout"]), "eligible_at": eligible_at, "delay_seconds": SPORTSBOOK_PAYOUT_DELAY_SECONDS})
+            settled += 1
+        return settled
 
     def market_payload(self, db: Database, user: DbRow) -> dict[str, Any]:
         self.market_apply_programs(db)
@@ -17442,7 +17623,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             JOIN users target ON target.id=c.target_user_id
             JOIN users requester ON requester.id=c.requested_by
             ORDER BY c.created_at DESC
-            LIMIT 200
             """,
         )
         for command in bank_bridge_commands:
@@ -18065,9 +18245,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "sportsbook_settings": {
                     "enabled": SPORTS_BETTING_ENABLED,
                     "provider": SPORTS_DATA_PROVIDER,
-                    "provider_configured": bool(SPORTS_DATA_API_KEY),
-                    "base_url": SPORTS_DATA_BASE_URL,
-                    "sport_keys": list(SPORTS_DATA_SPORT_KEYS),
+                    "provider_configured": KALSHI_MARKET_DATA_ENABLED if SPORTS_DATA_PROVIDER == "kalshi" else bool(SPORTS_DATA_API_KEY),
+                    "base_url": KALSHI_BASE_URL if SPORTS_DATA_PROVIDER == "kalshi" else SPORTS_DATA_BASE_URL,
+                    "sport_keys": list(KALSHI_SERIES_TICKERS) if SPORTS_DATA_PROVIDER == "kalshi" else list(SPORTS_DATA_SPORT_KEYS),
                     "event_count": int(one(db, "SELECT COUNT(*) AS count FROM sportsbook_events WHERE status IN ('scheduled','live')")["count"] or 0),
                     "live_count": int(one(db, "SELECT COUNT(*) AS count FROM sportsbook_events WHERE status='live'")["count"] or 0),
                     "open_market_count": int(one(db, "SELECT COUNT(*) AS count FROM sportsbook_markets WHERE status='open'")["count"] or 0),
