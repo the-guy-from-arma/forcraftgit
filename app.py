@@ -23,7 +23,7 @@ from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
 import psycopg
 import paramiko
@@ -129,6 +129,16 @@ SHADOWHAVEN_ANTICHEAT_SYNC_SECONDS = max(
 )
 ANTICHEAT_LIVE_TTL_SECONDS = max(90, int(os.environ.get("ANTICHEAT_LIVE_TTL_SECONDS", "900")))
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+SPORTS_DATA_PROVIDER = os.environ.get("SPORTS_DATA_PROVIDER", "the_odds_api").strip().lower()
+SPORTS_DATA_API_KEY = os.environ.get("SPORTS_DATA_API_KEY", "").strip()
+SPORTS_DATA_BASE_URL = os.environ.get("SPORTS_DATA_BASE_URL", "https://api.the-odds-api.com/v4").strip().rstrip("/")
+SPORTS_BETTING_ENABLED = os.environ.get("SPORTS_BETTING_ENABLED", "0").lower() in ("1", "true", "yes", "on")
+SPORTS_DATA_SPORT_KEYS = tuple(
+    key.strip() for key in os.environ.get(
+        "SPORTS_DATA_SPORT_KEYS",
+        "soccer_epl,basketball_nba,baseball_mlb,tennis_atp_wimbledon",
+    ).split(",") if key.strip()
+)
 FNN_GEMINI_MODEL = os.environ.get("FNN_GEMINI_MODEL", "gemini-3.6-flash").strip()
 FNN_GEMINI_FALLBACK_MODEL = os.environ.get("FNN_GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite").strip()
 FNN_GENERATION_INTERVAL_SECONDS = max(
@@ -2197,6 +2207,7 @@ APP_VISIBILITY_OPTIONS = (
     ("bank", "Bank"),
     ("wallstreet", "Ravenhood Markets"),
     ("lottery", "Faircroft Lottery"),
+    ("sportsbook", "Faircroft Sportsbook"),
     ("insurance", "Faircroft Insurance"),
     ("gangs", "Gang Network"),
     ("realty", "Faircroft Realty Group"),
@@ -3055,6 +3066,66 @@ def ensure_schema() -> None:
             );
             CREATE INDEX IF NOT EXISTS bank_bridge_commands_pending_idx
                 ON bank_bridge_commands (server_id, status, created_at);
+
+            CREATE TABLE IF NOT EXISTS sportsbook_events (
+                id SERIAL PRIMARY KEY,
+                provider_event_id TEXT NOT NULL UNIQUE,
+                sport TEXT NOT NULL,
+                league TEXT NOT NULL DEFAULT '',
+                home_team TEXT NOT NULL,
+                away_team TEXT NOT NULL,
+                starts_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'scheduled',
+                score_json TEXT NOT NULL DEFAULT '{}',
+                raw_json TEXT NOT NULL DEFAULT '{}',
+                synced_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS sportsbook_events_start_idx
+                ON sportsbook_events (sport, starts_at, status);
+
+            CREATE TABLE IF NOT EXISTS sportsbook_markets (
+                id SERIAL PRIMARY KEY,
+                event_id INTEGER NOT NULL,
+                market_key TEXT NOT NULL,
+                selection_key TEXT NOT NULL,
+                selection_label TEXT NOT NULL,
+                american_odds INTEGER NOT NULL,
+                decimal_odds NUMERIC(10,4) NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                updated_at TEXT NOT NULL,
+                UNIQUE (event_id, market_key, selection_key),
+                FOREIGN KEY (event_id) REFERENCES sportsbook_events(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS sportsbook_bets (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                stake NUMERIC(14,2) NOT NULL,
+                combined_odds NUMERIC(12,4) NOT NULL,
+                potential_payout NUMERIC(14,2) NOT NULL,
+                status TEXT NOT NULL DEFAULT 'awaiting_debit',
+                wallet_command_id TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                settled_at TEXT,
+                result_json TEXT NOT NULL DEFAULT '{}',
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS sportsbook_bets_user_idx
+                ON sportsbook_bets (user_id, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS sportsbook_bet_legs (
+                id SERIAL PRIMARY KEY,
+                bet_id INTEGER NOT NULL,
+                event_id INTEGER NOT NULL,
+                market_key TEXT NOT NULL,
+                selection_key TEXT NOT NULL,
+                odds_snapshot NUMERIC(12,4) NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                FOREIGN KEY (bet_id) REFERENCES sportsbook_bets(id) ON DELETE CASCADE,
+                FOREIGN KEY (event_id) REFERENCES sportsbook_events(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS sportsbook_bet_legs_bet_idx
+                ON sportsbook_bet_legs (bet_id);
 
             CREATE TABLE IF NOT EXISTS account_sanctions (
                 id SERIAL PRIMARY KEY,
@@ -6445,6 +6516,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         ("properties", "PROPERTIES", "home", False, True),
         ("bank", "BANK", "bank", verified, False),
         ("lottery", "LOTTERY", "trophy", verified, False),
+        ("sportsbook", "SPORTSBOOK", "sports", verified, False),
         ("insurance", "INSURANCE", "insurance", verified, False),
         ("gangs", "GANG NETWORK", "gang", verified, False),
         ("realty", "FAIRCROFT REALTY", "realty", verified, False),
@@ -7626,6 +7698,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_wallstreet_redeem_promo(db, user)
                 elif path == "/api/lottery" and method == "GET":
                     self.api_lottery(db, user)
+                elif path == "/api/sportsbook" and method == "GET":
+                    self.api_sportsbook(db, user, query)
+                elif path == "/api/sportsbook/bets" and method == "POST":
+                    self.api_sportsbook_bet(db, user)
                 elif path == "/api/lottery/entries" and method == "POST":
                     self.api_lottery_entry(db, user)
                 elif path == "/api/lottery/scratch" and method == "POST":
@@ -11157,6 +11233,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 """,
                 (status, now_iso(), json.dumps(result, separators=(",", ":"), default=str)[:4000], command_id),
             )
+        # A sportsbook wager is accepted only after the authoritative in-game
+        # bank bridge confirms the debit. Keep this transition tied to the
+        # bridge result so Railway cash can never be mistaken for game funds.
+        bet_status = "accepted" if status == "completed" else "rejected" if status == "failed" else "awaiting_debit"
+        db.execute(
+            "UPDATE sportsbook_bets SET status=?, result_json=? WHERE wallet_command_id=?",
+            (bet_status, json.dumps(result, separators=(",", ":"), default=str)[:4000], command_id),
+        )
         self.send_json(200, {"ok": True, "command_id": command_id, "status": status})
 
     def api_jobs(self, db: Database, user: DbRow | None) -> None:
@@ -11595,6 +11679,226 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], round(new_price, 4), "scheduled_program", current.isoformat()))
             if progress >= 1:
                 db.execute("UPDATE market_price_programs SET status = 'completed' WHERE id = ?", (program["id"],))
+
+    def api_sportsbook(self, db: Database, user: DbRow | None, query: dict[str, list[str]]) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        if SPORTS_BETTING_ENABLED and SPORTS_DATA_API_KEY and (query.get("refresh") or [""])[0] == "1":
+            self.sync_sportsbook_events(db)
+        events = all_rows(
+            db,
+            """
+            SELECT e.id, e.provider_event_id, e.sport, e.league, e.home_team, e.away_team,
+                   e.starts_at, e.status, e.score_json, e.synced_at
+            FROM sportsbook_events e
+            WHERE e.status IN ('scheduled','live')
+            ORDER BY CASE WHEN e.status='live' THEN 0 ELSE 1 END, e.starts_at
+            LIMIT 250
+            """,
+        )
+        markets = all_rows(
+            db,
+            """
+            SELECT m.event_id, m.market_key, m.selection_key, m.selection_label,
+                   m.american_odds, m.decimal_odds, m.status, m.updated_at
+            FROM sportsbook_markets m
+            JOIN sportsbook_events e ON e.id=m.event_id
+            WHERE e.status IN ('scheduled','live') AND m.status='open'
+            ORDER BY m.event_id, m.market_key, m.selection_label
+            """,
+        )
+        by_event: dict[int, list[dict[str, Any]]] = {}
+        for market in markets:
+            by_event.setdefault(int(market["event_id"]), []).append(dict(market))
+        payload_events = []
+        for event in events:
+            item = dict(event)
+            try:
+                item["score"] = json.loads(item.get("score_json") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                item["score"] = {}
+            item.pop("score_json", None)
+            item["markets"] = by_event.get(int(event["id"]), [])
+            payload_events.append(item)
+        bets = all_rows(
+            db,
+            "SELECT id, stake, combined_odds, potential_payout, status, created_at, settled_at, result_json FROM sportsbook_bets WHERE user_id=? ORDER BY id DESC LIMIT 25",
+            (int(user["id"]),),
+        )
+        for bet in bets:
+            try:
+                bet["result"] = json.loads(bet.get("result_json") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                bet["result"] = {}
+            bet.pop("result_json", None)
+        self.send_json(200, {
+            "enabled": SPORTS_BETTING_ENABLED,
+            "provider_configured": bool(SPORTS_DATA_API_KEY),
+            "provider": SPORTS_DATA_PROVIDER,
+            "sports": ["soccer", "baseball", "basketball", "tennis"],
+            "events": payload_events,
+            "bets": [dict(bet) for bet in bets],
+            "notice": "Sports data provider is not configured yet." if not SPORTS_DATA_API_KEY else "",
+        })
+
+    def api_sportsbook_bet(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        if not SPORTS_BETTING_ENABLED:
+            self.error(409, "Sportsbook is not enabled yet")
+            return
+        payload = self.read_json()
+        try:
+            stake = round(float(payload.get("stake") or 0), 2)
+        except (TypeError, ValueError):
+            stake = 0.0
+        legs = payload.get("legs")
+        if not isinstance(legs, list) or not 1 <= len(legs) <= 12:
+            self.error(400, "Choose between 1 and 12 selections")
+            return
+        if stake <= 0 or stake != int(stake) or stake > 1_000_000:
+            self.error(400, "Stake must be a positive whole-number amount")
+            return
+        identity = one(db, "SELECT identity_id FROM arma_account_links WHERE user_id=?", (user["id"],))
+        if not identity or not str(identity.get("identity_id") or "").strip():
+            self.error(409, "Link your Arma account before placing an in-game wager")
+            return
+        normalized = []
+        combined = 1.0
+        seen = set()
+        for raw in legs:
+            try:
+                event_id = int(raw.get("event_id"))
+            except (TypeError, ValueError, AttributeError):
+                self.error(400, "Each selection must include an event")
+                return
+            market_key = str(raw.get("market_key") or "h2h")[:40]
+            selection_key = str(raw.get("selection_key") or "")[:160]
+            if not selection_key or (event_id, market_key, selection_key) in seen:
+                self.error(400, "Selections must be unique")
+                return
+            seen.add((event_id, market_key, selection_key))
+            market = one(db, "SELECT m.*, e.home_team, e.away_team, e.starts_at FROM sportsbook_markets m JOIN sportsbook_events e ON e.id=m.event_id WHERE m.event_id=? AND m.market_key=? AND m.selection_key=? AND m.status='open' AND e.status IN ('scheduled','live')", (event_id, market_key, selection_key))
+            if not market:
+                self.error(409, "One of those selections is no longer open")
+                return
+            decimal = float(market["decimal_odds"] or 0)
+            if decimal <= 1:
+                self.error(409, "Invalid odds returned by the provider")
+                return
+            combined *= decimal
+            normalized.append((event_id, market_key, selection_key, decimal))
+        potential = round(stake * combined, 2)
+        created = now_iso()
+        bet = one(db, "INSERT INTO sportsbook_bets (user_id,stake,combined_odds,potential_payout,status,created_at) VALUES (?,?,?,?, 'awaiting_debit',?) RETURNING id", (user["id"], stake, round(combined, 4), potential, created))
+        bet_id = int(bet["id"])
+        for event_id, market_key, selection_key, decimal in normalized:
+            db.execute("INSERT INTO sportsbook_bet_legs (bet_id,event_id,market_key,selection_key,odds_snapshot) VALUES (?,?,?,?,?)", (bet_id, event_id, market_key, selection_key, decimal))
+        command_id = f"fc-sports-{secrets.token_urlsafe(18)}"
+        db.execute("UPDATE sportsbook_bets SET wallet_command_id=? WHERE id=?", (command_id, bet_id))
+        idempotency = f"sportsbook-bet-{bet_id}"
+        db.execute("INSERT INTO bank_bridge_commands (command_id,idempotency_key,server_id,operation,target_user_id,identity_id,amount,currency,reason,status,requested_by,created_at) VALUES (?,?,?,?,?,?,?,'bank',?,'pending',?,?)", (command_id, idempotency, "default", "debit_funds", user["id"], str(identity["identity_id"]), stake, f"Sportsbook wager FC-{bet_id:07d}", user["id"], created))
+        self.send_json(202, {"ok": True, "bet": {"id": bet_id, "stake": stake, "combined_odds": round(combined, 4), "potential_payout": potential, "status": "awaiting_debit", "wallet_command_id": command_id}})
+
+    def sync_sportsbook_events(self, db: Database) -> int:
+        if not SPORTS_DATA_API_KEY:
+            return 0
+        inserted = 0
+        for sport_key in SPORTS_DATA_SPORT_KEYS:
+            query = urlencode({
+                "apiKey": SPORTS_DATA_API_KEY,
+                "regions": "us",
+                "markets": "h2h",
+                "oddsFormat": "american",
+                "dateFormat": "iso",
+            })
+            request = urllib.request.Request(
+                f"{SPORTS_DATA_BASE_URL}/sports/{sport_key}/odds?{query}",
+                headers={"Accept": "application/json", "User-Agent": "FaircroftSports/1.0"},
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=8) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, list):
+                continue
+            sport_name = "soccer" if sport_key.startswith("soccer") else "basketball" if sport_key.startswith("basketball") else "baseball" if sport_key.startswith("baseball") else "tennis"
+            for event in payload[:100]:
+                if not isinstance(event, dict):
+                    continue
+                provider_id = str(event.get("id") or "").strip()
+                home = str(event.get("home_team") or "").strip()
+                away = str(event.get("away_team") or "").strip()
+                starts_at = str(event.get("commence_time") or "").strip()
+                if not provider_id or not home or not away or not starts_at:
+                    continue
+                ts = now_iso()
+                db.execute(
+                    """
+                    INSERT INTO sportsbook_events
+                    (provider_event_id,sport,league,home_team,away_team,starts_at,status,score_json,raw_json,synced_at)
+                    VALUES (?,?,?,?,?,?,'scheduled','{}',?,?)
+                    ON CONFLICT (provider_event_id) DO UPDATE SET
+                      sport=EXCLUDED.sport, league=EXCLUDED.league, home_team=EXCLUDED.home_team,
+                      away_team=EXCLUDED.away_team, starts_at=EXCLUDED.starts_at,
+                      status=CASE WHEN sportsbook_events.status='live' THEN 'live' ELSE EXCLUDED.status END,
+                      raw_json=EXCLUDED.raw_json, synced_at=EXCLUDED.synced_at
+                    """,
+                    (provider_id, sport_name, sport_key, home, away, starts_at, json.dumps(event, separators=(",", ":"), default=str), ts),
+                )
+                row = one(db, "SELECT id FROM sportsbook_events WHERE provider_event_id=?", (provider_id,))
+                if not row:
+                    continue
+                event_id = int(row["id"])
+                for bookmaker in event.get("bookmakers") or []:
+                    for market in bookmaker.get("markets") or []:
+                        if str(market.get("key") or "") != "h2h":
+                            continue
+                        for outcome in market.get("outcomes") or []:
+                            label = str(outcome.get("name") or "").strip()
+                            odds = int(outcome.get("price") or 0)
+                            if not label or not odds:
+                                continue
+                            decimal = round((odds / 100) + 1 if odds > 0 else (100 / abs(odds)) + 1, 4)
+                            selection_key = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+                            db.execute(
+                                """
+                                INSERT INTO sportsbook_markets
+                                (event_id,market_key,selection_key,selection_label,american_odds,decimal_odds,status,updated_at)
+                                VALUES (?,?,?,?,?,?, 'open', ?)
+                                ON CONFLICT (event_id,market_key,selection_key) DO UPDATE SET
+                                  selection_label=EXCLUDED.selection_label, american_odds=EXCLUDED.american_odds,
+                                  decimal_odds=EXCLUDED.decimal_odds, status='open', updated_at=EXCLUDED.updated_at
+                                """,
+                                (event_id, "h2h", selection_key, label, odds, decimal, ts),
+                            )
+                inserted += 1
+            # Scores are a separate provider feed. Merge them after odds so
+            # live/completed state is visible without changing the odds ticket
+            # snapshot already shown to residents.
+            score_query = urlencode({"apiKey": SPORTS_DATA_API_KEY, "daysFrom": "1", "dateFormat": "iso"})
+            score_request = urllib.request.Request(
+                f"{SPORTS_DATA_BASE_URL}/sports/{sport_key}/scores?{score_query}",
+                headers={"Accept": "application/json", "User-Agent": "FaircroftSports/1.0"},
+            )
+            try:
+                with urllib.request.urlopen(score_request, timeout=8) as response:
+                    score_payload = json.loads(response.read().decode("utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                score_payload = []
+            for scored in score_payload if isinstance(score_payload, list) else []:
+                provider_id = str(scored.get("id") or "").strip()
+                if not provider_id:
+                    continue
+                completed = bool(scored.get("completed"))
+                scores = scored.get("scores") or []
+                score_map = {str(item.get("name")): item.get("score") for item in scores if isinstance(item, dict)}
+                status = "completed" if completed else "live"
+                db.execute("UPDATE sportsbook_events SET status=?, score_json=?, synced_at=? WHERE provider_event_id=?", (status, json.dumps(score_map, separators=(",", ":"), default=str), now_iso(), provider_id))
+        return inserted
 
     def market_payload(self, db: Database, user: DbRow) -> dict[str, Any]:
         self.market_apply_programs(db)

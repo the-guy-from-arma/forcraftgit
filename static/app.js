@@ -108,6 +108,8 @@ const state = {
   statsTab: "overview",
   marketTicker: "FNN",
   marketTransferRecipient: null,
+  sportsbookSport: "all",
+  sportsbookSlip: [],
   generatedMarketCode: null,
   iceSearchResults: [],
   iceSelectedSubject: null,
@@ -202,6 +204,7 @@ const iconSvg = {
   "thumb-down": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M7 14V3H3v11h4ZM7 5h10a3 3 0 0 1 2.9 2.3l1 4A3 3 0 0 1 18 15h-4l1 4c.3 1.3-.7 2-1.5 2L7 14"/></svg>',
   download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 17v3h16v-3"/></svg>',
   trophy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 4h8v4a4 4 0 0 1-8 0V4Z"/><path d="M8 6H4v2a4 4 0 0 0 4 4M16 6h4v2a4 4 0 0 1-4 4M12 12v5M8 21h8M9 17h6"/></svg>',
+  sports: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="8"/><path d="M4.9 8.5h14.2M4.9 15.5h14.2M12 4c2 2.2 3 4.9 3 8s-1 5.8-3 8M12 4c-2 2.2-3 4.9-3 8s1 5.8 3 8"/></svg>',
   stats: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/><path d="m3 7 6-4 6 6 6-5"/><circle cx="3" cy="7" r="1"/><circle cx="9" cy="3" r="1"/><circle cx="15" cy="9" r="1"/><circle cx="21" cy="4" r="1"/></svg>',
   passport: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="3" width="14" height="18" rx="2"/><circle cx="12" cy="11" r="4"/><path d="M8 11h8M12 7c1 1 1.5 2.3 1.5 4S13 14 12 15c-1-1-1.5-2.3-1.5-4S11 8 12 7ZM9 18h6"/></svg>',
   federal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m12 2 8 4v6c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V6l8-4Z"/><path d="M8 9h8M9 9v6M12 9v6M15 9v6M7 16h10M12 5v2"/></svg>',
@@ -229,6 +232,7 @@ const tileColors = {
   bank: "linear-gradient(145deg, #5c9cff, #21497e)",
   wallstreet: "linear-gradient(145deg, #6ef0b0, #075745 58%, #07110e)",
   lottery: "linear-gradient(145deg, #f7df78, #a25d18 52%, #23124f)",
+  sportsbook: "linear-gradient(145deg, #67e8f9, #2164d4 52%, #28105f)",
   restriction: "linear-gradient(145deg, #ff9f5c, #7d281f)",
   treasury: "linear-gradient(145deg, #f8d572, #0f806f)",
   business: "linear-gradient(145deg, #58e6a5, #2457a8)",
@@ -689,6 +693,10 @@ function render() {
   if (state.activeApp === "lottery") {
     app.innerHTML = renderSystemBanner() + renderLotteryWorkspace() + renderRequiredProfileModals();
     bindLotteryWorkspace(); bindRequiredProfileModals(); return;
+  }
+  if (state.activeApp === "sportsbook") {
+    app.innerHTML = renderSystemBanner() + renderSportsbookWorkspace() + renderRequiredProfileModals();
+    bindSportsbookWorkspace(); bindRequiredProfileModals(); return;
   }
   if (state.activeApp === "changelog") {
     app.innerHTML = renderSystemBanner() + renderChangelogWorkspace() + renderRequiredProfileModals();
@@ -2048,6 +2056,7 @@ function renderPanel(id) {
     press: "Press Desk",
     citizenship: "Citizenship & Passport",
     lottery: "Faircroft Lottery",
+    sportsbook: "Faircroft Sportsbook",
     insurance: "Faircroft Insurance",
     gangs: "Gang Network",
     realty: "Faircroft Realty Group",
@@ -2083,6 +2092,7 @@ function renderPanel(id) {
     press: renderPressDesk,
     citizenship: renderCitizenship,
     lottery: renderLotteryWorkspace,
+    sportsbook: renderSportsbookWorkspace,
     insurance: renderInsuranceWorkspace,
     gangs: renderGangWorkspace,
     realty: renderRealtyWorkspace,
@@ -2113,6 +2123,7 @@ async function loadAppData(id) {
     bank: () => api("/api/bank"),
     wallstreet: () => api("/api/wallstreet"),
     lottery: () => api("/api/lottery"),
+    sportsbook: () => api("/api/sportsbook?refresh=1"),
     treasury: () => api("/api/treasury"),
     business: () => api("/api/business"),
     messages: () => api("/api/messages"),
@@ -4266,6 +4277,44 @@ function renderLotteryLiveWorkspace() {
     </section>
     <section class="lottery-live-records"><header><div><span>OFFICIAL ENTRY LEDGER</span><h2>Your current draw record</h2></div><strong>${entries.length} VERIFIED</strong></header>${entries.length?`<ol>${entries.map((entry,index)=>`<li><b>${String(index+1).padStart(2,"0")}</b><span><strong>FC-${String(entry.id).padStart(7,"0")}</strong><small>${new Date(entry.created_at).toLocaleString()}</small></span><em class="${entry.status}">${entry.fraud_flag?"REVIEW REQUIRED":escapeHtml(entry.status.toUpperCase())}</em></li>`).join("")}</ol>`:`<div class="lottery-live-empty"><b>01</b><span><strong>Your first entry becomes a permanent draw record.</strong><small>Issue a daily pass above to join the verified field.</small></span></div>`}</section>
   </main>`;
+}
+
+function renderSportsbookWorkspace() {
+  const data = state.cache.sportsbook || {};
+  const events = (data.events || []).filter(event => state.sportsbookSport === "all" || event.sport === state.sportsbookSport);
+  const slip = state.sportsbookSlip || [];
+  const combined = slip.reduce((total, leg) => total * Number(leg.decimal_odds || 1), 1);
+  const providerReady = Boolean(data.enabled && data.provider_configured);
+  const american = value => Number(value) > 0 ? `+${value}` : String(value);
+  return `<main class="fc-sportsbook">
+    <header class="sportsbook-header"><div class="sportsbook-mark"><span>FC</span><div><small>FAIRCROFT RP</small><strong>SPORTSBOOK</strong><em>GAME-DAY DESK</em></div></div><div class="sportsbook-status"><i></i><span>${providerReady ? "LIVE BOARD" : "BOARD PREVIEW"}</span><small>${escapeHtml(data.provider || "the odds provider")}</small></div><button class="sportsbook-exit" data-close-sportsbook>Exit</button></header>
+    <section class="sportsbook-hero"><div><span class="sportsbook-kicker">THE FAIR PLAY FIELD</span><h1>Pick your<br/><em>edge.</em></h1><p>Live fixtures, transparent prices, and one wallet: your verified Faircroft in-game bank.</p></div><div class="sportsbook-hero-orbit"><b>FC</b><i></i><i></i><i></i></div></section>
+    ${data.notice ? `<div class="sportsbook-notice"><strong>Board is ready for launch.</strong><span>${escapeHtml(data.notice)} Add the server-side sports provider key before publishing live odds.</span></div>` : ""}
+    <nav class="sportsbook-sports"><button class="${state.sportsbookSport === "all" ? "active" : ""}" data-sportsbook-sport="all">All board</button>${(data.sports || ["soccer","baseball","basketball","tennis"]).map(sport => `<button class="${state.sportsbookSport === sport ? "active" : ""}" data-sportsbook-sport="${sport}">${sport}</button>`).join("")}<button data-refresh-sportsbook>Refresh board</button></nav>
+    <div class="sportsbook-layout"><section class="sportsbook-board"><header class="sportsbook-section-head"><div><span>UPCOMING & LIVE</span><h2>Today's board</h2></div><strong>${events.length} EVENT${events.length === 1 ? "" : "S"}</strong></header>
+      <div class="sportsbook-events">${events.map(event => `<article class="sportsbook-event ${event.status === "live" ? "is-live" : ""}"><header><div><span>${event.status === "live" ? "● LIVE" : escapeHtml(event.sport.toUpperCase())} · ${escapeHtml(event.league || "Match board")}</span><strong>${escapeHtml(event.home_team)} <small>vs</small> ${escapeHtml(event.away_team)}</strong><time>${escapeHtml(new Date(event.starts_at).toLocaleString([], {weekday:"short",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}))}</time></div><b>${event.status === "live" ? "LIVE" : "OPEN"}</b></header><div class="sportsbook-market-row">${(event.markets || []).slice(0,3).map(market => { const key = `${event.id}|${market.market_key}|${market.selection_key}`; const selected = slip.some(item => item.key === key); return `<button class="sportsbook-odds ${selected ? "selected" : ""}" data-sportsbook-add data-key="${escapeHtml(key)}" data-event-id="${event.id}" data-market-key="${escapeHtml(market.market_key)}" data-selection-key="${escapeHtml(market.selection_key)}" data-label="${escapeHtml(market.selection_label)}" data-odds="${market.decimal_odds}"><span>${escapeHtml(market.selection_label)}</span><strong>${american(market.american_odds)}</strong><small>${Number(market.decimal_odds).toFixed(2)}</small></button>`; }).join("") || `<div class="sportsbook-empty">Prices will appear when the board syncs.</div>`}</div></article>`).join("") || `<div class="sportsbook-empty large">${providerReady ? "No open events right now." : "The live board is waiting for provider configuration."}</div>`}</div>
+    </section><aside class="sportsbook-slip"><header><div><span>BET SLIP</span><h2>Your picks</h2></div><strong>${slip.length}</strong></header><div class="sportsbook-slip-legs">${slip.map((leg,index) => `<article><div><small>${index + 1} · ${escapeHtml(leg.sport || "MATCH")}</small><strong>${escapeHtml(leg.label)}</strong><span>${escapeHtml(leg.teams)}</span></div><b>${american(leg.american_odds)}</b><button data-sportsbook-remove="${escapeHtml(leg.key)}" aria-label="Remove pick">×</button></article>`).join("") || `<div class="sportsbook-slip-empty">Tap a price to build a single or parlay.</div>`}</div><div class="sportsbook-slip-total"><span>COMBINED PRICE</span><strong>${slip.length ? combined.toFixed(2) : "—"}</strong></div><form id="sportsbookBetForm"><label>Stake<input name="stake" type="number" min="1" step="1" placeholder="Whole in-game credits" ${slip.length ? "" : "disabled"} required /></label><div><span>Potential return</span><strong data-sportsbook-payout>—</strong></div><button class="sportsbook-place" type="submit" ${slip.length || !providerReady ? "" : "disabled"}>${providerReady ? `Place ${slip.length > 1 ? "parlay" : "pick"}` : "Board preview"}</button></form><small class="sportsbook-footnote">Wagers debit the linked Arma bank through Bank Bridge. No Railway cash or payment PIN is used.</small></aside></div>
+    <section class="sportsbook-history"><header><span>MY TICKETS</span><h2>Recent wagers</h2></header><div>${(data.bets || []).map(bet => `<article><div><strong>FC-${String(bet.id).padStart(7,"0")}</strong><span>${new Date(bet.created_at).toLocaleString()}</span></div><b>${money(bet.stake)}</b><span class="sportsbook-bet-status ${escapeHtml(bet.status)}">${escapeHtml(bet.status.replaceAll("_", " "))}</span><strong>${money(bet.potential_payout)}</strong></article>`).join("") || `<div class="sportsbook-empty">No wagers placed yet.</div>`}</div></section>
+  </main>`;
+}
+
+function bindSportsbookWorkspace() {
+  $$('[data-sportsbook-sport]').forEach(button => button.addEventListener("click", () => { state.sportsbookSport = button.dataset.sportsbookSport || "all"; render(); }));
+  $$('[data-sportsbook-add]').forEach(button => button.addEventListener("click", () => {
+    const key = button.dataset.key;
+    const existing = state.sportsbookSlip.findIndex(item => item.key === key);
+    if (existing >= 0) state.sportsbookSlip.splice(existing, 1);
+    else state.sportsbookSlip.push({ key, event_id: Number(button.dataset.eventId), market_key: button.dataset.marketKey, selection_key: button.dataset.selectionKey, label: button.dataset.label, decimal_odds: Number(button.dataset.odds), american_odds: Number(button.querySelector("strong")?.textContent || 0), teams: button.closest(".sportsbook-event")?.querySelector("header strong")?.textContent || "", sport: button.closest(".sportsbook-event")?.querySelector("header span")?.textContent || "" });
+    render();
+  }));
+  $$('[data-sportsbook-remove]').forEach(button => button.addEventListener("click", () => { state.sportsbookSlip = state.sportsbookSlip.filter(item => item.key !== button.dataset.sportsbookRemove); render(); }));
+  $("[data-close-sportsbook]")?.addEventListener("click", async () => { state.activeApp = null; state.sportsbookSlip = []; await loadSession(); });
+  $("[data-refresh-sportsbook]")?.addEventListener("click", async () => { await loadAppData("sportsbook"); render(); });
+  const form = $("#sportsbookBetForm");
+  const stake = form?.querySelector("[name=stake]");
+  const updatePayout = () => { const target = $("[data-sportsbook-payout]"); if (target) target.textContent = stake?.value ? money(Number(stake.value) * state.sportsbookSlip.reduce((total, item) => total * Number(item.decimal_odds || 1), 1)) : "—"; };
+  stake?.addEventListener("input", updatePayout); updatePayout();
+  form?.addEventListener("submit", async event => { event.preventDefault(); try { const result = await api("/api/sportsbook/bets", { method: "POST", body: { stake: Number(stake.value), legs: state.sportsbookSlip.map(({event_id,market_key,selection_key}) => ({event_id,market_key,selection_key})) } }); state.sportsbookSlip = []; toast(`Wager FC-${String(result.bet.id).padStart(7,"0")} queued for game-bank debit`); await loadAppData("sportsbook"); render(); } catch (error) { toast(error.message); } });
 }
 
 function renderLotteryWorkspace() {
