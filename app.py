@@ -2196,6 +2196,7 @@ SYSTEM_SETTING_DEFAULTS = {
     "lottery_player_pool_rate_per_minute": "100.00",
     "lottery_player_pool_last_tick": "",
     "insurance_claim_auto_approve_seconds": "180",
+    "insurance_state_of_emergency": "0",
     "insurance_tiers": "{\"essential\":{\"coverage_percent\":50,\"premium\":3500},\"preferred\":{\"coverage_percent\":70,\"premium\":4250},\"premier\":{\"coverage_percent\":90,\"premium\":5000}}",
     "gang_creation_enabled": "1",
     "gang_global_limit": "100",
@@ -5233,6 +5234,7 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "lottery_player_pool_rate_per_minute": max(0.0, min(1000000.0, float(raw.get("lottery_player_pool_rate_per_minute") or 100))),
         "lottery_player_pool_last_tick": str(raw.get("lottery_player_pool_last_tick") or "")[:80],
         "insurance_claim_auto_approve_seconds": max(180, min(604800, int(raw.get("insurance_claim_auto_approve_seconds") or 180))),
+        "insurance_state_of_emergency": str(raw.get("insurance_state_of_emergency") or "0") in ("1", "true", "True", "yes", "on"),
         "insurance_tiers": insurance_tiers,
         "gang_creation_enabled": str(raw.get("gang_creation_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "gang_global_limit": max(1, min(1000, int(raw.get("gang_global_limit") or 100))),
@@ -11676,6 +11678,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             WHERE l.user_id=? ORDER BY l.linked_at DESC LIMIT 1""", (user["id"],))
         self.send_json(200, {"policies": [dict(row) for row in policies], "claims": [dict(row) for row in claims],
             "bank": dict(bank) if bank else {"balance": 0, "synced_at": None},
+            "state_of_emergency": settings["insurance_state_of_emergency"],
             "tiers": [
                 {"id":"essential","name":"Continuity Essential",**settings["insurance_tiers"]["essential"]},
                 {"id":"preferred","name":"Continuity Preferred",**settings["insurance_tiers"]["preferred"]},
@@ -11735,6 +11738,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         err = verified_required(user)
         if err:
             self.error(403 if user else 401, err); return
+        settings = get_system_settings(db)
+        if not settings["insurance_state_of_emergency"]:
+            self.error(409, "Insurance claims are closed until Insurance Command declares a State of Emergency."); return
         payload = self.read_json()
         try: policy_id = int(payload.get("policy_id") or 0)
         except (TypeError, ValueError): policy_id = 0
@@ -11754,7 +11760,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         coverage_percent = float(policy.get("coverage_percent") or {"essential":50,"standard":70,"preferred":70,"premier":90}.get(policy["coverage_tier"], 0))
         requested = round(protected_balance * coverage_percent / 100.0, 2)
         ts = now_iso(); claim_number = f"FCIC-{utcnow().strftime('%y%m')}-{secrets.randbelow(900000)+100000}"
-        auto_approve_at = (utcnow() + dt.timedelta(seconds=int(get_system_settings(db)["insurance_claim_auto_approve_seconds"]))).isoformat()
+        auto_approve_at = (utcnow() + dt.timedelta(seconds=int(settings["insurance_claim_auto_approve_seconds"]))).isoformat()
         db.execute("""INSERT INTO insurance_claims
             (claim_number,policy_id,user_id,character_id,incident_type,incident_summary,bank_balance_snapshot,coverage_percent,requested_amount,status,auto_approve_at,created_at,updated_at)
             VALUES (?,?,?,?, 'server_reset', ?,?,?,?,'pending',?,?,?)""",
@@ -18355,7 +18361,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 },
                 "insurance_claims": {
                     "claims": [dict(row) for row in insurance_claims],
-                    "settings": {"auto_approve_seconds": system_settings["insurance_claim_auto_approve_seconds"], "tiers": system_settings["insurance_tiers"]},
+                    "settings": {"auto_approve_seconds": system_settings["insurance_claim_auto_approve_seconds"], "state_of_emergency": system_settings["insurance_state_of_emergency"], "tiers": system_settings["insurance_tiers"]},
                     "stats": {key: float(value or 0) if key in {"exposure","paid_total"} else int(value or 0)
                               for key, value in insurance_claim_stats.items()},
                 },
@@ -18749,6 +18755,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         try: seconds = int(payload.get("auto_approve_seconds") or 180)
         except (TypeError, ValueError): seconds = 180
         seconds = max(180, min(604800, seconds))
+        state_of_emergency = str(payload.get("state_of_emergency") or "0").lower() in ("1", "true", "yes", "on")
         tiers = {}
         for name, fallback in (("essential", (50, 3500)), ("preferred", (70, 4250)), ("premier", (90, 5000))):
             try: coverage = float(payload.get(f"{name}_coverage_percent") or fallback[0])
@@ -18759,9 +18766,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 self.error(400, "Coverage must be 1–100% and premiums must be positive."); return
             tiers[name] = {"coverage_percent": round(coverage, 2), "premium": round(premium, 2)}
         set_system_setting(db, "insurance_claim_auto_approve_seconds", str(seconds))
+        set_system_setting(db, "insurance_state_of_emergency", "1" if state_of_emergency else "0")
         set_system_setting(db, "insurance_tiers", json.dumps(tiers, separators=(",", ":"), sort_keys=True))
-        add_admin_audit(db, int(user["id"]), "insurance.settings.updated", details={"auto_approve_seconds": seconds, "tiers": tiers})
-        self.send_json(200, {"ok": True, "auto_approve_seconds": seconds, "tiers": tiers})
+        add_admin_audit(db, int(user["id"]), "insurance.settings.updated", details={"auto_approve_seconds": seconds, "state_of_emergency": state_of_emergency, "tiers": tiers})
+        self.send_json(200, {"ok": True, "auto_approve_seconds": seconds, "state_of_emergency": state_of_emergency, "tiers": tiers})
 
     def api_dev_insurance_claim(self, db: Database, user: DbRow | None, claim_id: int) -> None:
         err = developer_required(user)
