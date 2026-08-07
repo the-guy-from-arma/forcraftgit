@@ -4289,7 +4289,7 @@ function renderSportsbookWorkspace() {
   return `<main class="fc-sportsbook">
     <header class="sportsbook-header"><div class="sportsbook-mark"><span>FC</span><div><small>FAIRCROFT RP</small><strong>SPORTSBOOK</strong><em>GAME-DAY DESK</em></div></div><div class="sportsbook-status"><i></i><span>${providerReady ? "LIVE BOARD" : "BOARD PREVIEW"}</span><small>${escapeHtml(data.provider || "the odds provider")}</small></div><button class="sportsbook-exit" data-close-sportsbook>Exit</button></header>
     <section class="sportsbook-hero"><div><span class="sportsbook-kicker">THE FAIR PLAY FIELD</span><h1>Pick your<br/><em>edge.</em></h1><p>Live fixtures, transparent prices, and one wallet: your verified Faircroft in-game bank.</p></div><div class="sportsbook-hero-orbit"><b>FC</b><i></i><i></i><i></i></div></section>
-    ${data.notice ? `<div class="sportsbook-notice"><strong>Board is ready for launch.</strong><span>${escapeHtml(data.notice)} Add the server-side sports provider key before publishing live odds.</span></div>` : ""}
+    ${data.notice || data.sync?.errors?.length ? `<div class="sportsbook-notice"><strong>${data.sync?.errors?.length ? "Provider sync needs attention." : "Board is ready for launch."}</strong><span>${escapeHtml(data.sync?.errors?.join(" · ") || data.notice)} ${data.sync?.errors?.length ? "Check the provider key, sport keys, and API quota in Sportsbook Settings." : "Add the server-side sports provider key before publishing live odds."}</span></div>` : ""}
     <nav class="sportsbook-sports"><button class="${state.sportsbookSport === "all" ? "active" : ""}" data-sportsbook-sport="all">All board</button>${(data.sports || ["soccer","baseball","basketball","tennis"]).map(sport => `<button class="${state.sportsbookSport === sport ? "active" : ""}" data-sportsbook-sport="${sport}">${sport}</button>`).join("")}<button data-refresh-sportsbook>Refresh board</button></nav>
     <div class="sportsbook-layout"><section class="sportsbook-board"><header class="sportsbook-section-head"><div><span>UPCOMING & LIVE</span><h2>Today's board</h2></div><strong>${events.length} EVENT${events.length === 1 ? "" : "S"}</strong></header>
       <div class="sportsbook-events">${events.map(event => `<article class="sportsbook-event ${event.status === "live" ? "is-live" : ""}"><header><div><span>${event.status === "live" ? "● LIVE" : escapeHtml(event.sport.toUpperCase())} · ${escapeHtml(event.league || "Match board")}</span><strong>${escapeHtml(event.home_team)} <small>vs</small> ${escapeHtml(event.away_team)}</strong><time>${escapeHtml(new Date(event.starts_at).toLocaleString([], {weekday:"short",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}))}</time></div><b>${event.status === "live" ? "LIVE" : "OPEN"}</b></header><div class="sportsbook-market-row">${(event.markets || []).slice(0,3).map(market => { const key = `${event.id}|${market.market_key}|${market.selection_key}`; const selected = slip.some(item => item.key === key); return `<button class="sportsbook-odds ${selected ? "selected" : ""}" data-sportsbook-add data-key="${escapeHtml(key)}" data-event-id="${event.id}" data-market-key="${escapeHtml(market.market_key)}" data-selection-key="${escapeHtml(market.selection_key)}" data-label="${escapeHtml(market.selection_label)}" data-odds="${market.decimal_odds}"><span>${escapeHtml(market.selection_label)}</span><strong>${american(market.american_odds)}</strong><small>${Number(market.decimal_odds).toFixed(2)}</small></button>`; }).join("") || `<div class="sportsbook-empty">Prices will appear when the board syncs.</div>`}</div></article>`).join("") || `<div class="sportsbook-empty large">${providerReady ? "No open events right now." : "The live board is waiting for provider configuration."}</div>`}</div>
@@ -11164,13 +11164,13 @@ const ADMIN_TOOL_NAV = [
   ["enforcement", "Cases", "07"], ["warnings", "Internal Notes", "08"],
   ["linking", "Account Linking", "09"], ["campaigns", "Active Campaigns", "10"],
   ["settlement", "Settlement", "11"], ["banking-settings", "Banking Settings", "12"], ["market-settings", "Stock Market", "13"],
-  ["lottery-settings", "Lottery Settings", "13"], ["gang-settings", "Gang Settings", "14"],
-  ["dmv-settings", "DMV Settings", "15"], ["mdt-settings", "MDT Settings", "16"],
-  ["court-settings", "Court Settings", "17"], ["ice-settings", "ICE Settings", "18"],
-  ["admin-2fa", "Admin 2FA", "19"], ["autopilot", "Auto Pilot", "20"],
-  ["system-update", "System Update", "21"], ["audit", "Activity Log", "22"],
-  ["fnn-settings", "FNN Settings", "23"], ["settings", "Settings", "24"],
-  ["account-deletion", "Account Deletion", "25"],
+  ["lottery-settings", "Lottery Settings", "13"], ["sportsbook-settings", "Sportsbook", "14"], ["gang-settings", "Gang Settings", "15"],
+  ["dmv-settings", "DMV Settings", "16"], ["mdt-settings", "MDT Settings", "17"],
+  ["court-settings", "Court Settings", "18"], ["ice-settings", "ICE Settings", "19"],
+  ["admin-2fa", "Admin 2FA", "20"], ["autopilot", "Auto Pilot", "21"],
+  ["system-update", "System Update", "22"], ["audit", "Activity Log", "23"],
+  ["fnn-settings", "FNN Settings", "24"], ["settings", "Settings", "25"],
+  ["account-deletion", "Account Deletion", "26"],
 ];
 
 function adminToolAccess() {
@@ -11210,6 +11210,7 @@ function renderDevWorkspace() {
     "gang-settings": ["Gang Settings", "Govern organizations, leaders, rosters, and recruitment PINs"],
     "market-settings": ["Stock Market Settings", "Operate Ravenhood pricing, settlement receipts, fees, and RP events"],
     "lottery-settings": ["Lottery Settings", "Govern entries, prize funding, role eligibility, fraud review, and weekly drawings"],
+    "sportsbook-settings": ["Sportsbook Settings", "Configure the live sports provider and inspect fixture, odds, and wager health"],
     "housing-market": ["Housing Market", "Read-only Shadow Haven property ownership, availability, tenure, locks, and guest access"],
     "insurance-claims": ["Insurance Claims", "Review verified server-reset and wipe compensation requests"],
     audit: ["Activity Log", "Chronological record of staff actions"],
@@ -11554,6 +11555,15 @@ function renderDevBankingSettings(banking, users) {
   </div>`;
 }
 
+function renderDevSportsbookSettings(settings) {
+  const configured = Boolean(settings.provider_configured);
+  return `<div class="stack dev-ops-view sportsbook-admin-view">
+    <div class="dev-view-intro"><div><span>FAIRCROFT GAME-DAY CONTROL</span><h2>Sportsbook operations</h2><p>Provider health, fixture sync, odds coverage, and wager queue. API credentials stay server-side and are never sent to the browser.</p></div><strong>${Number(settings.event_count || 0)} EVENTS</strong></div>
+    <div class="dev-metrics"><div class="dev-metric ${configured ? "green-tone" : "amber-tone"}"><span>Provider</span><strong>${configured ? "READY" : "MISSING"}</strong><small>${escapeHtml(settings.provider || "not configured")}</small></div><div class="dev-metric blue-tone"><span>Open events</span><strong>${Number(settings.event_count || 0)}</strong><small>${Number(settings.live_count || 0)} live</small></div><div class="dev-metric"><span>Prices</span><strong>${Number(settings.open_market_count || 0)}</strong><small>Open selections</small></div><div class="dev-metric amber-tone"><span>Debit queue</span><strong>${Number(settings.pending_bets || 0)}</strong><small>Awaiting Bank Bridge</small></div></div>
+    <div class="dev-grid-2"><section class="dev-card"><div class="dev-card-header"><div><span>PROVIDER CONNECTION</span><h2>${escapeHtml(settings.provider || "The Odds API")}</h2><p>Current base URL: <code>${escapeHtml(settings.base_url || "")}</code></p></div><span class="pill ${configured ? "green" : "amber"}">${configured ? "KEY PRESENT" : "KEY REQUIRED"}</span></div><div class="form-grid"><label>Configured sports<output>${escapeHtml((settings.sport_keys || []).join(", "))}</output></label><label>Public board mode<output>${settings.enabled ? "Enabled" : "Disabled"}</output></label><button class="primary wide" type="button" data-sportsbook-provider-sync>Sync fixtures and live scores</button></div><small class="muted">The sync uses the server-side SPORTS_DATA_API_KEY. It does not use the Arma bridge secret.</small></section><section class="dev-card"><div class="dev-card-header"><div><span>WAGER SAFETY</span><h2>Settlement gate</h2></div><span class="pill amber">MANUAL REVIEW</span></div><p class="muted">Wagers debit only after Bank Bridge confirmation. Automated payouts and Gemini price changes are not enabled by this panel.</p><dl class="dev-detail-list"><div><dt>Accepted wagers</dt><dd>${Number(settings.accepted_bets || 0)}</dd></div><div><dt>Live games</dt><dd>${Number(settings.live_count || 0)}</dd></div></dl></section></div>
+  </div>`;
+}
+
 function renderDevTools() {
   const data = state.cache["dev-tools"] || {};
   const users = data.users || [], sanctions = data.sanctions || [], warnings = data.warnings || [], logs = data.audit_logs || [], codes = data.unlink_codes || [];
@@ -11570,6 +11580,7 @@ function renderDevTools() {
   if (state.devTab === "court-settings") return renderDevCourtSettings(data.court_settings || {});
   if (state.devTab === "market-settings") return renderDevMarketSettings(data.market_settings || {}, users);
   if (state.devTab === "lottery-settings") return renderDevLotterySettings(data.lottery_settings || {});
+  if (state.devTab === "sportsbook-settings") return renderDevSportsbookSettings(data.sportsbook_settings || {});
   if (state.devTab === "gang-settings") return renderDevGangSettings(data.gang_operations || {});
   if (state.devTab === "mdt-settings") return renderDevMdtSettings(data.ice_settings || {});
   if (state.devTab === "ice-settings") return renderDevIceSettings(data.ice_settings || {});
@@ -12431,6 +12442,7 @@ function bindDevWorkspace() {
   $$('[data-lottery-prize-action]').forEach(button=>button.addEventListener("click",async()=>{const action=button.dataset.lotteryPrizeAction;if(action==="delete"&&!confirm("Permanently delete this unawarded special prize?"))return;try{await api(`/api/dev-tools/lottery/prizes/${button.dataset.prizeId}`,{method:"PATCH",body:{action}});toast("Special-prize vault updated");await refreshDevTools();}catch(error){toast(error.message);}}));
   $$('[data-lottery-review]').forEach(button=>button.addEventListener("click",async()=>{let reason="";if(button.dataset.action==="flag"||button.dataset.action==="exclude")reason=prompt("Document the integrity reason for this action:")||"";if((button.dataset.action==="flag"||button.dataset.action==="exclude")&&!reason)return;try{await api(`/api/dev-tools/lottery/entries/${button.dataset.lotteryReview}/review`,{method:"PATCH",body:{action:button.dataset.action,reason}});toast("Lottery entry review updated");await refreshDevTools();}catch(error){toast(error.message);}}));
   $("[data-lottery-run-draw]")?.addEventListener("click",async()=>{if(!confirm("Run a supervised lottery drawing now using all eligible entries and the current available pool?"))return;try{await api("/api/dev-tools/lottery/draw",{method:"POST",body:"{}"});toast("Lottery drawing completed");await refreshDevTools();}catch(error){toast(error.message);}});
+  $("[data-sportsbook-provider-sync]")?.addEventListener("click", async event => { event.currentTarget.disabled = true; try { const result = await api("/api/sportsbook?refresh=1"); toast(`${Number(result.events?.length || 0)} fixtures synced`); await refreshDevTools(); } catch (error) { toast(error.message); } finally { event.currentTarget.disabled = false; } });
   $("#admin2faCodeForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {

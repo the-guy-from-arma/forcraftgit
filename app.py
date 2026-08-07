@@ -2238,6 +2238,7 @@ ADMIN_TOOLS_SECTIONS = (
     ("banking-settings", "Banking Settings"),
     ("market-settings", "Stock Market"),
     ("lottery-settings", "Lottery Settings"),
+    ("sportsbook-settings", "Sportsbook Settings"),
     ("gang-settings", "Gang Settings"),
     ("dmv-settings", "DMV Settings"),
     ("mdt-settings", "MDT Settings"),
@@ -2252,7 +2253,7 @@ ADMIN_TOOLS_SECTIONS = (
     ("account-deletion", "Account Deletion"),
 )
 ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS = frozenset(
-    ("dashboard", "accounts", "intelligence", "housing-market", "anticheat", "audit", "banking-settings")
+    ("dashboard", "accounts", "intelligence", "housing-market", "anticheat", "audit", "banking-settings", "sportsbook-settings")
 )
 ADMIN_TOOLS_DEVELOPER_ONLY_SECTIONS = frozenset(("account-deletion",))
 ADMIN_TOOLS_CONFIGURABLE_SECTIONS = frozenset(
@@ -11684,8 +11685,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not user:
             self.error(401, "Authentication required")
             return
-        if SPORTS_BETTING_ENABLED and SPORTS_DATA_API_KEY and (query.get("refresh") or [""])[0] == "1":
-            self.sync_sportsbook_events(db)
+        sync_result = {"inserted": 0, "errors": []}
+        if SPORTS_DATA_API_KEY and (query.get("refresh") or [""])[0] == "1":
+            sync_result = self.sync_sportsbook_events(db)
         events = all_rows(
             db,
             """
@@ -11740,6 +11742,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "events": payload_events,
             "bets": [dict(bet) for bet in bets],
             "notice": "Sports data provider is not configured yet." if not SPORTS_DATA_API_KEY else "",
+            "sync": sync_result,
         })
 
     def api_sportsbook_bet(self, db: Database, user: DbRow | None) -> None:
@@ -11802,10 +11805,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("INSERT INTO bank_bridge_commands (command_id,idempotency_key,server_id,operation,target_user_id,identity_id,amount,currency,reason,status,requested_by,created_at) VALUES (?,?,?,?,?,?,?,'bank',?,'pending',?,?)", (command_id, idempotency, "default", "debit_funds", user["id"], str(identity["identity_id"]), stake, f"Sportsbook wager FC-{bet_id:07d}", user["id"], created))
         self.send_json(202, {"ok": True, "bet": {"id": bet_id, "stake": stake, "combined_odds": round(combined, 4), "potential_payout": potential, "status": "awaiting_debit", "wallet_command_id": command_id}})
 
-    def sync_sportsbook_events(self, db: Database) -> int:
+    def sync_sportsbook_events(self, db: Database) -> dict[str, Any]:
         if not SPORTS_DATA_API_KEY:
-            return 0
+            return {"inserted": 0, "errors": ["SPORTS_DATA_API_KEY is not configured"]}
         inserted = 0
+        errors: list[str] = []
         for sport_key in SPORTS_DATA_SPORT_KEYS:
             query = urlencode({
                 "apiKey": SPORTS_DATA_API_KEY,
@@ -11821,7 +11825,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             try:
                 with urllib.request.urlopen(request, timeout=8) as response:
                     payload = json.loads(response.read().decode("utf-8"))
-            except (OSError, ValueError, json.JSONDecodeError):
+            except urllib.error.HTTPError as exc:
+                errors.append(f"{sport_key}: HTTP {exc.code}")
+                continue
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                errors.append(f"{sport_key}: {type(exc).__name__}")
                 continue
             if not isinstance(payload, list):
                 continue
@@ -11887,7 +11895,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             try:
                 with urllib.request.urlopen(score_request, timeout=8) as response:
                     score_payload = json.loads(response.read().decode("utf-8"))
-            except (OSError, ValueError, json.JSONDecodeError):
+            except urllib.error.HTTPError as exc:
+                errors.append(f"{sport_key} scores: HTTP {exc.code}")
+                score_payload = []
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                errors.append(f"{sport_key} scores: {type(exc).__name__}")
                 score_payload = []
             for scored in score_payload if isinstance(score_payload, list) else []:
                 provider_id = str(scored.get("id") or "").strip()
@@ -11898,7 +11910,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 score_map = {str(item.get("name")): item.get("score") for item in scores if isinstance(item, dict)}
                 status = "completed" if completed else "live"
                 db.execute("UPDATE sportsbook_events SET status=?, score_json=?, synced_at=? WHERE provider_event_id=?", (status, json.dumps(score_map, separators=(",", ":"), default=str), now_iso(), provider_id))
-        return inserted
+        return {"inserted": inserted, "errors": errors[:12]}
 
     def market_payload(self, db: Database, user: DbRow) -> dict[str, Any]:
         self.market_apply_programs(db)
@@ -18049,6 +18061,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "entries": [dict(row) for row in all_rows(db, """SELECT e.*,u.name,u.civ_number,u.roles FROM lottery_entries e JOIN users u ON u.id=e.user_id ORDER BY e.created_at DESC LIMIT 250""")],
                     "fund_adjustments": [dict(row) for row in all_rows(db, """SELECT a.*,u.name AS created_by_name FROM lottery_fund_adjustments a JOIN users u ON u.id=a.created_by ORDER BY a.created_at DESC LIMIT 100""")],
                     "special_prizes": [dict(row) for row in all_rows(db, """SELECT p.*,u.name AS created_by_name,w.name AS winner_name FROM lottery_special_prizes p JOIN users u ON u.id=p.created_by LEFT JOIN users w ON w.id=p.winner_user_id ORDER BY CASE p.status WHEN 'active' THEN 0 WHEN 'disabled' THEN 1 ELSE 2 END,p.created_at DESC""")],
+                },
+                "sportsbook_settings": {
+                    "enabled": SPORTS_BETTING_ENABLED,
+                    "provider": SPORTS_DATA_PROVIDER,
+                    "provider_configured": bool(SPORTS_DATA_API_KEY),
+                    "base_url": SPORTS_DATA_BASE_URL,
+                    "sport_keys": list(SPORTS_DATA_SPORT_KEYS),
+                    "event_count": int(one(db, "SELECT COUNT(*) AS count FROM sportsbook_events WHERE status IN ('scheduled','live')")["count"] or 0),
+                    "live_count": int(one(db, "SELECT COUNT(*) AS count FROM sportsbook_events WHERE status='live'")["count"] or 0),
+                    "open_market_count": int(one(db, "SELECT COUNT(*) AS count FROM sportsbook_markets WHERE status='open'")["count"] or 0),
+                    "pending_bets": int(one(db, "SELECT COUNT(*) AS count FROM sportsbook_bets WHERE status='awaiting_debit'")["count"] or 0),
+                    "accepted_bets": int(one(db, "SELECT COUNT(*) AS count FROM sportsbook_bets WHERE status='accepted'")["count"] or 0),
                 },
             },
         )
