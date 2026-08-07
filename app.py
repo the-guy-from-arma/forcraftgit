@@ -16725,6 +16725,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         payload = self.read_json()
         reason = str(payload.get("reason") or "").strip()
+        operation = str(payload.get("operation") or "issue_funds").strip().lower()
         confirmation = str(payload.get("confirmation") or "").strip().upper()
         expected = f"DELETE CIV {target.get('civ_number') or target_id}".upper()
         if len(reason) < 12:
@@ -16830,6 +16831,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if target_user_id <= 0 or amount <= 0 or amount > 10_000_000:
             self.error(400, "Choose an account and an amount between 0.01 and 10,000,000.00")
             return
+        if operation not in ("issue_funds", "debit_funds"):
+            self.error(400, "Unsupported banking operation")
+            return
         if amount != int(amount):
             self.error(400, "In-game bank credits must be a whole number")
             return
@@ -16867,14 +16871,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             (command_id,idempotency_key,server_id,operation,target_user_id,identity_id,amount,currency,reason,status,requested_by,created_at)
             VALUES (?,?,?,?,?,?,?,?,?,'pending',?,?)
             """,
-            (command_id, idempotency_key, server_id, "issue_funds", target_user_id, identity_id, amount, currency, reason, int(user["id"]), created_at),
+            (command_id, idempotency_key, server_id, operation, target_user_id, identity_id, amount, currency, reason, int(user["id"]), created_at),
         )
         add_admin_audit(
             db,
             int(user["id"]),
             "bank_bridge.issue_funds_requested",
             target_user_id,
-            {"command_id": command_id, "amount": amount, "currency": currency, "server_id": server_id, "reason": reason},
+            {"command_id": command_id, "operation": operation, "amount": amount, "currency": currency, "server_id": server_id, "reason": reason},
         )
         self.send_json(
             202,
@@ -16883,7 +16887,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "command": {
                     "command_id": command_id,
                     "server_id": server_id,
-                    "operation": "issue_funds",
+                    "operation": operation,
                     "target_user_id": target_user_id,
                     "target_name": target["name"],
                     "target_civ_number": target.get("civ_number") or "",

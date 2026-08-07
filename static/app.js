@@ -11224,6 +11224,7 @@ function renderDevBankingSettings(banking, users) {
       <section class="dev-card dev-editor-panel"><div class="dev-card-header"><div><span>DEVELOPER COMMAND</span><h2>Issue in-game funds</h2></div><span class="pill amber">TEST MODE</span></div>
         <p class="muted">This creates a server command for the Bank Bridge. It does not edit Railway cash and does not require the four-digit payment PIN.</p>
         ${banking.testing_mode ? `<form id="devBankIssueFundsForm" class="form-grid">
+          <label>Operation<select name="operation"><option value="issue_funds">Add funds</option><option value="debit_funds">Withdraw funds</option></select></label>
           <label class="wide">Linked account<select name="target_user_id" required><option value="">Select linked account</option>${linkedUsers.map((account) => `<option value="${account.id}">${escapeHtml(account.name)} · ${escapeHtml(account.civ_number || "CIV pending")} · ${escapeHtml(account.arma_id || "")}</option>`).join("")}</select></label>
           <label>Amount<input name="amount" type="number" min="1" max="10000000" step="1" placeholder="0" required /></label>
           <label>Destination<select name="currency"><option value="bank">Authoritative in-game bank</option></select></label>
