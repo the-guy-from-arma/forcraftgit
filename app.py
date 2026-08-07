@@ -5358,7 +5358,7 @@ def lottery_game_snapshot(db: Database, user_id: int) -> dict[str, Any]:
     if not link:
         return {"balance": None, "reserved": 0, "available": None, "synced_at": None}
     snapshot = one(db, "SELECT balance, synced_at FROM arma_game_bank_balances WHERE identity_id=?", (link["identity_id"],))
-    pending = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM bank_bridge_commands WHERE target_user_id=? AND operation='debit_funds' AND status IN ('pending','claimed') AND reason LIKE 'Lottery %'", (user_id,))
+    pending = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM bank_bridge_commands WHERE target_user_id=? AND operation='debit_funds' AND status IN ('pending','claimed') AND reason LIKE 'Lottery %%'", (user_id,))
     reserved = float((pending or {}).get("total") or 0)
     balance = float(snapshot.get("balance") or 0) if snapshot else None
     return {"balance": round(balance, 2) if balance is not None else None, "reserved": round(reserved, 2), "available": round(max(0, balance - reserved), 2) if balance is not None else None, "synced_at": snapshot.get("synced_at") if snapshot else None}
@@ -11682,7 +11682,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         coverage_percent, premium = tiers[tier]
         bank = one(db, """SELECT b.balance FROM arma_account_links l JOIN arma_game_bank_balances b
             ON b.identity_id=l.identity_id WHERE l.user_id=? ORDER BY l.linked_at DESC LIMIT 1""", (user["id"],))
-        pending = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM bank_bridge_commands WHERE target_user_id=? AND operation='debit_funds' AND status IN ('pending','claimed') AND reason LIKE 'Insurance premium %'", (user["id"],))
+        pending = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM bank_bridge_commands WHERE target_user_id=? AND operation='debit_funds' AND status IN ('pending','claimed') AND reason LIKE 'Insurance premium %%'", (user["id"],))
         available = float(bank["balance"] or 0) - float((pending or {}).get("total") or 0) if bank else None
         if available is None:
             self.error(409, "Your linked Arma bank snapshot is not available yet."); return
@@ -12145,8 +12145,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         for market in markets:
             if not isinstance(market, dict):
                 continue
-            category = str(market.get("category") or "other").strip().lower().replace("_", "-")
-            if allowed_categories and category not in allowed_categories and not any(part in category for part in allowed_categories):
+            raw_category = str(market.get("category") or "").strip()
+            category = raw_category.lower().replace("_", "-") or "other"
+            # Kalshi does not consistently include category metadata on the
+            # public /markets response. Never reject a market solely because
+            # that optional field is absent.
+            if allowed_categories and raw_category and category not in allowed_categories and not any(part in category for part in allowed_categories):
                 skipped_category += 1
                 continue
             ticker = str(market.get("ticker") or "").strip()
@@ -12159,11 +12163,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             if KALSHI_SERIES_TICKERS and series not in KALSHI_SERIES_TICKERS:
                 skipped_series += 1
                 continue
-            yes_raw = market.get("yes_bid_dollars") or market.get("yes_ask_dollars") or market.get("yes_bid") or market.get("yes_ask") or market.get("last_price_dollars")
-            no_raw = market.get("no_bid_dollars") or market.get("no_ask_dollars") or market.get("no_bid") or market.get("no_ask")
             try:
-                yes_price = float(yes_raw or 0)
-                no_price = float(no_raw or 0)
+                def first_positive(*keys: str) -> float:
+                    for key in keys:
+                        try:
+                            value = float(market.get(key) or 0)
+                        except (TypeError, ValueError):
+                            continue
+                        if value > 0:
+                            return value
+                    return 0.0
+                yes_price = first_positive("yes_bid_dollars", "yes_ask_dollars", "yes_bid", "yes_ask", "last_price_dollars")
+                no_price = first_positive("no_bid_dollars", "no_ask_dollars", "no_bid", "no_ask", "no_last_price_dollars")
                 if yes_price > 1: yes_price /= 100
                 if no_price > 1: no_price /= 100
                 if no_price <= 0 and 0 < yes_price < 1: no_price = 1 - yes_price
