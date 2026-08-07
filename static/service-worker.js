@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v022-economic-index";
+const CACHE = "faircroft-rp-v022-ravenhood-workstation";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.2.2-economic-index",
+  "/static/styles.css?v=0.2.2-ravenhood-workstation",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.2.2-economic-index",
+  "/static/app.js?v=0.2.2-ravenhood-workstation",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
   "/static/brand/platforms/playstation.svg",

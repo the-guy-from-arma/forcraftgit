@@ -4047,6 +4047,19 @@ def ensure_migrations(db: Database) -> None:
     )
     db.execute(
         """
+        CREATE TABLE IF NOT EXISTS market_price_history (
+            id SERIAL PRIMARY KEY,
+            security_id INTEGER NOT NULL,
+            price NUMERIC(14,4) NOT NULL,
+            source TEXT NOT NULL DEFAULT 'market',
+            recorded_at TEXT NOT NULL,
+            FOREIGN KEY (security_id) REFERENCES market_securities(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS idx_market_price_history_security_time ON market_price_history(security_id, recorded_at)")
+    db.execute(
+        """
         CREATE TABLE IF NOT EXISTS market_promo_codes (
             id SERIAL PRIMARY KEY,
             campaign_name TEXT NOT NULL,
@@ -4299,6 +4312,12 @@ def ensure_migrations(db: Database) -> None:
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?) ON CONFLICT(ticker) DO NOTHING""",
             (ticker, name, kind, sector, f"A Faircroft roleplay {kind} operating in {sector.lower()}.", price, price, volatility, now_iso()),
         )
+    db.execute(
+        """INSERT INTO market_price_history (security_id,price,source,recorded_at)
+        SELECT s.id,s.price,'opening_snapshot',? FROM market_securities s
+        WHERE NOT EXISTS (SELECT 1 FROM market_price_history h WHERE h.security_id=s.id)""",
+        (now_iso(),),
+    )
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS dmv_driver_exam_attempts (
@@ -5251,6 +5270,7 @@ def market_volatility_cycle(db: Database, amplitude: float, source: str = "autop
         old_price = float(security.get("price") or 0)
         new_price = max(0.01, round(old_price * (1 + percent / 100.0), 4))
         db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?", (new_price, now_iso(), security["id"]))
+        db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], new_price, source[:40], now_iso()))
         changes.append(percent)
     average = sum(changes) / len(changes)
     db.execute(
@@ -5297,6 +5317,7 @@ def market_gemini_adjustment_cycle(db: Database) -> dict[str, Any]:
         old_price = float(security["price"] or 0)
         new_price = max(0.01, round(old_price * (1 + percent / 100.0), 4))
         db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?", (new_price, now_iso(), security["id"]))
+        db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], new_price, "gemini", now_iso()))
         applied.append({"ticker": ticker, "percent_change": round(percent, 2), "rationale": str(item.get("rationale") or "Market conditions")[:240]})
     detail = "; ".join(f"{item['ticker']} {item['percent_change']:+.2f}% — {item['rationale']}" for item in applied)
     db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('ai_adjustment','Gemini market adjustment',?,NULL,?)", (detail or "No eligible adjustments returned.", now_iso()))
@@ -11568,6 +11589,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 start_price = float(program.get("start_price") or security["price"])
                 new_price = max(0.01, start_price * (1 + float(program["percent_change"]) * progress / 100.0))
                 db.execute("UPDATE market_securities SET previous_price = price, price = ?, updated_at = ? WHERE id = ?", (round(new_price, 4), now_iso(), security["id"]))
+                last_history = one(db, "SELECT price,recorded_at FROM market_price_history WHERE security_id=? ORDER BY id DESC LIMIT 1", (security["id"],))
+                last_time = parse_iso(last_history["recorded_at"]) if last_history and last_history.get("recorded_at") else None
+                if not last_history or abs(float(last_history["price"])-new_price) >= 0.0001 or not last_time or (current-last_time).total_seconds() >= 300:
+                    db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], round(new_price, 4), "scheduled_program", current.isoformat()))
             if progress >= 1:
                 db.execute("UPDATE market_price_programs SET status = 'completed' WHERE id = ?", (program["id"],))
 
@@ -11581,6 +11606,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         cash_log: list[DbRow] = []
         transfers: list[DbRow] = []
         promo_redemptions: list[DbRow] = []
+        price_history: dict[str, list[dict[str, Any]]] = {str(row["ticker"]): [] for row in securities}
+        history_rows = all_rows(db, """SELECT h.security_id,h.price,h.source,h.recorded_at,s.ticker
+            FROM market_price_history h JOIN market_securities s ON s.id=h.security_id
+            WHERE s.active=1 ORDER BY h.id DESC LIMIT 8000""")
+        for row in reversed(history_rows):
+            ticker = str(row["ticker"])
+            bucket = price_history.setdefault(ticker, [])
+            if len(bucket) < 400:
+                bucket.append({"price": float(row["price"] or 0), "source": row["source"], "recorded_at": row["recorded_at"]})
         if account:
             holdings = all_rows(db, """SELECT h.*, s.ticker, s.name, s.price, s.previous_price, s.security_type
                 FROM market_holdings h JOIN market_securities s ON s.id = h.security_id
@@ -11601,6 +11635,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         return {"account": dict(account) if account else None, "securities": [dict(x) for x in securities], "holdings": [dict(x) for x in holdings],
                 "orders": [dict(x) for x in orders], "cash_transactions": [dict(x) for x in cash_log], "transfers": [dict(x) for x in transfers],
                 "promo_redemptions": [dict(x) for x in promo_redemptions],
+                "price_history": price_history,
                 "portfolio_value": round(portfolio_value, 2), "market_open": settings["market_open"],
                 "transfer_fee_percent": settings["market_transfer_fee_percent"], "trade_fee_percent": settings["market_trade_fee_percent"]}
 
@@ -18412,7 +18447,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             if item.get("security_id"):
                 security = one(db, "SELECT price FROM market_securities WHERE id=?", (item["security_id"],))
                 if security:
-                    db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?", (max(0.01, float(item["start_price"] or security["price"])), now_iso(), item["security_id"]))
+                    restored_price = max(0.01, float(item["start_price"] or security["price"]))
+                    restored_at = now_iso()
+                    db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?", (restored_price, restored_at, item["security_id"]))
+                    db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (item["security_id"], restored_price, "program_cancelled", restored_at))
                     restored += 1
             db.execute("UPDATE market_price_programs SET status='cancelled' WHERE id=?", (item["id"],))
         db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('program_cancelled',?,?,?,?)", (f"Stopped: {program['event_name']}", f"Restored {restored} security price(s) to their pre-movement baseline.", user["id"], now_iso()))
