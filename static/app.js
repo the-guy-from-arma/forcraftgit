@@ -4635,7 +4635,7 @@ function bindMarketWorkspace() {
   if (!app.dataset.marketActionsBound) {
     app.dataset.marketActionsBound = "true";
     app.addEventListener("click", async event => {
-      const control = event.target instanceof Element ? event.target.closest("[data-market-ticker],[data-market-range],[data-market-dialog],[data-market-overview],[data-close-market-dialog],[data-close-market],[data-refresh-market],[data-market-theme],[data-create-market-account],[data-change-market-recipient]") : null;
+      const control = event.target instanceof Element ? event.target.closest("[data-market-ticker],[data-market-range],[data-market-dialog],[data-market-overview],[data-market-portfolio],[data-close-market-dialog],[data-close-market],[data-refresh-market],[data-market-theme],[data-create-market-account],[data-change-market-recipient]") : null;
       if (!control || !app.contains(control)) return;
       event.preventDefault();
       event.stopPropagation();
