@@ -19601,4 +19601,27 @@ textarea:focus {
 @media(max-width:820px){.sportsbook-hero{display:block}.sportsbook-hero-orbit{width:130px;height:130px;margin:34px auto 0}.sportsbook-layout{grid-template-columns:1fr}.sportsbook-slip{position:relative;top:auto}.sportsbook-sports button:last-child{margin-left:0}.sportsbook-market-row{grid-template-columns:1fr}.sportsbook-history article{grid-template-columns:1fr 1fr}.sportsbook-history article>strong{display:none}}
 .sportsbook-trust-row{max-width:1400px;margin:0 auto 28px;padding:0 clamp(18px,4vw,58px);display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--sb-line);border:1px solid var(--sb-line);border-radius:14px;overflow:hidden}.sportsbook-trust-row article{display:flex;gap:13px;align-items:center;padding:16px 18px;background:rgba(8,20,35,.8)}.sportsbook-trust-row i{font:800 9px ui-monospace,monospace;color:var(--sb-cyan);font-style:normal}.sportsbook-trust-row strong,.sportsbook-trust-row span{display:block}.sportsbook-trust-row strong{font-size:10px;letter-spacing:.05em}.sportsbook-trust-row span{margin-top:4px;color:var(--sb-muted);font-size:9px}.sportsbook-header,.sportsbook-board,.sportsbook-slip,.sportsbook-history{box-shadow:0 18px 45px rgba(0,0,0,.18)}.sportsbook-event{background:rgba(10,24,41,.35)}.sportsbook-event:hover{background:rgba(15,34,57,.6)}.sportsbook-odds{transition:border-color .18s,background .18s,transform .18s}.sportsbook-odds:hover{transform:translateY(-1px)}.sportsbook-slip{background:linear-gradient(180deg,rgba(14,31,51,.96),rgba(7,17,31,.96))}.sportsbook-slip-total{background:rgba(97,232,244,.035)}.sportsbook-wallet-reference{display:block;margin-top:5px;color:var(--sb-muted);font-size:9px;font-weight:500}.sportsbook-place{letter-spacing:.02em}.sportsbook-history article{background:rgba(255,255,255,.012)}
 #app:has(>.fc-sportsbook){display:block;width:100%;max-width:none;min-height:100dvh;padding:0;overflow:auto}
+.fc-sportsbook{--sb-glow:rgba(97,232,244,.22)}
+.sportsbook-board{background:linear-gradient(180deg,rgba(8,20,37,.94),rgba(5,13,25,.88))}
+.sportsbook-category{border-bottom:1px solid rgba(123,193,255,.12)}
+.sportsbook-category>header{display:flex;align-items:center;justify-content:space-between;padding:18px 22px 12px;background:linear-gradient(90deg,rgba(97,232,244,.08),transparent 65%)}
+.sportsbook-category>header span{color:var(--sb-cyan);font:800 9px ui-monospace,monospace;letter-spacing:.16em}
+.sportsbook-category>header h3{margin:5px 0 0;font-size:18px;letter-spacing:-.02em}
+.sportsbook-category>header strong{color:var(--sb-muted);font-size:10px;letter-spacing:.1em}
+.sportsbook-category .sportsbook-event:last-child{border-bottom:0}
+.sportsbook-event{animation:sbslide .42s ease both}
+.sportsbook-event:nth-child(3n){animation-delay:.06s}.sportsbook-event:nth-child(4n){animation-delay:.1s}
+.sportsbook-event.is-live{box-shadow:inset 3px 0 0 #ff719a;background:linear-gradient(90deg,rgba(255,113,154,.08),transparent 55%)}
+.sportsbook-odds{box-shadow:0 6px 18px rgba(0,0,0,.12);transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease,background .2s ease}
+.sportsbook-odds:hover{transform:translateY(-3px);box-shadow:0 10px 26px var(--sb-glow)}
+.sportsbook-odds.selected{box-shadow:0 0 0 1px var(--sb-cyan),0 10px 28px var(--sb-glow);animation:sbpulse 1.2s ease-in-out infinite}
+.sportsbook-slip{box-shadow:0 20px 55px rgba(0,0,0,.32),0 0 0 1px rgba(97,232,244,.06);transition:transform .25s ease,box-shadow .25s ease}
+.sportsbook-slip:hover{transform:translateY(-2px);box-shadow:0 24px 62px rgba(0,0,0,.4),0 0 35px rgba(97,232,244,.08)}
+.sportsbook-slip-legs article{animation:sbslide .28s ease both}
+.sportsbook-slip-total strong{transition:color .2s ease,transform .2s ease}
+.sportsbook-slip:has(.sportsbook-slip-legs article) .sportsbook-slip-total strong{transform:scale(1.04)}
+.sportsbook-place{box-shadow:0 8px 24px rgba(239,88,189,.2);transition:transform .2s ease,box-shadow .2s ease,filter .2s ease}
+.sportsbook-place:not(:disabled):hover{transform:translateY(-2px);filter:brightness(1.08);box-shadow:0 12px 32px rgba(239,88,189,.34)}
+@keyframes sbslide{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes sbpulse{0%,100%{box-shadow:0 0 0 1px var(--sb-cyan),0 10px 28px var(--sb-glow)}50%{box-shadow:0 0 0 2px rgba(239,88,189,.65),0 12px 34px rgba(239,88,189,.18)}}
 @media(max-width:820px){.sportsbook-trust-row{grid-template-columns:1fr;margin-inline:18px}.sportsbook-trust-row article+article{border-top:1px solid var(--sb-line)}}
