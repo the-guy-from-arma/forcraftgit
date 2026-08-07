@@ -16725,7 +16725,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         payload = self.read_json()
         reason = str(payload.get("reason") or "").strip()
-        operation = str(payload.get("operation") or "issue_funds").strip().lower()
         confirmation = str(payload.get("confirmation") or "").strip().upper()
         expected = f"DELETE CIV {target.get('civ_number') or target_id}".upper()
         if len(reason) < 12:
@@ -16825,6 +16824,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             amount = 0.0
         reason = str(payload.get("reason") or "").strip()
+        operation = str(payload.get("operation") or "issue_funds").strip().lower()
         server_id = str(payload.get("server_id") or "default").strip()[:80] or "default"
         currency = str(payload.get("currency") or "cash").strip().lower()[:32] or "cash"
         idempotency_key = str(payload.get("idempotency_key") or secrets.token_urlsafe(24)).strip()[:160]
