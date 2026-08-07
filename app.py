@@ -132,13 +132,15 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 SPORTS_DATA_PROVIDER = os.environ.get("SPORTS_DATA_PROVIDER", "kalshi").strip().lower()
 SPORTS_DATA_API_KEY = os.environ.get("SPORTS_DATA_API_KEY", "").strip()
 SPORTS_DATA_BASE_URL = os.environ.get("SPORTS_DATA_BASE_URL", "https://api.the-odds-api.com/v4").strip().rstrip("/")
-KALSHI_MARKET_DATA_ENABLED = os.environ.get("KALSHI_MARKET_DATA_ENABLED", "0").lower() in ("1", "true", "yes", "on")
+KALSHI_MARKET_DATA_ENABLED = os.environ.get("KALSHI_MARKET_DATA_ENABLED", "1").lower() in ("1", "true", "yes", "on")
 KALSHI_BASE_URL = os.environ.get("KALSHI_BASE_URL", "https://external-api.kalshi.com/trade-api/v2").strip().rstrip("/")
 KALSHI_POLL_SECONDS = max(15, int(os.environ.get("KALSHI_POLL_SECONDS", "30")))
 KALSHI_SERIES_TICKERS = tuple(key.strip() for key in os.environ.get("KALSHI_SERIES_TICKERS", "").split(",") if key.strip())
-KALSHI_CATEGORIES = tuple(key.strip().lower() for key in os.environ.get("KALSHI_CATEGORIES", "politics,sports,technology,entertainment,video-games").split(",") if key.strip())
+KALSHI_CATEGORIES = tuple(key.strip().lower() for key in os.environ.get("KALSHI_CATEGORIES", "").split(",") if key.strip())
 SPORTSBOOK_PAYOUT_DELAY_SECONDS = max(3, int(os.environ.get("SPORTSBOOK_PAYOUT_DELAY_SECONDS", "5")))
 SPORTS_BETTING_ENABLED = os.environ.get("SPORTS_BETTING_ENABLED", "1" if KALSHI_MARKET_DATA_ENABLED else "0").lower() in ("1", "true", "yes", "on")
+if KALSHI_MARKET_DATA_ENABLED:
+    SPORTS_DATA_PROVIDER = "kalshi"
 SPORTS_DATA_SPORT_KEYS = tuple(
     key.strip() for key in os.environ.get(
         "SPORTS_DATA_SPORT_KEYS",
@@ -11983,8 +11985,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             series = str(market.get("series_ticker") or "").strip()
             if KALSHI_SERIES_TICKERS and series not in KALSHI_SERIES_TICKERS:
                 continue
-            yes_raw = market.get("yes_bid_dollars", market.get("yes_bid"))
-            no_raw = market.get("no_bid_dollars", market.get("no_bid"))
+            yes_raw = market.get("yes_bid_dollars") or market.get("yes_ask_dollars") or market.get("yes_bid") or market.get("yes_ask")
+            no_raw = market.get("no_bid_dollars") or market.get("no_ask_dollars") or market.get("no_bid") or market.get("no_ask")
             try:
                 yes_price = float(yes_raw or 0)
                 no_price = float(no_raw or 0)
