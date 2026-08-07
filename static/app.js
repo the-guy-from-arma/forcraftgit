@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
-const OS_VERSION = "0.2.2";
+const OS_VERSION = "0.3.0";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const SESSION_REFRESH_MS = 15000;
 const pendingMutations = new Map();
@@ -1262,7 +1262,7 @@ function renderUpdateLockdownHome(apps) {
     <section class="update-lockdown-screen faircroft-update-mode">
       <header><img src="/static/brand/faircroft-emblem.webp" alt="" /><div><span>FAIRCROFT RELEASE OPERATIONS</span><strong>Limited-service mode</strong></div><i></i></header>
       <article class="faircroft-update-brief">
-        <div class="faircroft-update-sequence"><span>RP OS</span><strong>0.2.2</strong></div>
+        <div class="faircroft-update-sequence"><span>RP OS</span><strong>0.3.0</strong></div>
         <div><p class="eyebrow">Platform maintenance</p><h2>${escapeHtml(title)}</h2><p>${escapeHtml(updateLockdownMessage())}</p></div>
         <div class="faircroft-update-progress"><span></span></div>
         <footer><span><i></i> Essential network online</span><strong>${escapeHtml(eta)}</strong></footer>
@@ -14345,7 +14345,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.2.2-account-deletion-search").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-commerce-play-systems").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {

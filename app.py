@@ -17147,7 +17147,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         request = urllib.request.Request(
             package_url,
             headers={
-                "User-Agent": "Faircroft-RP-Release-Delivery/0.2.2",
+                "User-Agent": "Faircroft-RP-Release-Delivery/0.3.0",
                 "Accept": "application/octet-stream,*/*",
             },
         )

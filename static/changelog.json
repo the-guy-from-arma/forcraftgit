@@ -1,6 +1,39 @@
 {
-  "version": "0.2.2",
+  "version": "0.3.0",
   "entries": [
+    {
+      "date": "2026-08-07",
+      "version": "0.3.0",
+      "title": "Faircroft Commerce and Play Systems",
+      "added": [
+        "Added Bank Bridge settlement for Lottery, Sportsbook, Ravenhood, and Insurance purchases using linked in-game bank balances.",
+        "Added configurable Lottery ticket prices for Weekly Pick 5, Quick Draw, and Instant Scratch purchases.",
+        "Added developer-configurable Scratch-off prize pools with randomized in-game cash rewards and audited payout commands.",
+        "Added a ten-card Scratch-off purchase cap per account with remaining allowance visibility and server-side enforcement.",
+        "Added Lottery Settings scratch activity logs showing resident, reward amount, status, and Bank Bridge settlement state.",
+        "Added Kalshi market synchronization for Faircroft Sportsbook prediction markets with readable category grouping and YES/NO pricing.",
+        "Added a redesigned Sportsbook betting center with clearer prediction questions, high-contrast odds tiles, parlay labeling, animated selections, and improved bet-slip hierarchy.",
+        "Added Insurance purchases through linked in-game funds without the legacy four-digit receipt PIN flow.",
+        "Added responsive mobile Lottery layouts that prevent desktop overflow, clipping, and unreadable number grids."
+      ],
+      "changed": [
+        "Lottery scratch rewards now settle through the authoritative in-game bank instead of the retired Railway wallet credit system.",
+        "Sportsbook presentation now treats Kalshi questions as prediction markets rather than displaying them as artificial team matchups.",
+        "Lottery mobile navigation, hero content, number selection, and purchase controls now adapt to phone-width screens.",
+        "Insurance purchase instructions now explain direct Bank Bridge debit authorization and no longer instruct residents to obtain a PIN."
+      ],
+      "fixed": [
+        "Fixed Scratch-off purchases bypassing the account-wide purchase limit across multiple days.",
+        "Fixed Lottery settings not exposing configurable Scratch-off reward amounts.",
+        "Fixed Sportsbook event lists being presented as one unreadable continuous feed.",
+        "Fixed mobile Lottery content overflowing horizontally and cutting off headings and controls.",
+        "Fixed Insurance purchase UI requiring a four-digit payment receipt even though the backend queues the in-game debit directly."
+      ],
+      "removed": [
+        "Removed the retired Lottery Wallet daily-credit purchase path from the active Lottery settings experience.",
+        "Removed the legacy four-digit payment receipt field from Insurance policy purchases."
+      ]
+    },
     {
       "date": "2026-07-31",
       "version": "0.2.2",
