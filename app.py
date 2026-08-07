@@ -2185,6 +2185,7 @@ SYSTEM_SETTING_DEFAULTS = {
     "lottery_payout_percent": "100.00",
     "lottery_scratch_enabled": "1",
     "lottery_scratch_daily_cards": "1",
+    "lottery_scratch_account_limit": "10",
     "lottery_scratch_prizes": "[25,50,75,100,150,250,500]",
     "lottery_quick_draw_enabled": "1",
     "lottery_quick_draw_interval_minutes": "30",
@@ -5221,6 +5222,7 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "lottery_payout_percent": max(1.0, min(100.0, float(raw.get("lottery_payout_percent") or 100))),
         "lottery_scratch_enabled": str(raw.get("lottery_scratch_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "lottery_scratch_daily_cards": max(1, min(5, int(raw.get("lottery_scratch_daily_cards") or 1))),
+        "lottery_scratch_account_limit": max(1, min(100, int(raw.get("lottery_scratch_account_limit") or 10))),
         "lottery_scratch_prizes": scratch_prizes,
         "lottery_quick_draw_enabled": str(raw.get("lottery_quick_draw_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "lottery_quick_draw_interval_minutes": max(5, min(1440, int(raw.get("lottery_quick_draw_interval_minutes") or 30))),
@@ -12547,6 +12549,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             LEFT JOIN market_promo_codes p ON p.id=c.promo_id
             LEFT JOIN market_securities s ON s.id=p.security_id
             WHERE c.user_id=? AND c.card_date=? ORDER BY c.card_number""", (user["id"], today))]
+        scratch_account_purchased = int(one(db, "SELECT COUNT(*) AS count FROM lottery_scratch_cards WHERE user_id=? AND status<>'rejected'", (user["id"],))["count"] or 0)
         quick_draw = ensure_quick_draw(db, settings)
         quick_entries = [dict(row) for row in all_rows(db, "SELECT * FROM lottery_quick_draw_entries WHERE draw_id=? AND user_id=? ORDER BY entry_number", (quick_draw["id"], user["id"]))]
         quick_latest = one(db, "SELECT d.*,u.name AS winner_name,u.civ_number AS winner_civ FROM lottery_quick_draws d LEFT JOIN users u ON u.id=d.winner_user_id WHERE d.status='completed' ORDER BY d.completed_at DESC LIMIT 1")
@@ -12587,7 +12590,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         active_ticket_count = sum(1 for item in purchased_tickets if item["result"] in {"active", "review"})
         winning_ticket_count = sum(1 for item in purchased_tickets if item["result"] == "winner")
         losing_ticket_count = sum(1 for item in purchased_tickets if item["result"] == "not_winner")
-        self.send_json(200, {"enabled": settings["lottery_enabled"], "draw": dict(draw), "funding": funding, "player_pool": lottery_player_pool_status(db, settings), "wallet": wallet, "wallet_transactions": wallet_transactions, "prices": {"weekly_ticket": settings["lottery_ticket_price"], "scratch": settings["lottery_scratch_price"], "quick_draw": settings["lottery_quick_draw_price"]}, "entries": [dict(row) for row in entries], "entries_today": today_count, "daily_limit": settings["lottery_daily_entries"], "remaining_today": 0, "role_weight": weight, "excluded": bool(excluded), "excluded_roles": excluded, "latest_result": dict(latest) if latest else None, "latest_special_prizes": latest_prizes, "timezone": settings["lottery_timezone"], "purchased_tickets": {"items": purchased_tickets, "active": active_ticket_count, "winners": winning_ticket_count, "not_winners": losing_ticket_count}, "scratch": {"enabled": settings["lottery_scratch_enabled"], "daily_limit": settings["lottery_scratch_daily_cards"], "cards": scratch_cards, "price": settings["lottery_scratch_price"]}, "quick_draw": {"enabled": settings["lottery_quick_draw_enabled"], "draw": dict(quick_draw), "daily_limit": settings["lottery_quick_draw_ticket_limit"], "entries": quick_entries, "price": settings["lottery_quick_draw_price"], "prize": settings["lottery_quick_draw_prize"], "latest_result": dict(quick_latest) if quick_latest else None}})
+        self.send_json(200, {"enabled": settings["lottery_enabled"], "draw": dict(draw), "funding": funding, "player_pool": lottery_player_pool_status(db, settings), "wallet": wallet, "wallet_transactions": wallet_transactions, "prices": {"weekly_ticket": settings["lottery_ticket_price"], "scratch": settings["lottery_scratch_price"], "quick_draw": settings["lottery_quick_draw_price"]}, "entries": [dict(row) for row in entries], "entries_today": today_count, "daily_limit": settings["lottery_daily_entries"], "remaining_today": 0, "role_weight": weight, "excluded": bool(excluded), "excluded_roles": excluded, "latest_result": dict(latest) if latest else None, "latest_special_prizes": latest_prizes, "timezone": settings["lottery_timezone"], "purchased_tickets": {"items": purchased_tickets, "active": active_ticket_count, "winners": winning_ticket_count, "not_winners": losing_ticket_count}, "scratch": {"enabled": settings["lottery_scratch_enabled"], "daily_limit": settings["lottery_scratch_daily_cards"], "account_limit": settings["lottery_scratch_account_limit"], "account_purchased": scratch_account_purchased, "account_remaining": max(0, settings["lottery_scratch_account_limit"] - scratch_account_purchased), "cards": scratch_cards, "price": settings["lottery_scratch_price"]}, "quick_draw": {"enabled": settings["lottery_quick_draw_enabled"], "draw": dict(quick_draw), "daily_limit": settings["lottery_quick_draw_ticket_limit"], "entries": quick_entries, "price": settings["lottery_quick_draw_price"], "prize": settings["lottery_quick_draw_prize"], "latest_result": dict(quick_latest) if quick_latest else None}})
 
     def api_lottery_entry(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -12634,6 +12637,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403, "This account is excluded from lottery participation by role policy."); return
         today = utcnow().astimezone(ZoneInfo(settings["lottery_timezone"])).date().isoformat()
         one(db, "SELECT id FROM users WHERE id=? FOR UPDATE", (user["id"],))
+        account_purchased = int(one(db, "SELECT COUNT(*) AS count FROM lottery_scratch_cards WHERE user_id=? AND status<>'rejected'", (user["id"],))["count"] or 0)
+        if account_purchased >= settings["lottery_scratch_account_limit"]:
+            self.error(409, f"Scratch-off account limit reached ({settings['lottery_scratch_account_limit']} cards). Existing cards must be resolved before another purchase."); return
         existing = all_rows(db, "SELECT * FROM lottery_scratch_cards WHERE user_id=? AND card_date=? ORDER BY card_number", (user["id"], today))
         if len(existing) >= settings["lottery_scratch_daily_cards"]:
             self.error(409, "All daily scratch cards have already been revealed."); return
