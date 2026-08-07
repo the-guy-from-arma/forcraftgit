@@ -2185,6 +2185,7 @@ SYSTEM_SETTING_DEFAULTS = {
     "lottery_payout_percent": "100.00",
     "lottery_scratch_enabled": "1",
     "lottery_scratch_daily_cards": "1",
+    "lottery_scratch_prizes": "[25,50,75,100,150,250,500]",
     "lottery_quick_draw_enabled": "1",
     "lottery_quick_draw_interval_minutes": "30",
     "lottery_quick_draw_entries": "1",
@@ -5151,6 +5152,13 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         try: premium = max(0.01, min(1000000000.0, float((item or {}).get("premium", fallback[1]))))
         except (TypeError, ValueError): premium = float(fallback[1])
         insurance_tiers[tier_name] = {"coverage_percent": coverage_percent, "premium": round(premium, 2)}
+    try:
+        scratch_prizes_raw = json.loads(str(raw.get("lottery_scratch_prizes") or SYSTEM_SETTING_DEFAULTS["lottery_scratch_prizes"]))
+        scratch_prizes = sorted({round(max(1.0, min(1000000000.0, float(value))), 2) for value in scratch_prizes_raw})
+    except (TypeError, ValueError, json.JSONDecodeError):
+        scratch_prizes = []
+    if not scratch_prizes:
+        scratch_prizes = [25.0, 50.0, 75.0, 100.0, 150.0, 250.0, 500.0]
     return {
         "autopilot_verify_enabled": str(raw.get("autopilot_verify_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "autopilot_verify_minutes": minutes,
@@ -5213,6 +5221,7 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "lottery_payout_percent": max(1.0, min(100.0, float(raw.get("lottery_payout_percent") or 100))),
         "lottery_scratch_enabled": str(raw.get("lottery_scratch_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "lottery_scratch_daily_cards": max(1, min(5, int(raw.get("lottery_scratch_daily_cards") or 1))),
+        "lottery_scratch_prizes": scratch_prizes,
         "lottery_quick_draw_enabled": str(raw.get("lottery_quick_draw_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "lottery_quick_draw_interval_minutes": max(5, min(1440, int(raw.get("lottery_quick_draw_interval_minutes") or 30))),
         "lottery_quick_draw_entries": max(1, min(5, int(raw.get("lottery_quick_draw_entries") or 1))),
@@ -12556,7 +12565,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 is_complete = str(item.get("draw_status") or "scheduled") == "completed"
                 is_winner = is_complete and int(item.get("winning_entry_id") or 0) == int(item["id"])
                 needs_review = game_name == "weekly" and bool(item.get("fraud_flag"))
-                result = "review" if needs_review and not is_complete else ("winner" if is_winner else ("not_winner" if is_complete else "active"))
+                ticket_status = str(item.get("status") or "eligible").lower()
+                result = "voided" if ticket_status == "voided" else ("rejected" if ticket_status == "rejected" else ("review" if needs_review and not is_complete else ("winner" if is_winner else ("not_winner" if is_complete else "active"))))
                 purchased_tickets.append({
                     "id": int(item["id"]),
                     "game": game_name,
@@ -12632,7 +12642,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self.error(409, str(exc)); return
         reward_type = "cash"
-        cash_amount = float(secrets.choice((25, 50, 75, 100, 150, 250, 500)))
+        cash_amount = float(secrets.choice(get_system_settings(db)["lottery_scratch_prizes"]))
         security = None
         share_quantity = 0
         reward_summary = f"${cash_amount:,.2f} in-game bank payout"
@@ -18431,6 +18441,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "excluded_roles": system_settings["lottery_excluded_roles"],
                     "scratch_enabled": system_settings["lottery_scratch_enabled"],
                     "scratch_daily_cards": system_settings["lottery_scratch_daily_cards"],
+                    "scratch_prizes": system_settings["lottery_scratch_prizes"],
                     "quick_draw_enabled": system_settings["lottery_quick_draw_enabled"],
                     "quick_draw_interval_minutes": system_settings["lottery_quick_draw_interval_minutes"],
                     "quick_draw_entries": system_settings["lottery_quick_draw_entries"],
@@ -18441,6 +18452,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "entries": [dict(row) for row in all_rows(db, """SELECT e.*,u.name,u.civ_number,u.roles FROM lottery_entries e JOIN users u ON u.id=e.user_id ORDER BY e.created_at DESC LIMIT 250""")],
                     "fund_adjustments": [dict(row) for row in all_rows(db, """SELECT a.*,u.name AS created_by_name FROM lottery_fund_adjustments a JOIN users u ON u.id=a.created_by ORDER BY a.created_at DESC LIMIT 100""")],
                     "special_prizes": [dict(row) for row in all_rows(db, """SELECT p.*,u.name AS created_by_name,w.name AS winner_name FROM lottery_special_prizes p JOIN users u ON u.id=p.created_by LEFT JOIN users w ON w.id=p.winner_user_id ORDER BY CASE p.status WHEN 'active' THEN 0 WHEN 'disabled' THEN 1 ELSE 2 END,p.created_at DESC""")],
+                    "scratch_cards": [dict(row) for row in all_rows(db, """SELECT c.*,u.name AS player_name,u.civ_number FROM lottery_scratch_cards c JOIN users u ON u.id=c.user_id ORDER BY c.created_at DESC LIMIT 250""")],
                 },
                 "sportsbook_settings": {
                     "enabled": SPORTS_BETTING_ENABLED,
@@ -19251,6 +19263,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             quick_draw_ticket_limit = max(1, min(100, int(payload.get("quick_draw_ticket_limit") or 25)))
             payout_percent = max(1.0, min(100.0, float(payload.get("payout_percent") or 100)))
             scratch_daily_cards = max(1, min(5, int(payload.get("scratch_daily_cards") or 1)))
+            scratch_prizes = sorted({round(max(1.0, min(1000000000.0, float(value.strip()))), 2) for value in str(payload.get("scratch_prizes") or "25,50,75,100,150,250,500").split(",") if value.strip()})
+            if not scratch_prizes: raise ValueError
             quick_draw_interval_minutes = max(5, min(1440, int(payload.get("quick_draw_interval_minutes") or 30)))
             draw_weekday = max(0, min(6, int(payload.get("draw_weekday") or 1)))
             ZoneInfo(str(payload.get("timezone") or "America/New_York"))
@@ -19275,6 +19289,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "lottery_excluded_roles": json.dumps(excluded_roles),
             "lottery_scratch_enabled": "1" if payload.get("scratch_enabled") else "0",
             "lottery_scratch_daily_cards": str(scratch_daily_cards),
+            "lottery_scratch_prizes": json.dumps(scratch_prizes, separators=(",", ":")),
             "lottery_quick_draw_enabled": "1" if payload.get("quick_draw_enabled") else "0",
             "lottery_quick_draw_interval_minutes": str(quick_draw_interval_minutes),
         }.items(): set_system_setting(db, key, value)
