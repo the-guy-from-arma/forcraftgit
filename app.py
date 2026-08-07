@@ -9073,9 +9073,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         payload = self.read_json()
         action = str(payload.get("action") or "").strip().lower()
-        status_map = {"review": "under_review", "interview": "interview_requested", "approve": "approved", "deny": "denied"}
+        status_map = {"review": "under_review", "interview": "interview_requested", "approve": "approved", "deny": "denied", "revoke": "revoked"}
         if action not in status_map:
-            self.error(400, "Choose review, interview, approve, or deny")
+            self.error(400, "Choose review, interview, approve, deny, or revoke")
             return
         try:
             exam = json.loads(application.get("statement") or "{}")
@@ -9113,21 +9113,32 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "UPDATE users SET verified = 1, roles = ?, primary_agency = ? WHERE id = ?",
                     (json.dumps(updated_roles), "Faircroft Immigration & Customs Enforcement", application["user_id"]),
                 )
+        elif action == "revoke":
+            applicant = one(db, "SELECT * FROM users WHERE id = ?", (application["user_id"],))
+            if applicant:
+                updated_roles = sorted(role for role in roles_for(applicant) if role != "ice_agent")
+                agency = applicant.get("primary_agency") or ""
+                if agency == "Faircroft Immigration & Customs Enforcement" and "ice_commander" not in updated_roles:
+                    agency = ""
+                db.execute("UPDATE users SET roles = ?, primary_agency = ? WHERE id = ?", (json.dumps(updated_roles), agency, application["user_id"]))
         subject_map = {
             "review": "ICE application under command review",
             "interview": "ICE interview and training invitation",
             "approve": "ICE Agent appointment approved",
             "deny": "ICE application decision",
+            "revoke": "ICE Agent appointment revoked",
         }
         body_map = {
             "review": "ICE Command has opened your application for review.",
             "interview": "Your perfect qualification result has advanced to the ICE interview and training process.",
             "approve": "ICE Command approved your appointment. The ICE Agent role and ICE MDT access are now active.",
             "deny": "ICE Command did not advance your application.",
+            "revoke": "ICE Command revoked your ICE Agent appointment. ICE MDT access has been removed from your account.",
         }
         body = body_map[action] + (f"\n\nCommander notes: {notes}" if notes else "")
         add_message(db, application["user_id"], subject_map[action], body, user["id"])
-        self.send_json(200, {"ok": True, "status": status, "role_granted": action == "approve"})
+        add_admin_audit(db, int(user["id"]), f"ice.application.{action}", int(application["user_id"]), {"application_id": application_id, "status": status, "notes": notes})
+        self.send_json(200, {"ok": True, "status": status, "role_granted": action == "approve", "role_revoked": action == "revoke"})
 
     def api_stats(self, db: Database, user: DbRow | None) -> None:
         """Return public, statewide aggregates without exposing resident-level records."""
@@ -11385,14 +11396,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             add_admin_audit(db, int(lottery_ticket["user_id"]), "lottery.ticket.command.result", int(row["target_user_id"]), {"command_id": command_id, "status": status, "ticket_id": lottery_ticket["id"], "result": result})
         if lottery_payout:
             add_admin_audit(db, int(lottery_payout["user_id"]), "lottery.payout.command.result", int(row["target_user_id"]), {"command_id": command_id, "status": status, "ticket_id": lottery_payout["id"], "result": result})
-        scratch = one(db, "SELECT id, user_id, cash_amount FROM lottery_scratch_cards WHERE bank_command_id=?", (command_id,))
+        scratch = one(db, "SELECT id, user_id, cash_amount, promo_id FROM lottery_scratch_cards WHERE bank_command_id=?", (command_id,))
         if scratch:
             if status == "completed":
-                payout_command = queue_lottery_bank_payout(db, int(scratch["user_id"]), float(scratch["cash_amount"] or 0), f"Lottery scratch payout FCS-{int(scratch['id']):07d}")
+                payout_command = None
+                if float(scratch["cash_amount"] or 0) > 0:
+                    payout_command = queue_lottery_bank_payout(db, int(scratch["user_id"]), float(scratch["cash_amount"]), f"Lottery scratch payout FCS-{int(scratch['id']):07d}")
                 db.execute("UPDATE lottery_scratch_cards SET status='revealed', revealed_at=?, payout_command_id=? WHERE id=?", (now_iso(), payout_command, scratch["id"]))
-                add_admin_audit(db, int(scratch["user_id"]), "lottery.scratch.payout.queued", int(row["target_user_id"]), {"command_id": payout_command, "ticket_id": scratch["id"], "amount": float(scratch["cash_amount"] or 0)})
+                add_admin_audit(db, int(scratch["user_id"]), "lottery.scratch.payout.queued" if payout_command else "lottery.scratch.stock.code.released", int(row["target_user_id"]), {"command_id": payout_command or command_id, "ticket_id": scratch["id"], "amount": float(scratch["cash_amount"] or 0), "promo_id": scratch["promo_id"]})
             elif status == "failed":
                 db.execute("UPDATE lottery_scratch_cards SET status='rejected' WHERE id=?", (scratch["id"],))
+                if scratch["promo_id"]:
+                    db.execute("UPDATE market_promo_codes SET active=0 WHERE id=?", (scratch["promo_id"],))
                 add_admin_audit(db, int(scratch["user_id"]), "lottery.scratch.ticket.failed", int(row["target_user_id"]), {"command_id": command_id, "ticket_id": scratch["id"], "result": result})
         insurance_policy = one(db, "SELECT id, user_id FROM insurance_policies WHERE bank_command_id=?", (command_id,))
         insurance_claim = one(db, "SELECT id, user_id, claim_number FROM insurance_claims WHERE payout_command_id=?", (command_id,))
@@ -12650,23 +12665,39 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         reward_type = "cash"
         cash_amount = float(secrets.choice(get_system_settings(db)["lottery_scratch_prizes"]))
         security = None
-        share_quantity = 0
-        reward_summary = f"${cash_amount:,.2f} in-game bank payout"
-        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-        while True:
-            raw_code = "FCX-SCR-" + "".join(secrets.choice(alphabet) for _ in range(4)) + "-" + "".join(secrets.choice(alphabet) for _ in range(4))
-            code_hash = hashlib.sha256(raw_code.replace("-", "").encode("utf-8")).hexdigest()
-            if not one(db, "SELECT id FROM market_promo_codes WHERE code_hash=?", (code_hash,)):
-                break
+        share_quantity = 0.0
+        promo_id = None
+        promo_code = None
+        # A portion of scratch cards are stock rewards. They receive a real,
+        # single-use Ravenhood promotion code tied to an active security.
+        securities = all_rows(db, "SELECT id,ticker FROM market_securities WHERE active=1 ORDER BY ticker")
+        if securities and secrets.randbelow(100) < 25:
+            reward_type = "stock"
+            cash_amount = 0.0
+            security = secrets.choice(securities)
+            share_quantity = float(secrets.choice((1, 2, 5)))
+            reward_summary = f"{share_quantity:g} {security['ticker']} stock share{'s' if share_quantity != 1 else ''}"
+            alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+            for _ in range(30):
+                promo_code = "FCX-SCR-" + "".join(secrets.choice(alphabet) for _ in range(4)) + "-" + "".join(secrets.choice(alphabet) for _ in range(4))
+                code_hash = hashlib.sha256(promo_code.replace("-", "").encode("utf-8")).hexdigest()
+                if not one(db, "SELECT id FROM market_promo_codes WHERE code_hash=?", (code_hash,)):
+                    break
+            expires = utcnow() + dt.timedelta(days=30)
+            promo_id = db.execute("""INSERT INTO market_promo_codes
+                (campaign_name,code_hash,code_hint,code_plain,reward_type,cash_amount,security_id,share_quantity,bundle_size,max_redemptions,expires_at,created_by,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id""", ("Faircroft Instant Scratch Stock", code_hash, promo_code[-4:], promo_code, "stock", 0, security["id"], share_quantity, 0, 1, expires.isoformat(), user["id"], utcnow().isoformat())).fetchone()["id"]
+        else:
+            reward_summary = f"${cash_amount:,.2f} in-game bank payout"
         created = utcnow()
         expires = created + dt.timedelta(days=30)
         number = len(existing) + 1
         db.execute("""INSERT INTO lottery_scratch_cards
             (user_id,card_date,card_number,status,outcome,bonus_entries,promo_id,reward_summary,purchase_cost,bank_command_id,cash_amount,revealed_at,created_at)
-            VALUES (?,?,?,'awaiting_debit',?,0,NULL,?,?,?, ?,NULL,?)""", (user["id"], today, number, reward_type, reward_summary, settings["lottery_scratch_price"], command_id, cash_amount, created.isoformat()))
+            VALUES (?,?,?,'awaiting_debit',?,0,?,?,?, ?,NULL,?)""", (user["id"], today, number, reward_type, promo_id, reward_summary, settings["lottery_scratch_price"], command_id, cash_amount, created.isoformat()))
         add_message(db, user["id"], "Faircroft Instant Scratch", f"Your scratch card revealed {reward_summary}. The prize will be deposited to your linked Arma bank after the ticket debit confirms.")
         add_admin_audit(db, int(user["id"]), "lottery.scratch.ticket.queued", int(user["id"]), {"command_id": command_id, "reward": reward_summary})
-        self.send_json(201, {"ok": True, "outcome": reward_type, "bonus_entries": 0, "card_number": number, "promo_id": None, "promo_code": None, "reward_type": reward_type, "reward_summary": reward_summary, "status": "awaiting_debit", "command_id": command_id, "wallet": lottery_game_snapshot(db, int(user["id"]))})
+        self.send_json(201, {"ok": True, "outcome": reward_type, "bonus_entries": 0, "card_number": number, "promo_id": promo_id, "promo_code": promo_code, "reward_type": reward_type, "reward_summary": reward_summary, "status": "awaiting_debit", "command_id": command_id, "wallet": lottery_game_snapshot(db, int(user["id"]))})
 
     def api_lottery_quick_draw_entry(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
