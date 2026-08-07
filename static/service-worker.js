@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v022-ravenhood-desk-restore";
+const CACHE = "faircroft-rp-v022-ravenhood-v13";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.2.2-ravenhood-desk-restore",
+  "/static/styles.css?v=0.2.2-ravenhood-v13",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.2.2-ravenhood-desk-restore",
+  "/static/app.js?v=0.2.2-ravenhood-v13",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
   "/static/brand/platforms/playstation.svg",

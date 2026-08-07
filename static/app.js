@@ -4417,7 +4417,7 @@ function renderMarketWorkspaceV11() {
   </main>`;
 }
 
-function renderMarketWorkspace() {
+function renderMarketWorkspaceV12() {
   // The V12 SVG stage can render blank after some Chromium/PWA restores.
   // Use the proven interactive exchange desk while that composition is rebuilt.
   return renderMarketWorkspaceV11();
@@ -4526,6 +4526,90 @@ function renderMarketWorkspace() {
       <aside class="market-v12-order"><header><small>ORDER TICKET</small><h2>${escapeHtml(selected.ticker || "—")}</h2><p>${escapeHtml(selected.name || "")}</p><i class="${data.market_open ? "open" : ""}"></i></header><form data-market-order><input type="hidden" name="ticker" value="${escapeHtml(selected.ticker || "")}"/><label>Action<select name="side"><option value="buy">Buy shares</option><option value="sell">Sell shares</option></select></label><label>Quantity<input name="quantity" type="number" min="0.000001" step="0.000001" placeholder="0.000000" required/></label><dl><div><dt>Market price</dt><dd>${money(currentPrice)}</dd></div><div><dt>Commission</dt><dd>${Number(data.trade_fee_percent || 0).toFixed(2)}%</dd></div><div><dt>Buying power</dt><dd>${money(cash)}</dd></div><div><dt>Position value</dt><dd>${money(heldValue)}</dd></div></dl><button class="market-primary" ${data.market_open ? "" : "disabled"}>Review order</button><small>Price and fee are confirmed before execution.</small></form><section><small>POSITION OUTLOOK</small><strong class="${projectedPrice >= currentPrice ? "up" : "down"}">${projectedPrice >= currentPrice ? "+" : ""}${((projectedPrice / Math.max(.01, currentPrice) - 1) * 100).toFixed(2)}%</strong><p>Statistical direction from verified quotes. This is an estimate, not a recorded trade.</p></section></aside>
     </section>${renderMarketDialog(data, stockOptions)}
   </main>`.replace("<linearGradient id=\"marketV12Band\"", "</linearGradient><linearGradient id=\"marketV12Band\"");
+}
+
+function renderMarketWorkspace() {
+  const data = state.cache.wallstreet;
+  if (!data) return `<main class="market-workspace market-v13"><div class="market-v13-loading"><i></i><strong>Opening Ravenhood</strong><span>Connecting to the Faircroft Exchange</span></div></main>`;
+  if (!data.account) return renderMarketWorkspaceLegacy();
+
+  const account = data.account;
+  const securities = data.securities || [];
+  const holdings = data.holdings || [];
+  const selected = securities.find(item => item.ticker === state.marketTicker) || securities[0] || {};
+  state.marketTicker = selected.ticker || "";
+  const range = ["1D", "1W", "1M", "1Y"].includes(state.marketRange) ? state.marketRange : "1D";
+  state.marketRange = range;
+  const now = Date.now();
+  const rangeMs = {"1D": 864e5, "1W": 6048e5, "1M": 2592e6, "1Y": 31536e6}[range];
+  const currentPrice = Number(selected.price || 0);
+  const previousPrice = Number(selected.previous_price || currentPrice);
+  const rawHistory = (data.price_history?.[selected.ticker] || [])
+    .map(row => ({price: Number(row.price || 0), time: Date.parse(row.recorded_at || "")}))
+    .filter(row => row.price > 0 && Number.isFinite(row.time))
+    .sort((a, b) => a.time - b.time);
+  let history = rawHistory.filter(row => row.time >= now - rangeMs);
+  if (history.length < 2) history = rawHistory.slice(-Math.max(2, {"1D": 32, "1W": 72, "1M": 144, "1Y": 360}[range]));
+  if (!history.length) history = [{price: previousPrice, time: now - rangeMs}, {price: currentPrice, time: now}];
+  if (history.length === 1) history.unshift({price: previousPrice, time: history[0].time - 3600000});
+  if (Math.abs(history.at(-1).price - currentPrice) > .00001) history.push({price: currentPrice, time: now});
+
+  const prices = history.map(row => row.price);
+  const open = prices[0] || currentPrice;
+  const high = Math.max(...prices, currentPrice);
+  const low = Math.min(...prices, currentPrice);
+  const change = open ? (currentPrice / open - 1) * 100 : 0;
+  const returns = prices.slice(1).map((price, index) => prices[index] ? price / prices[index] - 1 : 0);
+  const drift = returns.length ? returns.reduce((sum, value) => sum + value, 0) / returns.length : change / 100;
+  const variance = returns.length ? returns.reduce((sum, value) => sum + Math.pow(value - drift, 2), 0) / returns.length : 0;
+  const volatility = Math.max(.004, Math.sqrt(variance));
+  const forecast = Array.from({length: 8}, (_, index) => {
+    const progress = (index + 1) / 8;
+    return currentPrice * (1 + Math.max(-.09, Math.min(.09, drift * 5)) * progress + Math.sin(index * 1.17) * volatility * .55);
+  });
+  const chartValues = prices.concat(forecast);
+  const chartMin = Math.max(.01, Math.min(...chartValues) * .985);
+  const chartMax = Math.max(...chartValues) * 1.015;
+  const chartSpan = Math.max(.01, chartMax - chartMin);
+  const yFor = value => 286 - ((value - chartMin) / chartSpan) * 238;
+  const actualEndX = 925;
+  const actualPoints = history.map((row, index) => `${(28 + index / Math.max(1, history.length - 1) * (actualEndX - 28)).toFixed(1)},${yFor(row.price).toFixed(1)}`).join(" ");
+  const forecastPoints = [`${actualEndX},${yFor(currentPrice).toFixed(1)}`, ...forecast.map((value, index) => `${(actualEndX + (index + 1) * 51).toFixed(1)},${yFor(value).toFixed(1)}`)].join(" ");
+  const chartId = `rh-${String(selected.ticker || "market").replace(/[^a-z0-9]/gi, "")}`;
+
+  const invested = Number(data.portfolio_value || 0);
+  const cash = Number(account.cash_balance || 0);
+  const net = invested + cash;
+  const cost = holdings.reduce((sum, row) => sum + Number(row.quantity || 0) * Number(row.average_cost || 0), 0);
+  const profit = invested - cost;
+  const selectedHolding = holdings.find(row => row.ticker === selected.ticker);
+  const owned = Number(selectedHolding?.quantity || 0);
+  const movers = [...securities].sort((a, b) => Math.abs(marketChange(b)) - Math.abs(marketChange(a)));
+  const gainers = [...securities].sort((a, b) => marketChange(b) - marketChange(a)).slice(0, 4);
+  const stockOptions = securities.map(item => `<option value="${escapeHtml(item.ticker)}">${escapeHtml(item.ticker)} - ${escapeHtml(item.name)}</option>`).join("");
+  const holdingRows = holdings.length ? holdings.map((row, index) => {
+    const quantity = Number(row.quantity || 0);
+    const value = quantity * Number(row.price || 0);
+    const result = value - quantity * Number(row.average_cost || 0);
+    return `<button type="button" class="${row.ticker === selected.ticker ? "active" : ""}" data-market-ticker="${escapeHtml(row.ticker)}"><i>${String(index + 1).padStart(2, "0")}</i><span><b>${escapeHtml(row.ticker)}</b><small>${escapeHtml(row.name)}</small></span><em>${quantity.toLocaleString(undefined, {maximumFractionDigits: 4})} shares</em><strong>${money(value)}<small class="${result >= 0 ? "up" : "down"}">${result >= 0 ? "+" : ""}${money(result)}</small></strong></button>`;
+  }).join("") : `<div class="market-v13-empty"><strong>Your portfolio is ready</strong><span>Choose a company from the live market board to open your first position.</span></div>`;
+
+  return `<main class="market-workspace market-v13 market-v13-${state.marketTheme === "light" ? "light" : "dark"}">
+    <header class="market-v13-top"><button type="button" class="market-v13-brand" data-market-overview><span>RH</span><div><b>Ravenhood</b><small>Faircroft Exchange / FCX</small></div></button><nav><button type="button" data-market-overview>Trade</button><button type="button" data-market-portfolio>Portfolio</button><button type="button" data-market-dialog="deposit">Deposit</button><button type="button" data-market-dialog="withdrawal">Withdraw</button><button type="button" data-market-dialog="transfer">Transfer</button><button type="button" data-market-dialog="promo">Rewards</button></nav><div><span class="market-v13-status ${data.market_open ? "open" : "closed"}"><i></i>${data.market_open ? "Market open" : "Market closed"}</span><button type="button" data-market-theme>${state.marketTheme === "light" ? "Dark" : "Light"}</button><button type="button" data-refresh-market>Sync</button><button type="button" data-close-market>Exit</button></div></header>
+    <div class="market-v13-tape"><div>${securities.concat(securities).map(item => `<button type="button" data-market-ticker="${escapeHtml(item.ticker)}"><b>${escapeHtml(item.ticker)}</b><span>${money(item.price)}</span><i class="${marketChange(item) >= 0 ? "up" : "down"}">${marketChange(item) >= 0 ? "+" : ""}${marketChange(item).toFixed(2)}%</i></button>`).join("")}</div></div>
+    <section class="market-v13-account"><div><small>ACCOUNT EQUITY</small><strong>${money(net)}</strong><span class="${profit >= 0 ? "up" : "down"}">${profit >= 0 ? "+" : ""}${money(profit)} all-time</span></div><dl><div><dt>Invested</dt><dd>${money(invested)}</dd></div><div><dt>Buying power</dt><dd>${money(cash)}</dd></div><div><dt>Positions</dt><dd>${holdings.length}</dd></div><div><dt>Live listings</dt><dd>${securities.length}</dd></div></dl><nav><button type="button" data-market-dialog="deposit">Add funds</button><button type="button" data-market-dialog="promo">Redeem code</button></nav></section>
+    <section class="market-v13-grid">
+      <aside class="market-v13-discovery"><header><small>MARKET PULSE</small><h2>Hot right now</h2></header>${movers.slice(0, 7).map((item, index) => `<button type="button" class="${item.ticker === selected.ticker ? "active" : ""}" data-market-ticker="${escapeHtml(item.ticker)}"><i>${String(index + 1).padStart(2, "0")}</i><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}</small></span><strong>${money(item.price)}<em class="${marketChange(item) >= 0 ? "up" : "down"}">${marketChange(item) >= 0 ? "+" : ""}${marketChange(item).toFixed(2)}%</em></strong></button>`).join("")}</aside>
+      <section class="market-v13-stage">
+        <header class="market-v13-instrument"><div><small>${escapeHtml(selected.sector || "FAIRCROFT MARKET")} / ${escapeHtml(humanLabel(selected.security_type || "stock"))}</small><h1>${escapeHtml(selected.ticker || "--")}<span>${escapeHtml(selected.name || "Select a listing")}</span></h1><p>${escapeHtml(selected.description || `${selected.name || selected.ticker} is actively traded through Ravenhood.`)}</p></div><aside><small>LIVE QUOTE</small><strong>${money(currentPrice)}</strong><span class="${change >= 0 ? "up" : "down"}">${change >= 0 ? "+" : ""}${change.toFixed(2)}% / ${range}</span></aside></header>
+        <section class="market-v13-chart"><header><div><small>VERIFIED PERFORMANCE + MOMENTUM PATH</small><h2>${escapeHtml(selected.ticker || "Market")} live price desk</h2><span data-market-live-clock>Live synchronization armed</span></div><nav>${["1D", "1W", "1M", "1Y"].map(item => `<button type="button" class="${range === item ? "active" : ""}" data-market-range="${item}">${item}</button>`).join("")}</nav></header><div class="market-v13-canvas ${change >= 0 ? "positive" : "negative"}"><div class="market-v13-gridlines"></div><svg viewBox="0 0 1360 320" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(selected.ticker || "Market")} price history and projected momentum"><defs><linearGradient id="${chartId}-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".34"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs><polygon class="area" points="28,304 ${actualPoints} ${actualEndX},304" fill="url(#${chartId}-area)"/><polyline class="actual" points="${actualPoints}"/><polyline class="forecast" points="${forecastPoints}"/><line class="divider" x1="${actualEndX}" y1="24" x2="${actualEndX}" y2="304"/><circle class="pulse" cx="${actualEndX}" cy="${yFor(currentPrice).toFixed(1)}" r="7"/></svg><div class="market-v13-chart-labels"><span>${range === "1D" ? "Open" : "Period start"}</span><span>Recorded market</span><span>Now</span><span>Momentum path</span></div></div><footer><span><small>OPEN</small><b>${money(open)}</b></span><span><small>${range} LOW</small><b>${money(low)}</b></span><span><small>${range} HIGH</small><b>${money(high)}</b></span><span><small>YOUR POSITION</small><b>${owned ? `${owned.toLocaleString(undefined, {maximumFractionDigits: 4})} shares` : "Not held"}</b></span></footer></section>
+        <section class="market-v13-opportunities"><header><div><small>RAVENHOOD SIGNALS</small><h2>Today's momentum leaders</h2></div><span>Live repricing</span></header><div>${gainers.map(item => `<button type="button" data-market-ticker="${escapeHtml(item.ticker)}"><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}</small></span><strong>${money(item.price)}<em class="${marketChange(item) >= 0 ? "up" : "down"}">${marketChange(item) >= 0 ? "+" : ""}${marketChange(item).toFixed(2)}%</em></strong></button>`).join("")}</div></section>
+        <section class="market-v13-portfolio" id="marketPortfolioDesk"><header><div><small>YOUR RAVENHOOD ACCOUNT</small><h2>Portfolio command</h2><p>Every position, current value, and unrealized result in one view.</p></div><strong class="${profit >= 0 ? "up" : "down"}">${profit >= 0 ? "+" : ""}${money(profit)}</strong></header><div>${holdingRows}</div></section>
+        <section class="market-v13-board"><header><div><small>FCX LIVE BOARD</small><h2>Explore the exchange</h2></div><span>${securities.length} active listings</span></header><div>${securities.map(item => `<button type="button" class="${item.ticker === selected.ticker ? "active" : ""}" data-market-ticker="${escapeHtml(item.ticker)}"><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}</small></span><em>${escapeHtml(item.sector || "Market")}</em><strong>${money(item.price)}<small class="${marketChange(item) >= 0 ? "up" : "down"}">${marketChange(item) >= 0 ? "+" : ""}${marketChange(item).toFixed(2)}%</small></strong></button>`).join("")}</div></section>
+      </section>
+      <aside class="market-v13-ticket"><header><small>ORDER ENTRY</small><h2>${escapeHtml(selected.ticker || "--")}</h2><p>${escapeHtml(selected.name || "")}</p><i class="${data.market_open ? "open" : ""}"></i></header><form data-market-order><input type="hidden" name="ticker" value="${escapeHtml(selected.ticker || "")}"/><label>Action<select name="side"><option value="buy">Buy shares</option><option value="sell">Sell shares</option></select></label><label>Quantity<input name="quantity" type="number" min="0.000001" step="0.000001" placeholder="0.000000" required/></label><dl><div><dt>Market price</dt><dd>${money(currentPrice)}</dd></div><div><dt>Buying power</dt><dd>${money(cash)}</dd></div><div><dt>Shares owned</dt><dd>${owned.toLocaleString(undefined, {maximumFractionDigits: 4})}</dd></div><div><dt>Commission</dt><dd>${Number(data.trade_fee_percent || 0).toFixed(2)}%</dd></div></dl><button class="market-primary" ${data.market_open ? "" : "disabled"}>Review order</button><small>Price, quantity, and commission are confirmed before execution.</small></form><section><small>MARKET DIRECTION</small><b class="${forecast.at(-1) >= currentPrice ? "up" : "down"}">${forecast.at(-1) >= currentPrice ? "Positive" : "Defensive"}</b><p>Calculated from verified quote history for the selected range.</p></section></aside>
+    </section>${renderMarketDialog(data, stockOptions)}
+  </main>`;
 }
 
 function renderMarketWorkspaceV10() {
