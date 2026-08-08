@@ -114,6 +114,12 @@ const state = {
   sportsbookBetFilter: "all",
   sportsbookEventLimit: 24,
   sportsbookSlip: [],
+  casinoGame: "lobby",
+  casinoHistoryFilter: "all",
+  casinoKenoPicks: [],
+  casinoSelection: { coin: "crest", diceDirection: "under", diceTarget: 50, mineCount: 5 },
+  casinoLastRound: null,
+  casinoGeminiReview: null,
   generatedMarketCode: null,
   iceSearchResults: [],
   iceSelectedSubject: null,
@@ -209,6 +215,7 @@ const iconSvg = {
   download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 17v3h16v-3"/></svg>',
   trophy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 4h8v4a4 4 0 0 1-8 0V4Z"/><path d="M8 6H4v2a4 4 0 0 0 4 4M16 6h4v2a4 4 0 0 1-4 4M12 12v5M8 21h8M9 17h6"/></svg>',
   sports: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="8"/><path d="M4.9 8.5h14.2M4.9 15.5h14.2M12 4c2 2.2 3 4.9 3 8s-1 5.8-3 8M12 4c-2 2.2-3 4.9-3 8s1 5.8 3 8"/></svg>',
+  casino: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"/><path d="m12 9 2 3-2 3-2-3 2-3Z"/></svg>',
   stats: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/><path d="m3 7 6-4 6 6 6-5"/><circle cx="3" cy="7" r="1"/><circle cx="9" cy="3" r="1"/><circle cx="15" cy="9" r="1"/><circle cx="21" cy="4" r="1"/></svg>',
   passport: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="3" width="14" height="18" rx="2"/><circle cx="12" cy="11" r="4"/><path d="M8 11h8M12 7c1 1 1.5 2.3 1.5 4S13 14 12 15c-1-1-1.5-2.3-1.5-4S11 8 12 7ZM9 18h6"/></svg>',
   federal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m12 2 8 4v6c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V6l8-4Z"/><path d="M8 9h8M9 9v6M12 9v6M15 9v6M7 16h10M12 5v2"/></svg>',
@@ -237,6 +244,7 @@ const tileColors = {
   wallstreet: "linear-gradient(145deg, #6ef0b0, #075745 58%, #07110e)",
   lottery: "linear-gradient(145deg, #f7df78, #a25d18 52%, #23124f)",
   sportsbook: "linear-gradient(145deg, #67e8f9, #2164d4 52%, #28105f)",
+  casino: "linear-gradient(145deg, #f7d989, #8a5a17 52%, #081a16)",
   restriction: "linear-gradient(145deg, #ff9f5c, #7d281f)",
   treasury: "linear-gradient(145deg, #f8d572, #0f806f)",
   business: "linear-gradient(145deg, #58e6a5, #2457a8)",
@@ -701,6 +709,10 @@ function render() {
   if (state.activeApp === "sportsbook") {
     app.innerHTML = renderSystemBanner() + renderSportsbookWorkspace() + renderRequiredProfileModals();
     bindSportsbookWorkspace(); bindRequiredProfileModals(); return;
+  }
+  if (state.activeApp === "casino") {
+    app.innerHTML = renderSystemBanner() + renderCasinoWorkspace() + renderRequiredProfileModals();
+    bindCasinoWorkspace(); bindRequiredProfileModals(); return;
   }
   if (state.activeApp === "changelog") {
     app.innerHTML = renderSystemBanner() + renderChangelogWorkspace() + renderRequiredProfileModals();
@@ -2061,6 +2073,7 @@ function renderPanel(id) {
     citizenship: "Citizenship & Passport",
     lottery: "Faircroft Lottery",
     sportsbook: "Faircroft Sportsbook",
+    casino: "Faircroft Casino",
     insurance: "Faircroft Insurance",
     gangs: "Gang Network",
     realty: "Faircroft Realty Group",
@@ -2097,6 +2110,7 @@ function renderPanel(id) {
     citizenship: renderCitizenship,
     lottery: renderLotteryWorkspace,
     sportsbook: renderSportsbookWorkspace,
+    casino: renderCasinoWorkspace,
     insurance: renderInsuranceWorkspace,
     gangs: renderGangWorkspace,
     realty: renderRealtyWorkspace,
@@ -2128,6 +2142,7 @@ async function loadAppData(id) {
     wallstreet: () => api("/api/wallstreet"),
     lottery: () => api("/api/lottery"),
     sportsbook: () => api("/api/sportsbook"),
+    casino: () => api("/api/casino"),
     treasury: () => api("/api/treasury"),
     business: () => api("/api/business"),
     messages: () => api("/api/messages"),
@@ -2254,6 +2269,7 @@ function bindPanel() {
     citizenship: bindCitizenship,
     realty: bindRealtyWorkspace,
     "realty-dashboard": bindRealtyDashboardWorkspace,
+    casino: bindCasinoWorkspace,
   };
   binders[state.activeApp]?.();
 }
@@ -4194,13 +4210,33 @@ function renderLotteryTicketNumbers(numbers,emptyLabel="LEGACY LINE") {
 function renderLotteryPurchasedTicket(ticket) {
   const result=String(ticket.result||"active"),isComplete=result==="winner"||result==="not_winner";
   const status=result==="winner"?"WINNER":result==="not_winner"?"NOT A WINNER":result==="review"?"UNDER REVIEW":"DRAW PENDING";
-  const game=ticket.game==="quick"?"QUICK DRAW":"WEEKLY PICK 5";
+  const game=ticket.game==="quick"?"QUICK DRAW":ticket.source==="quick_pick"?"WEEKLY PICK 5 · QUICK PICK":"WEEKLY PICK 5";
   const drawAt=ticket.draw_at?new Date(ticket.draw_at):null,purchasedAt=ticket.purchased_at?new Date(ticket.purchased_at):null;
   return `<article class="lottery-purchased-ticket ${result}">
     <div class="lottery-ticket-edge"><small>${game}</small><strong>${escapeHtml(ticket.ticket_number||"")}</strong><em>${status}</em></div>
     <div class="lottery-ticket-line"><div><small>YOUR NUMBERS</small>${renderLotteryTicketNumbers(ticket.pick_numbers)}</div>${isComplete?`<div><small>DRAWN NUMBERS</small>${renderLotteryTicketNumbers(ticket.winning_numbers,"NO WINNING LINE")}</div>`:`<div class="lottery-ticket-wait"><small>OFFICIAL DRAW</small><strong>${drawAt&&!Number.isNaN(drawAt.getTime())?drawAt.toLocaleString():"Draw time pending"}</strong><span>Your ticket is secured in the active field.</span></div>`}</div>
     <footer><span>Purchased ${purchasedAt&&!Number.isNaN(purchasedAt.getTime())?purchasedAt.toLocaleString():"recently"}</span><span>Line cost ${money(ticket.ticket_cost||0)}</span>${result==="winner"?`<strong>PRIZE ${money(ticket.prize_amount||0)}</strong>`:result==="not_winner"?`<em>DRAW COMPLETE</em>`:`<em>ACTIVE TICKET</em>`}</footer>
   </article>`;
+}
+
+function isLotteryStockReward(reward) {
+  return String(reward?.reward_type || reward?.outcome || "").toLowerCase() === "stock" || Boolean(reward?.promo_code);
+}
+
+function lotteryCashDeliveryLabel(reward) {
+  const status = String(reward?.status || "").toLowerCase();
+  if (status === "rejected") return "TICKET PAYMENT FAILED · NO PAYOUT ISSUED";
+  if (reward?.payout_command_id) return "CASH PRIZE SENT TO YOUR LINKED IN-GAME BANK";
+  return "AUTOMATIC DEPOSIT TO YOUR LINKED IN-GAME BANK";
+}
+
+function renderLotteryScratchReward(reward, compact = false) {
+  const stockReward = isLotteryStockReward(reward);
+  const summary = escapeHtml(reward?.reward_summary || (stockReward ? "Ravenhood stock reward" : "In-game cash prize"));
+  if (compact) {
+    return `<div class="fc-lotto-last-reward"><small>LAST REVEALED CARD</small><strong>${summary}</strong>${stockReward ? `<code>${escapeHtml(reward?.promo_code || "Code pending")}</code>` : `<span>${escapeHtml(lotteryCashDeliveryLabel(reward))}</span>`}</div>`;
+  }
+  return `<div class="fc-lotto-scratch-prize ${stockReward ? "stock-reward" : "cash-reward"}"><small>${stockReward ? "YOUR RAVENHOOD STOCK REWARD" : "YOUR FAIRCROFT CASH PRIZE"}</small><strong>${summary}</strong><span>${stockReward ? "REDEEM IN RAVENHOOD" : "IN-GAME BANK PAYOUT"}</span>${stockReward ? `<code>${escapeHtml(reward?.promo_code || "Code pending")}</code><em>Single use · recorded in Stock Market Settings</em>` : `<em>${escapeHtml(lotteryCashDeliveryLabel(reward))}</em>`}</div>`;
 }
 
 function renderLotteryNumbersWorkspace() {
@@ -4214,11 +4250,11 @@ function renderLotteryNumbersWorkspace() {
   const pool=Number(funding.available||0),panel=state.lotteryPanel||"weekly",purchased=data.purchased_tickets||{},purchasedItems=purchased.items||[];
   const activeTickets=purchasedItems.filter(ticket=>ticket.result==="active"||ticket.result==="review"),completedTickets=purchasedItems.filter(ticket=>ticket.result==="winner"||ticket.result==="not_winner");
   const weeklyWinning=lotteryNumbers(data.latest_result?.winning_numbers),quickWinning=lotteryNumbers(quick.latest_result?.winning_numbers);
-  const game=`${panel==="weekly"?`<section class="lottery-pick-stage"><header><span>WEEKLY NUMBER DRAW</span><h2>Build your five-number line.</h2><p>Choose five unique numbers from 1 through 49. An exact match wins the official Faircroft pool.</p></header>${lotteryNumberField("weekly",1,49,5)}<footer><span data-pick-status="weekly">Choose 5 numbers</span><button data-lottery-enter disabled>Purchase line - ${money(prices.weekly_ticket||0)}</button></footer></section>`:""}
+  const game=`${panel==="weekly"?`<section class="lottery-pick-stage"><header><span>WEEKLY NUMBER DRAW</span><h2>Build your five-number line.</h2><p>Choose five unique numbers from 1 through 49, or let Quick Pick securely generate your complete line. An exact match wins the official Faircroft pool.</p></header>${lotteryNumberField("weekly",1,49,5)}<footer><span data-pick-status="weekly">Choose 5 numbers or use Quick Pick</span><div class="lottery-pick-actions"><button class="lottery-quick-pick" data-lottery-quick-pick ${!data.enabled||data.excluded||Number(purchased.active||0)>=5?"disabled":""}>Quick Pick &amp; Buy - ${money(prices.weekly_ticket||0)}</button><button data-lottery-enter disabled>Buy selected line - ${money(prices.weekly_ticket||0)}</button></div></footer></section>`:""}
     ${panel==="quick"?`<section class="lottery-pick-stage quick"><header><span>QUICK DRAW</span><h2>Pick three digits.</h2><p>Match all three official digits. The next result posts ${quickAt?quickAt.toLocaleString():"soon"}; a winning line earns ${money(quick.prize||0)} directly in your linked Arma bank.</p></header>${lotteryNumberField("quick",0,9,3)}<footer><span data-pick-status="quick">Choose 3 digits</span><button data-lottery-quick-entry disabled>Purchase line - ${money(quick.price||0)}</button></footer></section>`:""}
-    ${panel==="scratch"?`<section class="lottery-scratch-stage"><header><span>FAIRCROFT INSTANT</span><h2>Scratch. Reveal. Invest.</h2><p>Each ${money(scratch.price||0)} card reveals a Ravenhood cash or stock redemption code.</p><small class="lottery-account-cap">${accountRemaining} of ${Number(scratch.account_limit||10)} account purchases remaining</small></header>${scratchReveal?`<div class="fc-lotto-scratch-ticket" data-scratch-ticket><div class="fc-lotto-scratch-prize"><small>YOUR RAVENHOOD REWARD</small><strong>${escapeHtml(scratchReveal.reward_summary||"Ravenhood reward")}</strong><span>REDEEM IN RAVENHOOD</span><code>${escapeHtml(scratchReveal.promo_code||"")}</code><em>Single use - recorded in Stock Market Settings</em></div><canvas data-scratch-surface></canvas></div><strong class="fc-lotto-result" data-scratch-instruction>SCRATCH AT LEAST 45% TO REVEAL</strong>`:latestCard?`<div class="fc-lotto-last-reward"><small>LAST REVEALED CARD</small><strong>${escapeHtml(latestCard.reward_summary||"Reward issued")}</strong><code>${escapeHtml(latestCard.promo_code||"")}</code></div>`:`<div class="fc-lotto-scratch-card"><div><b>FC</b><span>SEALED RAVENHOOD REWARD</span><i>READY FOR PURCHASE</i></div></div>`}${!scratchReveal?`<button data-lottery-scratch ${!scratch.enabled||data.excluded||cardsRemaining<=0||accountRemaining<=0?"disabled":""}>${accountRemaining<=0?"Account scratch limit reached":cardsRemaining?`Buy scratch card - ${money(scratch.price||0)}`:"Daily card limit reached"}</button>`:""}</section>`:""}
-    ${panel==="tickets"?`<section class="lottery-purchased-board"><header><div><span>YOUR PURCHASED TICKETS</span><h2>Every line. Every result.</h2><p>Weekly and Quick Draw tickets remain here after the drawing, with the official numbers and outcome attached.</p></div><dl><div><dt>ACTIVE</dt><dd>${Number(purchased.active||0)}</dd></div><div><dt>WINNERS</dt><dd>${Number(purchased.winners||0)}</dd></div><div><dt>COMPLETED</dt><dd>${Number(purchased.not_winners||0)}</dd></div></dl></header><div class="lottery-ticket-section"><div class="lottery-ticket-section-title"><span>LIVE FIELD</span><h3>Active tickets</h3><strong>${activeTickets.length}</strong></div>${activeTickets.length?`<div class="lottery-purchased-list">${activeTickets.map(renderLotteryPurchasedTicket).join("")}</div>`:`<div class="lottery-purchased-empty"><i>FC</i><strong>No active tickets</strong><span>Purchase a Weekly Pick 5 or Quick Draw line and it will appear here immediately.</span></div>`}</div><div class="lottery-ticket-section completed"><div class="lottery-ticket-section-title"><span>OFFICIAL ARCHIVE</span><h3>Winners & completed tickets</h3><strong>${completedTickets.length}</strong></div>${completedTickets.length?`<div class="lottery-purchased-list">${completedTickets.map(renderLotteryPurchasedTicket).join("")}</div>`:`<div class="lottery-purchased-empty"><i>00</i><strong>No completed drawings yet</strong><span>After a drawing, each ticket will be permanently marked Winner or Not a Winner here.</span></div>`}</div>${weeklyWinning.length||quickWinning.length?`<aside class="lottery-latest-results"><span>LATEST OFFICIAL RESULTS</span>${weeklyWinning.length?`<div><small>WEEKLY PICK 5</small>${renderLotteryTicketNumbers(weeklyWinning)}</div>`:""}${quickWinning.length?`<div><small>QUICK DRAW</small>${renderLotteryTicketNumbers(quickWinning)}</div>`:""}</aside>`:""}</section>`:""}
-    ${panel==="about"?`<section class="lottery-how"><span>OFFICIAL PLAY GUIDE</span><h2>Play from your linked Arma bank.</h2><p>Your latest game-bank snapshot is the available play balance. Ticket purchases queue a debit command, and winning tickets queue an automatic payout command.</p><dl><div><dt>Weekly ticket</dt><dd>${money(prices.weekly_ticket||0)}</dd></div><div><dt>Quick Draw</dt><dd>${money(quick.price||0)}</dd></div><div><dt>Scratch card</dt><dd>${money(scratch.price||0)}</dd></div><div><dt>Available game balance</dt><dd>${wallet.available == null ? "Awaiting sync" : money(wallet.available)}</dd></div></dl></section>`:""}`;
+    ${panel==="scratch"?`<section class="lottery-scratch-stage"><header><span>FAIRCROFT INSTANT</span><h2>Scratch. Reveal. Invest.</h2><p>Each ${money(scratch.price||0)} card reveals an automatic in-game cash payout or a Ravenhood stock redemption code.</p><small class="lottery-account-cap">${accountRemaining} of ${Number(scratch.account_limit||10)} account purchases remaining</small></header>${scratchReveal?`<div class="fc-lotto-scratch-ticket" data-scratch-ticket>${renderLotteryScratchReward(scratchReveal)}<canvas data-scratch-surface></canvas></div><strong class="fc-lotto-result" data-scratch-instruction>SCRATCH AT LEAST 45% TO REVEAL</strong>`:latestCard?renderLotteryScratchReward(latestCard,true):`<div class="fc-lotto-scratch-card"><div><b>FC</b><span>SEALED RAVENHOOD REWARD</span><i>READY FOR PURCHASE</i></div></div>`}${!scratchReveal?`<button data-lottery-scratch ${!scratch.enabled||data.excluded||cardsRemaining<=0||accountRemaining<=0?"disabled":""}>${accountRemaining<=0?"Account scratch limit reached":cardsRemaining?`Buy scratch card - ${money(scratch.price||0)}`:"Daily card limit reached"}</button>`:""}</section>`:""}
+    ${panel==="tickets"?`<section class="lottery-purchased-board"><header><div><span>YOUR PURCHASED TICKETS</span><h2>Every line. Every result.</h2><p>Weekly and Quick Draw tickets remain here after the drawing, with the official numbers and outcome attached.</p></div><dl><div><dt>ACTIVE</dt><dd>${Number(purchased.active||0)}</dd></div><div><dt>WINNERS</dt><dd>${Number(purchased.winners||0)}</dd></div><div><dt>COMPLETED</dt><dd>${Number(purchased.not_winners||0)}</dd></div></dl></header><div class="lottery-ticket-section"><div class="lottery-ticket-section-title"><span>LIVE FIELD</span><h3>Active tickets</h3><strong>${activeTickets.length}</strong></div>${activeTickets.length?`<div class="lottery-purchased-list">${activeTickets.map(renderLotteryPurchasedTicket).join("")}</div>`:`<div class="lottery-purchased-empty"><i>FC</i><strong>No active tickets</strong><span>Purchase a Weekly Pick 5 or Quick Draw line and it will appear here immediately.</span></div>`}</div><div class="lottery-ticket-section completed"><div class="lottery-ticket-section-title"><span>OFFICIAL ARCHIVE</span><h3>Winners & completed tickets</h3><strong>${completedTickets.length}</strong></div>${completedTickets.length?`<div class="lottery-purchased-list">${completedTickets.map(renderLotteryPurchasedTicket).join("")}</div>`:`<div class="lottery-purchased-empty"><i>00</i><strong>No completed drawings yet</strong><span>After a drawing, each ticket will be permanently marked Winner or Not a Winner here.</span></div>`}</div>${weeklyWinning.length||quickWinning.length?`<aside class="lottery-latest-results"><span>LATEST OFFICIAL RESULTS</span>${weeklyWinning.length?`<div><small>WEEKLY PICK 5</small>${renderLotteryTicketNumbers(weeklyWinning)}</div>`:""}${data.latest_result&&!data.latest_result.winner_user_id&&Number(data.latest_result.rollover_amount||0)>0?`<div class="lottery-rollover-result"><small>NO EXACT MATCH</small><strong>${money(data.latest_result.rollover_amount)} ROLLED OVER</strong></div>`:""}${quickWinning.length?`<div><small>QUICK DRAW</small>${renderLotteryTicketNumbers(quickWinning)}</div>`:""}</aside>`:""}</section>`:""}
+    ${panel==="about"?`<section class="lottery-how"><span>OFFICIAL PLAY GUIDE</span><h2>Play from your linked Arma bank.</h2><p>Your latest game-bank snapshot is the available play balance. Weekly draw numbers are generated independently before eligible ticket lines are loaded and matched. If no line matches all five numbers, the unpaid jackpot remains in the pool for the next weekly drawing.</p><dl><div><dt>Weekly ticket</dt><dd>${money(prices.weekly_ticket||0)}</dd></div><div><dt>Quick Pick</dt><dd>5 secure random numbers</dd></div><div><dt>No exact weekly match</dt><dd>Jackpot rolls over</dd></div><div><dt>Quick Draw</dt><dd>${money(quick.price||0)}</dd></div><div><dt>Scratch card</dt><dd>${money(scratch.price||0)}</dd></div><div><dt>Available game balance</dt><dd>${wallet.available == null ? "Awaiting sync" : money(wallet.available)}</dd></div></dl></section>`:""}`;
   return `<main class="fc-lotto lottery-numbers-workspace"><canvas class="fc-lotto-canvas" data-lottery-canvas></canvas><header class="fc-lotto-nav"><div class="fc-lotto-wordmark"><i><b>FC</b></i><span><small>STATE OF FAIRCROFT</small><strong>LOTTERY LIVE</strong><em>OFFICIAL NUMBER DRAW NETWORK</em></span></div><div class="fc-lotto-onair"><i></i><span>${data.enabled?"ENTRIES OPEN":"ENTRIES PAUSED"}</span><small>${Number(poolState.online_players||0)} verified players online</small></div><nav><button data-refresh-lottery>Sync</button><button data-close-lottery>Exit Lottery</button></nav></header>
     <section class="lottery-number-hero"><div><span>THE FAIRCROFT WEEKLY</span><h1>YOUR NUMBERS.<br><em>YOUR MOMENT.</em></h1><p>Pick the line. Watch the live pool move. Own every chance you enter.</p></div><div class="lottery-live-jackpot"><small>LIVE ESTIMATED PRIZE</small><strong data-lottery-jackpot data-value="${pool}" data-rate-second="${poolState.enabled?Number(poolState.change_per_second||0):0}">${money(pool)}</strong><span>${Number(poolState.online_players||0)} ONLINE <b>${poolState.enabled?`${Number(poolState.change_per_minute||0)>=0?"+":"-"}${money(Math.abs(Number(poolState.change_per_minute||0)))}/MIN`:"GROWTH PAUSED"}</b></span></div><div class="lottery-wallet-display"><small>AVAILABLE GAME BALANCE</small><strong>${wallet.available == null ? "—" : money(wallet.available)}</strong><span>${wallet.synced_at ? `Bank snapshot ${new Date(wallet.synced_at).toLocaleString()}` : "Awaiting Arma bank sync"}</span></div><div class="lottery-draw-clock"><small>NEXT WEEKLY DRAW</small><strong>${String(days).padStart(2,"0")}D ${String(hours).padStart(2,"0")}H ${String(minutes).padStart(2,"0")}M</strong></div></section>
     <nav class="lottery-game-rail"><button class="${panel==="weekly"?"active":""}" data-lottery-panel="weekly">Weekly Pick 5<small>${money(prices.weekly_ticket||0)} per line</small></button><button class="${panel==="quick"?"active":""}" data-lottery-panel="quick">Quick Draw<small>${money(quick.price||0)} per line</small></button><button class="${panel==="scratch"?"active":""}" data-lottery-panel="scratch">Instant Scratch<small>${cardsRemaining} available</small></button><button class="${panel==="tickets"?"active":""}" data-lottery-panel="tickets">Purchased<small>${purchasedItems.length} saved ticket${purchasedItems.length===1?"":"s"}</small></button><button class="${panel==="about"?"active":""}" data-lottery-panel="about">Wallet & Rules<small>How play works</small></button></nav><div class="lottery-game-deck">${game}</div><footer class="fc-lotto-footer"><span>FAIRCROFT LOTTERY COMMISSION</span><i></i><span>NUMBER SELECTIONS ARE ATTACHED TO YOUR VERIFIED CIV RECORD</span></footer></main>`;
@@ -4374,6 +4410,78 @@ function bindSportsbookWorkspace() {
   form?.addEventListener("submit", async event => { event.preventDefault(); try { const result = await api("/api/sportsbook/bets", { method: "POST", body: { stake: Number(stake.value), legs: state.sportsbookSlip.map(({event_id,market_key,selection_key}) => ({event_id,market_key,selection_key})) } }); state.sportsbookSlip = []; toast(`Wager FC-${String(result.bet.id).padStart(7,"0")} queued for game-bank debit`); await loadAppData("sportsbook"); render(); } catch (error) { toast(error.message); } });
 }
 
+const CASINO_GAME_META = {
+  slots: { index: "01", name: "Neon Vault", type: "Slots", mark: "777", line: "Three reels. One electric payline." },
+  dice: { index: "02", name: "Faircroft Dice", type: "Table", mark: "◆", line: "Call the line before the roll." },
+  coin: { index: "03", name: "Civic Coin", type: "Instant", mark: "FC", line: "Crest or Crown. One clean decision." },
+  keno: { index: "04", name: "Midnight Keno", type: "Numbers", mark: "40", line: "Five picks against a ten-number draw." },
+  mines: { index: "05", name: "Blacksite", type: "Mines", mark: "×", line: "Three tiles. Keep the field clean." },
+};
+
+function casinoRoundState(round) {
+  const status = String(round?.status || "").toLowerCase();
+  if (["awaiting_debit", "won_pending_payout"].includes(status)) return "pending";
+  if (["paid"].includes(status)) return "won";
+  if (["lost", "rejected", "payout_failed"].includes(status)) return status === "lost" ? "lost" : "attention";
+  return "closed";
+}
+
+function casinoOutcomeMarkup(round) {
+  if (!round) return `<div class="casino-result-idle"><i>FC</i><strong>The table is ready.</strong><span>Your result appears here before the Bank Bridge settlement.</span></div>`;
+  const outcome = round.outcome || {}, won = Boolean(outcome.won), game = CASINO_GAME_META[round.game_key] || {};
+  let visual = `<div class="casino-result-mark">${escapeHtml(game.mark || "FC")}</div>`;
+  if (round.game_key === "slots") visual = `<div class="casino-result-reels">${(outcome.reels || []).map(symbol => `<i>${escapeHtml({seven:"7",fc:"FC",crown:"♛",bar:"BAR",chip:"●",bell:"◇"}[symbol] || symbol)}</i>`).join("")}</div>`;
+  if (round.game_key === "dice") visual = `<div class="casino-result-number">${Number(outcome.roll || 0).toFixed(2)}</div>`;
+  if (round.game_key === "coin") visual = `<div class="casino-result-coin"><span>${String(outcome.result || "crest") === "crest" ? "FC" : "♛"}</span></div>`;
+  if (round.game_key === "keno") visual = `<div class="casino-result-keno">${(outcome.drawn || []).map(number => `<i class="${(outcome.matches || []).includes(number) ? "match" : ""}">${number}</i>`).join("")}</div>`;
+  if (round.game_key === "mines") visual = `<div class="casino-result-mines">${Array.from({length:25},(_,index)=>`<i class="${(outcome.picks||[]).includes(index)?((outcome.hit||[]).includes(index)?"mine":"safe"):""}">${(outcome.picks||[]).includes(index)?((outcome.hit||[]).includes(index)?"×":"◆"):""}</i>`).join("")}</div>`;
+  return `<div class="casino-result ${won ? "win" : "loss"}"><span>${won ? "WINNING ROUND" : "ROUND COMPLETE"}</span>${visual}<h3>${escapeHtml(outcome.headline || "Result recorded")}</h3><div><strong>${won ? money(round.payout_amount) : money(0)}</strong><small>${won ? `${Number(round.multiplier || 0).toFixed(2)}× return` : `${money(round.bet_amount)} wager`}</small></div><em>${round.status === "awaiting_debit" ? "Awaiting authoritative game-bank debit" : round.status === "won_pending_payout" ? "Payout queued to your linked Arma bank" : escapeHtml(String(round.status || "recorded").replaceAll("_", " "))}</em></div>`;
+}
+
+function renderCasinoGameStage(game) {
+  const key = game.game_key, meta = CASINO_GAME_META[key] || {};
+  let controls = "";
+  if (key === "slots") controls = `<div class="casino-slot-machine"><span><b>7</b></span><span><b>FC</b></span><span><b>♛</b></span><i>PAYLINE</i></div><p>Three matching symbols trigger the premium line. Any pair returns a smaller win.</p>`;
+  if (key === "dice") controls = `<div class="casino-dice-control"><div class="casino-choice-pair"><button type="button" class="${state.casinoSelection.diceDirection === "under" ? "active" : ""}" data-casino-dice="under">ROLL UNDER</button><button type="button" class="${state.casinoSelection.diceDirection === "over" ? "active" : ""}" data-casino-dice="over">ROLL OVER</button></div><label>Target line <input data-casino-dice-target type="range" min="10" max="90" value="${Number(state.casinoSelection.diceTarget || 50)}"/><strong>${Number(state.casinoSelection.diceTarget || 50)}</strong></label></div>`;
+  if (key === "coin") controls = `<div class="casino-coin-control"><button type="button" class="${state.casinoSelection.coin === "crest" ? "active" : ""}" data-casino-coin="crest"><i>FC</i><span>Crest</span></button><button type="button" class="${state.casinoSelection.coin === "crown" ? "active" : ""}" data-casino-coin="crown"><i>♛</i><span>Crown</span></button></div>`;
+  if (key === "keno") controls = `<div class="casino-keno-control"><header><span>CHOOSE FIVE</span><button type="button" data-casino-keno-quick>Quick Pick</button></header><div>${Array.from({length:40},(_,index)=>{const number=index+1;return `<button type="button" class="${state.casinoKenoPicks.includes(number)?"active":""}" data-casino-keno="${number}">${number}</button>`;}).join("")}</div><small>${state.casinoKenoPicks.length} / 5 selected</small></div>`;
+  if (key === "mines") controls = `<div class="casino-mines-control"><div class="casino-mini-field">${Array.from({length:25},(_,index)=>`<i>${index % 7 === 0 ? "◆" : ""}</i>`).join("")}</div><div><span>FIELD DENSITY</span>${[[3,"Low"],[5,"Standard"],[8,"High"]].map(([count,label])=>`<button type="button" class="${Number(state.casinoSelection.mineCount)===count?"active":""}" data-casino-mines="${count}"><b>${count} mines</b><small>${label} risk</small></button>`).join("")}</div></div>`;
+  return `<section class="casino-game-stage"><header><div><span>${escapeHtml(meta.type || "Casino")} / ${escapeHtml(meta.index || "")}</span><h2>${escapeHtml(game.display_name || meta.name)}</h2><p>${escapeHtml(meta.line || "Faircroft table")}</p></div><button data-casino-game="lobby">All games</button></header><div class="casino-table-layout"><div class="casino-table-play">${controls}</div><aside class="casino-wager-desk"><span>PLACE YOUR WAGER</span><dl><div><dt>Minimum</dt><dd>${money(game.min_bet)}</dd></div><div><dt>Maximum</dt><dd>${money(game.max_bet)}</dd></div><div><dt>Published edge</dt><dd>${Number(game.house_edge).toFixed(2)}%</dd></div></dl><form id="casinoGameForm" data-game-key="${escapeHtml(key)}"><label>In-game credits<input name="bet" type="number" min="${Number(game.min_bet)}" max="${Number(game.max_bet)}" step="1" value="${Math.max(10,Number(game.min_bet||10))}" required/></label><div class="casino-bet-shortcuts">${[100,500,1000].map(value=>`<button type="button" data-casino-bet="${value}">${value>=1000?`${value/1000}K`:value}</button>`).join("")}</div><button type="submit">PLAY ${escapeHtml(meta.name || game.display_name).toUpperCase()}</button><small>One wager creates one auditable Bank Bridge debit.</small></form></aside></div></section>`;
+}
+
+function renderCasinoWorkspace() {
+  const data = state.cache.casino;
+  if (!data) return `<main class="casino-workspace"><div class="casino-loading"><i>FC</i><strong>Opening Faircroft Casino</strong></div></main>`;
+  const games = data.games || [], wallet = data.wallet || {}, rounds = data.rounds || [], daily = data.daily || {};
+  const activeGame = games.find(game => game.game_key === state.casinoGame && game.enabled);
+  const filtered = rounds.filter(round => state.casinoHistoryFilter === "all" || casinoRoundState(round) === state.casinoHistoryFilter);
+  const latest = state.casinoLastRound || rounds[0] || null;
+  return `<main class="casino-workspace">
+    <header class="casino-topbar"><div class="casino-brand"><i><b>FC</b></i><span><small>FAIRCROFT</small><strong>THE RESERVE</strong><em>CASINO &amp; SOCIAL CLUB</em></span></div><div class="casino-open-state"><i></i><span>${data.enabled ? "TABLES OPEN" : "CASINO CLOSED"}</span><small>Fictional in-game credits</small></div><button data-close-casino>Exit to RP OS</button></header>
+    <section class="casino-hero"><div><span>WELCOME TO THE RESERVE</span><h1>Five tables.<br/><em>One verified bank.</em></h1><p>Original Faircroft games, transparent table limits, and every debit or payout recorded through the Arma Bank Bridge.</p></div><dl><div><dt>AVAILABLE</dt><dd>${wallet.available == null ? "Awaiting sync" : money(wallet.available)}</dd></div><div><dt>RESERVED</dt><dd>${money(wallet.reserved || 0)}</dd></div><div><dt>DAILY ROOM</dt><dd>${money(daily.remaining || 0)}</dd></div></dl></section>
+    ${!wallet.linked ? `<div class="casino-gate"><strong>Link your Arma account to enter the tables.</strong><span>The casino never creates a separate Railway wallet.</span></div>` : wallet.available == null ? `<div class="casino-gate"><strong>Waiting for your authoritative game-bank snapshot.</strong><span>Join the game server so the current balance can sync.</span></div>` : ""}
+    <nav class="casino-game-nav"><button class="${state.casinoGame === "lobby" ? "active" : ""}" data-casino-game="lobby"><i>00</i><span>Lobby</span></button>${games.map(game=>{const meta=CASINO_GAME_META[game.game_key]||{};return `<button class="${state.casinoGame===game.game_key?"active":""}" data-casino-game="${escapeHtml(game.game_key)}" ${!game.enabled?"disabled":""}><i>${escapeHtml(meta.index||"")}</i><span>${escapeHtml(meta.name||game.display_name)}<small>${game.enabled?escapeHtml(meta.type||"Table"):"Table closed"}</small></span></button>`;}).join("")}</nav>
+    ${activeGame ? renderCasinoGameStage(activeGame) : `<section class="casino-lobby"><header><div><span>THE GAME FLOOR</span><h2>Choose your table.</h2><p>Fast rounds, published limits, and server-authoritative results.</p></div><button data-refresh-casino>Sync casino</button></header><div class="casino-game-gallery">${games.map(game=>{const meta=CASINO_GAME_META[game.game_key]||{};return `<article class="casino-game-card ${game.game_key} ${!game.enabled?"closed":""}"><div class="casino-game-art"><span>${escapeHtml(meta.mark||"FC")}</span><i>${escapeHtml(meta.index||"")}</i></div><div><small>${escapeHtml(meta.type||"Casino table")}</small><h3>${escapeHtml(game.display_name)}</h3><p>${escapeHtml(meta.line||"")}</p><dl><span>${money(game.min_bet)} minimum</span><span>${Number(game.house_edge).toFixed(2)}% edge</span></dl><button data-casino-game="${escapeHtml(game.game_key)}" ${!game.enabled||!data.enabled||wallet.available==null?"disabled":""}>${game.enabled?"Open table":"Table closed"}</button></div></article>`;}).join("")}</div></section>`}
+    <section class="casino-lower-deck"><article class="casino-live-result"><header><span>LATEST ROUND</span><strong>${latest ? escapeHtml(latest.round_id) : "NO PLAY YET"}</strong></header>${casinoOutcomeMarkup(latest)}</article><article class="casino-ticket-ledger"><header><div><span>MY CASINO LEDGER</span><h2>Round history</h2></div><strong>${rounds.length}</strong></header><nav>${[["all","All"],["pending","Pending"],["won","Wins"],["lost","Losses"]].map(([key,label])=>`<button class="${state.casinoHistoryFilter===key?"active":""}" data-casino-history="${key}">${label}</button>`).join("")}</nav><div>${filtered.slice(0,12).map(round=>`<article class="${casinoRoundState(round)}"><span><strong>${escapeHtml(round.round_id)}</strong><small>${escapeHtml(CASINO_GAME_META[round.game_key]?.name||round.game_key)} · ${new Date(round.created_at).toLocaleString()}</small></span><b>${money(round.bet_amount)}</b><em>${escapeHtml(String(round.status||"").replaceAll("_"," "))}</em><strong>${round.payout_amount>0?money(round.payout_amount):"—"}</strong></article>`).join("")||`<p>No casino rounds in this view.</p>`}</div></article></section>
+    <footer class="casino-disclosure"><span>18+ ROLEPLAY ENTERTAINMENT</span><p>${escapeHtml(data.notice||"")}</p><strong>Results use server-side secure randomness. Gemini may recommend future table settings but never selects winners.</strong></footer>
+  </main>`;
+}
+
+function bindCasinoWorkspace() {
+  $$('[data-casino-game]').forEach(button=>button.addEventListener('click',()=>{state.casinoGame=button.dataset.casinoGame||'lobby';state.casinoLastRound=null;render();}));
+  $$('[data-casino-history]').forEach(button=>button.addEventListener('click',()=>{state.casinoHistoryFilter=button.dataset.casinoHistory||'all';render();}));
+  $('[data-close-casino]')?.addEventListener('click',async()=>{state.activeApp=null;state.casinoGame='lobby';state.casinoLastRound=null;await loadSession();});
+  $('[data-refresh-casino]')?.addEventListener('click',async()=>{await loadAppData('casino');render();});
+  $$('[data-casino-coin]').forEach(button=>button.addEventListener('click',()=>{state.casinoSelection.coin=button.dataset.casinoCoin;render();}));
+  $$('[data-casino-dice]').forEach(button=>button.addEventListener('click',()=>{state.casinoSelection.diceDirection=button.dataset.casinoDice;render();}));
+  $('[data-casino-dice-target]')?.addEventListener('input',event=>{state.casinoSelection.diceTarget=Number(event.target.value);const label=event.target.parentElement?.querySelector('strong');if(label)label.textContent=event.target.value;});
+  $$('[data-casino-mines]').forEach(button=>button.addEventListener('click',()=>{state.casinoSelection.mineCount=Number(button.dataset.casinoMines);render();}));
+  $$('[data-casino-keno]').forEach(button=>button.addEventListener('click',()=>{const value=Number(button.dataset.casinoKeno),index=state.casinoKenoPicks.indexOf(value);if(index>=0)state.casinoKenoPicks.splice(index,1);else if(state.casinoKenoPicks.length<5)state.casinoKenoPicks.push(value);state.casinoKenoPicks.sort((a,b)=>a-b);render();}));
+  $('[data-casino-keno-quick]')?.addEventListener('click',()=>{const available=Array.from({length:40},(_,index)=>index+1),picked=[];while(picked.length<5){const index=crypto.getRandomValues(new Uint32Array(1))[0]%available.length;picked.push(available.splice(index,1)[0]);}state.casinoKenoPicks=picked.sort((a,b)=>a-b);render();});
+  $$('[data-casino-bet]').forEach(button=>button.addEventListener('click',()=>{const input=$('#casinoGameForm [name=bet]');if(input)input.value=button.dataset.casinoBet;}));
+  $('#casinoGameForm')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,game_key=form.dataset.gameKey,selection={};if(game_key==='coin')selection.choice=state.casinoSelection.coin;if(game_key==='dice'){selection.direction=state.casinoSelection.diceDirection;selection.target=state.casinoSelection.diceTarget;}if(game_key==='keno')selection.picks=state.casinoKenoPicks;if(game_key==='mines')selection.mine_count=state.casinoSelection.mineCount;const button=form.querySelector('button[type=submit]');button.disabled=true;button.textContent='SECURING ROUND…';try{const result=await api('/api/casino/rounds',{method:'POST',body:{game_key,bet:Number(form.bet.value),selection}});state.casinoLastRound=result.round;await loadAppData('casino');toast(`${result.round.round_id} recorded · ${result.round.outcome?.won?'winning payout queued after debit':'round complete'}`);render();}catch(error){button.disabled=false;toast(error.message);}});
+}
+
 function renderLotteryWorkspace() {
   return renderLotteryNumbersWorkspace();
   const data=state.cache.lottery;
@@ -4436,7 +4544,7 @@ function startLotteryScratchSurface(){
   let drawing=false,revealed=false,last=null,checks=0;
   const resize=()=>{const rect=canvas.getBoundingClientRect(),ratio=Math.max(1,window.devicePixelRatio||1);canvas.width=Math.max(1,Math.round(rect.width*ratio));canvas.height=Math.max(1,Math.round(rect.height*ratio));context.setTransform(ratio,0,0,ratio,0,0);const gradient=context.createLinearGradient(0,0,rect.width,rect.height);gradient.addColorStop(0,'#665d55');gradient.addColorStop(.22,'#f5eee0');gradient.addColorStop(.48,'#8d8278');gradient.addColorStop(.72,'#fff8e9');gradient.addColorStop(1,'#5c534c');context.fillStyle=gradient;context.fillRect(0,0,rect.width,rect.height);context.fillStyle='rgba(28,18,12,.86)';context.font='900 14px Inter, Arial';context.textAlign='center';context.textBaseline='middle';context.fillText('SCRATCH TO REVEAL',rect.width/2,rect.height/2);context.globalCompositeOperation='destination-out';};
   const point=event=>{const rect=canvas.getBoundingClientRect();return{x:event.clientX-rect.left,y:event.clientY-rect.top}};
-  const reveal=()=>{if(revealed)return;revealed=true;ticket?.classList.add('revealed');canvas.style.pointerEvents='none';const instruction=$('[data-scratch-instruction]');if(instruction)instruction.textContent='REWARD REVEALED · COPY YOUR CODE';toast(`Scratch reward revealed: ${state.lotteryScratchReveal?.reward_summary||'Ravenhood reward'}`);};
+  const reveal=()=>{if(revealed)return;revealed=true;ticket?.classList.add('revealed');canvas.style.pointerEvents='none';const instruction=$('[data-scratch-instruction]'),reward=state.lotteryScratchReveal||{};if(instruction)instruction.textContent=isLotteryStockReward(reward)?'STOCK REWARD REVEALED · COPY YOUR CODE':'CASH PRIZE REVEALED · AUTOMATIC IN-GAME DEPOSIT';toast(isLotteryStockReward(reward)?`Stock reward revealed: ${reward.reward_summary||'Ravenhood reward'}`:`Cash prize revealed: ${reward.reward_summary||'in-game bank payout'}`);};
   const measure=(force=false)=>{if(revealed||(!force&&++checks%4))return;const pixels=context.getImageData(0,0,canvas.width,canvas.height).data;let clear=0,total=0;for(let index=3;index<pixels.length;index+=320){total++;if(pixels[index]<40)clear++;}if(total&&clear/total>=.45)reveal();};
   const erase=event=>{if(!drawing)return;event.preventDefault();const next=point(event),rect=canvas.getBoundingClientRect();context.lineWidth=Math.max(34,Math.min(rect.width,rect.height)*.17);context.lineCap='round';context.lineJoin='round';context.beginPath();context.moveTo(last?.x??next.x,last?.y??next.y);context.lineTo(next.x,next.y);context.stroke();last=next;measure();};
   canvas.addEventListener('pointerdown',event=>{drawing=true;last=point(event);canvas.setPointerCapture?.(event.pointerId);erase(event)});
@@ -4469,7 +4577,9 @@ function bindLotteryWorkspace(){
       : Boolean(lottery.quick_draw?.enabled&&!lottery.excluded&&Number(lottery.quick_draw?.daily_limit||0)>Number(lottery.quick_draw?.entries?.length||0));
     if(submit)submit.disabled=current.length!==limit||!eligible;
   }));
-  $("[data-lottery-enter]")?.addEventListener("click",async()=>{try{const numbers=[...document.querySelectorAll('[data-lottery-number="weekly"].selected')].map(item=>Number(item.dataset.number));await api("/api/lottery/entries",{method:"POST",body:{numbers}});toast(`Weekly line ${numbers.join(" - ")} purchased`);state.lotteryPanel="tickets";await loadAppData("lottery");render();}catch(error){toast(error.message);}});
+  const purchaseWeeklyTicket=async(body,button)=>{if(button)button.disabled=true;try{const result=await api("/api/lottery/entries",{method:"POST",body});const numbers=result.numbers||body.numbers||[];toast(`${result.quick_pick?"Quick Pick":"Weekly line"} ${numbers.join(" - ")} purchased`);state.lotteryPanel="tickets";await loadAppData("lottery");render();}catch(error){if(button)button.disabled=false;toast(error.message);}};
+  $("[data-lottery-enter]")?.addEventListener("click",event=>{const numbers=[...document.querySelectorAll('[data-lottery-number="weekly"].selected')].map(item=>Number(item.dataset.number));purchaseWeeklyTicket({numbers},event.currentTarget);});
+  $("[data-lottery-quick-pick]")?.addEventListener("click",event=>purchaseWeeklyTicket({quick_pick:true},event.currentTarget));
   $("[data-lottery-scratch]")?.addEventListener("click",async()=>{try{const result=await api("/api/lottery/scratch",{method:"POST",body:{}});state.lotteryScratchReveal=result;await loadAppData("lottery");render();}catch(error){toast(error.message);}});
   $("[data-lottery-quick-entry]")?.addEventListener("click",async()=>{try{const numbers=[...document.querySelectorAll('[data-lottery-number="quick"].selected')].map(item=>Number(item.dataset.number));await api("/api/lottery/quick-draw/entries",{method:"POST",body:{numbers}});toast(`Quick Draw line ${numbers.join(" - ")} purchased`);await loadAppData("lottery");render();}catch(error){toast(error.message);}});
 }
@@ -11221,8 +11331,8 @@ const ADMIN_TOOL_NAV = [
   ["enforcement", "Cases", "07"], ["warnings", "Internal Notes", "08"],
   ["linking", "Account Linking", "09"], ["campaigns", "Active Campaigns", "10"],
   ["settlement", "Settlement", "11"], ["banking-settings", "Banking Settings", "12"], ["market-settings", "Stock Market", "13"],
-  ["lottery-settings", "Lottery Settings", "13"], ["sportsbook-settings", "Sportsbook", "14"], ["gang-settings", "Gang Settings", "15"],
-  ["dmv-settings", "DMV Settings", "16"], ["mdt-settings", "MDT Settings", "17"],
+  ["lottery-settings", "Lottery Settings", "13"], ["sportsbook-settings", "Sportsbook", "14"], ["casino-tools", "Casino Tools", "15"], ["gang-settings", "Gang Settings", "16"],
+  ["dmv-settings", "DMV Settings", "17"], ["mdt-settings", "MDT Settings", "18"],
   ["court-settings", "Court Settings", "18"], ["ice-settings", "ICE Settings", "19"],
   ["admin-2fa", "Admin 2FA", "20"], ["autopilot", "Auto Pilot", "21"],
   ["system-update", "System Update", "22"], ["audit", "Activity Log", "23"],
@@ -11268,6 +11378,7 @@ function renderDevWorkspace() {
     "market-settings": ["Stock Market Settings", "Operate Ravenhood pricing, settlement receipts, fees, and RP events"],
     "lottery-settings": ["Lottery Settings", "Govern entries, prize funding, role eligibility, fraud review, and weekly drawings"],
     "sportsbook-settings": ["Sportsbook Settings", "Configure the live sports provider and inspect fixture, odds, and wager health"],
+    "casino-tools": ["Casino Tools", "Operate Faircroft tables, published odds, Bank Bridge settlement, and audited balance automation"],
     "housing-market": ["Housing Market", "Read-only Shadow Haven property ownership, availability, tenure, locks, and guest access"],
     "insurance-claims": ["Insurance Claims", "Review verified server-reset and wipe compensation requests"],
     audit: ["Activity Log", "Chronological record of staff actions"],
@@ -11635,6 +11746,21 @@ function renderDevSportsbookSettings(settings) {
   </div>`;
 }
 
+function renderDevCasinoTools(casino) {
+  const settings=casino.settings||{},games=casino.games||[],totals=casino.totals||{},rounds=casino.recent_rounds||[],cycles=casino.cycles||[];
+  const paid=rounds.filter(round=>round.status==='paid').length,pending=Number(totals.pending||0),houseNet=Number(totals.wagered||0)-Number(totals.scheduled_payouts||0);
+  return `<div class="casino-admin">
+    <header class="casino-admin-hero"><div><span>FC / THE RESERVE CONTROL ROOM</span><h2>Casino operations</h2><p>Publish table limits, monitor Bank Bridge settlement, and review aggregate game math. Individual outcomes remain server-authoritative and cannot be edited.</p></div><strong class="${settings.casino_enabled?'live':''}">${settings.casino_enabled?'TABLES OPEN':'CASINO CLOSED'}</strong></header>
+    <section class="casino-admin-metrics"><article><span>Total handle</span><strong>${money(totals.wagered||0)}</strong><small>${Number(totals.rounds||0)} permanent rounds</small></article><article><span>Scheduled returns</span><strong>${money(totals.scheduled_payouts||0)}</strong><small>${paid} confirmed payouts in view</small></article><article><span>Modeled house position</span><strong>${money(houseNet)}</strong><small>Wagers less scheduled returns</small></article><article><span>Bridge queue</span><strong>${pending}</strong><small>Debit or payout pending</small></article></section>
+    <form id="devCasinoSettingsForm" class="casino-admin-policy"><header><div><span>CASINO POLICY</span><h3>Floor controls</h3></div><button type="submit">Publish settings</button></header><div class="casino-admin-policy-grid"><label class="casino-admin-switch"><span><strong>Casino open</strong><small>Show enabled tables to verified residents</small></span><input name="enabled" type="checkbox" ${settings.casino_enabled?'checked':''}/></label><label>Daily net-loss limit<input name="daily_loss_limit" type="number" min="100" step="1" value="${Number(settings.casino_daily_loss_limit||250000)}"/></label><label class="casino-admin-switch"><span><strong>RTP guardrail automation</strong><small>Reviews 200 recent settled rounds; max 0.25% adjustment</small></span><input name="autopilot_enabled" type="checkbox" ${settings.casino_autopilot_enabled?'checked':''}/></label><label>Automation interval<input name="autopilot_interval_minutes" type="number" min="60" max="10080" value="${Number(settings.casino_autopilot_interval_minutes||360)}"/><small>Minutes · last ${escapeHtml(settings.casino_autopilot_last_tick||'never')}</small></label><label class="casino-admin-switch"><span><strong>Gemini balance review</strong><small>Aggregate recommendations only; Gemini never selects winners</small></span><input name="gemini_enabled" type="checkbox" ${settings.casino_gemini_enabled?'checked':''}/></label></div>
+      <div class="casino-admin-games">${games.map(game=>`<article data-casino-settings-game="${escapeHtml(game.game_key)}"><header><i>${escapeHtml(CASINO_GAME_META[game.game_key]?.mark||'FC')}</i><span><strong>${escapeHtml(game.display_name)}</strong><small>${escapeHtml(CASINO_GAME_META[game.game_key]?.type||'Table')}</small></span><label><input name="${game.game_key}_enabled" type="checkbox" ${game.enabled?'checked':''}/> OPEN</label></header><div><label>Minimum<input name="${game.game_key}_min" type="number" min="1" step="1" value="${Number(game.min_bet)}"/></label><label>Maximum<input name="${game.game_key}_max" type="number" min="1" step="1" value="${Number(game.max_bet)}"/></label><label>House edge<input name="${game.game_key}_edge" type="number" min="1" max="15" step="0.01" value="${Number(game.house_edge)}"/><small>Published to players</small></label></div></article>`).join('')}</div>
+    </form>
+    <section class="casino-admin-automation"><div><span>AUTOMATED MATH REVIEW</span><h3>Balance the floor without touching a completed round.</h3><p>The deterministic guardrail measures aggregate RTP. Gemini can apply a maximum one-point future odds adjustment per table and creates a permanent staff audit.</p>${state.casinoGeminiReview?`<aside><strong>${escapeHtml(state.casinoGeminiReview.summary||'Review complete')}</strong><span>${(state.casinoGeminiReview.applied||[]).map(item=>`${escapeHtml(item.game_key)} ${Number(item.previous_edge).toFixed(2)}% → ${Number(item.house_edge).toFixed(2)}%`).join(' · ')||'No settings required a change.'}</span></aside>`:''}</div><div><button data-casino-balance-cycle>Run guardrail cycle</button><button class="gemini" data-casino-gemini ${!casino.gemini_configured||!settings.casino_gemini_enabled?'disabled':''}>Run Gemini balance review</button><small>${casino.gemini_configured?'GEMINI_API_KEY detected':'GEMINI_API_KEY is not configured'}</small></div></section>
+    <section class="casino-admin-ledger"><header><div><span>PERMANENT ROUND LEDGER</span><h3>Wagers and settlements</h3></div><strong>${rounds.length} SHOWN</strong></header><div class="casino-admin-ledger-head"><span>Round / Player</span><span>Game</span><span>Wager</span><span>Return</span><span>Bridge state</span></div>${rounds.map(round=>`<article><span><strong>${escapeHtml(round.round_id)}</strong><small>${escapeHtml(round.player_name||'Resident')} · CIV ${escapeHtml(round.civ_number||'pending')} · ${new Date(round.created_at).toLocaleString()}</small></span><span>${escapeHtml(CASINO_GAME_META[round.game_key]?.name||round.game_key)}</span><b>${money(round.bet_amount)}</b><b>${round.payout_amount>0?money(round.payout_amount):'—'}</b><em class="${casinoRoundState(round)}">${escapeHtml(String(round.status||'').replaceAll('_',' '))}</em></article>`).join('')||'<p class="empty">No casino rounds recorded yet.</p>'}</section>
+    <section class="casino-admin-cycles"><header><span>AUTOMATION AUDIT</span><h3>Recent balance cycles</h3></header>${cycles.map(cycle=>`<article><strong>${escapeHtml(String(cycle.cycle_type||'automatic').toUpperCase())}</strong><span>${escapeHtml(cycle.created_at||'')}</span><code>${escapeHtml(cycle.applied_json||'[]')}</code></article>`).join('')||'<p>No balance cycles yet.</p>'}</section>
+  </div>`;
+}
+
 function renderDevTools() {
   const data = state.cache["dev-tools"] || {};
   const users = data.users || [], sanctions = data.sanctions || [], warnings = data.warnings || [], logs = data.audit_logs || [], codes = data.unlink_codes || [];
@@ -11652,6 +11778,7 @@ function renderDevTools() {
   if (state.devTab === "market-settings") return renderDevMarketSettings(data.market_settings || {}, users);
   if (state.devTab === "lottery-settings") return renderDevLotterySettings(data.lottery_settings || {});
   if (state.devTab === "sportsbook-settings") return renderDevSportsbookSettings(data.sportsbook_settings || {});
+  if (state.devTab === "casino-tools") return renderDevCasinoTools(data.casino_tools || {});
   if (state.devTab === "gang-settings") return renderDevGangSettings(data.gang_operations || {});
   if (state.devTab === "mdt-settings") return renderDevMdtSettings(data.ice_settings || {});
   if (state.devTab === "ice-settings") return renderDevIceSettings(data.ice_settings || {});
@@ -12515,6 +12642,9 @@ function bindDevWorkspace() {
   $$('[data-lottery-review]').forEach(button=>button.addEventListener("click",async()=>{let reason="";if(button.dataset.action==="flag"||button.dataset.action==="exclude")reason=prompt("Document the integrity reason for this action:")||"";if((button.dataset.action==="flag"||button.dataset.action==="exclude")&&!reason)return;try{await api(`/api/dev-tools/lottery/entries/${button.dataset.lotteryReview}/review`,{method:"PATCH",body:{action:button.dataset.action,reason}});toast("Lottery entry review updated");await refreshDevTools();}catch(error){toast(error.message);}}));
   $("[data-lottery-run-draw]")?.addEventListener("click",async()=>{if(!confirm("Run a supervised lottery drawing now using all eligible entries and the current available pool?"))return;try{await api("/api/dev-tools/lottery/draw",{method:"POST",body:"{}"});toast("Lottery drawing completed");await refreshDevTools();}catch(error){toast(error.message);}});
   $("[data-sportsbook-provider-sync]")?.addEventListener("click", async event => { event.currentTarget.disabled = true; try { const result = await api("/api/sportsbook?refresh=1"); const sync = result.sync || {}; const received = Number(sync.received ?? 0); const inserted = Number(sync.inserted ?? result.events?.length ?? 0); const skipped = Number(sync.skipped_price || 0) + Number(sync.skipped_missing || 0) + Number(sync.skipped_category || 0) + Number(sync.skipped_series || 0); const breakdown = `price ${Number(sync.skipped_price || 0)}, missing ${Number(sync.skipped_missing || 0)}, category ${Number(sync.skipped_category || 0)}, series ${Number(sync.skipped_series || 0)}`; const detail = sync.errors?.length ? ` · ${sync.errors[0]}` : received && !inserted ? ` · ${received} received, ${skipped} skipped (${breakdown})` : ""; toast(`${inserted} Kalshi markets synced${detail}`); await refreshDevTools(); } catch (error) { toast(error.message); } finally { event.currentTarget.disabled = false; } });
+  $("#devCasinoSettingsForm")?.addEventListener("submit",async event=>{event.preventDefault();const form=event.currentTarget,data=state.cache["dev-tools"]?.casino_tools||{},games=(data.games||[]).map(game=>({game_key:game.game_key,enabled:form[`${game.game_key}_enabled`]?.checked,min_bet:form[`${game.game_key}_min`]?.value,max_bet:form[`${game.game_key}_max`]?.value,house_edge:form[`${game.game_key}_edge`]?.value}));try{await api("/api/dev-tools/casino/settings",{method:"PATCH",body:{enabled:form.enabled.checked,daily_loss_limit:form.daily_loss_limit.value,autopilot_enabled:form.autopilot_enabled.checked,autopilot_interval_minutes:form.autopilot_interval_minutes.value,gemini_enabled:form.gemini_enabled.checked,games}});toast("Casino floor settings published");await refreshDevTools();}catch(error){toast(error.message);}});
+  $("[data-casino-balance-cycle]")?.addEventListener("click",async event=>{event.currentTarget.disabled=true;try{const result=await api("/api/dev-tools/casino/balance-cycle",{method:"POST",body:{}});toast(`Casino guardrail cycle complete · ${result.applied?.length||0} change(s)`);await refreshDevTools();}catch(error){event.currentTarget.disabled=false;toast(error.message);}});
+  $("[data-casino-gemini]")?.addEventListener("click",async event=>{if(!confirm("Run Gemini against aggregate casino RTP and apply only bounded future-round edge recommendations?"))return;event.currentTarget.disabled=true;event.currentTarget.textContent="Gemini is reviewing…";try{state.casinoGeminiReview=await api("/api/dev-tools/casino/gemini",{method:"POST",body:{apply:true},timeoutMs:120000});toast("Gemini casino balance review complete");await refreshDevTools();}catch(error){event.currentTarget.disabled=false;toast(error.message);}});
   $("#admin2faCodeForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
@@ -14399,7 +14529,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-commerce-play-systems").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-casino-reserve").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {

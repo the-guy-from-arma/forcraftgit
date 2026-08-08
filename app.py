@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import io
 import json
+import math
 import mimetypes
 import os
 import re
@@ -2199,6 +2200,13 @@ SYSTEM_SETTING_DEFAULTS = {
     "insurance_state_of_emergency": "0",
     "insurance_tiers": "{\"essential\":{\"coverage_percent\":50,\"premium\":3500},\"preferred\":{\"coverage_percent\":70,\"premium\":4250},\"premier\":{\"coverage_percent\":90,\"premium\":5000}}",
     "sportsbook_last_sync_at": "",
+    "casino_enabled": "1",
+    "casino_daily_loss_limit": "250000.00",
+    "casino_autopilot_enabled": "0",
+    "casino_autopilot_interval_minutes": "360",
+    "casino_autopilot_last_tick": "",
+    "casino_gemini_enabled": "1",
+    "casino_last_balance_summary": "",
     "gang_creation_enabled": "1",
     "gang_global_limit": "100",
     "gang_default_member_limit": "20",
@@ -2222,6 +2230,7 @@ APP_VISIBILITY_OPTIONS = (
     ("wallstreet", "Ravenhood Markets"),
     ("lottery", "Faircroft Lottery"),
     ("sportsbook", "Faircroft Sportsbook"),
+    ("casino", "Faircroft Casino"),
     ("insurance", "Faircroft Insurance"),
     ("gangs", "Gang Network"),
     ("realty", "Faircroft Realty Group"),
@@ -2253,6 +2262,7 @@ ADMIN_TOOLS_SECTIONS = (
     ("market-settings", "Stock Market"),
     ("lottery-settings", "Lottery Settings"),
     ("sportsbook-settings", "Sportsbook Settings"),
+    ("casino-tools", "Casino Tools"),
     ("gang-settings", "Gang Settings"),
     ("dmv-settings", "DMV Settings"),
     ("mdt-settings", "MDT Settings"),
@@ -2267,7 +2277,7 @@ ADMIN_TOOLS_SECTIONS = (
     ("account-deletion", "Account Deletion"),
 )
 ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS = frozenset(
-    ("dashboard", "accounts", "intelligence", "housing-market", "anticheat", "audit", "banking-settings", "sportsbook-settings")
+    ("dashboard", "accounts", "intelligence", "housing-market", "anticheat", "audit", "banking-settings", "sportsbook-settings", "casino-tools")
 )
 ADMIN_TOOLS_DEVELOPER_ONLY_SECTIONS = frozenset(("account-deletion",))
 ADMIN_TOOLS_CONFIGURABLE_SECTIONS = frozenset(
@@ -4249,6 +4259,7 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE lottery_entries ADD COLUMN IF NOT EXISTS bank_command_id TEXT")
     db.execute("ALTER TABLE lottery_entries ADD COLUMN IF NOT EXISTS payout_command_id TEXT")
     db.execute("ALTER TABLE lottery_draws ADD COLUMN IF NOT EXISTS winning_numbers TEXT NOT NULL DEFAULT '[]'")
+    db.execute("ALTER TABLE lottery_draws ADD COLUMN IF NOT EXISTS rollover_amount NUMERIC(14,2) NOT NULL DEFAULT 0")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS lottery_fund_adjustments (
@@ -4397,6 +4408,73 @@ def ensure_migrations(db: Database) -> None:
         )
         """
     )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS casino_game_settings (
+            game_key TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            min_bet NUMERIC(14,2) NOT NULL DEFAULT 10,
+            max_bet NUMERIC(14,2) NOT NULL DEFAULT 100000,
+            house_edge NUMERIC(8,4) NOT NULL DEFAULT 4,
+            config_json TEXT NOT NULL DEFAULT '{}',
+            updated_by INTEGER,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS casino_rounds (
+            id SERIAL PRIMARY KEY,
+            round_id TEXT NOT NULL UNIQUE,
+            user_id INTEGER NOT NULL,
+            game_key TEXT NOT NULL,
+            bet_amount NUMERIC(14,2) NOT NULL,
+            payout_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+            multiplier NUMERIC(12,4) NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'awaiting_debit',
+            selection_json TEXT NOT NULL DEFAULT '{}',
+            outcome_json TEXT NOT NULL DEFAULT '{}',
+            bank_command_id TEXT NOT NULL UNIQUE,
+            payout_command_id TEXT UNIQUE,
+            created_at TEXT NOT NULL,
+            settled_at TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (game_key) REFERENCES casino_game_settings(game_key) ON DELETE RESTRICT
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS casino_rounds_user_idx ON casino_rounds(user_id, created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS casino_rounds_status_idx ON casino_rounds(status, created_at)")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS casino_balance_cycles (
+            id SERIAL PRIMARY KEY,
+            cycle_type TEXT NOT NULL DEFAULT 'automatic',
+            summary_json TEXT NOT NULL DEFAULT '{}',
+            applied_json TEXT NOT NULL DEFAULT '[]',
+            created_by INTEGER,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    casino_defaults = (
+        ("slots", "Neon Vault Slots", 10, 250000, 5.0, '{"reels":3,"theme":"neon_vault"}'),
+        ("dice", "Faircroft Dice", 10, 250000, 3.0, '{"minimum_target":10,"maximum_target":90}'),
+        ("coin", "Civic Coin Flip", 10, 250000, 3.5, '{"faces":["crest","crown"]}'),
+        ("keno", "Midnight Keno", 10, 100000, 6.0, '{"choose":5,"draw":10,"pool":40}'),
+        ("mines", "Blacksite Mines", 10, 100000, 5.0, '{"tiles":25,"safe_picks":3}'),
+    )
+    for game_key, display_name, min_bet, max_bet, house_edge, config_json in casino_defaults:
+        db.execute(
+            """INSERT INTO casino_game_settings
+               (game_key,display_name,enabled,min_bet,max_bet,house_edge,config_json,updated_at)
+               VALUES (?,?,1,?,?,?,?,?) ON CONFLICT(game_key) DO NOTHING""",
+            (game_key, display_name, min_bet, max_bet, house_edge, config_json, now_iso()),
+        )
     securities = (
         ("FNN", "Faircroft News Network", "stock", "Media", 42.50, 1.2),
         ("FCF", "Faircroft Financial", "stock", "Finance", 118.20, 0.8),
@@ -5238,6 +5316,13 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "insurance_state_of_emergency": str(raw.get("insurance_state_of_emergency") or "0") in ("1", "true", "True", "yes", "on"),
         "insurance_tiers": insurance_tiers,
         "sportsbook_last_sync_at": str(raw.get("sportsbook_last_sync_at") or "")[:80],
+        "casino_enabled": str(raw.get("casino_enabled") or "1") in ("1", "true", "True", "yes", "on"),
+        "casino_daily_loss_limit": max(100.0, min(1000000000.0, float(raw.get("casino_daily_loss_limit") or 250000))),
+        "casino_autopilot_enabled": str(raw.get("casino_autopilot_enabled") or "0") in ("1", "true", "True", "yes", "on"),
+        "casino_autopilot_interval_minutes": max(60, min(10080, int(raw.get("casino_autopilot_interval_minutes") or 360))),
+        "casino_autopilot_last_tick": str(raw.get("casino_autopilot_last_tick") or "")[:80],
+        "casino_gemini_enabled": str(raw.get("casino_gemini_enabled") or "1") in ("1", "true", "True", "yes", "on"),
+        "casino_last_balance_summary": str(raw.get("casino_last_balance_summary") or "")[:4000],
         "gang_creation_enabled": str(raw.get("gang_creation_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "gang_global_limit": max(1, min(1000, int(raw.get("gang_global_limit") or 100))),
         "gang_default_member_limit": max(2, min(200, int(raw.get("gang_default_member_limit") or 20))),
@@ -5398,6 +5483,189 @@ def queue_lottery_bank_payout(db: Database, user_id: int, amount: float, detail:
     command_id = f"fc-lottery-payout-{secrets.token_urlsafe(18)}"
     db.execute("INSERT INTO bank_bridge_commands (command_id,idempotency_key,server_id,operation,target_user_id,identity_id,amount,currency,reason,status,requested_by,created_at) VALUES (?,?,?,?,?,?,?,'bank',?,'pending',?,?)", (command_id, f"lottery-payout-{secrets.token_urlsafe(18)}", "default", "issue_funds", user_id, str(link["identity_id"]), round(amount, 2), detail, user_id, now_iso()))
     return command_id
+
+
+def casino_game_settings_payload(db: Database) -> list[dict[str, Any]]:
+    games: list[dict[str, Any]] = []
+    for row in all_rows(db, "SELECT * FROM casino_game_settings ORDER BY CASE game_key WHEN 'slots' THEN 1 WHEN 'dice' THEN 2 WHEN 'coin' THEN 3 WHEN 'keno' THEN 4 ELSE 5 END"):
+        item = dict(row)
+        for key in ("min_bet", "max_bet", "house_edge"):
+            item[key] = round(float(item.get(key) or 0), 2)
+        item["enabled"] = bool(item.get("enabled"))
+        try:
+            item["config"] = json.loads(item.get("config_json") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            item["config"] = {}
+        item.pop("config_json", None)
+        games.append(item)
+    return games
+
+
+def casino_wallet_snapshot(db: Database, user_id: int) -> dict[str, Any]:
+    link = one(db, "SELECT identity_id FROM arma_account_links WHERE user_id=? AND identity_id IS NOT NULL AND identity_id<>''", (user_id,))
+    if not link:
+        return {"linked": False, "balance": None, "reserved": 0.0, "available": None, "synced_at": None}
+    snapshot = one(db, "SELECT balance,synced_at FROM arma_game_bank_balances WHERE identity_id=?", (link["identity_id"],))
+    pending = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM bank_bridge_commands WHERE target_user_id=? AND operation='debit_funds' AND status IN ('pending','claimed')", (user_id,))
+    reserved = round(float((pending or {}).get("total") or 0), 2)
+    balance = round(float(snapshot.get("balance") or 0), 2) if snapshot else None
+    return {
+        "linked": True,
+        "identity_id": str(link["identity_id"]),
+        "balance": balance,
+        "reserved": reserved,
+        "available": round(max(0.0, balance - reserved), 2) if balance is not None else None,
+        "synced_at": snapshot.get("synced_at") if snapshot else None,
+    }
+
+
+def casino_queue_command(db: Database, user_id: int, amount: float, operation: str, detail: str, identity_id: str = "") -> str | None:
+    if amount <= 0:
+        return None
+    if not identity_id:
+        link = one(db, "SELECT identity_id FROM arma_account_links WHERE user_id=? AND identity_id IS NOT NULL AND identity_id<>''", (user_id,))
+        identity_id = str(link.get("identity_id") or "") if link else ""
+    if not identity_id:
+        return None
+    command_id = f"fc-casino-{'debit' if operation == 'debit_funds' else 'payout'}-{secrets.token_urlsafe(18)}"
+    db.execute(
+        "INSERT INTO bank_bridge_commands (command_id,idempotency_key,server_id,operation,target_user_id,identity_id,amount,currency,reason,status,requested_by,created_at) VALUES (?,?,?,?,?,?,?,'bank',?,'pending',?,?)",
+        (command_id, f"casino-{operation}-{secrets.token_urlsafe(18)}", "default", operation, user_id, identity_id, round(amount, 2), detail[:500], user_id, now_iso()),
+    )
+    return command_id
+
+
+def casino_secure_sample(population: list[int], count: int) -> list[int]:
+    values = list(population)
+    chosen: list[int] = []
+    for _ in range(min(count, len(values))):
+        chosen.append(values.pop(secrets.randbelow(len(values))))
+    return chosen
+
+
+def casino_resolve_game(game_key: str, selection: dict[str, Any], bet: float, house_edge: float) -> tuple[dict[str, Any], float, float]:
+    edge_factor = max(0.75, min(0.99, 1.0 - house_edge / 100.0))
+    multiplier = 0.0
+    outcome: dict[str, Any]
+    if game_key == "coin":
+        choice = str(selection.get("choice") or "crest").lower()
+        if choice not in ("crest", "crown"):
+            raise ValueError("Choose Crest or Crown before flipping.")
+        result = "crest" if secrets.randbelow(2) == 0 else "crown"
+        won = result == choice
+        multiplier = round(edge_factor / 0.5, 4) if won else 0.0
+        outcome = {"won": won, "result": result, "choice": choice, "headline": f"{result.title()} landed"}
+    elif game_key == "dice":
+        direction = str(selection.get("direction") or "under").lower()
+        try:
+            target = int(selection.get("target") or 50)
+        except (TypeError, ValueError):
+            target = 50
+        if direction not in ("under", "over") or not 10 <= target <= 90:
+            raise ValueError("Choose over or under with a target from 10 through 90.")
+        roll_units = secrets.randbelow(10000) + 1
+        roll = round(roll_units / 100.0, 2)
+        won = roll_units < target * 100 if direction == "under" else roll_units > target * 100
+        probability = (target * 100 - 1) / 10000.0 if direction == "under" else (10000 - target * 100) / 10000.0
+        multiplier = round(edge_factor / probability, 4) if won else 0.0
+        outcome = {"won": won, "roll": roll, "direction": direction, "target": target, "headline": f"The table rolled {roll:.2f}"}
+    elif game_key == "slots":
+        symbols = ["seven", "fc", "crown", "bar", "chip", "bell"]
+        reels = [secrets.choice(symbols) for _ in range(3)]
+        counts = {symbol: reels.count(symbol) for symbol in set(reels)}
+        base = 0.0
+        if len(counts) == 1:
+            base = {"seven": 25, "fc": 15, "crown": 10, "bar": 7, "chip": 5, "bell": 3}[reels[0]]
+        elif max(counts.values()) == 2:
+            base = 1.5
+        multiplier = round(base * (edge_factor / 0.925), 4) if base else 0.0
+        outcome = {"won": multiplier > 0, "reels": reels, "headline": "Jackpot line" if len(counts) == 1 else "Pair on the payline" if base else "No line this spin"}
+    elif game_key == "keno":
+        raw_picks = selection.get("picks")
+        if not isinstance(raw_picks, list):
+            raw_picks = []
+        try:
+            picks = sorted({int(value) for value in raw_picks})
+        except (TypeError, ValueError):
+            picks = []
+        if not picks:
+            picks = sorted(casino_secure_sample(list(range(1, 41)), 5))
+        if len(picks) != 5 or any(value < 1 or value > 40 for value in picks):
+            raise ValueError("Choose five different Keno numbers from 1 through 40.")
+        drawn = sorted(casino_secure_sample(list(range(1, 41)), 10))
+        matches = sorted(set(picks).intersection(drawn))
+        base = {0: 0, 1: 0, 2: 2, 3: 3, 4: 12, 5: 150}[len(matches)]
+        multiplier = round(base * (edge_factor / 0.965), 4) if base else 0.0
+        outcome = {"won": multiplier > 0, "picks": picks, "drawn": drawn, "matches": matches, "headline": f"{len(matches)} number{'s' if len(matches) != 1 else ''} matched"}
+    elif game_key == "mines":
+        try:
+            mine_count = int(selection.get("mine_count") or 5)
+        except (TypeError, ValueError):
+            mine_count = 5
+        if mine_count not in (3, 5, 8):
+            raise ValueError("Choose a 3, 5, or 8-mine field.")
+        mines = sorted(casino_secure_sample(list(range(25)), mine_count))
+        picks = sorted(casino_secure_sample(list(range(25)), 3))
+        hit = sorted(set(mines).intersection(picks))
+        probability = math.comb(25 - mine_count, 3) / math.comb(25, 3)
+        multiplier = round(edge_factor / probability, 4) if not hit else 0.0
+        outcome = {"won": not hit, "mine_count": mine_count, "picks": picks, "mines": mines, "hit": hit, "headline": "Three clean tiles" if not hit else "Mine field breached"}
+    else:
+        raise ValueError("That casino game is not available.")
+    payout = round(bet * multiplier, 2) if multiplier else 0.0
+    outcome["multiplier"] = multiplier
+    outcome["payout"] = payout
+    return outcome, multiplier, payout
+
+
+def casino_admin_snapshot(db: Database, settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    games = casino_game_settings_payload(db)
+    totals = one(db, """SELECT COUNT(*) AS rounds,COALESCE(SUM(bet_amount),0) AS wagered,COALESCE(SUM(payout_amount),0) AS scheduled_payouts,
+        COUNT(*) FILTER (WHERE status IN ('awaiting_debit','won_pending_payout')) AS pending,
+        COUNT(*) FILTER (WHERE status='rejected') AS rejected FROM casino_rounds""") or {}
+    recent = all_rows(db, """SELECT r.*,u.name AS player_name,u.civ_number FROM casino_rounds r JOIN users u ON u.id=r.user_id ORDER BY r.id DESC LIMIT 200""")
+    for row in recent:
+        for field in ("selection_json", "outcome_json"):
+            try:
+                row[field[:-5]] = json.loads(row.get(field) or "{}")
+            except (TypeError, json.JSONDecodeError):
+                row[field[:-5]] = {}
+            row.pop(field, None)
+        for field in ("bet_amount", "payout_amount", "multiplier"):
+            row[field] = float(row.get(field) or 0)
+    cycles = all_rows(db, "SELECT * FROM casino_balance_cycles ORDER BY id DESC LIMIT 20")
+    return {
+        "settings": settings or get_system_settings(db),
+        "games": games,
+        "totals": {"rounds": int(totals.get("rounds") or 0), "wagered": float(totals.get("wagered") or 0), "scheduled_payouts": float(totals.get("scheduled_payouts") or 0), "pending": int(totals.get("pending") or 0), "rejected": int(totals.get("rejected") or 0)},
+        "recent_rounds": [dict(row) for row in recent],
+        "cycles": [dict(row) for row in cycles],
+        "gemini_configured": bool(GEMINI_API_KEY),
+    }
+
+
+def casino_balance_cycle(db: Database, actor_id: int | None = None, cycle_type: str = "automatic") -> dict[str, Any]:
+    applied: list[dict[str, Any]] = []
+    health: list[dict[str, Any]] = []
+    for game in casino_game_settings_payload(db):
+        row = one(db, """SELECT COUNT(*) AS rounds,COALESCE(SUM(bet_amount),0) AS wagered,COALESCE(SUM(payout_amount),0) AS payouts
+            FROM (SELECT id,bet_amount,payout_amount FROM casino_rounds WHERE game_key=? AND status IN ('lost','won_pending_payout','paid','payout_failed') ORDER BY id DESC LIMIT 200) sample""", (game["game_key"],)) or {}
+        wagered = float(row.get("wagered") or 0)
+        payouts = float(row.get("payouts") or 0)
+        observed_rtp = payouts / wagered * 100 if wagered else None
+        target_rtp = 100.0 - float(game["house_edge"])
+        health.append({"game_key": game["game_key"], "rounds": int(row.get("rounds") or 0), "observed_rtp": round(observed_rtp, 2) if observed_rtp is not None else None, "target_rtp": round(target_rtp, 2)})
+        if cycle_type == "automatic" and observed_rtp is not None and int(row.get("rounds") or 0) >= 50 and abs(observed_rtp - target_rtp) > 8:
+            adjustment = 0.25 if observed_rtp > target_rtp else -0.25
+            new_edge = round(max(1.0, min(15.0, float(game["house_edge"]) + adjustment)), 2)
+            if new_edge != float(game["house_edge"]):
+                db.execute("UPDATE casino_game_settings SET house_edge=?,updated_by=?,updated_at=? WHERE game_key=?", (new_edge, actor_id, now_iso(), game["game_key"]))
+                applied.append({"game_key": game["game_key"], "previous_edge": game["house_edge"], "house_edge": new_edge, "reason": "Observed RTP guardrail"})
+    summary = {"games": health, "changes": len(applied), "policy": "Future-round odds only; outcomes are never rewritten."}
+    db.execute("INSERT INTO casino_balance_cycles (cycle_type,summary_json,applied_json,created_by,created_at) VALUES (?,?,?,?,?)", (cycle_type, json.dumps(summary, separators=(",", ":")), json.dumps(applied, separators=(",", ":")), actor_id, now_iso()))
+    set_system_setting(db, "casino_autopilot_last_tick", now_iso())
+    set_system_setting(db, "casino_last_balance_summary", json.dumps(summary, separators=(",", ":"))[:4000])
+    return {"summary": summary, "applied": applied}
 
 def lottery_active_ticket_count(db: Database, user_id: int) -> int:
     weekly = one(db, "SELECT COUNT(*) AS count FROM lottery_entries e JOIN lottery_draws d ON d.id=e.draw_id WHERE e.user_id=? AND e.status IN ('awaiting_debit','eligible') AND d.status='scheduled'", (user_id,))
@@ -5573,7 +5841,7 @@ def run_due_quick_draws(db: Database, settings: dict[str, Any] | None = None) ->
     settings = settings or get_system_settings(db)
     if not settings["lottery_enabled"] or not settings["lottery_quick_draw_enabled"]:
         return
-    due = all_rows(db, "SELECT * FROM lottery_quick_draws WHERE status='scheduled' AND scheduled_at<=? ORDER BY scheduled_at", (now_iso(),))
+    due = all_rows(db, "SELECT * FROM lottery_quick_draws WHERE status='scheduled' AND scheduled_at<=? ORDER BY scheduled_at FOR UPDATE SKIP LOCKED", (now_iso(),))
     for draw in due:
         entries = all_rows(db, "SELECT * FROM lottery_quick_draw_entries WHERE draw_id=? AND status='eligible' ORDER BY id", (draw["id"],))
         winning_numbers = lottery_random_numbers(3, 0, 9)
@@ -5596,14 +5864,20 @@ def run_due_lottery_draws(db: Database) -> None:
     settings = get_system_settings(db)
     if not settings["lottery_enabled"]:
         return
-    for draw in all_rows(db, "SELECT * FROM lottery_draws WHERE status='scheduled' AND scheduled_at<=? ORDER BY scheduled_at", (now_iso(),)):
+    for draw in all_rows(db, "SELECT * FROM lottery_draws WHERE status='scheduled' AND scheduled_at<=? ORDER BY scheduled_at FOR UPDATE SKIP LOCKED", (now_iso(),)):
+        # Establish the official result independently before any ticket lines
+        # are loaded or compared. Tickets can only be evaluated afterward.
+        winning_numbers = lottery_random_numbers(5, 1, 49)
         entries = all_rows(db, "SELECT * FROM lottery_entries WHERE draw_id=? AND status='eligible' AND fraud_flag=0 ORDER BY id", (draw["id"],))
         funding = lottery_funding_snapshot(db, settings)
-        winning_numbers = lottery_random_numbers(5, 1, 49)
         exact = [entry for entry in entries if lottery_saved_numbers(entry.get("pick_numbers")) == winning_numbers]
         winner = exact[secrets.randbelow(len(exact))] if exact and funding["available"] > 0 else None
         payout = round(funding["available"] * settings["lottery_payout_percent"] / 100, 2) if winner else 0
-        db.execute("""UPDATE lottery_draws SET status='completed',winning_numbers=?,source_fines=?,source_market_fees=?,prize_pool=?,payout_amount=?,winning_entry_id=?,winner_user_id=?,completed_at=? WHERE id=? AND status='scheduled'""", (json.dumps(winning_numbers), funding["fines"], funding["market_fees"], funding["available"], payout, winner["id"] if winner else None, winner["user_id"] if winner else None, now_iso(), draw["id"]))
+        # Unpaid value remains in lottery_funding_snapshot because that total
+        # subtracts only completed payouts. Record the carried amount on the
+        # draw as an auditable rollover without adding it to the pool twice.
+        rollover = round(max(0.0, float(funding["available"]) - payout), 2)
+        db.execute("""UPDATE lottery_draws SET status='completed',winning_numbers=?,source_fines=?,source_market_fees=?,prize_pool=?,payout_amount=?,rollover_amount=?,winning_entry_id=?,winner_user_id=?,completed_at=? WHERE id=? AND status='scheduled'""", (json.dumps(winning_numbers), funding["fines"], funding["market_fees"], funding["available"], payout, rollover, winner["id"] if winner else None, winner["user_id"] if winner else None, now_iso(), draw["id"]))
         if winner:
             payout_command = queue_lottery_bank_payout(db, int(winner["user_id"]), payout, f"Lottery weekly payout FCW-{int(winner['id']):07d}")
             if payout_command:
@@ -6533,6 +6807,7 @@ def admin_tools_route_section(path: str) -> str:
         ("/api/dev-tools/banking/", "banking-settings"),
         ("/api/dev-tools/market/", "market-settings"),
         ("/api/dev-tools/lottery/", "lottery-settings"),
+        ("/api/dev-tools/casino/", "casino-tools"),
         ("/api/dev-tools/gangs/", "gang-settings"),
         ("/api/dev-tools/sanctions", "enforcement"),
         ("/api/dev-tools/warnings", "warnings"),
@@ -6562,6 +6837,7 @@ def account_deletion_impact(db: Database, target_id: int) -> dict[str, Any]:
         ("businesses", "SELECT COUNT(*) AS count FROM businesses WHERE owner_id = ?", (target_id,)),
         ("properties", "SELECT COUNT(*) AS count FROM properties WHERE owner_id = ?", (target_id,)),
         ("lottery_entries", "SELECT COUNT(*) AS count FROM lottery_entries WHERE user_id = ?", (target_id,)),
+        ("casino_rounds", "SELECT COUNT(*) AS count FROM casino_rounds WHERE user_id = ?", (target_id,)),
         ("sanctions", "SELECT COUNT(*) AS count FROM account_sanctions WHERE user_id = ?", (target_id,)),
         ("internal_notes", "SELECT COUNT(*) AS count FROM account_internal_warnings WHERE user_id = ?", (target_id,)),
     )
@@ -6636,6 +6912,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         ("bank", "BANK", "bank", verified, False),
         ("lottery", "LOTTERY", "trophy", verified, False),
         ("sportsbook", "SPORTSBOOK", "sports", verified, False),
+        ("casino", "FAIRCROFT CASINO", "casino", verified, False),
         ("insurance", "INSURANCE", "insurance", verified, False),
         ("gangs", "GANG NETWORK", "gang", verified, False),
         ("realty", "FAIRCROFT REALTY", "realty", verified, False),
@@ -7821,6 +8098,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_sportsbook(db, user, query)
                 elif path == "/api/sportsbook/bets" and method == "POST":
                     self.api_sportsbook_bet(db, user)
+                elif path == "/api/casino" and method == "GET":
+                    self.api_casino(db, user)
+                elif path == "/api/casino/rounds" and method == "POST":
+                    self.api_casino_round(db, user)
                 elif path == "/api/lottery/entries" and method == "POST":
                     self.api_lottery_entry(db, user)
                 elif path == "/api/lottery/scratch" and method == "POST":
@@ -8073,6 +8354,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_lottery_entry_review(db, user, self.path_int(path, 4))
                 elif path == "/api/dev-tools/lottery/draw" and method == "POST":
                     self.api_dev_lottery_draw(db, user)
+                elif path == "/api/dev-tools/casino/settings" and method == "PATCH":
+                    self.api_dev_casino_settings(db, user)
+                elif path == "/api/dev-tools/casino/balance-cycle" and method == "POST":
+                    self.api_dev_casino_balance_cycle(db, user)
+                elif path == "/api/dev-tools/casino/gemini" and method == "POST":
+                    self.api_dev_casino_gemini(db, user)
                 elif path == "/api/dev-tools/gangs/settings" and method == "PATCH":
                     self.api_dev_gang_settings(db, user)
                 elif path.startswith("/api/dev-tools/gangs/members/") and method == "PATCH":
@@ -11422,6 +11709,23 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 if scratch["promo_id"]:
                     db.execute("UPDATE market_promo_codes SET active=0 WHERE id=?", (scratch["promo_id"],))
                 add_admin_audit(db, int(scratch["user_id"]), "lottery.scratch.ticket.failed", int(row["target_user_id"]), {"command_id": command_id, "ticket_id": scratch["id"], "result": result})
+        casino_round = one(db, "SELECT * FROM casino_rounds WHERE bank_command_id=? OR payout_command_id=?", (command_id, command_id))
+        if casino_round:
+            is_casino_payout = str(casino_round.get("payout_command_id") or "") == command_id
+            if is_casino_payout:
+                if status == "completed":
+                    db.execute("UPDATE casino_rounds SET status='paid',settled_at=? WHERE id=?", (now_iso(), casino_round["id"]))
+                elif status == "failed":
+                    db.execute("UPDATE casino_rounds SET status='payout_failed',settled_at=? WHERE id=?", (now_iso(), casino_round["id"]))
+                add_admin_audit(db, int(casino_round["user_id"]), "casino.payout.result", int(row["target_user_id"]), {"round_id": casino_round["round_id"], "command_id": command_id, "status": status, "result": result})
+            elif status == "completed":
+                payout_command = casino_queue_command(db, int(casino_round["user_id"]), float(casino_round["payout_amount"] or 0), "issue_funds", f"Casino payout {casino_round['round_id']}")
+                next_status = "won_pending_payout" if payout_command else "lost" if float(casino_round["payout_amount"] or 0) <= 0 else "payout_failed"
+                db.execute("UPDATE casino_rounds SET status=?,payout_command_id=?,settled_at=? WHERE id=?", (next_status, payout_command, now_iso(), casino_round["id"]))
+                add_admin_audit(db, int(casino_round["user_id"]), "casino.debit.completed", int(row["target_user_id"]), {"round_id": casino_round["round_id"], "command_id": command_id, "payout_command_id": payout_command, "payout": float(casino_round["payout_amount"] or 0)})
+            elif status == "failed":
+                db.execute("UPDATE casino_rounds SET status='rejected',settled_at=? WHERE id=?", (now_iso(), casino_round["id"]))
+                add_admin_audit(db, int(casino_round["user_id"]), "casino.debit.failed", int(row["target_user_id"]), {"round_id": casino_round["round_id"], "command_id": command_id, "result": result})
         insurance_policy = one(db, "SELECT id, user_id FROM insurance_policies WHERE bank_command_id=?", (command_id,))
         insurance_claim = one(db, "SELECT id, user_id, claim_number FROM insurance_claims WHERE payout_command_id=?", (command_id,))
         if insurance_policy:
@@ -11906,6 +12210,102 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], round(new_price, 4), "scheduled_program", current.isoformat()))
             if progress >= 1:
                 db.execute("UPDATE market_price_programs SET status = 'completed' WHERE id = ?", (program["id"],))
+
+    def casino_round_public(self, row: DbRow | dict[str, Any]) -> dict[str, Any]:
+        item = dict(row)
+        for source, target in (("selection_json", "selection"), ("outcome_json", "outcome")):
+            try:
+                item[target] = json.loads(item.get(source) or "{}")
+            except (TypeError, json.JSONDecodeError):
+                item[target] = {}
+            item.pop(source, None)
+        for key in ("bet_amount", "payout_amount", "multiplier"):
+            item[key] = float(item.get(key) or 0)
+        return item
+
+    def api_casino(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        settings = get_system_settings(db)
+        wallet = casino_wallet_snapshot(db, int(user["id"]))
+        rounds = [self.casino_round_public(row) for row in all_rows(db, "SELECT * FROM casino_rounds WHERE user_id=? ORDER BY id DESC LIMIT 100", (user["id"],))]
+        today_start = utcnow().date().isoformat() + "T00:00:00+00:00"
+        today = one(db, """SELECT COALESCE(SUM(bet_amount),0) AS wagered,COALESCE(SUM(payout_amount),0) AS payouts,COUNT(*) AS rounds
+            FROM casino_rounds WHERE user_id=? AND created_at>=? AND status<>'rejected'""", (user["id"], today_start)) or {}
+        daily_net = max(0.0, float(today.get("wagered") or 0) - float(today.get("payouts") or 0))
+        self.send_json(200, {
+            "enabled": settings["casino_enabled"],
+            "wallet": wallet,
+            "games": casino_game_settings_payload(db),
+            "rounds": rounds,
+            "daily": {"rounds": int(today.get("rounds") or 0), "wagered": round(float(today.get("wagered") or 0), 2), "payouts": round(float(today.get("payouts") or 0), 2), "net_loss": round(daily_net, 2), "loss_limit": settings["casino_daily_loss_limit"], "remaining": round(max(0.0, settings["casino_daily_loss_limit"] - daily_net), 2)},
+            "notice": "Fictional Faircroft in-game currency only. No cash value, deposits, cards, or cryptocurrency.",
+        })
+
+    def api_casino_round(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        # Serialize wagers per account so simultaneous taps cannot spend the
+        # same read-only game-bank snapshot before the first debit is reserved.
+        one(db, "SELECT id FROM users WHERE id=? FOR UPDATE", (user["id"],))
+        settings = get_system_settings(db)
+        if not settings["casino_enabled"]:
+            self.error(409, "Faircroft Casino is currently closed")
+            return
+        payload = self.read_json()
+        game_key = str(payload.get("game_key") or "").strip().lower()[:30]
+        game = one(db, "SELECT * FROM casino_game_settings WHERE game_key=?", (game_key,))
+        if not game or not bool(game.get("enabled")):
+            self.error(409, "That casino table is not open")
+            return
+        try:
+            bet = round(float(payload.get("bet") or 0), 2)
+        except (TypeError, ValueError):
+            bet = 0.0
+        if bet <= 0 or bet != int(bet):
+            self.error(400, "Wager must be a positive whole-number amount")
+            return
+        minimum = float(game.get("min_bet") or 0)
+        maximum = float(game.get("max_bet") or 0)
+        if bet < minimum or bet > maximum:
+            self.error(400, f"This table accepts wagers from ${minimum:,.0f} through ${maximum:,.0f}")
+            return
+        wallet = casino_wallet_snapshot(db, int(user["id"]))
+        if not wallet["linked"]:
+            self.error(409, "Link your Arma account before entering Faircroft Casino")
+            return
+        if wallet["available"] is None:
+            self.error(409, "Your read-only in-game bank snapshot is not available yet")
+            return
+        if bet > float(wallet["available"]):
+            self.error(409, f"Insufficient available in-game balance. Available: ${float(wallet['available']):,.2f}")
+            return
+        today_start = utcnow().date().isoformat() + "T00:00:00+00:00"
+        today = one(db, "SELECT COALESCE(SUM(bet_amount),0) AS wagered,COALESCE(SUM(payout_amount),0) AS payouts FROM casino_rounds WHERE user_id=? AND created_at>=? AND status<>'rejected'", (user["id"], today_start)) or {}
+        current_loss = max(0.0, float(today.get("wagered") or 0) - float(today.get("payouts") or 0))
+        if current_loss + bet > float(settings["casino_daily_loss_limit"]):
+            self.error(409, f"This wager exceeds your Faircroft Casino daily play limit. Remaining: ${max(0.0, float(settings['casino_daily_loss_limit']) - current_loss):,.2f}")
+            return
+        selection = payload.get("selection") if isinstance(payload.get("selection"), dict) else {}
+        try:
+            outcome, multiplier, payout = casino_resolve_game(game_key, selection, bet, float(game.get("house_edge") or 0))
+        except ValueError as exc:
+            self.error(400, str(exc))
+            return
+        round_id = f"FCC-{secrets.token_hex(8).upper()}"
+        command_id = casino_queue_command(db, int(user["id"]), bet, "debit_funds", f"Casino wager {round_id}", str(wallet.get("identity_id") or ""))
+        if not command_id:
+            self.error(409, "The Bank Bridge could not create this wager")
+            return
+        created_at = now_iso()
+        row = one(db, """INSERT INTO casino_rounds
+            (round_id,user_id,game_key,bet_amount,payout_amount,multiplier,status,selection_json,outcome_json,bank_command_id,created_at)
+            VALUES (?,?,?,?,?,?,'awaiting_debit',?,?,?,?) RETURNING *""",
+            (round_id, user["id"], game_key, bet, payout, multiplier, json.dumps(selection, separators=(",", ":")), json.dumps(outcome, separators=(",", ":")), command_id, created_at))
+        add_admin_audit(db, int(user["id"]), "casino.round.created", int(user["id"]), {"round_id": round_id, "game": game_key, "bet": bet, "payout": payout, "multiplier": multiplier, "bank_command_id": command_id})
+        self.send_json(202, {"ok": True, "round": self.casino_round_public(row), "wallet": casino_wallet_snapshot(db, int(user["id"]))})
 
     def api_sportsbook(self, db: Database, user: DbRow | None, query: dict[str, list[str]]) -> None:
         if not user:
@@ -12656,6 +13056,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "game": game_name,
                     "ticket_number": f"{'FCW' if game_name == 'weekly' else 'FCQ'}-{int(item['id']):07d}",
                     "entry_number": int(item.get("entry_number") or 0),
+                    "source": str(item.get("source") or "purchased"),
                     "pick_numbers": lottery_saved_numbers(item.get("pick_numbers")),
                     "ticket_cost": float(item.get("ticket_cost") or 0),
                     "purchased_at": item.get("created_at"),
@@ -12685,10 +13086,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if excluded:
             self.error(403, "This account is excluded from lottery participation by role policy."); return
         payload = self.read_json()
-        try:
-            picks = lottery_pick_numbers(payload.get("numbers"), 5, 1, 49)
-        except ValueError as exc:
-            self.error(400, str(exc)); return
+        quick_pick = payload.get("quick_pick") is True
+        if quick_pick:
+            picks = lottery_random_numbers(5, 1, 49)
+        else:
+            try:
+                picks = lottery_pick_numbers(payload.get("numbers"), 5, 1, 49)
+            except ValueError as exc:
+                self.error(400, str(exc)); return
         draw = ensure_lottery_draw(db, settings); today = utcnow().astimezone(ZoneInfo(settings["lottery_timezone"])).date().isoformat()
         if lottery_active_ticket_count(db, int(user["id"])) >= 5:
             self.error(409, "You already have five open lottery tickets. Wait for one draw to close before purchasing another."); return
@@ -12697,13 +13102,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         # fast repeated requests must share one daily number sequence.
         one(db, "SELECT id FROM users WHERE id=? FOR UPDATE", (user["id"],))
         try:
-            command_id = queue_lottery_bank_debit(db, user, float(settings["lottery_ticket_price"]), f"Lottery weekly ticket FC-{int(user['id']):07d}")
+            ticket_kind = "Quick Pick" if quick_pick else "selected line"
+            command_id = queue_lottery_bank_debit(db, user, float(settings["lottery_ticket_price"]), f"Lottery weekly {ticket_kind} FC-{int(user['id']):07d}")
         except ValueError as exc:
             self.error(409, str(exc)); return
         weight = max([settings["lottery_role_weights"].get(role, 1.0) for role in roles] or [1.0])
         next_number = int(one(db, "SELECT COALESCE(MAX(entry_number),0) AS maximum FROM lottery_entries WHERE user_id=? AND entry_date=?", (user["id"], today))["maximum"] or 0) + 1
-        entry = one(db, "INSERT INTO lottery_entries (draw_id,user_id,entry_date,entry_number,role_weight,source,pick_numbers,ticket_cost,status,bank_command_id,created_at) VALUES (?,?,?,?,?,'purchased',?,?, 'awaiting_debit', ?, ?) RETURNING id", (draw["id"], user["id"], today, next_number, weight, json.dumps(picks), settings["lottery_ticket_price"], command_id, now_iso()))
-        self.send_json(201, {"ok": True, "entry_number": next_number, "numbers": picks, "status": "awaiting_debit", "command_id": command_id, "wallet": lottery_game_snapshot(db, int(user["id"]))})
+        source = "quick_pick" if quick_pick else "purchased"
+        entry = one(db, "INSERT INTO lottery_entries (draw_id,user_id,entry_date,entry_number,role_weight,source,pick_numbers,ticket_cost,status,bank_command_id,created_at) VALUES (?,?,?,?,?,?,?,?, 'awaiting_debit', ?, ?) RETURNING id", (draw["id"], user["id"], today, next_number, weight, source, json.dumps(picks), settings["lottery_ticket_price"], command_id, now_iso()))
+        self.send_json(201, {"ok": True, "entry_number": next_number, "numbers": picks, "quick_pick": quick_pick, "status": "awaiting_debit", "command_id": command_id, "wallet": lottery_game_snapshot(db, int(user["id"]))})
 
     def api_lottery_scratch(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -18582,6 +18989,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "pending_bets": int(one(db, "SELECT COUNT(*) AS count FROM sportsbook_bets WHERE status='awaiting_debit'")["count"] or 0),
                     "accepted_bets": int(one(db, "SELECT COUNT(*) AS count FROM sportsbook_bets WHERE status='accepted'")["count"] or 0),
                 },
+                "casino_tools": casino_admin_snapshot(db, system_settings),
             },
         )
 
@@ -19366,6 +19774,108 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(502, f"Gemini market briefing failed: {str(exc)[:300]}"); return
         db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('ai_briefing','Gemini market briefing',?,?,?)", (briefing,user["id"],now_iso()))
         self.send_json(200, {"ok": True, "briefing": briefing})
+
+    def api_dev_casino_settings(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        try:
+            daily_limit = max(100.0, min(1000000000.0, float(payload.get("daily_loss_limit") or 250000)))
+            interval = max(60, min(10080, int(payload.get("autopilot_interval_minutes") or 360)))
+        except (TypeError, ValueError):
+            self.error(400, "Casino limits must be valid numbers")
+            return
+        set_system_setting(db, "casino_enabled", "1" if bool(payload.get("enabled")) else "0")
+        set_system_setting(db, "casino_daily_loss_limit", f"{daily_limit:.2f}")
+        set_system_setting(db, "casino_autopilot_enabled", "1" if bool(payload.get("autopilot_enabled")) else "0")
+        set_system_setting(db, "casino_autopilot_interval_minutes", str(interval))
+        set_system_setting(db, "casino_gemini_enabled", "1" if bool(payload.get("gemini_enabled")) else "0")
+        games = payload.get("games") if isinstance(payload.get("games"), list) else []
+        allowed = {row["game_key"] for row in casino_game_settings_payload(db)}
+        updated: list[str] = []
+        for item in games:
+            if not isinstance(item, dict):
+                continue
+            game_key = str(item.get("game_key") or "").strip().lower()
+            if game_key not in allowed:
+                continue
+            try:
+                minimum = max(1.0, min(1000000000.0, float(item.get("min_bet") or 10)))
+                maximum = max(minimum, min(1000000000.0, float(item.get("max_bet") or minimum)))
+                house_edge = max(1.0, min(15.0, float(item.get("house_edge") or 4)))
+            except (TypeError, ValueError):
+                self.error(400, f"Invalid limits for {game_key}")
+                return
+            db.execute("UPDATE casino_game_settings SET enabled=?,min_bet=?,max_bet=?,house_edge=?,updated_by=?,updated_at=? WHERE game_key=?", (1 if bool(item.get("enabled")) else 0, round(minimum, 2), round(maximum, 2), round(house_edge, 2), user["id"], now_iso(), game_key))
+            updated.append(game_key)
+        add_admin_audit(db, int(user["id"]), "casino.settings.updated", details={"games": updated, "enabled": bool(payload.get("enabled")), "daily_loss_limit": daily_limit, "autopilot_enabled": bool(payload.get("autopilot_enabled"))})
+        self.send_json(200, {"ok": True, "casino": casino_admin_snapshot(db)})
+
+    def api_dev_casino_balance_cycle(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        result = casino_balance_cycle(db, int(user["id"]), "automatic")
+        add_admin_audit(db, int(user["id"]), "casino.balance_cycle.completed", details={"changes": len(result["applied"]), "applied": result["applied"]})
+        self.send_json(200, {"ok": True, **result})
+
+    def api_dev_casino_gemini(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        settings = get_system_settings(db)
+        if not GEMINI_API_KEY or not settings["casino_gemini_enabled"]:
+            self.error(409, "Gemini casino balancing is not configured or is disabled")
+            return
+        metrics = []
+        for game in casino_game_settings_payload(db):
+            row = one(db, """SELECT COUNT(*) AS rounds,COALESCE(SUM(bet_amount),0) AS wagered,COALESCE(SUM(payout_amount),0) AS payouts
+                FROM (SELECT id,bet_amount,payout_amount FROM casino_rounds WHERE game_key=? AND status IN ('lost','won_pending_payout','paid','payout_failed') ORDER BY id DESC LIMIT 500) sample""", (game["game_key"],)) or {}
+            wagered = float(row.get("wagered") or 0)
+            metrics.append({"game_key": game["game_key"], "rounds": int(row.get("rounds") or 0), "current_house_edge": game["house_edge"], "observed_rtp": round(float(row.get("payouts") or 0) / wagered * 100, 2) if wagered else None})
+        prompt = ("You are the Faircroft Casino game-math auditor for a fictional roleplay currency system. Review aggregate RTP only. "
+                  "Never choose winners, target a player, recommend deceptive behavior, or change completed rounds. Return strict JSON with keys summary and recommendations. "
+                  "recommendations must be an array of objects with game_key, house_edge, and reason. House edges must remain between 1 and 15 percent and should change by no more than 1 percentage point. "
+                  f"CURRENT METRICS:\n{json.dumps(metrics, separators=(',', ':'))}")
+        body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1200, "responseMimeType": "application/json"}}
+        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{FNN_GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+        request = urllib.request.Request(endpoint, data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=90) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            raw = str(result["candidates"][0]["content"]["parts"][0]["text"]).strip()
+            raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.IGNORECASE)
+            recommendation = json.loads(raw)
+        except (urllib.error.URLError, urllib.error.HTTPError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+            self.error(502, f"Gemini casino review failed: {str(exc)[:300]}")
+            return
+        current = {item["game_key"]: item for item in casino_game_settings_payload(db)}
+        applied: list[dict[str, Any]] = []
+        if bool(self.read_json().get("apply", True)):
+            for item in recommendation.get("recommendations", []) if isinstance(recommendation, dict) else []:
+                game_key = str((item or {}).get("game_key") or "").lower()
+                if game_key not in current:
+                    continue
+                try:
+                    suggested = float(item.get("house_edge"))
+                except (TypeError, ValueError):
+                    continue
+                previous = float(current[game_key]["house_edge"])
+                safe_edge = round(max(1.0, min(15.0, max(previous - 1.0, min(previous + 1.0, suggested)))), 2)
+                db.execute("UPDATE casino_game_settings SET house_edge=?,updated_by=?,updated_at=? WHERE game_key=?", (safe_edge, user["id"], now_iso(), game_key))
+                applied.append({"game_key": game_key, "previous_edge": previous, "house_edge": safe_edge, "reason": str(item.get("reason") or "Gemini aggregate RTP review")[:300]})
+        summary = str(recommendation.get("summary") or "Gemini balance review completed")[:2000] if isinstance(recommendation, dict) else "Gemini balance review completed"
+        db.execute("INSERT INTO casino_balance_cycles (cycle_type,summary_json,applied_json,created_by,created_at) VALUES ('gemini',?,?,?,?)", (json.dumps({"summary": summary, "metrics": metrics}, separators=(",", ":")), json.dumps(applied, separators=(",", ":")), user["id"], now_iso()))
+        set_system_setting(db, "casino_last_balance_summary", summary)
+        add_admin_audit(db, int(user["id"]), "casino.gemini_review.completed", details={"summary": summary, "applied": applied})
+        self.send_json(200, {"ok": True, "summary": summary, "applied": applied})
 
     def api_dev_lottery_settings(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
@@ -21884,6 +22394,26 @@ def sportsbook_sync_worker() -> None:
         time.sleep(min(60, KALSHI_POLL_SECONDS))
 
 
+def casino_balance_worker() -> None:
+    """Run low-frequency RTP guardrails without touching individual outcomes."""
+    time.sleep(60)
+    while True:
+        try:
+            with conn() as db:
+                settings = get_system_settings(db)
+                if settings["casino_autopilot_enabled"]:
+                    current = utcnow()
+                    last_tick = parse_iso(settings["casino_autopilot_last_tick"]) if settings["casino_autopilot_last_tick"] else None
+                    if not last_tick or (current - last_tick).total_seconds() >= settings["casino_autopilot_interval_minutes"] * 60:
+                        result = casino_balance_cycle(db, None, "automatic")
+                        print(f"Faircroft Casino balance cycle reviewed {len(result['summary']['games'])} game(s); {len(result['applied'])} guardrail change(s)")
+        except Exception as exc:
+            print(f"Faircroft Casino balance cycle error: {type(exc).__name__}: {exc}")
+        # Casino policy intervals start at one hour. A five-minute watcher keeps
+        # scheduling responsive without adding a needless database query every minute.
+        time.sleep(300)
+
+
 def main() -> None:
     schema_ready = False
     for attempt in range(1, 31):
@@ -21930,6 +22460,7 @@ def main() -> None:
     threading.Thread(target=lottery_worker, name="faircroft-lottery", daemon=True).start()
     threading.Thread(target=market_automation_worker, name="ravenhood-market-automation", daemon=True).start()
     threading.Thread(target=sportsbook_sync_worker, name="faircroft-sportsbook-sync", daemon=True).start()
+    threading.Thread(target=casino_balance_worker, name="faircroft-casino-balance", daemon=True).start()
     port = int(os.environ.get("PORT", "8080"))
     host = os.environ.get("HOST", "0.0.0.0")
     server = ThreadingHTTPServer((host, port), RoleplayHandler)
