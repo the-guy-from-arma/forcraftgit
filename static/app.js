@@ -4604,7 +4604,7 @@ function renderCasinoWorkspace() {
   const latest = state.casinoLastRound || rounds[0] || null;
   const playerName=state.session?.user?.name||'Verified resident',wonToday=Number(daily.payouts||0),openGames=games.filter(game=>game.enabled);
   const lobby=`<section class="casino-lobby casino-lobby-v3"><header><div><span>THE GAME FLOOR</span><h1>Play your way.</h1><p>Five original Faircroft games. Every wager and return settles against your linked in-game account.</p></div><aside><button data-refresh-casino>Refresh floor</button><span><i></i>${openGames.length} tables live</span></aside></header><div class="casino-floor-marquee" aria-hidden="true"><span>THE RESERVE</span><i></i><span>LIVE TABLES</span><i></i><span>VERIFIED BANK</span><i></i><span>FAIRCROFT NIGHTS</span></div><div class="casino-featured-grid" tabindex="0" aria-label="The Reserve casino games">${games.map((game,index)=>{const meta=CASINO_GAME_META[game.game_key]||{},terms=casinoGameTerms(game),last=rounds.find(round=>round.game_key===game.game_key);return `<article class="casino-feature-card ${escapeHtml(game.game_key)} ${game.enabled?'':'closed'}" style="--game-order:${index}"><div class="casino-feature-art">${casinoLobbyArt(game.game_key)}<span>${escapeHtml(meta.type||'Table')} · ${escapeHtml(meta.index||'')}</span></div><div class="casino-feature-copy"><header><span><i></i>${game.enabled?'OPEN NOW':'TABLE CLOSED'}</span>${last?`<small>Last played ${new Date(last.created_at).toLocaleDateString()}</small>`:'<small>Ready for first play</small>'}</header><h2>${escapeHtml(game.display_name||meta.name)}</h2><p>${escapeHtml(meta.line||'')}</p><dl><div><dt>WAGER</dt><dd>${money(game.min_bet)}–${money(game.max_bet)}</dd></div><div><dt>${escapeHtml(terms.returnLabel.toUpperCase())}</dt><dd>${terms.multiplier.toFixed(2)}×</dd></div></dl><button data-casino-game="${escapeHtml(game.game_key)}" ${!game.enabled||!data.enabled||wallet.available==null?'disabled':''}>${game.enabled?`Enter ${escapeHtml(meta.name||game.display_name)}`:'Table unavailable'}<b>→</b></button></div></article>`;}).join('')}</div><section class="casino-lobby-bottom"><article><header><span>YOUR SESSION</span><strong>UTC DAY</strong></header><div><span><small>Rounds played</small><strong>${Number(daily.rounds||0)}</strong></span><span><small>Amount wagered</small><strong>${money(daily.wagered||0)}</strong></span><span><small>Returns scheduled</small><strong>${money(wonToday)}</strong></span><span><small>Daily room left</small><strong>${money(daily.remaining||0)}</strong></span></div></article><aside><header><span>RECENT PLAY</span><strong>${rounds.length} RECORDED</strong></header><div>${rounds.slice(0,5).map(round=>`<article class="${casinoRoundState(round)}"><i>${escapeHtml(CASINO_GAME_META[round.game_key]?.index||'FC')}</i><span><strong>${escapeHtml(CASINO_GAME_META[round.game_key]?.name||round.game_key)}</strong><small>${new Date(round.created_at).toLocaleString()}</small></span><b>${money(round.bet_amount)}</b><em>${round.outcome?.won?`+${money(round.payout_amount)}`:'No win'}</em></article>`).join('')||'<p>No rounds yet. Choose a table to begin.</p>'}</div></aside></section></section>`;
-  return `<main class="casino-workspace casino-v3 casino-v4 ${activeGame ? "casino-table-open" : "casino-floor-open"}">
+  return `<main class="casino-workspace casino-v3 casino-v4 casino-v5 ${activeGame ? "casino-table-open" : "casino-floor-open"}">
     <header class="casino-topbar casino-topbar-v3"><div class="casino-brand"><i><b>FC</b></i><span><small>FAIRCROFT</small><strong>THE RESERVE</strong><em>CASINO</em></span></div><nav><button class="${state.casinoGame==='lobby'?'active':''}" data-casino-game="lobby" ${state.casinoAnimation?'disabled':''}>Casino</button><button data-casino-scroll="history">My play</button><span><i></i>${data.enabled?'LIVE FLOOR':'CLOSED'}</span></nav><button data-close-casino>Exit</button></header>
     <div class="casino-atmosphere" aria-hidden="true"><i></i><i></i><i></i><span></span></div>
     <section class="casino-member-bar"><div><i>${escapeHtml(playerName.slice(0,1).toUpperCase())}</i><span><small>VERIFIED PLAYER</small><strong>${escapeHtml(playerName)}</strong><em>${wallet.synced_at?`Bank synced ${new Date(wallet.synced_at).toLocaleString()}`:'Waiting for game-bank sync'}</em></span></div><dl><div><dt>PLAYABLE BALANCE</dt><dd>${wallet.available == null ? "Awaiting sync" : money(wallet.available)}</dd></div><div><dt>QUEUED WAGERS</dt><dd>${money(wallet.reserved || 0)}</dd></div><div><dt>DAILY PLAY ROOM</dt><dd>${money(daily.remaining || 0)}</dd></div></dl><strong><i></i>${data.enabled?`${openGames.length} games available`:'Floor closed'}</strong></section>
@@ -4618,7 +4618,25 @@ function renderCasinoWorkspace() {
 }
 
 function bindCasinoWorkspace() {
-  $$('[data-casino-game]').forEach(button=>button.addEventListener('click',()=>{if(state.casinoAnimation)return;state.casinoGame=button.dataset.casinoGame||'lobby';state.casinoLastRound=null;state.casinoNotice=null;render();}));
+  if (!app.dataset.casinoNavigationBound) {
+    app.dataset.casinoNavigationBound = 'true';
+    app.addEventListener('click', event => {
+      const button = event.target.closest?.('[data-casino-game]');
+      if (!button || !app.contains(button) || state.activeApp !== 'casino') return;
+      event.preventDefault();
+      if (state.casinoAnimation) return;
+      const nextGame = button.dataset.casinoGame || 'lobby';
+      if (nextGame !== 'lobby' && !(state.cache.casino?.games || []).some(game => game.game_key === nextGame && game.enabled)) return;
+      state.casinoGame = nextGame;
+      state.casinoLastRound = null;
+      state.casinoNotice = null;
+      render();
+      requestAnimationFrame(() => {
+        const destination = document.querySelector(nextGame === 'lobby' ? '.casino-lobby-v3' : '.casino-game-stage-v3');
+        destination?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+  }
   $$('[data-casino-history]').forEach(button=>button.addEventListener('click',()=>{state.casinoHistoryFilter=button.dataset.casinoHistory||'all';render();}));
   $('[data-casino-scroll="history"]')?.addEventListener('click',()=>document.querySelector('[data-casino-history-section]')?.scrollIntoView({behavior:'smooth',block:'start'}));
   $('[data-close-casino]')?.addEventListener('click',async()=>{state.activeApp=null;state.casinoGame='lobby';state.casinoLastRound=null;state.casinoNotice=null;await loadSession();});
@@ -14772,7 +14790,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-casino-rtp-private-v1").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-casino-floor-v5").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {
