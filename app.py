@@ -171,6 +171,7 @@ REFERRAL_BONUS_AMOUNT = 50000.00
 CASINO_MIN_HOUSE_EDGE = 1.0
 CASINO_MAX_HOUSE_EDGE = 95.0
 CASINO_WAGER_REQUEST_INTERVAL_SECONDS = 2.5
+CASINO_MAX_QUEUED_ROUNDS = 5
 CASINO_WAGER_REQUEST_TIMES: dict[str, float] = {}
 CASINO_WAGER_REQUEST_LOCK = threading.Lock()
 
@@ -5590,9 +5591,12 @@ def casino_active_round_queue(db: Database, user_id: int) -> dict[str, Any]:
         (user_id,),
     )
     first = rows[0] if rows else None
+    queued_count = len(rows)
     return {
-        "locked": bool(rows),
-        "count": len(rows),
+        "locked": queued_count >= CASINO_MAX_QUEUED_ROUNDS,
+        "count": queued_count,
+        "limit": CASINO_MAX_QUEUED_ROUNDS,
+        "remaining_slots": max(0, CASINO_MAX_QUEUED_ROUNDS - queued_count),
         "queued_wagers": round(sum(float(row.get("bet_amount") or 0) for row in rows if row.get("status") == "awaiting_debit"), 2),
         "round_id": str(first.get("round_id") or "") if first else "",
         "status": str(first.get("status") or "") if first else "",
@@ -5603,7 +5607,7 @@ def casino_active_round_queue(db: Database, user_id: int) -> dict[str, Any]:
 def casino_wallet_snapshot(db: Database, user_id: int) -> dict[str, Any]:
     link = one(db, "SELECT identity_id FROM arma_account_links WHERE user_id=? AND identity_id IS NOT NULL AND identity_id<>''", (user_id,))
     if not link:
-        return {"linked": False, "balance": None, "reserved": 0.0, "available": None, "synced_at": None, "round_gate": {"locked": False, "count": 0, "queued_wagers": 0.0, "round_id": "", "status": "", "created_at": None}}
+        return {"linked": False, "balance": None, "reserved": 0.0, "available": None, "synced_at": None, "round_gate": {"locked": False, "count": 0, "limit": CASINO_MAX_QUEUED_ROUNDS, "remaining_slots": CASINO_MAX_QUEUED_ROUNDS, "queued_wagers": 0.0, "round_id": "", "status": "", "created_at": None}}
     snapshot = one(db, "SELECT balance,synced_at FROM arma_game_bank_balances WHERE identity_id=?", (link["identity_id"],))
     pending = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM bank_bridge_commands WHERE target_user_id=? AND operation='debit_funds' AND status IN ('pending','claimed')", (user_id,))
     reserved = round(float((pending or {}).get("total") or 0), 2)
@@ -12764,10 +12768,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         round_gate = casino_active_round_queue(db, int(user["id"]))
         if round_gate["locked"]:
             queued_count = int(round_gate["count"])
+            queue_limit = int(round_gate["limit"])
             self.send_json(
                 429,
                 {
-                    "error": f"Your previous casino activity is still settling through Bank Bridge ({queued_count} queued round{'s' if queued_count != 1 else ''}). New wagers unlock automatically after settlement.",
+                    "error": f"You already have {queued_count} of {queue_limit} casino rounds settling through Bank Bridge. Wait for at least one round to settle before placing another wager.",
                     "code": "casino_settlement_pending",
                     "retry_after_seconds": 5,
                     "round_gate": round_gate,
