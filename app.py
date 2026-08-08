@@ -168,6 +168,8 @@ TREASURY_MAX_REQUEST_AMOUNT = 10_000_000.00
 TREASURY_MAX_PROOFS = 4
 TREASURY_MAX_PROOF_CHARS = 1_800_000
 REFERRAL_BONUS_AMOUNT = 50000.00
+CASINO_MIN_HOUSE_EDGE = 1.0
+CASINO_MAX_HOUSE_EDGE = 95.0
 
 
 def now_iso() -> str:
@@ -2580,6 +2582,9 @@ def ensure_schema() -> None:
                 coverage_percent NUMERIC(6,2) NOT NULL DEFAULT 0,
                 protected_bank_balance NUMERIC(18,2) NOT NULL DEFAULT 0,
                 premium_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+                monthly_premium_rate NUMERIC(12,2) NOT NULL DEFAULT 0,
+                term_months INTEGER NOT NULL DEFAULT 1,
+                rate_locked_until TEXT,
                 deductible_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
                 questionnaire TEXT NOT NULL DEFAULT '{}',
                 status TEXT NOT NULL DEFAULT 'active',
@@ -3874,6 +3879,11 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE insurance_policies ADD COLUMN IF NOT EXISTS protected_bank_balance NUMERIC(18,2) NOT NULL DEFAULT 0")
     db.execute("ALTER TABLE insurance_policies ADD COLUMN IF NOT EXISTS bank_command_id TEXT")
     db.execute("ALTER TABLE insurance_policies ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'completed'")
+    db.execute("ALTER TABLE insurance_policies ADD COLUMN IF NOT EXISTS monthly_premium_rate NUMERIC(12,2) NOT NULL DEFAULT 0")
+    db.execute("ALTER TABLE insurance_policies ADD COLUMN IF NOT EXISTS term_months INTEGER NOT NULL DEFAULT 1")
+    db.execute("ALTER TABLE insurance_policies ADD COLUMN IF NOT EXISTS rate_locked_until TEXT")
+    db.execute("UPDATE insurance_policies SET monthly_premium_rate=premium_amount WHERE monthly_premium_rate=0 AND premium_amount>0")
+    db.execute("UPDATE insurance_policies SET rate_locked_until=expires_at WHERE rate_locked_until IS NULL OR rate_locked_until='' ")
     db.execute("ALTER TABLE insurance_claims ADD COLUMN IF NOT EXISTS auto_approve_at TEXT")
     db.execute("ALTER TABLE insurance_claims ADD COLUMN IF NOT EXISTS payout_command_id TEXT")
     db.execute("""CREATE TABLE IF NOT EXISTS insurance_claims (
@@ -5038,8 +5048,11 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS game_persistence_record_idx ON game_persistence_records (record_id)")
     db.execute("CREATE INDEX IF NOT EXISTS arma_game_reputation_player_key_idx ON arma_game_reputation (LOWER(player_key))")
     db.execute("CREATE INDEX IF NOT EXISTS account_sanctions_user_idx ON account_sanctions (user_id, created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS account_sanctions_active_user_idx ON account_sanctions (user_id, sanction_type, starts_at, expires_at) WHERE revoked_at IS NULL")
     db.execute("CREATE INDEX IF NOT EXISTS account_warnings_user_idx ON account_internal_warnings (user_id, created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS admin_audit_logs_created_idx ON admin_audit_logs (created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS bank_bridge_commands_created_idx ON bank_bridge_commands (created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS user_characters_active_user_idx ON user_characters (user_id, is_active, updated_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS panic_alerts_department_idx ON panic_alerts (department)")
     db.execute("CREATE INDEX IF NOT EXISTS panic_alerts_status_idx ON panic_alerts (status, priority, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS dispatch_call_units_alert_idx ON dispatch_call_units (alert_id, detached_at)")
@@ -5544,7 +5557,7 @@ def casino_secure_sample(population: list[int], count: int) -> list[int]:
 
 
 def casino_resolve_game(game_key: str, selection: dict[str, Any], bet: float, house_edge: float) -> tuple[dict[str, Any], float, float]:
-    edge_factor = max(0.75, min(0.99, 1.0 - house_edge / 100.0))
+    edge_factor = max(0.05, min(0.99, 1.0 - house_edge / 100.0))
     multiplier = 0.0
     outcome: dict[str, Any]
     if game_key == "coin":
@@ -5657,7 +5670,7 @@ def casino_balance_cycle(db: Database, actor_id: int | None = None, cycle_type: 
         health.append({"game_key": game["game_key"], "rounds": int(row.get("rounds") or 0), "observed_rtp": round(observed_rtp, 2) if observed_rtp is not None else None, "target_rtp": round(target_rtp, 2)})
         if cycle_type == "automatic" and observed_rtp is not None and int(row.get("rounds") or 0) >= 50 and abs(observed_rtp - target_rtp) > 8:
             adjustment = 0.25 if observed_rtp > target_rtp else -0.25
-            new_edge = round(max(1.0, min(15.0, float(game["house_edge"]) + adjustment)), 2)
+            new_edge = round(max(CASINO_MIN_HOUSE_EDGE, min(CASINO_MAX_HOUSE_EDGE, float(game["house_edge"]) + adjustment)), 2)
             if new_edge != float(game["house_edge"]):
                 db.execute("UPDATE casino_game_settings SET house_edge=?,updated_by=?,updated_at=? WHERE game_key=?", (new_edge, actor_id, now_iso(), game["game_key"]))
                 applied.append({"game_key": game["game_key"], "previous_edge": game["house_edge"], "house_edge": new_edge, "reason": "Observed RTP guardrail"})
@@ -7721,6 +7734,123 @@ def presence_seconds(db: Database, user_id: int) -> int:
     return int(row["seconds"]) if row else 0
 
 
+def admin_account_directory(
+    db: Database,
+    *,
+    limit: int | None = None,
+    offset: int = 0,
+    search: str = "",
+) -> list[dict[str, Any]]:
+    """Build the Admin Tools account directory in one database round trip."""
+    window_start = (utcnow() - dt.timedelta(days=NAME_CHANGE_WINDOW_DAYS)).isoformat()
+    now = now_iso()
+    search_sql = ""
+    params: list[Any] = [today_key(), window_start, window_start, now, now]
+    if search.strip():
+        term = f"%{search.strip()}%"
+        search_sql = "WHERE u.name ILIKE ? OR u.email ILIKE ? OR u.civ_number ILIKE ? OR l.identity_id ILIKE ?"
+        params.extend((term, term, term, term))
+    paging_sql = ""
+    if limit is not None:
+        paging_sql = "LIMIT ? OFFSET ?"
+        params.extend((max(1, min(int(limit), 500)), max(0, int(offset))))
+    rows = all_rows(
+        db,
+        f"""
+        SELECT u.*, l.identity_id AS linked_arma_id, l.linked_at AS arma_linked_at,
+               COALESCE(p.seconds, 0) AS presence_seconds_today,
+               COALESCE(chars.character_count, 0) AS character_count,
+               COALESCE(active_character.character_name, u.name) AS active_character_name,
+               COALESCE(name_changes.used, 0) AS name_changes_used,
+               restriction.id AS restriction_id,
+               restriction.sanction_type AS restriction_type,
+               restriction.reason AS restriction_reason,
+               restriction.starts_at AS restriction_starts_at,
+               restriction.expires_at AS restriction_expires_at,
+               restriction.created_at AS restriction_created_at
+        FROM users u
+        LEFT JOIN arma_account_links l ON l.user_id = u.id
+        LEFT JOIN user_presence p ON p.user_id = u.id AND p.day = ?
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS character_count FROM user_characters c WHERE c.user_id = u.id
+        ) chars ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT c.character_name FROM user_characters c
+            WHERE c.user_id = u.id AND c.is_active = 1
+            ORDER BY c.updated_at DESC LIMIT 1
+        ) active_character ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS used FROM profile_name_changes n
+            WHERE n.user_id = u.id
+              AND n.changed_at >= CASE
+                    WHEN COALESCE(u.name_change_unlocked_at, '') > ? THEN u.name_change_unlocked_at
+                    ELSE ?
+                  END
+        ) name_changes ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT s.id, s.sanction_type, s.reason, s.starts_at, s.expires_at, s.created_at
+            FROM account_sanctions s
+            WHERE s.user_id = u.id
+              AND s.revoked_at IS NULL
+              AND s.sanction_type IN ('cad_timeout', 'cad_suspension', 'cad_temp_ban', 'cad_permanent_ban')
+              AND s.starts_at <= ?
+              AND (s.expires_at IS NULL OR s.expires_at > ?)
+            ORDER BY CASE s.sanction_type
+                WHEN 'cad_permanent_ban' THEN 0
+                WHEN 'cad_temp_ban' THEN 1
+                WHEN 'cad_suspension' THEN 2
+                ELSE 3 END, s.created_at DESC
+            LIMIT 1
+        ) restriction ON TRUE
+        {search_sql}
+        ORDER BY u.verified ASC, u.created_at DESC
+        {paging_sql}
+        """,
+        tuple(params),
+    )
+    accounts: list[dict[str, Any]] = []
+    for row in rows:
+        item = public_user(row)
+        item["arma_id"] = row.get("linked_arma_id")
+        item["linked_arma_id"] = row.get("linked_arma_id")
+        item["arma_linked"] = bool(row.get("linked_arma_id"))
+        item["arma_linked_at"] = row.get("arma_linked_at")
+        item["press_pass_status"] = row.get("press_pass_status") or "active"
+        item["press_pass_reason"] = row.get("press_pass_reason") or ""
+        item["press_pass_action_at"] = row.get("press_pass_action_at")
+        item["presence_seconds_today"] = int(row.get("presence_seconds_today") or 0)
+        used = int(row.get("name_changes_used") or 0)
+        unlocked_at = row.get("name_change_unlocked_at")
+        effective_window_start = window_start
+        if unlocked_at:
+            try:
+                if parse_iso(unlocked_at) > parse_iso(window_start):
+                    effective_window_start = unlocked_at
+            except ValueError:
+                pass
+        item["name_change"] = {
+            "locked": bool(row.get("name_change_locked", 0)),
+            "used": used,
+            "limit": NAME_CHANGE_LIMIT,
+            "remaining": max(0, NAME_CHANGE_LIMIT - used),
+            "window_days": NAME_CHANGE_WINDOW_DAYS,
+            "window_start": effective_window_start,
+            "unlocked_at": unlocked_at,
+        }
+        item["character_count"] = int(row.get("character_count") or 0)
+        item["active_character_name"] = row.get("active_character_name") or row.get("name")
+        item["admin_restriction"] = ({
+            "id": row.get("restriction_id"),
+            "sanction_type": row.get("restriction_type"),
+            "reason": row.get("restriction_reason") or "",
+            "starts_at": row.get("restriction_starts_at"),
+            "expires_at": row.get("restriction_expires_at"),
+            "created_at": row.get("restriction_created_at"),
+        } if row.get("restriction_id") else None)
+        accounts.append(item)
+    return accounts
+
+
 def active_jobs(db: Database, user_id: int) -> list[dict[str, Any]]:
     rows = all_rows(
         db,
@@ -8281,7 +8411,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 elif path == "/api/downloads/android" and method == "GET":
                     self.api_download_package(user, "android")
                 elif path == "/api/dev-tools" and method == "GET":
-                    self.api_dev_tools(db, user)
+                    requested_section = str((query.get("section") or [""])[0]).strip().lower()
+                    if requested_section:
+                        self.api_dev_tools_section(db, user, requested_section, query)
+                    else:
+                        self.api_dev_tools(db, user)
                 elif path == "/api/dev-tools/account-deletion/search" and method == "GET":
                     self.api_dev_account_deletion_search(db, user, query)
                 elif path.startswith("/api/dev-tools/account-deletion/") and method == "GET":
@@ -12013,17 +12147,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         policy_type = str(payload.get("policy_type") or "").strip().lower()
         tier = str(payload.get("coverage_tier") or "standard").strip().lower()
         subject = str(payload.get("subject_label") or "").strip()[:120]
+        try: term_months = int(payload.get("term_months") or 1)
+        except (TypeError, ValueError): term_months = 1
         valid_types = {"compensation", "vehicle", "property", "life", "business", "general"}
         configured_tiers = settings["insurance_tiers"]
         tiers = {name: (float(item["coverage_percent"]), float(item["premium"])) for name, item in configured_tiers.items()}
         tiers["standard"] = tiers.get("preferred", (70, 4250))
-        if not character or policy_type not in valid_types or tier not in tiers or not subject:
+        if not character or policy_type not in valid_types or tier not in tiers or not subject or term_months not in {1, 3, 6}:
             self.error(400, "Select a character, policy, coverage tier, and insured subject."); return
         if policy_type == "compensation" and one(db, """SELECT id FROM insurance_policies
-            WHERE user_id=? AND policy_type='compensation' AND status='active' AND expires_at>? LIMIT 1""",
+            WHERE user_id=? AND policy_type='compensation' AND status IN ('active','pending_payment') AND expires_at>? LIMIT 1""",
             (user["id"], now_iso())):
             self.error(409, "An active continuity policy already protects this linked bank account."); return
-        coverage_percent, premium = tiers[tier]
+        coverage_percent, monthly_premium_rate = tiers[tier]
+        premium = round(monthly_premium_rate * term_months, 2)
         bank = one(db, """SELECT b.balance FROM arma_account_links l JOIN arma_game_bank_balances b
             ON b.identity_id=l.identity_id WHERE l.user_id=? ORDER BY l.linked_at DESC LIMIT 1""", (user["id"],))
         pending = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM bank_bridge_commands WHERE target_user_id=? AND operation='debit_funds' AND status IN ('pending','claimed') AND reason LIKE 'Insurance premium %%'", (user["id"],))
@@ -12035,19 +12172,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         protected_balance = max(0.0, float(bank["balance"] or 0)) if bank else 0.0
         coverage = round(protected_balance * coverage_percent / 100.0, 2)
         deductible = 0
-        issued = utcnow(); expires = issued + dt.timedelta(days=30)
+        issued = utcnow(); expires = issued + dt.timedelta(days=30 * term_months)
         policy_number = f"FCI-{issued.strftime('%y%m')}-{secrets.randbelow(900000)+100000}"
         questionnaire = {key: str(payload.get(key) or "").strip()[:500] for key in ("risk_use", "location", "beneficiary", "notes")}
-        payment_command = self.queue_insurance_bank_command(db, int(user["id"]), premium, "debit_funds", f"Insurance premium {policy_number}")
+        payment_command = self.queue_insurance_bank_command(db, int(user["id"]), premium, "debit_funds", f"Insurance premium {policy_number} ({term_months}-month locked rate)")
         if not payment_command:
             self.error(409, "Link your Arma account before purchasing insurance."); return
         db.execute("""INSERT INTO insurance_policies
-            (user_id,character_id,policy_number,policy_type,coverage_tier,subject_label,coverage_amount,coverage_percent,protected_bank_balance,premium_amount,deductible_amount,questionnaire,status,receipt_code_id,bank_command_id,payment_status,issued_at,expires_at,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'pending_payment',NULL,?,'pending',?,?,?,?)""",
-            (user["id"], character_id, policy_number, policy_type, tier, subject, coverage, coverage_percent, protected_balance, premium, deductible,
-             json.dumps(questionnaire, separators=(",", ":")), payment_command, issued.isoformat(), expires.isoformat(), issued.isoformat(), issued.isoformat()))
-        add_admin_audit(db, int(user["id"]), "insurance.policy.issued", int(user["id"]), {"policy_number": policy_number, "character_id": character_id, "premium": premium})
-        self.send_json(201, {"ok": True, "policy_number": policy_number, "status": "pending_payment", "command_id": payment_command})
+            (user_id,character_id,policy_number,policy_type,coverage_tier,subject_label,coverage_amount,coverage_percent,protected_bank_balance,premium_amount,monthly_premium_rate,term_months,rate_locked_until,deductible_amount,questionnaire,status,receipt_code_id,bank_command_id,payment_status,issued_at,expires_at,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending_payment',NULL,?,'pending',?,?,?,?)""",
+            (user["id"], character_id, policy_number, policy_type, tier, subject, coverage, coverage_percent, protected_balance, premium,
+             monthly_premium_rate, term_months, expires.isoformat(), deductible, json.dumps(questionnaire, separators=(",", ":")),
+             payment_command, issued.isoformat(), expires.isoformat(), issued.isoformat(), issued.isoformat()))
+        add_admin_audit(db, int(user["id"]), "insurance.policy.issued", int(user["id"]), {"policy_number": policy_number, "character_id": character_id, "premium": premium, "monthly_premium_rate": monthly_premium_rate, "term_months": term_months, "rate_locked_until": expires.isoformat()})
+        self.send_json(201, {"ok": True, "policy_number": policy_number, "status": "pending_payment", "command_id": payment_command, "premium": premium, "monthly_premium_rate": monthly_premium_rate, "term_months": term_months, "rate_locked_until": expires.isoformat()})
 
     def api_insurance_claim_create(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -12794,6 +12932,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         cash_log: list[DbRow] = []
         transfers: list[DbRow] = []
         promo_redemptions: list[DbRow] = []
+        pending_withdrawal_amount = 0.0
+        available_withdrawal_amount = 0.0
         price_history: dict[str, list[dict[str, Any]]] = {str(row["ticker"]): [] for row in securities}
         history_rows = all_rows(db, """SELECT h.security_id,h.price,h.source,h.recorded_at,s.ticker
             FROM market_price_history h JOIN market_securities s ON s.id=h.security_id
@@ -12811,6 +12951,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 WHERE o.account_id = ? ORDER BY o.created_at DESC LIMIT 50""", (account["id"],))
             cash_log = all_rows(db, """SELECT t.*, issuer.name AS processed_by_name FROM market_cash_transactions t
                 LEFT JOIN users issuer ON issuer.id = t.processed_by WHERE t.account_id = ? ORDER BY t.created_at DESC LIMIT 30""", (account["id"],))
+            pending_withdrawal = one(db, """SELECT COALESCE(SUM(amount),0) AS total
+                FROM market_cash_transactions
+                WHERE account_id=? AND transaction_type='withdrawal' AND status='pending'""", (account["id"],))
+            pending_withdrawal_amount = round(float((pending_withdrawal or {}).get("total") or 0), 2)
+            available_withdrawal_amount = round(max(0.0, float(account["cash_balance"] or 0) - pending_withdrawal_amount), 2)
             transfers = all_rows(db, """SELECT t.*, s.ticker, fu.name AS from_name, tu.name AS to_name
                 FROM market_transfers t JOIN market_securities s ON s.id=t.security_id
                 JOIN market_accounts fa ON fa.id=t.from_account_id JOIN users fu ON fu.id=fa.user_id
@@ -12824,6 +12969,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "orders": [dict(x) for x in orders], "cash_transactions": [dict(x) for x in cash_log], "transfers": [dict(x) for x in transfers],
                 "promo_redemptions": [dict(x) for x in promo_redemptions],
                 "price_history": price_history,
+                "pending_withdrawal_amount": pending_withdrawal_amount,
+                "available_withdrawal_amount": available_withdrawal_amount,
                 "portfolio_value": round(portfolio_value, 2), "market_open": settings["market_open"],
                 "transfer_fee_percent": settings["market_transfer_fee_percent"], "trade_fee_percent": settings["market_trade_fee_percent"]}
 
@@ -12845,7 +12992,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         err = verified_required(user)
         if err:
             self.error(403 if user else 401, err); return
-        account = one(db, "SELECT * FROM market_accounts WHERE user_id = ?", (user["id"],))
+        account = one(db, "SELECT * FROM market_accounts WHERE user_id = ? FOR UPDATE", (user["id"],))
         if not account:
             self.error(409, "Create your Ravenhood account first."); return
         payload = self.read_json(); tx_type = str(payload.get("transaction_type") or "").lower()
@@ -12869,7 +13016,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         reason = f"Ravenhood {tx_type} FC-{int(account['id']):07d}"
         db.execute("INSERT INTO bank_bridge_commands (command_id,idempotency_key,server_id,operation,target_user_id,identity_id,amount,currency,reason,status,requested_by,created_at) VALUES (?,?,?,?,?,?,?,'bank',?,'pending',?,?)", (command_id, idempotency, "default", operation, user["id"], str(link["identity_id"]), amount, reason, user["id"], ts))
         add_admin_audit(db, int(user["id"]), f"market.cash.{tx_type}.queued", int(user["id"]), {"amount": amount, "command_id": command_id})
-        self.send_json(202, {"ok": True, "status": "pending", "command_id": command_id, "transaction_type": tx_type, "amount": amount, "balance": round(float(account["cash_balance"] or 0), 2)})
+        remaining = round(available - amount, 2) if tx_type == "withdrawal" else round(float(account["cash_balance"] or 0), 2)
+        self.send_json(202, {"ok": True, "status": "pending", "command_id": command_id, "transaction_type": tx_type, "amount": amount, "balance": round(float(account["cash_balance"] or 0), 2), "available_to_withdraw": remaining})
 
     def api_wallstreet_order(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -18163,38 +18311,831 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             },
         )
 
+    def api_dev_tools_section(
+        self,
+        db: Database,
+        user: DbRow | None,
+        section: str,
+        query: dict[str, list[str]],
+    ) -> None:
+        """Return only the read model required by the visible Admin Tools tab."""
+        section = "housing-market" if section == "property-intelligence" else section
+        allowed_sections = {section_id for section_id, _label in ADMIN_TOOLS_SECTIONS}
+        if section not in allowed_sections:
+            self.error(400, "Unknown Admin Tools section")
+            return
+        err = admin_tools_member_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        settings = get_system_settings(db)
+        if has_any(user, "owner", "dev"):
+            effective_section_set = allowed_sections
+        else:
+            enabled_section_set = {
+                key for key, enabled in settings.get("admin_tools_access", {}).items()
+                if enabled and key in ADMIN_TOOLS_CONFIGURABLE_SECTIONS
+            }
+            effective_section_set = set(ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS) | enabled_section_set
+        if section not in effective_section_set:
+            self.error(403, "Development role is required")
+            return
+        now = now_iso()
+        effective_sections = sorted(effective_section_set)
+        payload: dict[str, Any] = {
+            "section": section,
+            "generated_at": now,
+            "admin_tools_access": {
+                "is_developer": has_any(user, "owner", "dev"),
+                "is_admin": has_any(user, "admin") and not has_any(user, "owner", "dev"),
+                "effective_sections": effective_sections,
+                "default_sections": sorted(ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS),
+                "configurable_sections": [
+                    {
+                        "id": section_id,
+                        "label": label,
+                        "enabled": bool(settings["admin_tools_access"].get(section_id, False)),
+                    }
+                    for section_id, label in ADMIN_TOOLS_SECTIONS
+                    if section_id in ADMIN_TOOLS_CONFIGURABLE_SECTIONS
+                ],
+            },
+        }
+        if section in {"dashboard", "linking"}:
+            account_stats = one(
+                db,
+                """
+                SELECT COUNT(*) AS total_accounts,
+                       COUNT(*) FILTER (WHERE u.verified <> 0) AS verified_accounts,
+                       COUNT(*) FILTER (WHERE u.verified = 0) AS unverified_accounts,
+                       COUNT(l.id) AS linked_accounts,
+                       COUNT(*) FILTER (WHERE l.id IS NULL) AS unlinked_accounts,
+                       COUNT(*) FILTER (WHERE u.verified <> 0 AND l.id IS NULL) AS verified_unlinked
+                FROM users u LEFT JOIN arma_account_links l ON l.user_id = u.id
+                """,
+            ) or {}
+            sanction_stats = one(
+                db,
+                """
+                SELECT COUNT(*) FILTER (WHERE sanction_type='ban') AS active_bans,
+                       COUNT(*) FILTER (WHERE sanction_type='timeout') AS active_timeouts,
+                       COUNT(*) AS active_sanctions
+                FROM account_sanctions
+                WHERE revoked_at IS NULL AND starts_at <= ?
+                  AND (expires_at IS NULL OR expires_at > ?)
+                """,
+                (now, now),
+            ) or {}
+            payload.update({
+                "total_accounts": int(account_stats.get("total_accounts") or 0),
+                "verified_accounts": int(account_stats.get("verified_accounts") or 0),
+                "unverified_accounts": int(account_stats.get("unverified_accounts") or 0),
+                "linked_accounts": int(account_stats.get("linked_accounts") or 0),
+                "unlinked_accounts": int(account_stats.get("unlinked_accounts") or 0),
+                "verified_unlinked": int(account_stats.get("verified_unlinked") or 0),
+                "active_sanctions": int(sanction_stats.get("active_sanctions") or 0),
+                "active_bans": int(sanction_stats.get("active_bans") or 0),
+                "active_timeouts": int(sanction_stats.get("active_timeouts") or 0),
+            })
+
+        if section in {"dashboard", "enforcement"}:
+            payload["sanctions"] = [dict(row) for row in all_rows(
+                db,
+                """
+                SELECT s.*, target.name AS target_name, target.civ_number,
+                       creator.name AS created_by_name, revoker.name AS revoked_by_name
+                FROM account_sanctions s
+                JOIN users target ON target.id=s.user_id
+                JOIN users creator ON creator.id=s.created_by
+                LEFT JOIN users revoker ON revoker.id=s.revoked_by
+                ORDER BY s.created_at DESC LIMIT ?
+                """,
+                (60 if section == "dashboard" else 250,),
+            )]
+        if section in {"dashboard", "warnings"}:
+            payload["warnings"] = [dict(row) for row in all_rows(
+                db,
+                """
+                SELECT w.*, target.name AS target_name, target.civ_number,
+                       creator.name AS created_by_name, resolver.name AS resolved_by_name
+                FROM account_internal_warnings w
+                JOIN users target ON target.id=w.user_id
+                JOIN users creator ON creator.id=w.created_by
+                LEFT JOIN users resolver ON resolver.id=w.resolved_by
+                ORDER BY w.created_at DESC LIMIT ?
+                """,
+                (60 if section == "dashboard" else 250,),
+            )]
+        if section in {"dashboard", "linking"}:
+            payload["recent_links"] = [dict(row) for row in all_rows(
+                db,
+                """
+                SELECT l.id,l.user_id AS account_id,l.linked_at,l.player_name,l.identity_id AS arma_id,
+                       u.name AS account_name,u.civ_number
+                FROM arma_account_links l JOIN users u ON u.id=l.user_id
+                ORDER BY l.linked_at DESC LIMIT 40
+                """,
+            )]
+        if section == "dashboard":
+            payload["audit_logs"] = [dict(row) for row in all_rows(
+                db,
+                """
+                SELECT l.*,actor.name AS actor_name,target.name AS target_name,target.civ_number
+                FROM admin_audit_logs l LEFT JOIN users actor ON actor.id=l.actor_id
+                LEFT JOIN users target ON target.id=l.target_user_id
+                ORDER BY l.created_at DESC LIMIT 10
+                """,
+            )]
+        if section in {"accounts", "enforcement", "warnings", "linking", "account-deletion", "banking-settings", "intelligence"}:
+            payload["users"] = admin_account_directory(db, limit=500)
+
+        if section == "linking":
+            payload["unlink_codes"] = [dict(row) for row in all_rows(
+                db,
+                """
+                SELECT c.id,c.code_hint,c.expires_at,c.uses_remaining,c.used_at,c.revoked_at,c.created_at,
+                       creator.name AS created_by_name,used.name AS used_by_name
+                FROM developer_unlink_codes c JOIN users creator ON creator.id=c.created_by
+                LEFT JOIN users used ON used.id=c.used_by
+                ORDER BY c.created_at DESC LIMIT 100
+                """,
+            )]
+        elif section == "account-deletion":
+            records: list[DbRow] = []
+            total_deleted = 0
+            if strict_developer_required(user) is None:
+                records = all_rows(
+                    db,
+                    """
+                    SELECT r.*,COALESCE(actor.name,r.deleted_by_name) AS actor_name
+                    FROM account_deletion_records r LEFT JOIN users actor ON actor.id=r.deleted_by
+                    ORDER BY r.deleted_at DESC LIMIT 150
+                    """,
+                )
+                total_deleted = int((one(db, "SELECT COUNT(*) AS count FROM account_deletion_records") or {}).get("count") or 0)
+            payload["account_deletion"] = {
+                "accounts": payload.get("users", []) if strict_developer_required(user) is None else [],
+                "records": [dict(row) for row in records],
+                "total_deleted": total_deleted,
+            }
+        elif section == "banking-settings":
+            try:
+                page = max(1, int((query.get("page") or ["1"])[0]))
+            except ValueError:
+                page = 1
+            page_size = 100
+            command_counts = one(
+                db,
+                """
+                SELECT COUNT(*) AS total,
+                       COUNT(*) FILTER (WHERE status='pending') AS pending,
+                       COUNT(*) FILTER (WHERE status='completed') AS completed,
+                       COUNT(*) FILTER (WHERE status='failed') AS failed
+                FROM bank_bridge_commands
+                """,
+            ) or {}
+            commands = all_rows(
+                db,
+                """
+                SELECT c.*,target.name AS target_name,target.civ_number,requester.name AS requested_by_name
+                FROM bank_bridge_commands c JOIN users target ON target.id=c.target_user_id
+                JOIN users requester ON requester.id=c.requested_by
+                ORDER BY c.created_at DESC LIMIT ? OFFSET ?
+                """,
+                (page_size, (page - 1) * page_size),
+            )
+            for command in commands:
+                try:
+                    parsed_result = json.loads(command.get("result_json") or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    parsed_result = {}
+                if not isinstance(parsed_result, dict):
+                    parsed_result = {}
+                command["result"] = parsed_result
+                command["failure_reason"] = str(parsed_result.get("message") or parsed_result.get("error") or "").strip()[:500]
+            economy = one(
+                db,
+                """
+                SELECT COUNT(*) AS bank_accounts,COALESCE(SUM(balance),0) AS currency_in_circulation,
+                       COALESCE(AVG(balance),0) AS average_balance,COALESCE(MAX(balance),0) AS largest_balance,
+                       SUM(CASE WHEN balance>0 THEN 1 ELSE 0 END) AS funded_accounts,
+                       SUM(CASE WHEN balance<=0 THEN 1 ELSE 0 END) AS empty_accounts,
+                       MAX(synced_at) AS last_synced_at
+                FROM arma_game_bank_balances
+                """,
+            ) or {}
+            linked_bank = one(db, "SELECT COUNT(DISTINCT b.identity_id) AS linked_accounts FROM arma_game_bank_balances b JOIN arma_account_links l ON l.identity_id=b.identity_id") or {}
+            linked_directory = all_rows(
+                db,
+                """
+                SELECT u.id AS account_id,u.name AS account_name,u.email,u.civ_number,l.identity_id,l.player_name,l.linked_at,
+                       COALESCE(b.balance,0) AS balance,b.synced_at,
+                       (SELECT COUNT(*) FROM user_characters c WHERE c.user_id=u.id) AS character_count
+                FROM users u JOIN arma_account_links l ON l.user_id=u.id
+                LEFT JOIN arma_game_bank_balances b ON b.identity_id=l.identity_id
+                ORDER BY COALESCE(b.balance,0) DESC,u.name
+                """,
+            )
+            top_unlinked = all_rows(
+                db,
+                """
+                SELECT b.identity_id,b.balance,b.synced_at FROM arma_game_bank_balances b
+                WHERE NOT EXISTS (SELECT 1 FROM arma_account_links l WHERE l.identity_id=b.identity_id)
+                ORDER BY b.balance DESC,b.identity_id LIMIT 10
+                """,
+            )
+            payload["banking"] = {
+                "testing_mode": BANK_BRIDGE_TEST_MODE,
+                "pin_required": False,
+                "commands": [dict(row) for row in commands],
+                "pending": int(command_counts.get("pending") or 0),
+                "completed": int(command_counts.get("completed") or 0),
+                "failed": int(command_counts.get("failed") or 0),
+                "history": {"page": page, "page_size": page_size, "total": int(command_counts.get("total") or 0)},
+                "economy": {
+                    "currency_in_circulation": float(economy.get("currency_in_circulation") or 0),
+                    "average_balance": float(economy.get("average_balance") or 0),
+                    "largest_balance": float(economy.get("largest_balance") or 0),
+                    "bank_accounts": int(economy.get("bank_accounts") or 0),
+                    "funded_accounts": int(economy.get("funded_accounts") or 0),
+                    "empty_accounts": int(economy.get("empty_accounts") or 0),
+                    "linked_accounts": int(linked_bank.get("linked_accounts") or 0),
+                    "last_synced_at": economy.get("last_synced_at"),
+                    "source": "FCRPMUSSALO/Banks",
+                    "top_unlinked_accounts": [dict(row) for row in top_unlinked],
+                    "linked_directory": [dict(row) for row in linked_directory],
+                },
+            }
+
+        if section == "intelligence":
+            persistence_sync = one(db, "SELECT * FROM game_persistence_sync_status ORDER BY updated_at DESC LIMIT 1")
+            categories = all_rows(db, "SELECT category,COUNT(*) AS records,MAX(synced_at) AS last_synced_at FROM game_persistence_records GROUP BY category ORDER BY category")
+            bank_economy = one(
+                db,
+                """
+                SELECT COUNT(*) AS bank_accounts,COALESCE(SUM(balance),0) AS currency_in_circulation,
+                       COALESCE(AVG(balance),0) AS average_balance,COALESCE(MAX(balance),0) AS largest_balance,
+                       SUM(CASE WHEN balance>0 THEN 1 ELSE 0 END) AS funded_accounts,
+                       SUM(CASE WHEN balance<=0 THEN 1 ELSE 0 END) AS empty_accounts,MAX(synced_at) AS last_synced_at
+                FROM arma_game_bank_balances
+                """,
+            ) or {}
+            bank_category = one(db, "SELECT COUNT(*) AS records,MAX(synced_at) AS last_synced_at FROM arma_game_bank_balances") or {}
+            if int(bank_category.get("records") or 0):
+                categories.insert(0, {"category": "Banks", "records": int(bank_category.get("records") or 0), "last_synced_at": bank_category.get("last_synced_at")})
+            linked_bank = one(db, "SELECT COUNT(DISTINCT b.identity_id) AS linked_accounts FROM arma_game_bank_balances b JOIN arma_account_links l ON l.identity_id=b.identity_id") or {}
+            top_linked = all_rows(
+                db,
+                """
+                SELECT b.identity_id,b.balance,b.synced_at,u.id AS account_id,u.name AS account_name,u.civ_number,l.player_name
+                FROM arma_game_bank_balances b JOIN arma_account_links l ON l.identity_id=b.identity_id
+                JOIN users u ON u.id=l.user_id ORDER BY b.balance DESC,b.identity_id LIMIT 10
+                """,
+            )
+            top_unlinked = all_rows(
+                db,
+                """
+                SELECT b.identity_id,b.balance,b.synced_at FROM arma_game_bank_balances b
+                WHERE NOT EXISTS (SELECT 1 FROM arma_account_links l WHERE l.identity_id=b.identity_id)
+                ORDER BY b.balance DESC,b.identity_id LIMIT 10
+                """,
+            )
+            linked_directory = all_rows(
+                db,
+                """
+                SELECT u.id AS account_id,u.name AS account_name,u.email,u.civ_number,l.identity_id,l.player_name,l.linked_at,
+                       COALESCE(b.balance,0) AS balance,b.synced_at,
+                       (SELECT COUNT(*) FROM user_characters c WHERE c.user_id=u.id) AS character_count
+                FROM users u JOIN arma_account_links l ON l.user_id=u.id
+                LEFT JOIN arma_game_bank_balances b ON b.identity_id=l.identity_id
+                ORDER BY COALESCE(b.balance,0) DESC,u.name
+                """,
+            )
+            unlinked_directory = all_rows(
+                db,
+                """
+                SELECT u.id AS account_id,u.name AS account_name,u.email,u.civ_number,0 AS balance,
+                       (SELECT COUNT(*) FROM user_characters c WHERE c.user_id=u.id) AS character_count
+                FROM users u WHERE NOT EXISTS (SELECT 1 FROM arma_account_links l WHERE l.user_id=u.id)
+                ORDER BY u.name
+                """,
+            )
+            balances = [float(row.get("balance") or 0) for row in all_rows(db, "SELECT balance FROM arma_game_bank_balances ORDER BY balance")]
+            circulation = float(bank_economy.get("currency_in_circulation") or 0)
+            maturity = max(0.0, min(100.0, circulation / 20_000_000_000 * 100.0))
+            median = 0.0
+            if balances:
+                midpoint = len(balances) // 2
+                median = balances[midpoint] if len(balances) % 2 else (balances[midpoint - 1] + balances[midpoint]) / 2
+            if maturity < 5:
+                phase, outlook = "Foundation", "Wide open"
+            elif maturity < 20:
+                phase, outlook = "Growing", "Strong"
+            elif maturity < 45:
+                phase, outlook = "Established", "Healthy"
+            elif maturity < 75:
+                phase, outlook = "High velocity", "Measured"
+            else:
+                phase, outlook = "Mature", "Tight"
+            payload["game_intelligence"] = {
+                "sync": dict(persistence_sync) if persistence_sync else {"status": "awaiting_first_sync", "records": 0, "source_root": SHADOWHAVEN_PERSISTENCE_ROOT},
+                "categories": [dict(row) for row in categories],
+                "economy": {
+                    "currency_in_circulation": circulation,
+                    "average_balance": float(bank_economy.get("average_balance") or 0),
+                    "largest_balance": float(bank_economy.get("largest_balance") or 0),
+                    "bank_accounts": int(bank_economy.get("bank_accounts") or 0),
+                    "funded_accounts": int(bank_economy.get("funded_accounts") or 0),
+                    "empty_accounts": int(bank_economy.get("empty_accounts") or 0),
+                    "linked_accounts": int(linked_bank.get("linked_accounts") or 0),
+                    "last_synced_at": bank_economy.get("last_synced_at"),
+                    "source": "FCRPMUSSALO/Banks",
+                    "top_linked_accounts": [dict(row) for row in top_linked],
+                    "top_unlinked_accounts": [dict(row) for row in top_unlinked],
+                    "linked_directory": [dict(row) for row in linked_directory],
+                    "unlinked_directory": [dict(row) for row in unlinked_directory],
+                    "insights": {
+                        "phase": phase,
+                        "expansion_outlook": outlook,
+                        "maturity_score": round(maturity, 1),
+                        "median_balance": median,
+                        "millionaire_accounts": sum(1 for balance in balances if balance >= 1_000_000),
+                        "funded_accounts": int(bank_economy.get("funded_accounts") or 0),
+                        "distribution_score": round(max(0.0, 100.0 - ((float(bank_economy.get("largest_balance") or 0) / circulation) * 100.0 if circulation else 0.0)), 1),
+                    },
+                },
+                "read_only": True,
+                "transaction_history_available": False,
+            }
+        elif section == "housing-market":
+            properties = all_rows(
+                db,
+                """
+                SELECT p.property_id,p.name,p.address,p.owner_identity,p.status,p.price_text,p.rent_text,
+                       p.property_type,p.raw_payload,p.source_file,p.synced_at,
+                       COALESCE(ru.id,u.id) AS owner_user_id,COALESCE(ru.name,u.name) AS owner_name,
+                       COALESCE(ru.civ_number,u.civ_number) AS owner_civ,l.player_name AS owner_player_name,
+                       l.platform AS owner_platform
+                FROM game_property_records p
+                LEFT JOIN arma_account_links l ON l.identity_id=p.owner_identity OR l.uid=p.owner_identity
+                LEFT JOIN realty_property_assignments ra ON ra.property_id=p.property_id
+                LEFT JOIN users u ON u.id=l.user_id LEFT JOIN users ru ON ru.id=ra.owner_user_id
+                ORDER BY p.synced_at DESC,p.name LIMIT 1000
+                """,
+            )
+            property_sync = one(db, "SELECT * FROM anticheat_sync_status WHERE source_key='property_mod'")
+            total = len(properties)
+            owned = sum(1 for row in properties if str(row.get("owner_identity") or "").strip())
+            available = max(0, total - owned)
+            housed = len({int(row["owner_user_id"]) for row in properties if row.get("owner_user_id")})
+            residents = int(account_stats.get("verified_accounts") or account_stats.get("total_accounts") or 0)
+            unhoused = max(0, residents - housed)
+            coverage = round(min(100.0, available / max(1, unhoused) * 100.0), 1)
+            payload["property_intelligence"] = {
+                "records": [dict(row) for row in properties],
+                "total": total,
+                "occupied": sum(1 for row in properties if str(row.get("status") or "").lower() in {"owned", "occupied", "rented"}),
+                "available": sum(1 for row in properties if str(row.get("status") or "").lower() in {"available", "vacant", "for_sale"}),
+                "source_file": ", ".join(SHADOWHAVEN_PROPERTY_FILES),
+                "source_files": SHADOWHAVEN_PROPERTY_FILES,
+                "sync": dict(property_sync) if property_sync else {"status": "awaiting_first_sync", "records": 0},
+                "read_only": True,
+                "market": {
+                    "total_properties": total,
+                    "owned_properties": owned,
+                    "available_properties": available,
+                    "resident_accounts": residents,
+                    "housed_accounts": housed,
+                    "unhoused_accounts": unhoused,
+                    "houses_needed": max(0, unhoused - available),
+                    "availability_rate": round(available / total * 100.0 if total else 0.0, 1),
+                    "occupancy_rate": round(owned / total * 100.0 if total else 0.0, 1),
+                    "homelessness_rate": round(unhoused / residents * 100.0 if residents else 0.0, 1),
+                    "coverage_rate": coverage,
+                    "pressure": "surplus" if available > unhoused * 1.25 else "balanced" if unhoused <= available else "strained" if coverage >= 60 else "critical",
+                    "method": "Verified Faircroft accounts compared with linked property owners; one housed account is counted once even when it owns multiple properties.",
+                },
+            }
+        elif section == "anticheat":
+            players = all_rows(
+                db,
+                """
+                SELECT p.*,link.user_id AS linked_user_id,link.linked_platform,
+                       COALESCE(NULLIF(p.reported_system,''),NULLIF(link.linked_platform,''),'Unknown') AS detected_system,
+                       account.name AS account_name,account.civ_number,p.last_seen_at,p.is_online AS online,
+                       active_lock.id AS active_lock_id,active_lock.reason AS active_lock_reason,
+                       active_lock.grey_screened_at AS active_lock_at,
+                       COALESCE(flag_review.reviewed_teleport_flags,0) AS reviewed_teleport_flags,
+                       COALESCE(flag_review.reviewed_aim_flags,0) AS reviewed_aim_flags,
+                       COALESCE(flag_review.reviewed_event_count,0) AS reviewed_event_count,
+                       flag_review.reviewed_at AS flags_reviewed_at,COALESCE(alts.alt_group_count,0) AS alt_group_count
+                FROM anticheat_players p
+                LEFT JOIN LATERAL (
+                    SELECT l.user_id,l.platform AS linked_platform FROM arma_account_links l
+                    WHERE l.identity_id=p.uid OR l.uid=p.uid ORDER BY l.linked_at DESC LIMIT 1
+                ) link ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT l.id,l.reason,l.grey_screened_at FROM anticheat_profile_locks l
+                    WHERE l.player_uid=p.uid AND l.cleared_at IS NULL ORDER BY l.grey_screened_at DESC,l.id DESC LIMIT 1
+                ) active_lock ON TRUE
+                LEFT JOIN anticheat_flag_reviews flag_review ON flag_review.player_uid=p.uid
+                LEFT JOIN users account ON account.id=link.user_id
+                LEFT JOIN (SELECT uid,COUNT(*) AS alt_group_count FROM anticheat_alt_members GROUP BY uid) alts ON alts.uid=p.uid
+                ORDER BY online DESC,p.ticket_count DESC,p.last_synced_at DESC LIMIT 1000
+                """,
+            )
+            events = all_rows(db, "SELECT e.*,p.player_name FROM anticheat_events e LEFT JOIN anticheat_players p ON p.uid=e.player_uid ORDER BY e.event_time DESC,e.first_synced_at DESC LIMIT 500")
+            event_counts = {str(row["player_uid"]): int(row["count"] or 0) for row in all_rows(db, "SELECT player_uid,COUNT(*) AS count FROM anticheat_events GROUP BY player_uid")}
+            for player in players:
+                uid = str(player.get("uid") or "")
+                event_count = event_counts.get(uid, 0)
+                new_count = max(0, int(player.get("teleport_flags") or 0) - int(player.get("reviewed_teleport_flags") or 0))
+                new_count += max(0, int(player.get("aim_flags") or 0) - int(player.get("reviewed_aim_flags") or 0))
+                if event_count > int(player.get("reviewed_event_count") or 0):
+                    new_count += 1
+                player["anti_cheat_event_count"] = event_count
+                player["unreviewed_flag_count"] = new_count
+                player["flags_reviewed"] = bool(player.get("flags_reviewed_at")) and new_count == 0
+            locks = all_rows(
+                db,
+                """
+                SELECT l.*,account.name AS account_name,account.civ_number FROM anticheat_profile_locks l
+                LEFT JOIN users account ON account.id=l.linked_user_id
+                ORDER BY CASE WHEN l.cleared_at IS NULL THEN 0 ELSE 1 END,l.grey_screened_at DESC,l.id DESC LIMIT 300
+                """,
+            )
+            payload["anti_cheat"] = {
+                "players": [dict(row) for row in players],
+                "events": [dict(row) for row in events],
+                "alt_groups": [dict(row) for row in all_rows(db, "SELECT * FROM anticheat_alt_groups ORDER BY last_seen DESC,group_key LIMIT 300")],
+                "alt_members": [dict(row) for row in all_rows(db, "SELECT * FROM anticheat_alt_members ORDER BY group_key,observed_name LIMIT 2000")],
+                "profile_locks": [dict(row) for row in locks],
+                "sync_status": [dict(row) for row in all_rows(db, "SELECT * FROM anticheat_sync_status ORDER BY source_key")],
+                "presence_source": "anticheat_player_json",
+                "metrics": {
+                    "players": len(players),
+                    "online": sum(1 for row in players if row.get("online")),
+                    "flagged": sum(1 for row in players if int(row.get("unreviewed_flag_count") or 0) > 0),
+                    "grey_screened": sum(1 for row in players if int(row.get("grey_screened") or 0) or int(row.get("profile_locked") or 0) or row.get("active_lock_id")),
+                    "active_locks": sum(1 for row in locks if not row.get("cleared_at")),
+                    "alt_groups": int((one(db, "SELECT COUNT(*) AS count FROM anticheat_alt_groups") or {}).get("count") or 0),
+                    "events": len(events),
+                },
+            }
+
+        if section == "insurance-claims":
+            claims = all_rows(
+                db,
+                """
+                SELECT ic.*,p.policy_number,p.coverage_tier,p.premium_amount,p.subject_label,
+                       u.name AS resident_name,u.civ_number,c.character_name,reviewer.name AS reviewed_by_name
+                FROM insurance_claims ic JOIN insurance_policies p ON p.id=ic.policy_id
+                JOIN users u ON u.id=ic.user_id JOIN user_characters c ON c.id=ic.character_id
+                LEFT JOIN users reviewer ON reviewer.id=ic.reviewed_by
+                ORDER BY CASE ic.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 WHEN 'paid' THEN 2 ELSE 3 END,
+                         ic.created_at DESC LIMIT 500
+                """,
+            )
+            claim_stats = one(
+                db,
+                """
+                SELECT COUNT(*) AS total,COALESCE(SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END),0) AS pending,
+                       COALESCE(SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END),0) AS approved,
+                       COALESCE(SUM(CASE WHEN status='paid' THEN 1 ELSE 0 END),0) AS paid,
+                       COALESCE(SUM(CASE WHEN status IN ('pending','approved') THEN requested_amount ELSE 0 END),0) AS exposure,
+                       COALESCE(SUM(CASE WHEN status='paid' THEN requested_amount ELSE 0 END),0) AS paid_total
+                FROM insurance_claims
+                """,
+            ) or {}
+            payload["insurance_claims"] = {
+                "claims": [dict(row) for row in claims],
+                "settings": {
+                    "auto_approve_seconds": settings["insurance_claim_auto_approve_seconds"],
+                    "state_of_emergency": settings["insurance_state_of_emergency"],
+                    "tiers": settings["insurance_tiers"],
+                },
+                "stats": {key: float(value or 0) if key in {"exposure", "paid_total"} else int(value or 0) for key, value in claim_stats.items()},
+            }
+        elif section == "dmv-settings":
+            licenses = all_rows(
+                db,
+                """
+                SELECT u.id AS user_id,u.name,u.civ_number,u.email,d.license_status,d.license_class,
+                       d.endorsements,d.updated_at,link.identity_id
+                FROM users u JOIN dmv_records d ON d.user_id=u.id
+                LEFT JOIN arma_account_links link ON link.user_id=u.id
+                ORDER BY u.name,u.id LIMIT 1000
+                """,
+            )
+            payload["dmv_settings"] = {
+                "licenses": [dict(row) for row in licenses],
+                "classes": settings["dmv_license_classes"],
+                "vehicle_sync": {
+                    "imported_dmv_records": int((one(db, "SELECT COUNT(*) AS count FROM dmv_vehicles WHERE source='fcrpmussalo'") or {}).get("count") or 0),
+                    "cached_source_records": int((one(db, "SELECT COUNT(*) AS count FROM game_persistence_records WHERE category='Vehicles'") or {}).get("count") or 0),
+                    "sync_interval_seconds": SHADOWHAVEN_PERSISTENCE_SYNC_SECONDS,
+                    "source_root": SHADOWHAVEN_PERSISTENCE_ROOT,
+                },
+                "stats": {
+                    "total": len(licenses),
+                    "valid": sum(1 for row in licenses if row.get("license_status") == "Valid"),
+                    "suspended": sum(1 for row in licenses if row.get("license_status") == "Suspended"),
+                    "revoked": sum(1 for row in licenses if row.get("license_status") == "Revoked"),
+                    "expired": sum(1 for row in licenses if row.get("license_status") == "Expired"),
+                },
+            }
+        elif section == "court-settings":
+            payload["court_settings"] = {
+                "citation_count": int((one(db, "SELECT COUNT(*) AS count FROM citations c JOIN charge_catalog catalog ON catalog.id=c.charge_id WHERE catalog.kind='citation'") or {}).get("count") or 0),
+                "criminal_count": int((one(db, "SELECT COUNT(*) AS count FROM citations c JOIN charge_catalog catalog ON catalog.id=c.charge_id WHERE catalog.kind='criminal'") or {}).get("count") or 0),
+            }
+        elif section == "gang-settings":
+            payload["gang_operations"] = {
+                "gangs": [dict(row) for row in all_rows(
+                    db,
+                    """
+                    SELECT g.*,u.name AS leader_account,c.character_name AS leader_character,
+                           (SELECT COUNT(*) FROM gang_members gm WHERE gm.gang_id=g.id AND gm.status IN ('active','locked')) AS member_count
+                    FROM gangs g JOIN users u ON u.id=g.leader_user_id JOIN user_characters c ON c.id=g.leader_character_id
+                    ORDER BY CASE g.status WHEN 'active' THEN 0 ELSE 1 END,g.created_at DESC
+                    """,
+                )],
+                "members": [dict(row) for row in all_rows(db, "SELECT gm.*,g.name AS gang_name,c.character_name,u.name AS account_name FROM gang_members gm JOIN gangs g ON g.id=gm.gang_id JOIN user_characters c ON c.id=gm.character_id JOIN users u ON u.id=gm.user_id ORDER BY g.name,c.character_name")],
+                "invite_codes": [dict(row) for row in all_rows(
+                    db,
+                    """
+                    SELECT i.id,i.gang_id,i.code_hint,i.uses_remaining,i.expires_at,i.revoked_at,i.redeemed_at,i.created_at,
+                           g.name AS gang_name,issuer.name AS issued_by_name,ic.character_name AS issued_by_character,
+                           redeemer.name AS redeemed_by_name,rc.character_name AS redeemed_character
+                    FROM gang_invite_codes i JOIN gangs g ON g.id=i.gang_id JOIN users issuer ON issuer.id=i.issued_by_user_id
+                    JOIN user_characters ic ON ic.id=i.issued_by_character_id LEFT JOIN users redeemer ON redeemer.id=i.redeemed_by_user_id
+                    LEFT JOIN user_characters rc ON rc.id=i.redeemed_character_id ORDER BY i.created_at DESC LIMIT 500
+                    """,
+                )],
+                "settings": {
+                    "creation_enabled": settings["gang_creation_enabled"],
+                    "global_limit": settings["gang_global_limit"],
+                    "default_member_limit": settings["gang_default_member_limit"],
+                    "max_creations_per_user": settings["gang_max_creations_per_user"],
+                },
+            }
+        elif section in {"ice-settings", "mdt-settings"}:
+            agents = all_rows(db, "SELECT id,name,civ_number,roles FROM users WHERE roles LIKE ? OR roles LIKE ? OR roles LIKE ? ORDER BY name", ("%ice_agent%", "%ice_commander%", "%owner%"))
+            payload["ice_settings"] = {
+                "restrict_local_data": settings["ice_restrict_local_data"],
+                "ordinance_notice": "Faircroft Local Ordinance restricts local police involvement with federal immigration operations. NCIC remains available while local reports, BOLOs, and warrants are withheld.",
+                "agents": [{"id": int(row["id"]), "name": row["name"], "civ_number": row.get("civ_number") or "", "roles": roles_for(row)} for row in agents if has_any(row, *ICE_SERVICE_ROLES)],
+            }
+
+        if section == "admin-2fa":
+            payload["admin_2fa_codes"] = [dict(row) for row in all_rows(
+                db,
+                """
+                SELECT c.id,c.code_hint,c.expires_at,c.uses_remaining,c.used_at,c.revoked_at,c.created_at,
+                       creator.name AS created_by_name,used.name AS used_by_name
+                FROM admin_2fa_codes c JOIN users creator ON creator.id=c.created_by
+                LEFT JOIN users used ON used.id=c.used_by ORDER BY c.created_at DESC LIMIT 100
+                """,
+            )]
+            payload["myfaircroft_payment_codes"] = [dict(row) for row in all_rows(
+                db,
+                """
+                SELECT c.id,c.code_hint,c.authorized_amount,c.expires_at,c.used_at,c.revoked_at,c.created_at,c.citation_id,
+                       creator.name AS created_by_name,COALESCE(target.name,'Unassigned bearer PIN') AS target_user_name,
+                       target.civ_number AS target_civ_number,used.name AS used_by_name
+                FROM myfaircroft_payment_codes c JOIN users creator ON creator.id=c.created_by
+                LEFT JOIN users target ON target.id=c.target_user_id LEFT JOIN users used ON used.id=c.used_by
+                ORDER BY c.created_at DESC LIMIT 200
+                """,
+            )]
+        elif section == "audit":
+            try:
+                page = max(1, int((query.get("page") or ["1"])[0]))
+            except ValueError:
+                page = 1
+            page_size = 100
+            total = int((one(db, "SELECT COUNT(*) AS count FROM admin_audit_logs") or {}).get("count") or 0)
+            payload["audit_logs"] = [dict(row) for row in all_rows(
+                db,
+                """
+                SELECT l.*,actor.name AS actor_name,target.name AS target_name,target.civ_number
+                FROM admin_audit_logs l LEFT JOIN users actor ON actor.id=l.actor_id
+                LEFT JOIN users target ON target.id=l.target_user_id
+                ORDER BY l.created_at DESC LIMIT ? OFFSET ?
+                """,
+                (page_size, (page - 1) * page_size),
+            )]
+            payload["audit_history"] = {"page": page, "page_size": page_size, "total": total}
+        elif section == "campaigns":
+            payload["experience"] = {
+                "system_banner_enabled": settings["system_banner_enabled"],
+                "system_banner_configured": settings["system_banner_configured"],
+                "system_banner_message": settings["system_banner_message"],
+                "system_banner_tone": settings["system_banner_tone"],
+                "system_banner_start_at": settings["system_banner_start_at"],
+                "system_banner_end_at": settings["system_banner_end_at"],
+                "splash_enabled": settings["splash_enabled"],
+                "splash_configured": settings["splash_configured"],
+                "splash_title": settings["splash_title"],
+                "splash_message": settings["splash_message"],
+                "splash_media_url": settings["splash_media_url"],
+                "splash_start_at": settings["splash_start_at"],
+                "splash_end_at": settings["splash_end_at"],
+                "splash_revision": settings["splash_revision"],
+            }
+            payload["market_settings"] = {
+                "securities": [dict(row) for row in all_rows(
+                    db,
+                    "SELECT id,ticker,name,security_type,active FROM market_securities ORDER BY security_type,ticker",
+                )],
+                "promotions": [dict(row) for row in all_rows(
+                    db,
+                    """
+                    SELECT p.id,p.campaign_name,p.code_hint,p.code_plain,p.reward_type,p.cash_amount,p.share_quantity,p.bundle_size,
+                           p.max_redemptions,p.redemption_count,p.expires_at,p.active,p.created_at,s.ticker,creator.name AS created_by_name
+                    FROM market_promo_codes p LEFT JOIN market_securities s ON s.id=p.security_id
+                    JOIN users creator ON creator.id=p.created_by ORDER BY p.created_at DESC LIMIT 100
+                    """,
+                )],
+                "promotion_redemptions": [dict(row) for row in all_rows(
+                    db,
+                    """
+                    SELECT r.reward_summary,r.redeemed_at,p.campaign_name,p.code_plain,p.code_hint,u.name,u.civ_number
+                    FROM market_promo_redemptions r JOIN market_promo_codes p ON p.id=r.promo_id
+                    JOIN users u ON u.id=r.user_id ORDER BY r.redeemed_at DESC LIMIT 100
+                    """,
+                )],
+            }
+        elif section in {"autopilot", "system-update"}:
+            payload["system_settings"] = settings
+            if section == "autopilot":
+                payload["autopilot_stats"] = auto_verify_stats(db, settings)
+        elif section == "fnn-settings":
+            accounts = admin_account_directory(db, limit=500)
+            press_members = [account for account in accounts if has_any(account, "press")]
+            editions = []
+            for row in all_rows(db, "SELECT id,edition_date,headline,deck,lead_story,stories_json,published_at FROM fnn_editions ORDER BY published_at DESC LIMIT 30"):
+                try:
+                    stories = json.loads(row.get("stories_json") or "[]")
+                except (TypeError, json.JSONDecodeError):
+                    stories = []
+                editions.append({"id": row["id"], "edition_date": row["edition_date"], "headline": row["headline"], "deck": row.get("deck") or "", "lead_story": row.get("lead_story") or "", "published_at": row["published_at"], "stories": stories})
+            payload["fnn_settings"] = {
+                "press_pass_limit": settings["fnn_press_pass_limit"],
+                "autopilot_enabled": settings["fnn_autopilot_enabled"],
+                "morning_time": settings["fnn_autopilot_morning_time"],
+                "evening_time": settings["fnn_autopilot_evening_time"],
+                "timezone": settings["fnn_autopilot_timezone"],
+                "last_cycle": settings["fnn_autopilot_last_cycle"],
+                "active_press_passes": sum(1 for member in press_members if str(member.get("press_pass_status") or "active") == "active"),
+                "issued_press_passes": len(press_members),
+                "press_members": press_members,
+                "content_control": {
+                    "cad_reports": [dict(row) for row in all_rows(db, "SELECT r.*,o.name AS officer_name FROM cad_after_call_reports r JOIN users o ON o.id=r.officer_id ORDER BY r.created_at DESC LIMIT 200")],
+                    "press_reports": [dict(row) for row in all_rows(db, "SELECT r.*,u.name AS author_name FROM press_reports r JOIN users u ON u.id=r.author_id ORDER BY r.created_at DESC LIMIT 200")],
+                    "editions": editions,
+                },
+            }
+        elif section == "settings":
+            beta_tasks = all_rows(db, "SELECT * FROM beta_tasks ORDER BY active DESC,updated_at DESC LIMIT 100")
+            beta_reports = all_rows(db, "SELECT r.*,reporter.name AS reporter_name,t.title AS task_title FROM beta_bug_reports r JOIN users reporter ON reporter.id=r.reporter_id LEFT JOIN beta_tasks t ON t.id=r.task_id ORDER BY r.created_at DESC LIMIT 200")
+            beta_members = all_rows(
+                db,
+                """
+                SELECT u.id,u.name,u.civ_number,u.email,u.verified,u.roles,
+                       (SELECT MAX(r.responded_at) FROM beta_program_responses r WHERE r.user_id=u.id AND r.response='accepted') AS beta_joined_at,
+                       CASE WHEN link.id IS NULL THEN 0 ELSE 1 END AS arma_linked,link.identity_id AS linked_arma_id
+                FROM users u LEFT JOIN arma_account_links link ON link.user_id=u.id WHERE u.roles LIKE ?
+                ORDER BY COALESCE((SELECT MAX(r.responded_at) FROM beta_program_responses r WHERE r.user_id=u.id AND r.response='accepted'),u.created_at) DESC,u.name
+                """,
+                ("%beta%",),
+            )
+            app_visibility = settings["app_visibility"]
+            payload.update({
+                "system_settings": settings,
+                "app_visibility": {
+                    "apps": [{"id": app_id, "label": label, "enabled": app_visibility.get(app_id, True)} for app_id, label in APP_VISIBILITY_OPTIONS],
+                    "protected": sorted(PROTECTED_APP_IDS),
+                },
+                "beta_program": {
+                    "recruiting_enabled": settings["beta_recruiting_enabled"],
+                    "recruiting_message": settings["beta_recruiting_message"],
+                    "campaign_id": settings["beta_campaign_id"],
+                    "members": len(beta_members),
+                    "member_roster": [dict(row) for row in beta_members],
+                    "tasks": [dict(row) for row in beta_tasks],
+                    "reports": [dict(row) for row in beta_reports],
+                },
+                "applications_accepting": settings["applications_accepting"],
+                "application_intake": [
+                    {"key": str(posting["key"]), "label": str(posting["label"]), "division": str(posting["division"]), "accepting": settings["application_intake"].get(str(posting["key"]), True)}
+                    for posting in DEPARTMENT_POSTINGS
+                ],
+            })
+
+        if section == "market-settings":
+            payload["market_settings"] = {
+                "market_open": settings["market_open"],
+                "transfer_fee_percent": settings["market_transfer_fee_percent"],
+                "trade_fee_percent": settings["market_trade_fee_percent"],
+                "holding_balance": settings["market_holding_balance"],
+                "ai_enabled": settings["market_ai_enabled"],
+                "autopilot_enabled": settings["market_autopilot_enabled"],
+                "autopilot_interval_minutes": settings["market_autopilot_interval_minutes"],
+                "volatility_percent": settings["market_volatility_percent"],
+                "autopilot_last_tick": settings["market_autopilot_last_tick"],
+                "gemini_autopilot_enabled": settings["market_gemini_autopilot_enabled"],
+                "gemini_interval_minutes": settings["market_gemini_interval_minutes"],
+                "gemini_last_tick": settings["market_gemini_last_tick"],
+                "gemini_configured": bool(GEMINI_API_KEY),
+                "securities": [dict(row) for row in all_rows(db, "SELECT * FROM market_securities ORDER BY security_type,ticker")],
+                "programs": [dict(row) for row in all_rows(db, "SELECT p.*,s.ticker FROM market_price_programs p LEFT JOIN market_securities s ON s.id=p.security_id ORDER BY p.created_at DESC LIMIT 50")],
+                "events": [dict(row) for row in all_rows(db, "SELECT * FROM market_events ORDER BY created_at DESC LIMIT 50")],
+                "codes": [dict(row) for row in all_rows(
+                    db,
+                    """
+                    SELECT c.id,c.code_hint,c.target_user_id,c.transaction_type,c.amount,c.expires_at,c.used_at,c.revoked_at,c.created_at,
+                           COALESCE(target.name,'Unassigned bearer PIN') AS target_name,creator.name AS created_by_name,used.name AS used_by_name
+                    FROM market_cash_codes c LEFT JOIN users target ON target.id=c.target_user_id
+                    JOIN users creator ON creator.id=c.created_by LEFT JOIN users used ON used.id=c.used_by
+                    ORDER BY c.created_at DESC LIMIT 100
+                    """,
+                )],
+                "promotions": [dict(row) for row in all_rows(
+                    db,
+                    """
+                    SELECT p.id,p.campaign_name,p.code_hint,p.code_plain,p.reward_type,p.cash_amount,p.share_quantity,p.bundle_size,
+                           p.max_redemptions,p.redemption_count,p.expires_at,p.active,p.created_at,s.ticker,creator.name AS created_by_name
+                    FROM market_promo_codes p LEFT JOIN market_securities s ON s.id=p.security_id
+                    JOIN users creator ON creator.id=p.created_by ORDER BY p.created_at DESC LIMIT 100
+                    """,
+                )],
+                "promotion_redemptions": [dict(row) for row in all_rows(
+                    db,
+                    """
+                    SELECT r.reward_summary,r.redeemed_at,p.campaign_name,p.code_plain,p.code_hint,u.name,u.civ_number
+                    FROM market_promo_redemptions r JOIN market_promo_codes p ON p.id=r.promo_id
+                    JOIN users u ON u.id=r.user_id ORDER BY r.redeemed_at DESC LIMIT 100
+                    """,
+                )],
+            }
+        elif section == "lottery-settings":
+            payload["lottery_settings"] = {
+                "enabled": settings["lottery_enabled"],
+                "daily_credit": settings["lottery_daily_credit"],
+                "ticket_price": settings["lottery_ticket_price"],
+                "scratch_price": settings["lottery_scratch_price"],
+                "quick_draw_price": settings["lottery_quick_draw_price"],
+                "quick_draw_prize": settings["lottery_quick_draw_prize"],
+                "quick_draw_ticket_limit": settings["lottery_quick_draw_ticket_limit"],
+                "draw_weekday": settings["lottery_draw_weekday"],
+                "draw_time": settings["lottery_draw_time"],
+                "timezone": settings["lottery_timezone"],
+                "payout_percent": settings["lottery_payout_percent"],
+                "role_weights": settings["lottery_role_weights"],
+                "excluded_roles": settings["lottery_excluded_roles"],
+                "scratch_enabled": settings["lottery_scratch_enabled"],
+                "scratch_daily_cards": settings["lottery_scratch_daily_cards"],
+                "scratch_prizes": settings["lottery_scratch_prizes"],
+                "quick_draw_enabled": settings["lottery_quick_draw_enabled"],
+                "quick_draw_interval_minutes": settings["lottery_quick_draw_interval_minutes"],
+                "quick_draw_entries": settings["lottery_quick_draw_entries"],
+                "player_pool": lottery_player_pool_status(db, settings),
+                "funding": lottery_funding_snapshot(db, settings),
+                "player_pool_accruals": [dict(row) for row in all_rows(db, "SELECT * FROM lottery_player_pool_accruals ORDER BY created_at DESC LIMIT 100")],
+                "draws": [dict(row) for row in all_rows(db, "SELECT d.*,u.name AS winner_name,u.civ_number AS winner_civ FROM lottery_draws d LEFT JOIN users u ON u.id=d.winner_user_id ORDER BY d.scheduled_at DESC LIMIT 30")],
+                "entries": [dict(row) for row in all_rows(db, "SELECT e.*,u.name,u.civ_number,u.roles FROM lottery_entries e JOIN users u ON u.id=e.user_id ORDER BY e.created_at DESC LIMIT 250")],
+                "fund_adjustments": [dict(row) for row in all_rows(db, "SELECT a.*,u.name AS created_by_name FROM lottery_fund_adjustments a JOIN users u ON u.id=a.created_by ORDER BY a.created_at DESC LIMIT 100")],
+                "special_prizes": [dict(row) for row in all_rows(db, "SELECT p.*,u.name AS created_by_name,w.name AS winner_name FROM lottery_special_prizes p JOIN users u ON u.id=p.created_by LEFT JOIN users w ON w.id=p.winner_user_id ORDER BY CASE p.status WHEN 'active' THEN 0 WHEN 'disabled' THEN 1 ELSE 2 END,p.created_at DESC")],
+                "scratch_cards": [dict(row) for row in all_rows(db, "SELECT c.*,u.name AS player_name,u.civ_number FROM lottery_scratch_cards c JOIN users u ON u.id=c.user_id ORDER BY c.created_at DESC LIMIT 250")],
+            }
+        elif section == "sportsbook-settings":
+            payload["sportsbook_settings"] = {
+                "enabled": SPORTS_BETTING_ENABLED,
+                "provider": SPORTS_DATA_PROVIDER,
+                "provider_configured": KALSHI_MARKET_DATA_ENABLED if SPORTS_DATA_PROVIDER == "kalshi" else bool(SPORTS_DATA_API_KEY),
+                "base_url": KALSHI_BASE_URL if SPORTS_DATA_PROVIDER == "kalshi" else SPORTS_DATA_BASE_URL,
+                "sport_keys": list(KALSHI_SERIES_TICKERS) if SPORTS_DATA_PROVIDER == "kalshi" else list(SPORTS_DATA_SPORT_KEYS),
+                "last_sync_at": settings["sportsbook_last_sync_at"],
+                "poll_seconds": KALSHI_POLL_SECONDS,
+                "event_count": int((one(db, "SELECT COUNT(*) AS count FROM sportsbook_events WHERE status IN ('scheduled','live')") or {}).get("count") or 0),
+                "live_count": int((one(db, "SELECT COUNT(*) AS count FROM sportsbook_events WHERE status='live'") or {}).get("count") or 0),
+                "open_market_count": int((one(db, "SELECT COUNT(*) AS count FROM sportsbook_markets WHERE status='open'") or {}).get("count") or 0),
+                "pending_bets": int((one(db, "SELECT COUNT(*) AS count FROM sportsbook_bets WHERE status='awaiting_debit'") or {}).get("count") or 0),
+                "accepted_bets": int((one(db, "SELECT COUNT(*) AS count FROM sportsbook_bets WHERE status='accepted'") or {}).get("count") or 0),
+            }
+        elif section == "casino-tools":
+            payload["casino_tools"] = casino_admin_snapshot(db, settings)
+
+        self.send_json(200, payload)
+
     def api_dev_tools(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
         if err:
             self.error(403 if user else 401, err)
             return
-        user_rows = all_rows(
-            db,
-            """
-            SELECT u.*, l.identity_id AS linked_arma_id, l.linked_at AS arma_linked_at
-            FROM users u
-            LEFT JOIN arma_account_links l ON l.user_id = u.id
-            ORDER BY u.verified ASC, u.created_at DESC LIMIT 500
-            """,
-        )
-        users = []
-        for row in user_rows:
-            item = public_user(row)
-            item["arma_id"] = row.get("linked_arma_id")
-            item["arma_linked"] = bool(row.get("linked_arma_id"))
-            item["arma_linked_at"] = row.get("arma_linked_at")
-            item["press_pass_status"] = row.get("press_pass_status") or "active"
-            item["press_pass_reason"] = row.get("press_pass_reason") or ""
-            item["press_pass_action_at"] = row.get("press_pass_action_at")
-            item["presence_seconds_today"] = presence_seconds(db, row["id"])
-            item["name_change"] = name_change_status(db, int(row["id"]))
-            count = one(db, "SELECT COUNT(*) AS count FROM user_characters WHERE user_id = ?", (row["id"],))
-            active = one(db, "SELECT character_name FROM user_characters WHERE user_id = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1", (row["id"],))
-            item["character_count"] = int(count["count"] if count else 0)
-            item["active_character_name"] = active["character_name"] if active else row["name"]
-            restriction = active_admin_account_restriction(db, int(row["id"]))
-            item["admin_restriction"] = dict(restriction) if restriction else None
-            users.append(item)
+        users = admin_account_directory(db, limit=500)
         press_members = [dict(account) for account in users if has_any(account, "press")]
         fnn_cad_reports = all_rows(db, """SELECT r.*, o.name AS officer_name
             FROM cad_after_call_reports r JOIN users o ON o.id=r.officer_id
@@ -19805,7 +20746,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             try:
                 minimum = max(1.0, min(1000000000.0, float(item.get("min_bet") or 10)))
                 maximum = max(minimum, min(1000000000.0, float(item.get("max_bet") or minimum)))
-                house_edge = max(1.0, min(15.0, float(item.get("house_edge") or 4)))
+                house_edge = max(CASINO_MIN_HOUSE_EDGE, min(CASINO_MAX_HOUSE_EDGE, float(item.get("house_edge") or 4)))
             except (TypeError, ValueError):
                 self.error(400, f"Invalid limits for {game_key}")
                 return
@@ -19842,7 +20783,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             metrics.append({"game_key": game["game_key"], "rounds": int(row.get("rounds") or 0), "current_house_edge": game["house_edge"], "observed_rtp": round(float(row.get("payouts") or 0) / wagered * 100, 2) if wagered else None})
         prompt = ("You are the Faircroft Casino game-math auditor for a fictional roleplay currency system. Review aggregate RTP only. "
                   "Never choose winners, target a player, recommend deceptive behavior, or change completed rounds. Return strict JSON with keys summary and recommendations. "
-                  "recommendations must be an array of objects with game_key, house_edge, and reason. House edges must remain between 1 and 15 percent and should change by no more than 1 percentage point. "
+                  f"recommendations must be an array of objects with game_key, house_edge, and reason. House edges must remain between {CASINO_MIN_HOUSE_EDGE:.0f} and {CASINO_MAX_HOUSE_EDGE:.0f} percent and should change by no more than 1 percentage point. "
                   f"CURRENT METRICS:\n{json.dumps(metrics, separators=(',', ':'))}")
         body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1200, "responseMimeType": "application/json"}}
         endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{FNN_GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
@@ -19868,7 +20809,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 except (TypeError, ValueError):
                     continue
                 previous = float(current[game_key]["house_edge"])
-                safe_edge = round(max(1.0, min(15.0, max(previous - 1.0, min(previous + 1.0, suggested)))), 2)
+                safe_edge = round(max(CASINO_MIN_HOUSE_EDGE, min(CASINO_MAX_HOUSE_EDGE, max(previous - 1.0, min(previous + 1.0, suggested)))), 2)
                 db.execute("UPDATE casino_game_settings SET house_edge=?,updated_by=?,updated_at=? WHERE game_key=?", (safe_edge, user["id"], now_iso(), game_key))
                 applied.append({"game_key": game_key, "previous_edge": previous, "house_edge": safe_edge, "reason": str(item.get("reason") or "Gemini aggregate RTP review")[:300]})
         summary = str(recommendation.get("summary") or "Gemini balance review completed")[:2000] if isinstance(recommendation, dict) else "Gemini balance review completed"
@@ -21910,12 +22851,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err)
             return
-        stats = {
-            "users": one(db, "SELECT COUNT(*) AS count FROM users")["count"],
-            "unverified": one(db, "SELECT COUNT(*) AS count FROM users WHERE verified = 0")["count"],
-            "open_cases": one(db, "SELECT COUNT(*) AS count FROM citations WHERE status NOT IN ('paid','dismissed')")["count"],
-            "panic_alerts": one(db, "SELECT COUNT(*) AS count FROM panic_alerts WHERE status = 'active'")["count"],
-        }
+        stats = dict(one(
+            db,
+            """
+            SELECT (SELECT COUNT(*) FROM users) AS users,
+                   (SELECT COUNT(*) FROM users WHERE verified = 0) AS unverified,
+                   (SELECT COUNT(*) FROM citations WHERE status NOT IN ('paid','dismissed')) AS open_cases,
+                   (SELECT COUNT(*) FROM panic_alerts WHERE status = 'active') AS panic_alerts
+            """,
+        ) or {})
         cad_reports = all_rows(db, """SELECT r.id,r.report_number,r.call_type,r.disposition,r.location,r.created_at,o.name AS officer_name
             FROM cad_after_call_reports r JOIN users o ON o.id=r.officer_id ORDER BY r.created_at DESC LIMIT 200""")
         press_reports = all_rows(db, """SELECT r.id,r.report_number,r.headline,r.category,r.status,r.created_at,u.name AS author_name
@@ -21932,30 +22876,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err)
             return
-        rows = all_rows(
-            db,
-            """
-            SELECT u.*, l.identity_id AS linked_arma_id, l.linked_at AS arma_linked_at
-            FROM users u
-            LEFT JOIN arma_account_links l ON l.user_id = u.id
-            ORDER BY u.verified ASC, u.created_at DESC
-            """,
-        )
-        users = []
-        for row in rows:
-            item = public_user(row)
-            item["arma_id"] = row.get("linked_arma_id")
-            item["arma_linked"] = bool(row.get("linked_arma_id"))
-            item["arma_linked_at"] = row.get("arma_linked_at")
-            item["presence_seconds_today"] = presence_seconds(db, row["id"])
-            item["name_change"] = name_change_status(db, int(row["id"]))
-            count = one(db, "SELECT COUNT(*) AS count FROM user_characters WHERE user_id = ?", (row["id"],))
-            active = one(db, "SELECT character_name FROM user_characters WHERE user_id = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1", (row["id"],))
-            item["character_count"] = int(count["count"] if count else 0)
-            item["active_character_name"] = active["character_name"] if active else row["name"]
-            restriction = active_admin_account_restriction(db, int(row["id"]))
-            item["admin_restriction"] = dict(restriction) if restriction else None
-            users.append(item)
+        users = admin_account_directory(db)
         self.send_json(200, {"users": users})
 
     def api_admin_enforcement(self, db: Database, user: DbRow | None, target_id: int) -> None:

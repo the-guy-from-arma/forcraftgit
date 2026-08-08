@@ -11,6 +11,22 @@ let deferredPwaInstallPrompt = null;
 let sessionRefreshTimer = null;
 let sessionRefreshInFlight = false;
 let marketLiveRefreshTimer = null;
+let devToolsRefreshTimer = null;
+const devToolsSectionRequests = new Map();
+
+const DEV_TOOLS_REFRESH_MS = {
+  dashboard: 30000,
+  accounts: 30000,
+  enforcement: 30000,
+  warnings: 30000,
+  linking: 30000,
+  intelligence: 120000,
+  "housing-market": 60000,
+  anticheat: 30000,
+  "insurance-claims": 30000,
+  "banking-settings": 15000,
+  "sportsbook-settings": 120000,
+};
 
 const state = {
   boot: {
@@ -48,6 +64,10 @@ const state = {
   fnnConsole: [],
   fineSettlementPrompt: "",
   devTab: "dashboard",
+  devSectionLoadedAt: {},
+  devSectionLoading: "",
+  devBankCommandPage: 1,
+  devAuditPage: 1,
   devAccount: null,
   devDeletionPreview: null,
   devLinkedSearch: "",
@@ -129,6 +149,8 @@ const state = {
   iceCameraSource: "all",
   iceCameraSearch: "",
   insuranceSelectedPolicy: null,
+  insuranceCoverageTier: "preferred",
+  insuranceTermMonths: 1,
   gangSelectedMembership: null,
   businessTab: "apply",
   businessReviewFilter: "active",
@@ -2037,6 +2059,9 @@ function bindHome() {
   $("[data-logout]")?.addEventListener("click", async () => {
     await api("/api/auth/logout", { method: "POST" });
     stopSessionRefresh();
+    stopDevToolsRefresh();
+    state.devSectionLoadedAt = {};
+    delete state.cache["dev-tools"];
     state.session = { user: null, apps: [] };
     state.activeApp = null;
     render();
@@ -2131,6 +2156,64 @@ function renderPanel(id) {
   `;
 }
 
+function devToolsSectionName(section = state.devTab) {
+  return section === "property-intelligence" ? "housing-market" : section;
+}
+
+function devToolsSectionUrl(section = state.devTab) {
+  const normalized = devToolsSectionName(section);
+  const params = new URLSearchParams({ section: normalized });
+  if (normalized === "banking-settings") params.set("page", String(state.devBankCommandPage || 1));
+  if (normalized === "audit") params.set("page", String(state.devAuditPage || 1));
+  return `/api/dev-tools?${params.toString()}`;
+}
+
+async function loadDevToolsSection(section = state.devTab, { force = false } = {}) {
+  const normalized = devToolsSectionName(section);
+  const ttl = DEV_TOOLS_REFRESH_MS[normalized] || 300000;
+  const loadedAt = Number(state.devSectionLoadedAt[normalized] || 0);
+  if (!force && loadedAt && Date.now() - loadedAt < ttl) return state.cache["dev-tools"] || {};
+
+  const url = devToolsSectionUrl(normalized);
+  if (!devToolsSectionRequests.has(url)) {
+    const request = api(url).then((data) => {
+      state.cache["dev-tools"] = { ...(state.cache["dev-tools"] || {}), ...data };
+      state.devSectionLoadedAt[normalized] = Date.now();
+      return state.cache["dev-tools"];
+    }).finally(() => devToolsSectionRequests.delete(url));
+    devToolsSectionRequests.set(url, request);
+  }
+  return devToolsSectionRequests.get(url);
+}
+
+function stopDevToolsRefresh() {
+  if (devToolsRefreshTimer) clearInterval(devToolsRefreshTimer);
+  devToolsRefreshTimer = null;
+}
+
+function devToolsFormIsActive() {
+  const active = document.activeElement;
+  return Boolean(active?.closest?.(".dev-workspace") && (
+    active.matches("input, select, textarea") || active.isContentEditable
+  ));
+}
+
+function scheduleDevToolsRefresh() {
+  stopDevToolsRefresh();
+  if (state.activeApp !== "dev-tools") return;
+  const section = devToolsSectionName();
+  const interval = DEV_TOOLS_REFRESH_MS[section];
+  if (!interval) return;
+  devToolsRefreshTimer = setInterval(async () => {
+    if (document.hidden || state.activeApp !== "dev-tools" || devToolsFormIsActive()) return;
+    try {
+      await refreshDevTools({ force: true, silent: true });
+    } catch (error) {
+      console.warn("Admin Tools background refresh deferred", error);
+    }
+  }, interval);
+}
+
 async function loadAppData(id) {
   const loaders = {
     profile: () => api("/api/profile"),
@@ -2170,7 +2253,7 @@ async function loadAppData(id) {
     "fire-settings": () => api("/api/fire/overview"),
     system: () => api("/api/system/settings"),
     "indeed-admin": () => api("/api/indeed-admin/applications"),
-    "dev-tools": () => api("/api/dev-tools"),
+    "dev-tools": () => loadDevToolsSection(state.devTab),
     "beta-tasks": () => api("/api/beta/tasks"),
     downloads: () => api("/api/downloads/access"),
     leaderboards: () => api("/api/leaderboards"),
@@ -2190,6 +2273,7 @@ async function loadAppData(id) {
   if (loaders[id]) {
     try {
       state.cache[id] = await loaders[id]();
+      if (id === "dev-tools" && state.activeApp === "dev-tools") scheduleDevToolsRefresh();
     } catch (error) {
       toast(error.message);
     }
@@ -2414,41 +2498,62 @@ function renderInsuranceWorkspaceLegacy() {
 }
 
 function renderInsuranceWorkspace() {
-  const data=state.cache.insurance||{policies:[],claims:[],characters:[],tiers:[]};
-  const policies=(data.policies||[]).filter(policy=>policy.policy_type==='compensation'),claims=data.claims||[],tiers=data.tiers||[];
-  const selected=policies.find(item=>String(item.id)===String(state.insuranceSelectedPolicy))||policies[0];
-  const active=policies.filter(p=>p.status==='active'), bankBalance=Number(data.bank?.balance||0);
-  const pct=Number(selected?.coverage_percent||({essential:50,preferred:70,standard:70,premier:90}[selected?.coverage_tier]||0));
-  const chars=(data.characters||[]).map(item=>`<option value="${item.id}">${escapeHtml(item.character_name)}${item.is_active?' — active':''}</option>`).join('');
-  const selectedClaims=claims.filter(c=>String(c.policy_id)===String(selected?.id));
-  const maxCoverage=active.length?Math.max(...active.map(p=>Number(p.coverage_percent||0))):0;
-  const protectedValue=selected?Number(selected.coverage_amount||0):0;
-  const exposure=Math.max(0,bankBalance-protectedValue);
-  return `<section class="insurance-workspace insurance-continuity insurance-vanguard">
-  <header class="insurance-commandbar"><div class="insurance-wordmark"><img src="/static/brand/faircroft-emblem.webp" alt="Faircroft"/><div><small>FAIRCROFT CONTINUITY AUTHORITY</small><strong>Resident Protection Network</strong></div></div><nav><button data-insurance-scroll="protection">Protection</button><button data-insurance-scroll="claims">Claims</button><button data-insurance-scroll="enroll">Enroll</button></nav><div><span class="insurance-secure"><i></i> POLICY NETWORK ONLINE</span><button class="secondary" data-refresh-insurance>Synchronize</button><button class="primary" data-close-insurance>Return to RP OS</button></div></header>
-  <main><section class="continuity-hero"><div class="continuity-hero-copy"><span>FC / ASSET CONTINUITY DIVISION</span><h1>Your empire has<br/><em>a recovery protocol.</em></h1><p>Lock a verified percentage of your Faircroft game-bank position into an official recovery contract before the next authorized reset or wipe.</p><div><button class="primary" data-insurance-scroll="enroll">Initialize protection</button><small>Coverage activates through a verified in-game receipt</small></div><aside class="continuity-signal"><i></i><span>LIVE ASSET LINK</span><b>${money(bankBalance)}</b></aside></div><div class="continuity-seal" style="--shield:${maxCoverage}"><div><img src="/static/brand/faircroft-emblem.webp" alt="Faircroft"/><strong>${maxCoverage||'FC'}${maxCoverage?'%':''}</strong><span>${active.length?'RECOVERY SHIELD ARMED':'CONTINUITY AUTHORITY'}</span></div><i></i><i></i><i></i><b>FCIA / VERIFIED ASSET DEFENSE</b></div></section>
-  <section class="continuity-liveboard"><div class="continuity-live-value"><span>VERIFIED GAME-BANK POSITION</span><strong>${money(bankBalance)}</strong><small>Authoritative linked balance</small></div><div class="continuity-exposure-map"><span>PROTECTION TELEMETRY</span><div><i style="--protected:${pct}%"></i></div><dl><div><dt>Protected</dt><dd>${money(protectedValue)}</dd></div><div><dt>Open exposure</dt><dd>${money(exposure)}</dd></div></dl></div><div class="continuity-live-stats"><p><span>Policies</span><b>${active.length}</b></p><p><span>Claims queued</span><b>${claims.filter(c=>c.status==='pending').length}</b></p><p><span>Network</span><b class="live">Verified</b></p></div></section>
-  <section class="continuity-portfolio" id="protection"><aside><span>YOUR PROTECTION</span><h2>Continuity file</h2><p>Every policy belongs to one exact Faircroft character and renews on a 30-day cycle.</p><nav>${policies.map(p=>`<button class="${selected?.id===p.id?'active':''}" data-insurance-policy="${p.id}"><i></i><span><strong>${escapeHtml(humanLabel(p.coverage_tier))}</strong><small>${escapeHtml(p.character_name)} · ${escapeHtml(p.policy_number)}</small></span><b>${Number(p.coverage_percent||0)}%</b></button>`).join('')||'<em>No policy is active yet.</em>'}</nav></aside><div class="continuity-policy-stage">${selected?`<header><div><span>OFFICIAL CONTINUITY CERTIFICATE</span><h2>${escapeHtml(selected.subject_label)}</h2><p>${escapeHtml(selected.character_name)} · ${escapeHtml(selected.policy_number)}</p></div><strong class="${selected.status==='active'?'live':''}">${escapeHtml(String(selected.status).toUpperCase())}</strong></header><div class="continuity-recovery"><div><span>Protected bank snapshot</span><strong>${money(selected.protected_bank_balance)}</strong><small>Verified at policy issuance</small></div><div class="continuity-recovery-rate"><span>Recovery level</span><strong>${pct}%</strong><i style="--coverage:${pct}%"></i><small>Estimated compensation ${money(selected.coverage_amount)}</small></div></div><dl><div><dt>Monthly premium</dt><dd>${money(selected.premium_amount)}</dd></div><div><dt>Coverage class</dt><dd>${escapeHtml(humanLabel(selected.coverage_tier))}</dd></div><div><dt>Effective</dt><dd>${new Date(selected.issued_at).toLocaleDateString()}</dd></div><div><dt>Renews / expires</dt><dd>${new Date(selected.expires_at).toLocaleDateString()}</dd></div></dl><footer><img src="/static/brand/faircroft-emblem.webp" alt=""/><span>Digitally recorded by the Faircroft Continuity Authority</span><code>${escapeHtml(selected.policy_number.replaceAll('-',''))}</code></footer>`:`<div class="continuity-empty"><span>FC</span><h2>Your continuity file is ready.</h2><p>Select a protection level below to issue the first official policy.</p></div>`}</div></section>
-  <section class="continuity-claims" id="claims"><header><div><span>CLAIM OPERATIONS</span><h2>Recovery ledger</h2><p>Claims remain visible from filing through staff review and final compensation.</p></div><strong>${claims.length} TOTAL</strong></header><div class="continuity-claim-ledger">${claims.map(claim=>`<article><i class="${escapeHtml(claim.status)}"></i><div><small>${escapeHtml(claim.claim_number)}</small><strong>${escapeHtml(claim.character_name)}</strong><span>${escapeHtml(claim.incident_summary)}</span></div><dl><div><dt>Verified basis</dt><dd>${money(claim.bank_balance_snapshot)}</dd></div><div><dt>Recovery</dt><dd>${Number(claim.coverage_percent)}%</dd></div><div><dt>Claim value</dt><dd>${money(claim.requested_amount)}</dd></div></dl><b class="claim-${escapeHtml(claim.status)}">${escapeHtml(humanLabel(claim.status))}</b>${claim.review_notes?`<p>${escapeHtml(claim.review_notes)}</p>`:''}</article>`).join('')||'<div class="continuity-no-claims">No claims filed. Your ledger will appear here after an authorized reset or wipe.</div>'}</div>${selected&&selected.status==='active'?`<form id="insuranceClaimForm" class="continuity-claim-form"><input type="hidden" name="policy_id" value="${selected.id}"/><div><span>FILE A RECOVERY CLAIM</span><h3>${escapeHtml(selected.policy_number)}</h3><p>Use only after an announced server reset or wipe. Filing creates a pending claim for Admin Tools review.</p></div><label>Describe the reset, date, and loss<textarea name="incident_summary" minlength="20" maxlength="1500" required></textarea></label><label class="continuity-confirm"><input type="checkbox" name="confirmed_reset" value="true" required/><span>I confirm an authorized server reset or wipe occurred.</span></label><button class="primary" ${selectedClaims.some(c=>['pending','approved'].includes(c.status))?'disabled':''}>${selectedClaims.some(c=>['pending','approved'].includes(c.status))?'Claim already in review':'Submit protected claim'}</button></form>`:''}</section>
-  <section class="continuity-enrollment" id="enroll"><header><span>CHOOSE YOUR RECOVERY LEVEL</span><h2>One month of protection.<br/>A verified path back.</h2></header><div class="continuity-tier-track">${tiers.map((tier,index)=>`<button type="button" data-insurance-tier="${escapeHtml(tier.id)}" class="${index===1?'featured':''}"><small>0${index+1}</small><span>${escapeHtml(tier.name.replace('Continuity ',''))}</span><strong>${Number(tier.coverage_percent)}<em>%</em></strong><p>of the verified protected game-bank balance</p><b>${money(tier.premium)}<small>/ 30 days</small></b></button>`).join('')}</div><form id="insurancePolicyForm"><input type="hidden" name="policy_type" value="compensation"/><div class="continuity-enroll-fields"><label>Protected character<select name="character_id" required><option value="">Select exact character</option>${chars}</select></label><label>Protection level<select name="coverage_tier" required>${tiers.map(t=>`<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)} · ${Number(t.coverage_percent)}% · ${money(t.premium)}/month</option>`).join('')}</select></label><label>Policy designation<input name="subject_label" value="Server Continuity Compensation" maxlength="120" required/></label></div><label>Continuity notes<textarea name="notes" maxlength="500"></textarea></label><input type="hidden" name="risk_use" value="Authorized server reset and wipe compensation"/><p class="continuity-payment-note">Your premium is queued directly against your linked in-game bank through Bank Bridge. No four-digit payment PIN is required.</p><button class="primary">Purchase with in-game funds</button></form></section>
-  </main></section>`;
+  const data = state.cache.insurance || { policies: [], claims: [], characters: [], tiers: [] };
+  const policies = (data.policies || []).filter(policy => policy.policy_type === "compensation");
+  const claims = data.claims || [];
+  const tiers = data.tiers || [];
+  const active = policies.filter(policy => policy.status === "active");
+  const purchaseBlocked = policies.some(policy => ["active", "pending_payment"].includes(policy.status) && new Date(policy.expires_at).getTime() > Date.now());
+  const selected = policies.find(policy => String(policy.id) === String(state.insuranceSelectedPolicy)) || policies[0];
+  const tierId = tiers.some(tier => tier.id === state.insuranceCoverageTier) ? state.insuranceCoverageTier : (tiers[1]?.id || tiers[0]?.id || "preferred");
+  const quoteTier = tiers.find(tier => tier.id === tierId) || tiers[0] || { id: "preferred", name: "Continuity Preferred", coverage_percent: 70, premium: 4250 };
+  const termMonths = [1, 3, 6].includes(Number(state.insuranceTermMonths)) ? Number(state.insuranceTermMonths) : 1;
+  const bankBalance = Number(data.bank?.balance || 0);
+  const quotePercent = Number(quoteTier.coverage_percent || 0);
+  const monthlyRate = Number(quoteTier.premium || 0);
+  const totalPremium = monthlyRate * termMonths;
+  const quoteCoverage = bankBalance * quotePercent / 100;
+  const lockDate = new Date(Date.now() + termMonths * 30 * 86400000);
+  const selectedPercent = Number(selected?.coverage_percent || quotePercent);
+  const protectedValue = selected ? Number(selected.coverage_amount || 0) : quoteCoverage;
+  const exposure = Math.max(0, bankBalance - protectedValue);
+  const selectedClaims = claims.filter(claim => String(claim.policy_id) === String(selected?.id));
+  const selectedTerm = Math.max(1, Number(selected?.term_months || 1));
+  const selectedMonthlyRate = Number(selected?.monthly_premium_rate || (Number(selected?.premium_amount || 0) / selectedTerm));
+  const characters = (data.characters || []).map(character => `<option value="${character.id}">${escapeHtml(character.character_name)}${character.is_active ? " — active" : ""}</option>`).join("");
+  const tierCopy = {
+    essential: { eyebrow: "Core recovery", title: "Essential", description: "A practical recovery floor for residents who want meaningful protection at the lowest monthly rate.", points: ["Covers 50% of the protected snapshot", "One verified Faircroft character", "Bank Bridge payout after approval"] },
+    preferred: { eyebrow: "Balanced protection", title: "Preferred", description: "Broader protection for established characters with more assets exposed during an authorized reset.", points: ["Covers 70% of the protected snapshot", "Priority continuity record", "Best balance of rate and recovery"] },
+    premier: { eyebrow: "Maximum continuity", title: "Premier", description: "The strongest available continuity contract for high-value accounts and long-term character progression.", points: ["Covers 90% of the protected snapshot", "Highest recovery ceiling", "Maximum reset-loss protection"] }
+  };
+  const termOptions = [
+    { months: 1, label: "Monthly", days: "30 days", note: "Maximum flexibility" },
+    { months: 3, label: "3-month lock", days: "90 days", note: "Rate guaranteed for a quarter" },
+    { months: 6, label: "6-month lock", days: "180 days", note: "Longest available price protection" }
+  ];
+  const emergencyOpen = Boolean(data.state_of_emergency);
+  return `<section class="insurance-workspace insurance-continuity insurance-v5">
+    <header class="ins5-topbar"><div class="ins5-brand"><img src="/static/brand/faircroft-emblem.webp" alt="Faircroft"/><span><small>FAIRCROFT INSURANCE</small><strong>Continuity</strong></span></div><nav><button data-insurance-scroll="plans">Coverage</button><button data-insurance-scroll="protection">My policy</button><button data-insurance-scroll="claims">Claims</button></nav><div><span><i></i>SECURE NETWORK</span><button data-refresh-insurance>Refresh</button><button class="primary" data-close-insurance>Exit</button></div></header>
+    <main>
+      <section class="ins5-hero"><div class="ins5-hero-copy"><span>PROTECTION FOR YOUR FAIRCROFT STORY</span><h1>Keep what you<br/><em>worked to build.</em></h1><p>Continuity coverage protects a fixed percentage of your verified in-game bank snapshot if an authorized server reset or wipe is declared.</p><div><button class="primary" data-insurance-scroll="plans">See coverage options</button><button data-insurance-scroll="claims">How claims work</button></div><small>No real-money product. Premiums and approved recovery payments use Faircroft in-game currency through Bank Bridge.</small></div><aside class="ins5-hero-policy"><header><span>YOUR LIVE POSITION</span><i>${data.bank?.synced_at ? "SYNCED" : "AWAITING SYNC"}</i></header><strong>${money(bankBalance)}</strong><p>Verified game-bank balance</p><div class="ins5-cover-ring" style="--coverage:${selectedPercent}"><span><b>${selectedPercent}%</b><small>${selected ? "CURRENT COVERAGE" : "QUOTE PREVIEW"}</small></span></div><footer><span>${active.length ? `${active.length} active ${active.length === 1 ? "policy" : "policies"}` : "No active policy"}</span><b>${emergencyOpen ? "CLAIMS OPEN" : "CLAIMS STANDBY"}</b></footer></aside></section>
+      <section class="ins5-trust-strip"><article><b>01</b><span><strong>Snapshot protected</strong><small>Your coverage is calculated from the verified bank balance captured when the policy is issued.</small></span></article><article><b>02</b><span><strong>Rate stays fixed</strong><small>A 3- or 6-month term keeps its stored monthly rate even if new-policy prices rise later.</small></span></article><article><b>03</b><span><strong>Recovery is controlled</strong><small>Claims open only during a declared State of Emergency and approved payouts return through Bank Bridge.</small></span></article></section>
+      <section class="ins5-policy" id="protection"><header><div><span>YOUR COVERAGE</span><h2>Policy center</h2><p>Everything important about your protection, without the fine-print maze.</p></div><strong>${active.length} ACTIVE</strong></header><div class="ins5-policy-layout"><aside>${policies.map(policy => `<button class="${selected?.id === policy.id ? "active" : ""}" data-insurance-policy="${policy.id}"><span><i></i><strong>${escapeHtml(humanLabel(policy.coverage_tier))}</strong><small>${escapeHtml(policy.character_name)}</small></span><b>${Number(policy.coverage_percent || 0)}%</b><em>${escapeHtml(policy.policy_number)}</em></button>`).join("") || `<div class="ins5-no-policy"><b>+</b><strong>No policy yet</strong><span>Your first quote is ready below.</span></div>`}</aside><article>${selected ? `<header><div><span>OFFICIAL CONTINUITY CERTIFICATE</span><h3>${escapeHtml(selected.character_name)}</h3><p>${escapeHtml(selected.policy_number)}</p></div><strong class="${selected.status === "active" ? "active" : ""}">${escapeHtml(humanLabel(selected.status))}</strong></header><div class="ins5-policy-amount"><span><small>Protected snapshot</small><strong>${money(selected.protected_bank_balance)}</strong></span><span><small>Maximum covered amount</small><strong>${money(selected.coverage_amount)}</strong></span><span><small>Uncovered exposure</small><strong>${money(Math.max(0, Number(selected.protected_bank_balance || 0) - Number(selected.coverage_amount || 0)))}</strong></span></div><div class="ins5-policy-meter"><span><b style="width:${selectedPercent}%"></b></span><strong>${selectedPercent}% protected</strong></div><dl><div><dt>Coverage</dt><dd>${escapeHtml(humanLabel(selected.coverage_tier))}</dd></div><div><dt>Policy term</dt><dd>${selectedTerm} month${selectedTerm === 1 ? "" : "s"}</dd></div><div><dt>Locked monthly rate</dt><dd>${money(selectedMonthlyRate)}</dd></div><div><dt>Total premium paid</dt><dd>${money(selected.premium_amount)}</dd></div><div><dt>Effective date</dt><dd>${new Date(selected.issued_at).toLocaleDateString()}</dd></div><div><dt>Rate locked through</dt><dd>${new Date(selected.rate_locked_until || selected.expires_at).toLocaleDateString()}</dd></div></dl><footer><img src="/static/brand/faircroft-emblem.webp" alt=""/><span>Rate and coverage terms are stored with this certificate.</span><code>${escapeHtml(selected.policy_number.replaceAll("-", ""))}</code></footer>` : `<div class="ins5-policy-empty"><span>FC</span><h3>Your protection starts with a clear quote.</h3><p>Compare the three recovery levels and choose how long you want today’s rate locked.</p><button class="primary" data-insurance-scroll="plans">Build my quote</button></div>`}</article></div></section>
+      <section class="ins5-plans" id="plans"><header><div><span>COMPARE COVERAGE</span><h2>Choose what feels right.</h2><p>Every plan covers the same qualifying event. The difference is how much of your protected snapshot can be recovered.</p></div><aside><span>VERIFIED BALANCE</span><strong>${money(bankBalance)}</strong></aside></header><div class="ins5-plan-grid">${tiers.map((tier, index) => { const copy = tierCopy[tier.id] || tierCopy.preferred; const activeTier = tier.id === tierId; return `<button type="button" data-insurance-tier="${escapeHtml(tier.id)}" class="${activeTier ? "active" : ""}"><header><small>${escapeHtml(copy.eyebrow)}</small><strong>${escapeHtml(copy.title)}</strong><i>${String(index + 1).padStart(2, "0")}</i></header><div><b>${Number(tier.coverage_percent)}<em>%</em></b><span>of the protected bank snapshot</span></div><p>${escapeHtml(copy.description)}</p><ul>${copy.points.map(point => `<li><i>✓</i>${escapeHtml(point)}</li>`).join("")}</ul><footer><span><small>RATE FROM</small><strong>${money(tier.premium)}<em>/ month</em></strong></span><b>${activeTier ? "Selected" : "Choose plan"}</b></footer></button>`; }).join("")}</div>
+        <div class="ins5-coverage-explainer"><span>HOW COVERAGE IS CALCULATED</span><p><b>${money(bankBalance)}</b> verified snapshot × <b>${quotePercent}%</b> ${escapeHtml((tierCopy[tierId] || tierCopy.preferred).title)} coverage = up to <strong>${money(quoteCoverage)}</strong> eligible recovery after an approved claim.</p><small>Future deposits do not retroactively increase an existing certificate. Purchasing a new policy captures a new snapshot.</small></div>
+      </section>
+      <section class="ins5-enroll" id="enroll"><div class="ins5-enroll-main"><header><span>BUILD YOUR POLICY</span><h2>Lock today’s rate.</h2><p>Choose a term, identify the protected character, and review the complete debit before purchasing.</p></header><div class="ins5-term-picker">${termOptions.map(term => `<button type="button" data-insurance-term="${term.months}" class="${term.months === termMonths ? "active" : ""}"><span><strong>${escapeHtml(term.label)}</strong><small>${escapeHtml(term.note)}</small></span><b>${escapeHtml(term.days)}</b>${term.months > 1 ? `<em>RATE LOCK</em>` : ""}</button>`).join("")}</div><form id="insurancePolicyForm"><input type="hidden" name="policy_type" value="compensation"/><input type="hidden" name="coverage_tier" value="${escapeHtml(tierId)}"/><input type="hidden" name="term_months" value="${termMonths}"/><input type="hidden" name="subject_label" value="Server Continuity Compensation"/><input type="hidden" name="risk_use" value="Authorized server reset and wipe compensation"/><div><label>Protected character<select name="character_id" required><option value="">Select exact character</option>${characters}</select><small>The certificate belongs to this exact RP character.</small></label><label>Continuity notes <em>Optional</em><textarea name="notes" maxlength="500" placeholder="Anything you want recorded with this policy"></textarea></label></div><label class="ins5-authorization"><input type="checkbox" required/><span><strong>I authorize one in-game bank debit of ${money(totalPremium)}.</strong><small>This prepays the full ${termMonths}-month term at a locked rate of ${money(monthlyRate)} per month.</small></span></label><button class="primary" ${bankBalance < totalPremium || purchaseBlocked ? "disabled" : ""}>${purchaseBlocked ? "Current policy already on file" : bankBalance < totalPremium ? "Insufficient in-game balance" : `Purchase ${termMonths}-month protection`}</button></form></div><aside class="ins5-quote"><span>YOUR QUOTE</span><header><div><small>PLAN</small><strong>${escapeHtml((tierCopy[tierId] || tierCopy.preferred).title)}</strong></div><b>${quotePercent}%</b></header><dl><div><dt>Monthly rate</dt><dd>${money(monthlyRate)}</dd></div><div><dt>Rate-lock term</dt><dd>${termMonths} month${termMonths === 1 ? "" : "s"}</dd></div><div><dt>Coverage estimate</dt><dd>${money(quoteCoverage)}</dd></div><div><dt>Rate guaranteed until</dt><dd>${lockDate.toLocaleDateString()}</dd></div></dl><div><span>TOTAL DUE TODAY</span><strong>${money(totalPremium)}</strong><small>One Bank Bridge debit. No four-digit PIN.</small></div><p>Price changes made later in Insurance Settings apply only to new policies. This quote’s monthly rate is stored with the certificate through the date above.</p></aside></section>
+      <section class="ins5-claims" id="claims"><header><div><span>CLAIMS</span><h2>When recovery matters.</h2><p>A claim is simple, but it is only available after Insurance Command declares a State of Emergency for an authorized reset or wipe.</p></div><strong class="${emergencyOpen ? "open" : "closed"}"><i></i>${emergencyOpen ? "CLAIMS OPEN" : "STANDBY — CLAIMS CLOSED"}</strong></header><div class="ins5-claim-guide"><article><b>1</b><span><strong>Emergency declared</strong><small>Insurance Command opens the claim window.</small></span></article><article><b>2</b><span><strong>Report the loss</strong><small>Identify the reset date and explain what occurred.</small></span></article><article><b>3</b><span><strong>Payout queued</strong><small>Approved recovery returns to the linked in-game bank.</small></span></article></div>${emergencyOpen && selected && selected.status === "active" ? `<form id="insuranceClaimForm"><input type="hidden" name="policy_id" value="${selected.id}"/><div><span>FILE AGAINST ${escapeHtml(selected.policy_number)}</span><strong>Describe the qualifying event</strong><p>Your current recovery ceiling is ${money(selected.coverage_amount)}.</p></div><label>Reset date and loss details<textarea name="incident_summary" minlength="20" maxlength="1500" required placeholder="Include the announced reset, approximate date, and what was lost."></textarea></label><label><input type="checkbox" name="confirmed_reset" value="true" required/><span>I confirm an authorized server reset or wipe occurred.</span></label><button class="primary" ${selectedClaims.some(claim => ["pending", "approved"].includes(claim.status)) ? "disabled" : ""}>${selectedClaims.some(claim => ["pending", "approved"].includes(claim.status)) ? "Claim already under review" : "Submit recovery claim"}</button></form>` : `<div class="ins5-claims-closed"><span>${emergencyOpen ? "NO ACTIVE POLICY" : "PROTECTED CLAIM WINDOW"}</span><strong>${emergencyOpen ? "Activate a policy before filing." : "There is no qualifying emergency right now."}</strong><p>${emergencyOpen ? "Choose a coverage plan above to create a continuity certificate." : "Your policy remains active. This claim form automatically opens when Insurance Command declares a State of Emergency."}</p></div>`}<section class="ins5-claim-history"><header><span>CLAIM HISTORY</span><strong>${claims.length} RECORD${claims.length === 1 ? "" : "S"}</strong></header>${claims.map(claim => `<article><i class="${escapeHtml(claim.status)}"></i><span><small>${escapeHtml(claim.claim_number)}</small><strong>${escapeHtml(claim.character_name)}</strong><p>${escapeHtml(claim.incident_summary)}</p></span><dl><div><dt>Coverage</dt><dd>${Number(claim.coverage_percent)}%</dd></div><div><dt>Claim value</dt><dd>${money(claim.requested_amount)}</dd></div></dl><b class="claim-${escapeHtml(claim.status)}">${escapeHtml(humanLabel(claim.status))}</b></article>`).join("") || `<p>No claims have been filed on this account.</p>`}</section></section>
+    </main>
+  </section>`;
 }
 
 function bindInsuranceWorkspace() {
-  if (state.cache.insurance && !state.cache.insurance.state_of_emergency) {
-    const claimForm = $('#insuranceClaimForm');
-    if (claimForm) {
-      const notice = document.createElement('div');
-      notice.className = 'continuity-claim-closed';
-      notice.innerHTML = '<strong>Claims are currently closed</strong><span>Insurance Command must declare a State of Emergency before compensation claims can be filed.</span>';
-      claimForm.replaceWith(notice);
-    }
-  }
   $(`[data-insurance-policy]`) && $$('[data-insurance-policy]').forEach((button) => button.addEventListener('click', () => { state.insuranceSelectedPolicy = button.dataset.insurancePolicy; render(); }));
   $$('[data-insurance-scroll]').forEach((button) => button.addEventListener('click', () => document.getElementById(button.dataset.insuranceScroll)?.scrollIntoView({behavior:'smooth'})));
   $('[data-close-insurance]')?.addEventListener('click', async () => { state.activeApp=null; await loadSession(); });
   $('[data-refresh-insurance]')?.addEventListener('click', async () => { await loadAppData('insurance'); render(); });
-  $$('[data-insurance-tier]').forEach(button=>button.addEventListener('click',()=>{const select=$('#insurancePolicyForm [name="coverage_tier"]');if(select){select.value=button.dataset.insuranceTier;document.getElementById('enroll')?.scrollIntoView({behavior:'smooth'});}}));
+  $$('[data-insurance-tier]').forEach(button=>button.addEventListener('click',()=>{state.insuranceCoverageTier=button.dataset.insuranceTier||'preferred';render();document.getElementById('plans')?.scrollIntoView({behavior:'smooth',block:'start'});}));
+  $$('[data-insurance-term]').forEach(button=>button.addEventListener('click',()=>{state.insuranceTermMonths=Number(button.dataset.insuranceTerm||1);render();document.getElementById('enroll')?.scrollIntoView({behavior:'smooth',block:'start'});}));
   $('#insurancePolicyForm')?.addEventListener('submit', async (event) => { event.preventDefault(); const button=$('button[type="submit"]',event.currentTarget); if(button)button.disabled=true; try { const result=await api('/api/insurance/policies',{method:'POST',body:Object.fromEntries(new FormData(event.currentTarget))}); toast(`Certificate ${result.policy_number} issued`); state.cache.insurance=await api('/api/insurance'); state.insuranceSelectedPolicy=state.cache.insurance.policies?.[0]?.id; render(); } catch(error){if(button)button.disabled=false;toast(error.message);} });
   $('#insuranceClaimForm')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,body=Object.fromEntries(new FormData(form));body.confirmed_reset=form.confirmed_reset.checked;try{const result=await api('/api/insurance/claims',{method:'POST',body});toast(`Claim ${result.claim_number} is pending review`);state.cache.insurance=await api('/api/insurance');render();}catch(error){toast(error.message);}});
 }
@@ -4455,7 +4560,7 @@ function casinoCombination(total, choose) {
 }
 
 function casinoGameTerms(game) {
-  const edgeFactor = Math.max(.75, Math.min(.99, 1 - Number(game.house_edge || 0) / 100));
+  const edgeFactor = Math.max(.05, Math.min(.99, 1 - Number(game.house_edge || 0) / 100));
   const key = game.game_key;
   if (key === "coin") return { multiplier: edgeFactor / .5, returnLabel: "Win pays", chance: "50% draw chance", note: "Choose one face. The result is a secure 50/50 draw." };
   if (key === "dice") {
@@ -4498,9 +4603,10 @@ function renderCasinoWorkspace() {
   const filtered = rounds.filter(round => state.casinoHistoryFilter === "all" || casinoRoundState(round) === state.casinoHistoryFilter);
   const latest = state.casinoLastRound || rounds[0] || null;
   const playerName=state.session?.user?.name||'Verified resident',wonToday=Number(daily.payouts||0),openGames=games.filter(game=>game.enabled);
-  const lobby=`<section class="casino-lobby casino-lobby-v3"><header><div><span>THE GAME FLOOR</span><h1>Play your way.</h1><p>Five original Faircroft games. Every wager and return settles against your linked in-game account.</p></div><aside><button data-refresh-casino>Refresh floor</button><span><i></i>${openGames.length} tables live</span></aside></header><div class="casino-featured-grid">${games.map((game,index)=>{const meta=CASINO_GAME_META[game.game_key]||{},terms=casinoGameTerms(game),last=rounds.find(round=>round.game_key===game.game_key);return `<article class="casino-feature-card ${escapeHtml(game.game_key)} ${game.enabled?'':'closed'}" style="--game-order:${index}"><div class="casino-feature-art">${casinoLobbyArt(game.game_key)}<span>${escapeHtml(meta.type||'Table')} · ${escapeHtml(meta.index||'')}</span></div><div class="casino-feature-copy"><header><span><i></i>${game.enabled?'OPEN NOW':'TABLE CLOSED'}</span>${last?`<small>Last played ${new Date(last.created_at).toLocaleDateString()}</small>`:'<small>Ready for first play</small>'}</header><h2>${escapeHtml(game.display_name||meta.name)}</h2><p>${escapeHtml(meta.line||'')}</p><dl><div><dt>WAGER</dt><dd>${money(game.min_bet)}–${money(game.max_bet)}</dd></div><div><dt>${escapeHtml(terms.returnLabel.toUpperCase())}</dt><dd>${terms.multiplier.toFixed(2)}×</dd></div><div><dt>TARGET RTP</dt><dd>${(100-Number(game.house_edge)).toFixed(2)}%</dd></div></dl><button data-casino-game="${escapeHtml(game.game_key)}" ${!game.enabled||!data.enabled||wallet.available==null?'disabled':''}>${game.enabled?`Enter ${escapeHtml(meta.name||game.display_name)}`:'Table unavailable'}<b>→</b></button></div></article>`;}).join('')}</div><section class="casino-lobby-bottom"><article><header><span>YOUR SESSION</span><strong>UTC DAY</strong></header><div><span><small>Rounds played</small><strong>${Number(daily.rounds||0)}</strong></span><span><small>Amount wagered</small><strong>${money(daily.wagered||0)}</strong></span><span><small>Returns scheduled</small><strong>${money(wonToday)}</strong></span><span><small>Daily room left</small><strong>${money(daily.remaining||0)}</strong></span></div></article><aside><header><span>RECENT PLAY</span><strong>${rounds.length} RECORDED</strong></header><div>${rounds.slice(0,5).map(round=>`<article class="${casinoRoundState(round)}"><i>${escapeHtml(CASINO_GAME_META[round.game_key]?.index||'FC')}</i><span><strong>${escapeHtml(CASINO_GAME_META[round.game_key]?.name||round.game_key)}</strong><small>${new Date(round.created_at).toLocaleString()}</small></span><b>${money(round.bet_amount)}</b><em>${round.outcome?.won?`+${money(round.payout_amount)}`:'No win'}</em></article>`).join('')||'<p>No rounds yet. Choose a table to begin.</p>'}</div></aside></section></section>`;
-  return `<main class="casino-workspace casino-v3">
+  const lobby=`<section class="casino-lobby casino-lobby-v3"><header><div><span>THE GAME FLOOR</span><h1>Play your way.</h1><p>Five original Faircroft games. Every wager and return settles against your linked in-game account.</p></div><aside><button data-refresh-casino>Refresh floor</button><span><i></i>${openGames.length} tables live</span></aside></header><div class="casino-floor-marquee" aria-hidden="true"><span>THE RESERVE</span><i></i><span>LIVE TABLES</span><i></i><span>VERIFIED BANK</span><i></i><span>FAIRCROFT NIGHTS</span></div><div class="casino-featured-grid" tabindex="0" aria-label="The Reserve casino games">${games.map((game,index)=>{const meta=CASINO_GAME_META[game.game_key]||{},terms=casinoGameTerms(game),last=rounds.find(round=>round.game_key===game.game_key);return `<article class="casino-feature-card ${escapeHtml(game.game_key)} ${game.enabled?'':'closed'}" style="--game-order:${index}"><div class="casino-feature-art">${casinoLobbyArt(game.game_key)}<span>${escapeHtml(meta.type||'Table')} · ${escapeHtml(meta.index||'')}</span></div><div class="casino-feature-copy"><header><span><i></i>${game.enabled?'OPEN NOW':'TABLE CLOSED'}</span>${last?`<small>Last played ${new Date(last.created_at).toLocaleDateString()}</small>`:'<small>Ready for first play</small>'}</header><h2>${escapeHtml(game.display_name||meta.name)}</h2><p>${escapeHtml(meta.line||'')}</p><dl><div><dt>WAGER</dt><dd>${money(game.min_bet)}–${money(game.max_bet)}</dd></div><div><dt>${escapeHtml(terms.returnLabel.toUpperCase())}</dt><dd>${terms.multiplier.toFixed(2)}×</dd></div></dl><button data-casino-game="${escapeHtml(game.game_key)}" ${!game.enabled||!data.enabled||wallet.available==null?'disabled':''}>${game.enabled?`Enter ${escapeHtml(meta.name||game.display_name)}`:'Table unavailable'}<b>→</b></button></div></article>`;}).join('')}</div><section class="casino-lobby-bottom"><article><header><span>YOUR SESSION</span><strong>UTC DAY</strong></header><div><span><small>Rounds played</small><strong>${Number(daily.rounds||0)}</strong></span><span><small>Amount wagered</small><strong>${money(daily.wagered||0)}</strong></span><span><small>Returns scheduled</small><strong>${money(wonToday)}</strong></span><span><small>Daily room left</small><strong>${money(daily.remaining||0)}</strong></span></div></article><aside><header><span>RECENT PLAY</span><strong>${rounds.length} RECORDED</strong></header><div>${rounds.slice(0,5).map(round=>`<article class="${casinoRoundState(round)}"><i>${escapeHtml(CASINO_GAME_META[round.game_key]?.index||'FC')}</i><span><strong>${escapeHtml(CASINO_GAME_META[round.game_key]?.name||round.game_key)}</strong><small>${new Date(round.created_at).toLocaleString()}</small></span><b>${money(round.bet_amount)}</b><em>${round.outcome?.won?`+${money(round.payout_amount)}`:'No win'}</em></article>`).join('')||'<p>No rounds yet. Choose a table to begin.</p>'}</div></aside></section></section>`;
+  return `<main class="casino-workspace casino-v3 casino-v4 ${activeGame ? "casino-table-open" : "casino-floor-open"}">
     <header class="casino-topbar casino-topbar-v3"><div class="casino-brand"><i><b>FC</b></i><span><small>FAIRCROFT</small><strong>THE RESERVE</strong><em>CASINO</em></span></div><nav><button class="${state.casinoGame==='lobby'?'active':''}" data-casino-game="lobby" ${state.casinoAnimation?'disabled':''}>Casino</button><button data-casino-scroll="history">My play</button><span><i></i>${data.enabled?'LIVE FLOOR':'CLOSED'}</span></nav><button data-close-casino>Exit</button></header>
+    <div class="casino-atmosphere" aria-hidden="true"><i></i><i></i><i></i><span></span></div>
     <section class="casino-member-bar"><div><i>${escapeHtml(playerName.slice(0,1).toUpperCase())}</i><span><small>VERIFIED PLAYER</small><strong>${escapeHtml(playerName)}</strong><em>${wallet.synced_at?`Bank synced ${new Date(wallet.synced_at).toLocaleString()}`:'Waiting for game-bank sync'}</em></span></div><dl><div><dt>PLAYABLE BALANCE</dt><dd>${wallet.available == null ? "Awaiting sync" : money(wallet.available)}</dd></div><div><dt>QUEUED WAGERS</dt><dd>${money(wallet.reserved || 0)}</dd></div><div><dt>DAILY PLAY ROOM</dt><dd>${money(daily.remaining || 0)}</dd></div></dl><strong><i></i>${data.enabled?`${openGames.length} games available`:'Floor closed'}</strong></section>
     ${!wallet.linked ? `<div class="casino-gate"><strong>Link your Arma account to enter the tables.</strong><span>The casino never creates a separate Railway wallet.</span></div>` : wallet.available == null ? `<div class="casino-gate"><strong>Waiting for your authoritative game-bank snapshot.</strong><span>Join the game server so the current balance can sync.</span></div>` : ""}
     ${state.casinoNotice ? `<section class="casino-status-rail ${escapeHtml(state.casinoNotice.kind || "info")}" role="status"><i>${state.casinoNotice.kind === "success" ? "✓" : state.casinoNotice.kind === "error" ? "!" : "FC"}</i><div><strong>${escapeHtml(state.casinoNotice.title || "Casino update")}</strong><span>${escapeHtml(state.casinoNotice.detail || "")}</span></div>${state.casinoNotice.kind === "pending" ? `<em><b></b><b></b><b></b></em>` : `<button type="button" data-casino-notice-close aria-label="Dismiss casino update">×</button>`}</section>` : ""}
@@ -4870,6 +4976,8 @@ function renderMarketWorkspace() {
 
   const invested = Number(data.portfolio_value || 0);
   const cash = Number(account.cash_balance || 0);
+  const pendingWithdrawal = Number(data.pending_withdrawal_amount || 0);
+  const availableWithdrawal = Number(data.available_withdrawal_amount ?? Math.max(0, cash - pendingWithdrawal));
   const net = invested + cash;
   const cost = holdings.reduce((sum, row) => sum + Number(row.quantity || 0) * Number(row.average_cost || 0), 0);
   const profit = invested - cost;
@@ -4888,7 +4996,7 @@ function renderMarketWorkspace() {
   return `<main class="market-workspace market-terminal-workspace market-v13 market-v13-${state.marketTheme === "light" ? "light" : "dark"}">
     <header class="market-v13-top"><button type="button" class="market-v13-brand" data-market-overview><span>RH</span><div><b>Ravenhood</b><small>Faircroft Exchange / FCX</small></div></button><nav><button type="button" data-market-overview>Trade</button><button type="button" data-market-portfolio>Portfolio</button><button type="button" data-market-dialog="deposit">Deposit</button><button type="button" data-market-dialog="withdrawal">Withdraw</button><button type="button" data-market-dialog="transfer">Transfer</button><button type="button" data-market-dialog="promo">Rewards</button></nav><div><span class="market-v13-status ${data.market_open ? "open" : "closed"}"><i></i>${data.market_open ? "Market open" : "Market closed"}</span><button type="button" data-market-theme>${state.marketTheme === "light" ? "Dark" : "Light"}</button><button type="button" data-refresh-market>Sync</button><button type="button" data-close-market>Exit</button></div></header>
     <div class="market-v13-tape"><div>${securities.concat(securities).map(item => `<button type="button" data-market-ticker="${escapeHtml(item.ticker)}"><b>${escapeHtml(item.ticker)}</b><span>${money(item.price)}</span><i class="${marketChange(item) >= 0 ? "up" : "down"}">${marketChange(item) >= 0 ? "+" : ""}${marketChange(item).toFixed(2)}%</i></button>`).join("")}</div></div>
-    <section class="market-v13-account"><div><small>ACCOUNT EQUITY</small><strong>${money(net)}</strong><span class="${profit >= 0 ? "up" : "down"}">${profit >= 0 ? "+" : ""}${money(profit)} all-time</span></div><dl><div><dt>Invested</dt><dd>${money(invested)}</dd></div><div><dt>Buying power</dt><dd>${money(cash)}</dd></div><div><dt>Positions</dt><dd>${holdings.length}</dd></div><div><dt>Live listings</dt><dd>${securities.length}</dd></div></dl><nav><button type="button" data-market-dialog="deposit">Add funds</button><button type="button" data-market-dialog="promo">Redeem code</button></nav></section>
+    <section class="market-v13-account"><div><small>ACCOUNT EQUITY</small><strong>${money(net)}</strong><span class="${profit >= 0 ? "up" : "down"}">${profit >= 0 ? "+" : ""}${money(profit)} all-time</span></div><dl><div><dt>Invested</dt><dd>${money(invested)}</dd></div><div><dt>Buying power</dt><dd>${money(cash)}</dd></div><div><dt>Available to withdraw</dt><dd>${money(availableWithdrawal)}</dd></div><div><dt>Positions</dt><dd>${holdings.length}</dd></div></dl><nav><button type="button" data-market-dialog="deposit">Add funds</button><button type="button" data-market-dialog="withdrawal">Withdraw to bank</button><button type="button" data-market-dialog="promo">Redeem code</button></nav></section>
     <section class="market-v13-grid">
       <aside class="market-v13-discovery"><header><small>MARKET PULSE</small><h2>Hot right now</h2></header>${movers.slice(0, 7).map((item, index) => `<button type="button" class="${item.ticker === selected.ticker ? "active" : ""}" data-market-ticker="${escapeHtml(item.ticker)}"><i>${String(index + 1).padStart(2, "0")}</i><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}</small></span><strong>${money(item.price)}<em class="${marketChange(item) >= 0 ? "up" : "down"}">${marketChange(item) >= 0 ? "+" : ""}${marketChange(item).toFixed(2)}%</em></strong></button>`).join("")}</aside>
       <section class="market-v13-stage">
@@ -5007,7 +5115,10 @@ function renderMarketDialog(data, stockOptions) {
     return `<div class="market-modal market-action-modal market-promo-modal market-promo-success"><section class="market-modal-card"><button type="button" data-close-market-dialog>&times;</button><div class="market-success-orbit"><i></i><b>RH</b></div><p class="eyebrow">Promotion confirmed</p><h2>Reward added successfully.</h2><p>Your Ravenhood portfolio was refreshed and the promotion has been recorded on your exchange activity ledger.</p><div class="market-success-receipt"><span>CAMPAIGN</span><strong>${escapeHtml(promo.campaign_name || "Ravenhood promotion")}</strong><span>REWARD</span><strong>${escapeHtml(promo.reward_summary || "Reward credited")}</strong></div><button class="market-primary" type="button" data-close-market-dialog>Return to Ravenhood</button></section></div>`;
   }
   const deposit = type === "deposit";
-  return `<div class="market-modal market-action-modal market-cash-modal"><form class="market-modal-card" data-market-cash><button type="button" data-close-market-dialog>&times;</button><p class="eyebrow">${deposit ? "Fund your account" : "Settle a withdrawal"}</p><h2>${deposit ? "Deposit from game bank" : "Withdraw to game bank"}</h2><p>${deposit ? "Move an exact amount from your linked Arma bank into Ravenhood buying power." : "Return an exact amount of settled Ravenhood cash to your linked Arma bank."}</p><ol><li>Enter the amount you want to move.</li><li>Faircroft queues a Bank Bridge command for your linked identity.</li><li>The buying-power balance changes only after the bridge confirms it.</li></ol><input type="hidden" name="transaction_type" value="${type}"/><label>Amount<input name="amount" type="number" min="0.01" max="1000000000" step="0.01" inputmode="decimal" placeholder="0.00" required/></label><div class="market-rule warning"><strong>${deposit ? "Deposit command: debit from the authoritative in-game bank." : "Withdrawal command: issue funds back to the authoritative in-game bank."}</strong><span>No stock PIN or Railway cash is used. Pending commands appear in Dev Tools and remain safe if you are offline.</span></div><button class="market-primary">Queue ${deposit ? "deposit" : "withdrawal"}</button></form></div>`;
+  const settledBuyingPower = Number(data.account?.cash_balance || 0);
+  const pendingWithdrawal = Number(data.pending_withdrawal_amount || 0);
+  const availableWithdrawal = Number(data.available_withdrawal_amount ?? Math.max(0, settledBuyingPower - pendingWithdrawal));
+  return `<div class="market-modal market-action-modal market-cash-modal"><form class="market-modal-card" data-market-cash><button type="button" data-close-market-dialog>&times;</button><p class="eyebrow">${deposit ? "Fund your account" : "Ravenhood cash desk"}</p><h2>${deposit ? "Deposit from game bank" : "Withdraw to game bank"}</h2><p>${deposit ? "Move an exact amount from your linked Arma bank into Ravenhood buying power." : "Move settled buying power—including proceeds from sold shares—back to your linked in-game bank."}</p>${deposit ? "" : `<div class="market-cash-availability"><span><small>BUYING POWER</small><strong>${money(settledBuyingPower)}</strong></span><span><small>PENDING</small><strong>${money(pendingWithdrawal)}</strong></span><span><small>AVAILABLE TO WITHDRAW</small><strong>${money(availableWithdrawal)}</strong></span></div>`}<ol><li>Enter the amount you want to move.</li><li>Faircroft queues a Bank Bridge command for your linked identity.</li><li>The buying-power balance changes only after the bridge confirms it.</li></ol><input type="hidden" name="transaction_type" value="${type}"/><label>Amount<input name="amount" type="number" min="0.01" max="${deposit ? "1000000000" : Math.max(0, availableWithdrawal).toFixed(2)}" step="0.01" inputmode="decimal" placeholder="0.00" required ${!deposit && availableWithdrawal <= 0 ? "disabled" : ""}/></label><div class="market-rule warning"><strong>${deposit ? "Deposit command: debit from the authoritative in-game bank." : "Withdrawal command: issue funds back to the authoritative in-game bank."}</strong><span>No stock PIN or Railway cash is used. The command remains queued safely if you are offline and is delivered when Bank Bridge can process it.</span></div><button class="market-primary" ${!deposit && availableWithdrawal <= 0 ? "disabled" : ""}>${deposit ? "Queue deposit" : availableWithdrawal > 0 ? "Send to in-game bank" : "No buying power available"}</button></form></div>`;
 }
 
 function bindMarketWorkspace() {
@@ -5066,7 +5177,7 @@ function bindMarketWorkspace() {
   }
   $("[data-market-recipient-search]")?.addEventListener("submit", async event => { event.preventDefault(); const civ=String(new FormData(event.currentTarget).get("civ")||"").trim(); const result=await api(`/api/wallstreet/recipient?civ=${encodeURIComponent(civ)}`); state.marketTransferRecipient=result.recipient; render(); });
   $("[data-market-order]")?.addEventListener("submit", async event => { event.preventDefault(); const body=Object.fromEntries(new FormData(event.currentTarget)); await api("/api/wallstreet/orders",{method:"POST",body:JSON.stringify(body)}); toast("Order executed"); await loadAppData("wallstreet"); render(); });
-  $("[data-market-cash]")?.addEventListener("submit", async event => { event.preventDefault(); const body=Object.fromEntries(new FormData(event.currentTarget)); const result=await api("/api/wallstreet/cash",{method:"POST",body:JSON.stringify(body)}); toast(`${humanLabel(body.transaction_type)} queued: ${money(result.amount)} · awaiting Bank Bridge`); state.marketDialog=null; await loadAppData("wallstreet"); render(); });
+  $("[data-market-cash]")?.addEventListener("submit", async event => { event.preventDefault(); const form=event.currentTarget,button=form.querySelector('button[type="submit"],button.market-primary'); if(button)button.disabled=true; try { const body=Object.fromEntries(new FormData(form)); const result=await api("/api/wallstreet/cash",{method:"POST",body:JSON.stringify(body)}); toast(body.transaction_type==="withdrawal"?`${money(result.amount)} queued for your in-game bank`:`${money(result.amount)} deposit queued from your in-game bank`); state.marketDialog=null; await loadAppData("wallstreet"); render(); } catch(error) { if(button)button.disabled=false; toast(error.message); } });
   $("[data-market-transfer]")?.addEventListener("submit", async event => { event.preventDefault(); const body=Object.fromEntries(new FormData(event.currentTarget)); await api("/api/wallstreet/transfers",{method:"POST",body:JSON.stringify(body)}); toast(`Shares transferred to CIV ${body.recipient_civ_number}`); state.marketDialog=null; state.marketTransferRecipient=null; await loadAppData("wallstreet"); render(); });
   if (marketLiveRefreshTimer) clearInterval(marketLiveRefreshTimer);
   marketLiveRefreshTimer = setInterval(async () => {
@@ -11777,6 +11888,9 @@ function renderDevAccountDeletion(data, users) {
 
 function renderDevBankingSettings(banking, users) {
   const commands = banking.commands || [];
+  const history = banking.history || {};
+  const historyPage = Number(history.page || state.devBankCommandPage || 1);
+  const historyPages = Math.max(1, Math.ceil(Number(history.total || commands.length) / Number(history.page_size || 100)));
   const linkedUsers = users.filter((account) => account.arma_linked);
   const economy = banking.economy || {};
   const linkedDirectory = economy.linked_directory || [];
@@ -11803,6 +11917,7 @@ function renderDevBankingSettings(banking, users) {
       <section class="dev-card dev-record-panel"><div class="dev-card-header"><div><span>BRIDGE STATUS</span><h2>Command ledger</h2></div><strong>${commands.length}</strong></div>
         <div class="dev-banking-summary"><span><b>${Number(banking.pending || 0)}</b> Pending</span><span><b>${Number(banking.completed || 0)}</b> Completed</span><span><b>${Number(banking.failed || 0)}</b> Failed</span></div>
         <div class="dev-record-list">${commands.map((command) => { const failure = command.failure_reason || command.result?.message || command.result?.error || ""; return `<article class="dev-banking-command"><div><small>${escapeHtml(command.created_at || "")} / ${escapeHtml(command.requested_by_name || "Developer")}</small><strong>${escapeHtml(command.target_name || "Account")} / ${money(command.amount || 0)}</strong><p>${escapeHtml(command.reason || "")}</p>${command.status === "failed" ? `<p class="dev-bank-failure"><b>Failure reason:</b> ${escapeHtml(failure || "The bridge did not provide a failure reason.")}</p>` : ""}</div><span class="dev-record-status ${command.status === "completed" ? "closed" : command.status === "failed" ? "danger" : ""}">${escapeHtml(command.status || "pending")}</span></article>`; }).join("") || `<div class="empty">No fund commands issued</div>`}</div>
+        <footer class="dev-history-pager"><span>${Number(history.total || commands.length).toLocaleString()} retained commands</span><div><button class="secondary" type="button" data-dev-bank-page="${historyPage - 1}" ${historyPage <= 1 ? "disabled" : ""}>Previous</button><b>${historyPage} / ${historyPages}</b><button class="secondary" type="button" data-dev-bank-page="${historyPage + 1}" ${historyPage >= historyPages ? "disabled" : ""}>Next</button></div></footer>
       </section>
     </div>
   </div>`;
@@ -11843,8 +11958,8 @@ function renderDevCasinoTools(casino) {
       </div>
       <section class="casino-admin-table-editor"><header><div><span>TABLE DIRECTORY</span><h3>Wager limits and published game math</h3><p>Each row controls one resident-facing game. Use the guide below before changing an edge.</p></div><details><summary>What does house edge mean?</summary><p>House edge is the casino’s expected long-run percentage across many rounds. A 5% edge targets about 95% return-to-player over a large sample. It does not guarantee the result of any single player or session.</p></details></header>
         <div class="casino-admin-table-head"><span>Table</span><span>Resident access</span><span>Smallest wager</span><span>Largest wager</span><span>House edge</span><span>Target RTP</span></div>
-        <div class="casino-admin-games">${games.map(game=>{const edge=Number(game.house_edge);return `<article data-casino-settings-game="${escapeHtml(game.game_key)}"><header><i>${escapeHtml(CASINO_GAME_META[game.game_key]?.mark||'FC')}</i><span><strong>${escapeHtml(game.display_name)}</strong><small>${escapeHtml(CASINO_GAME_META[game.game_key]?.line||CASINO_GAME_META[game.game_key]?.type||'Casino table')}</small></span></header><label class="table-access"><input name="${game.game_key}_enabled" type="checkbox" ${game.enabled?'checked':''}/><span>${game.enabled?'Open':'Closed'}</span></label><label><small>Minimum</small><div><em>$</em><input name="${game.game_key}_min" type="number" min="1" step="1" value="${Number(game.min_bet)}"/></div></label><label><small>Maximum</small><div><em>$</em><input name="${game.game_key}_max" type="number" min="1" step="1" value="${Number(game.max_bet)}"/></div></label><label><small>House edge</small><div><input name="${game.game_key}_edge" type="number" min="1" max="15" step="0.01" value="${edge}"/><em>%</em></div></label><output>${(100-edge).toFixed(2)}%<small>expected</small></output></article>`;}).join('')}</div>
-        <footer><div><i></i><span><strong>Changes apply to new rounds only</strong><small>Minimum cannot exceed maximum. House edge must remain between 1% and 15%.</small></span></div><button type="submit">Review and publish settings</button></footer>
+        <div class="casino-admin-games">${games.map(game=>{const edge=Number(game.house_edge);return `<article data-casino-settings-game="${escapeHtml(game.game_key)}"><header><i>${escapeHtml(CASINO_GAME_META[game.game_key]?.mark||'FC')}</i><span><strong>${escapeHtml(game.display_name)}</strong><small>${escapeHtml(CASINO_GAME_META[game.game_key]?.line||CASINO_GAME_META[game.game_key]?.type||'Casino table')}</small></span></header><label class="table-access"><input name="${game.game_key}_enabled" type="checkbox" ${game.enabled?'checked':''}/><span>${game.enabled?'Open':'Closed'}</span></label><label><small>Minimum</small><div><em>$</em><input name="${game.game_key}_min" type="number" min="1" step="1" value="${Number(game.min_bet)}"/></div></label><label><small>Maximum</small><div><em>$</em><input name="${game.game_key}_max" type="number" min="1" step="1" value="${Number(game.max_bet)}"/></div></label><label><small>House edge</small><div><input name="${game.game_key}_edge" type="number" min="1" max="95" step="0.01" value="${edge}"/><em>%</em></div></label><output>${(100-edge).toFixed(2)}%<small>expected</small></output></article>`;}).join('')}</div>
+        <footer><div><i></i><span><strong>Changes apply to new rounds only</strong><small>Minimum cannot exceed maximum. House edge may be set from 1% through 95%.</small></span></div><button type="submit">Review and publish settings</button></footer>
       </section>
     </form>
     <section class="casino-admin-automation casino-admin-review-center"><div><span>TABLE-MATH REVIEW CENTER</span><h3>Check whether long-run returns match the published settings.</h3><p><strong>Guardrail cycle</strong> uses fixed rules and needs at least 50 settled rounds per table before it can adjust anything. <strong>Gemini review</strong> studies aggregate results and may recommend a bounded future edge change. Neither option can alter a result, select a winner, or target a resident.</p>${state.casinoGeminiReview?`<aside><strong>${escapeHtml(state.casinoGeminiReview.summary||'Review complete')}</strong><span>${(state.casinoGeminiReview.applied||[]).map(item=>`${escapeHtml(CASINO_GAME_META[item.game_key]?.name||item.game_key)} ${Number(item.previous_edge).toFixed(2)}% → ${Number(item.house_edge).toFixed(2)}%`).join(' · ')||'No table settings needed a change.'}</span></aside>`:''}</div><div><button data-casino-balance-cycle><small>FIXED RULES</small>Run guardrail check</button><button class="gemini" data-casino-gemini ${!casino.gemini_configured||!settings.casino_gemini_enabled?'disabled':''}><small>AGGREGATE AI REVIEW</small>Run Gemini review</button><span class="casino-admin-provider ${casino.gemini_configured?'ready':''}"><i></i>${casino.gemini_configured?'Gemini connection ready':'Gemini API is not configured'}</span></div></section>
@@ -11857,6 +11972,7 @@ function renderDevTools() {
   const data = state.cache["dev-tools"] || {};
   const users = data.users || [], sanctions = data.sanctions || [], warnings = data.warnings || [], logs = data.audit_logs || [], codes = data.unlink_codes || [];
   const metrics = devMetrics(data, warnings);
+  if (state.devSectionLoading === devToolsSectionName()) return `<div class="dev-section-loading" role="status"><i></i><strong>Opening ${escapeHtml(humanLabel(devToolsSectionName()))}</strong><span>Loading the current workspace only.</span></div>`;
   if (state.devTab === "accounts") return `<div class="stack dev-ops-view dev-account-management-view">
     <div class="dev-view-intro"><div><span>RESIDENT ACCOUNT AUTHORITY</span><h2>Account management</h2><p>The complete administrative account directory is mirrored here for developers. Verify residents, assign roles, recover passwords, apply account enforcement, and maintain sign-in identities.</p></div><strong>${users.length} FILES</strong></div>
     <section class="dev-card dev-account-directory"><div class="dev-card-header"><div><span>CONTROLLED RESIDENT REGISTRY</span><h2>Search every account</h2></div><span class="pill green">LIVE DIRECTORY</span></div>${renderAdminUsers(users)}</section>
@@ -12172,7 +12288,10 @@ function renderDevTools() {
       </section>
     </div>`;
   }
-  return `<div class="dev-ops-view dev-audit-view"><div class="dev-view-intro"><div><span>IMMUTABLE STAFF RECORD</span><h2>Administrative activity</h2><p>Chronological accountability across enforcement, identity, moderation, and system controls.</p></div><strong>${logs.length} EVENTS</strong></div><section class="dev-card dev-audit-panel"><div class="dev-card-header"><div><span>EVENT STREAM</span><h2>Activity ledger</h2></div><span class="dev-live-indicator"><i></i>Current</span></div>${devAudit(logs)}</section></div>`;
+  const auditHistory = data.audit_history || {};
+  const auditPage = Number(auditHistory.page || state.devAuditPage || 1);
+  const auditPages = Math.max(1, Math.ceil(Number(auditHistory.total || logs.length) / Number(auditHistory.page_size || 100)));
+  return `<div class="dev-ops-view dev-audit-view"><div class="dev-view-intro"><div><span>IMMUTABLE STAFF RECORD</span><h2>Administrative activity</h2><p>Chronological accountability across enforcement, identity, moderation, and system controls.</p></div><strong>${Number(auditHistory.total || logs.length).toLocaleString()} EVENTS</strong></div><section class="dev-card dev-audit-panel"><div class="dev-card-header"><div><span>EVENT STREAM</span><h2>Activity ledger</h2></div><span class="dev-live-indicator"><i></i>Current</span></div>${devAudit(logs)}<footer class="dev-history-pager"><span>Complete history retained</span><div><button class="secondary" type="button" data-dev-audit-page="${auditPage - 1}" ${auditPage <= 1 ? "disabled" : ""}>Previous</button><b>${auditPage} / ${auditPages}</b><button class="secondary" type="button" data-dev-audit-page="${auditPage + 1}" ${auditPage >= auditPages ? "disabled" : ""}>Next</button></div></footer></section></div>`;
 }
 
 function devRecentLinks(links) {
@@ -12913,7 +13032,19 @@ function bindDevWorkspace() {
         toast(error.message);
       }
     }
+    state.devSectionLoading = devToolsSectionName(requestedTab);
     render();
+    try {
+      await loadDevToolsSection(requestedTab);
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      if (devToolsSectionName(state.devTab) === devToolsSectionName(requestedTab)) {
+        state.devSectionLoading = "";
+        scheduleDevToolsRefresh();
+        render();
+      }
+    }
   }));
   $$("[data-anticheat-player]").forEach((button) => button.addEventListener("click", () => {
     state.devAntiCheatUid = button.dataset.anticheatPlayer;
@@ -12987,33 +13118,51 @@ function bindDevWorkspace() {
     state.devAccount = null;
     render();
   }));
-  $("[data-dev-enforce]")?.addEventListener("click", () => {
+  $("[data-dev-enforce]")?.addEventListener("click", async () => {
     const targetId = $("[data-dev-enforce]").dataset.devEnforce;
     state.devAccount = null;
     state.devTab = "enforcement";
+    state.devSectionLoading = "enforcement";
+    render();
+    try { await loadDevToolsSection("enforcement"); } catch (error) { toast(error.message); }
+    state.devSectionLoading = "";
     render();
     const select = $("#devSanctionForm select[name='user_id']");
     if (select) select.value = targetId;
   });
-  $("[data-close-dev]")?.addEventListener("click", async () => { state.activeApp = null; await loadSession(); });
-  $("[data-refresh-dev]")?.addEventListener("click", refreshDevTools);
+  $$(`[data-dev-bank-page]`).forEach((button) => button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    state.devBankCommandPage = Math.max(1, Number(button.dataset.devBankPage || 1));
+    await refreshDevTools({ force: true });
+  }));
+  $$(`[data-dev-audit-page]`).forEach((button) => button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    state.devAuditPage = Math.max(1, Number(button.dataset.devAuditPage || 1));
+    await refreshDevTools({ force: true });
+  }));
+  $("[data-close-dev]")?.addEventListener("click", async () => { stopDevToolsRefresh(); state.activeApp = null; await loadSession(); });
+  $("[data-refresh-dev]")?.addEventListener("click", () => refreshDevTools({ force: true }));
 }
 
-async function refreshDevTools() {
+async function refreshDevTools({ force = true, silent = false } = {}) {
   const pageScrollY = window.scrollY;
-  await loadAppData("dev-tools");
-  if (state.devTab === "settlement") state.cache["fine-settlement"] = await api("/api/fine-settlement");
+  try {
+    await loadDevToolsSection(state.devTab, { force });
+    if (state.devTab === "settlement") state.cache["fine-settlement"] = await api("/api/fine-settlement");
+  } catch (error) {
+    if (!silent) {
+      toast(error.message);
+      return false;
+    }
+    throw error;
+  }
   render();
+  scheduleDevToolsRefresh();
   requestAnimationFrame(() => {
     const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
     window.scrollTo({ top: Math.min(pageScrollY, maxScroll), left: 0, behavior: "instant" });
   });
-  $("#devPropertySearch")?.addEventListener("input", (event) => {
-    state.devPropertySearch = event.target.value;
-    render();
-    const input = $("#devPropertySearch");
-    if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
-  });
+  return true;
 }
 
 function renderAntiCheatModal(data, uid) {
@@ -14369,7 +14518,8 @@ function bindSystem() {
         body,
       });
       toast("System settings saved");
-      await loadAppData(state.activeApp === "dev-tools" ? "dev-tools" : "system");
+      if (state.activeApp === "dev-tools") await refreshDevTools({ force: true });
+      else await loadAppData("system");
       await loadSession();
     } catch (error) {
       toast(error.message);
@@ -14622,7 +14772,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-casino-floor-v3").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-casino-rtp-private-v1").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {

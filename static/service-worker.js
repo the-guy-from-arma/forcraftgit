@@ -1,9 +1,9 @@
-const CACHE = "faircroft-rp-v030-casino-floor-v3";
+const CACHE = "faircroft-rp-v030-casino-rtp-private-v1";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.3.0-casino-floor-v3",
+  "/static/styles.css?v=0.3.0-casino-rtp-private-v1",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.3.0-casino-floor-v3",
+  "/static/app.js?v=0.3.0-casino-rtp-private-v1",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
   "/static/brand/platforms/playstation.svg",
