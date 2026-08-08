@@ -18510,7 +18510,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 ],
             },
         }
-        if section in {"dashboard", "linking"}:
+        account_stats: dict[str, Any] = {}
+        if section in {"dashboard", "linking", "housing-market"}:
             account_stats = one(
                 db,
                 """
@@ -18523,6 +18524,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 FROM users u LEFT JOIN arma_account_links l ON l.user_id = u.id
                 """,
             ) or {}
+        if section in {"dashboard", "linking"}:
             sanction_stats = one(
                 db,
                 """
