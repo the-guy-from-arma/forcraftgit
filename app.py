@@ -11918,12 +11918,22 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         events = all_rows(
             db,
             """
-            SELECT e.id, e.provider_event_id, e.sport, e.league, e.home_team, e.away_team,
-                   e.starts_at, e.status, e.score_json, e.raw_json, e.synced_at
-            FROM sportsbook_events e
-            WHERE e.status IN ('scheduled','live')
-            ORDER BY CASE WHEN e.status='live' THEN 0 ELSE 1 END, e.starts_at
-            LIMIT 250
+            WITH ranked_events AS (
+                SELECT e.id, e.provider_event_id, e.sport, e.league, e.home_team, e.away_team,
+                       e.starts_at, e.status, e.score_json, e.raw_json, e.synced_at,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY LOWER(COALESCE(NULLIF(e.sport,''),'other'))
+                           ORDER BY CASE WHEN e.status='live' THEN 0 ELSE 1 END, e.starts_at
+                       ) AS category_rank
+                FROM sportsbook_events e
+                WHERE e.status IN ('scheduled','live')
+            )
+            SELECT id, provider_event_id, sport, league, home_team, away_team,
+                   starts_at, status, score_json, raw_json, synced_at
+            FROM ranked_events
+            WHERE category_rank <= 100
+            ORDER BY CASE WHEN status='live' THEN 0 ELSE 1 END, category_rank, starts_at
+            LIMIT 500
             """,
         )
         markets = all_rows(
@@ -12174,7 +12184,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         markets: list[dict[str, Any]] = []
         cursor = ""
         fetch_errors: list[str] = []
-        for _page in range(2):
+        for _page in range(5):
             query_values = {"status": "open", "limit": "200", "with_nested_markets": "true"}
             if cursor:
                 query_values["cursor"] = cursor
