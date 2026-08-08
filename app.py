@@ -165,6 +165,7 @@ NAME_CHANGE_LIMIT = 3
 NAME_CHANGE_WINDOW_DAYS = 3
 TREASURY_STIMULUS_AMOUNT = 75000.00
 TREASURY_MAX_REQUEST_AMOUNT = 10_000_000.00
+INSURANCE_BANK_COMMAND_MAX_AMOUNT = 10_000_000
 TREASURY_MAX_PROOFS = 4
 TREASURY_MAX_PROOF_CHARS = 1_800_000
 REFERRAL_BONUS_AMOUNT = 50000.00
@@ -2202,7 +2203,6 @@ SYSTEM_SETTING_DEFAULTS = {
     "lottery_player_pool_direction": "increase",
     "lottery_player_pool_rate_per_minute": "100.00",
     "lottery_player_pool_last_tick": "",
-    "insurance_claim_auto_approve_seconds": "180",
     "insurance_state_of_emergency": "0",
     "insurance_tiers": "{\"essential\":{\"coverage_percent\":50,\"premium\":3500},\"preferred\":{\"coverage_percent\":70,\"premium\":4250},\"premier\":{\"coverage_percent\":90,\"premium\":5000}}",
     "sportsbook_last_sync_at": "",
@@ -3906,6 +3906,24 @@ def ensure_migrations(db: Database) -> None:
         FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL
     )""")
     db.execute("CREATE INDEX IF NOT EXISTS insurance_claims_review_idx ON insurance_claims (status, created_at)")
+    db.execute("""CREATE TABLE IF NOT EXISTS insurance_claim_payout_commands (
+        id SERIAL PRIMARY KEY,
+        claim_id INTEGER NOT NULL,
+        command_id TEXT NOT NULL UNIQUE,
+        chunk_number INTEGER NOT NULL,
+        chunk_count INTEGER NOT NULL,
+        amount NUMERIC(18,2) NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL,
+        completed_at TEXT,
+        UNIQUE (claim_id, chunk_number),
+        FOREIGN KEY (claim_id) REFERENCES insurance_claims(id) ON DELETE CASCADE
+    )""")
+    db.execute("CREATE INDEX IF NOT EXISTS insurance_claim_payout_claim_idx ON insurance_claim_payout_commands (claim_id, status)")
+    # Auto approval is retired. Existing unreviewed claims remain pending for
+    # a deliberate decision in Dev Tools instead of firing after a restart.
+    db.execute("UPDATE insurance_claims SET auto_approve_at=NULL WHERE status='pending' AND auto_approve_at IS NOT NULL")
+    db.execute("DELETE FROM system_settings WHERE setting_key='insurance_claim_auto_approve_seconds'")
     if not one(db, "SELECT setting_key FROM system_settings WHERE setting_key = 'citizenship_grandfathered_at'"):
         grandfathered_at = now_iso()
         for account in all_rows(db, "SELECT id, civ_number FROM users ORDER BY id"):
@@ -5355,7 +5373,6 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "lottery_player_pool_direction": "decrease" if str(raw.get("lottery_player_pool_direction") or "increase").lower() == "decrease" else "increase",
         "lottery_player_pool_rate_per_minute": max(0.0, min(1000000.0, float(raw.get("lottery_player_pool_rate_per_minute") or 100))),
         "lottery_player_pool_last_tick": str(raw.get("lottery_player_pool_last_tick") or "")[:80],
-        "insurance_claim_auto_approve_seconds": max(180, min(604800, int(raw.get("insurance_claim_auto_approve_seconds") or 180))),
         "insurance_state_of_emergency": str(raw.get("insurance_state_of_emergency") or "0") in ("1", "true", "True", "yes", "on"),
         "insurance_tiers": insurance_tiers,
         "sportsbook_last_sync_at": str(raw.get("sportsbook_last_sync_at") or "")[:80],
@@ -12021,9 +12038,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403, err)
             return
         # The bridge polls this endpoint even when a resident is offline. Use
-        # that same heartbeat to release payouts after the configured delay.
+        # that same heartbeat to settle external market outcomes, but never to
+        # make insurance decisions. Insurance claims are manual-only.
         self.settle_sportsbook_bets(db)
-        self.run_due_insurance_claims(db)
         query = query or {}
         server_id = str(self.headers.get("X-Server-ID") or (query.get("server_id") or [""])[0] or "default").strip()[:80] or "default"
         rows = all_rows(
@@ -12221,11 +12238,75 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 db.execute("UPDATE casino_rounds SET status='rejected',settled_at=? WHERE id=?", (now_iso(), casino_round["id"]))
                 add_admin_audit(db, int(casino_round["user_id"]), "casino.debit.failed", int(row["target_user_id"]), {"round_id": casino_round["round_id"], "command_id": command_id, "result": result})
         insurance_policy = one(db, "SELECT id, user_id FROM insurance_policies WHERE bank_command_id=?", (command_id,))
-        insurance_claim = one(db, "SELECT id, user_id, claim_number FROM insurance_claims WHERE payout_command_id=?", (command_id,))
+        insurance_payout_chunk = one(
+            db,
+            """SELECT pc.*,ic.user_id,ic.claim_number FROM insurance_claim_payout_commands pc
+               JOIN insurance_claims ic ON ic.id=pc.claim_id WHERE pc.command_id=?""",
+            (command_id,),
+        )
+        # A direct payout_command_id without a batch row is a legacy single
+        # command created before manual chunked payouts were introduced.
+        insurance_claim = None if insurance_payout_chunk else one(db, "SELECT id, user_id, claim_number FROM insurance_claims WHERE payout_command_id=?", (command_id,))
         if insurance_policy:
             policy_status = "active" if status == "completed" else "payment_failed" if status == "failed" else "pending_payment"
             db.execute("UPDATE insurance_policies SET status=?, payment_status=?, updated_at=? WHERE id=?", (policy_status, "completed" if status == "completed" else "failed" if status == "failed" else "pending", now_iso(), insurance_policy["id"]))
             add_admin_audit(db, int(insurance_policy["user_id"]), "insurance.policy.payment.result", int(row["target_user_id"]), {"command_id": command_id, "policy_id": insurance_policy["id"], "status": status, "result": result})
+        if insurance_payout_chunk:
+            chunk_status = "pending" if status == "retry" else status
+            db.execute(
+                """UPDATE insurance_claim_payout_commands SET status=?,completed_at=?
+                   WHERE command_id=?""",
+                (chunk_status, now_iso() if chunk_status in ("completed", "failed") else None, command_id),
+            )
+            progress = one(
+                db,
+                """SELECT COUNT(*) AS total,
+                          COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END),0) AS completed,
+                          COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),0) AS failed,
+                          COALESCE(SUM(CASE WHEN status='completed' THEN amount ELSE 0 END),0) AS delivered
+                   FROM insurance_claim_payout_commands WHERE claim_id=?""",
+                (insurance_payout_chunk["claim_id"],),
+            ) or {}
+            total_chunks = int(progress.get("total") or 0)
+            completed_chunks = int(progress.get("completed") or 0)
+            failed_chunks = int(progress.get("failed") or 0)
+            if total_chunks > 0 and completed_chunks == total_chunks:
+                db.execute(
+                    "UPDATE insurance_claims SET status='paid',paid_at=?,updated_at=? WHERE id=? AND status='approved'",
+                    (now_iso(), now_iso(), insurance_payout_chunk["claim_id"]),
+                )
+                add_message(
+                    db,
+                    int(insurance_payout_chunk["user_id"]),
+                    "Continuity compensation delivered",
+                    f"All {total_chunks} payout command{'s' if total_chunks != 1 else ''} for claim {insurance_payout_chunk['claim_number']} completed. {float(progress.get('delivered') or 0):,.0f} in-game credits were delivered.",
+                )
+            elif failed_chunks:
+                failure_note = f"Bank Bridge payout exception: {failed_chunks} of {total_chunks} command(s) failed. Review the Command Ledger before retrying."
+                db.execute(
+                    """UPDATE insurance_claims SET review_notes=CASE
+                           WHEN review_notes LIKE ? THEN review_notes
+                           WHEN review_notes='' THEN ? ELSE review_notes || ' ' || ? END,
+                           updated_at=? WHERE id=? AND status='approved'""",
+                    (f"%{failure_note}%", failure_note, failure_note, now_iso(), insurance_payout_chunk["claim_id"]),
+                )
+            add_admin_audit(
+                db,
+                int(row["requested_by"]),
+                "insurance.claim.payout.chunk_result",
+                int(row["target_user_id"]),
+                {
+                    "command_id": command_id,
+                    "claim_number": insurance_payout_chunk["claim_number"],
+                    "chunk_number": int(insurance_payout_chunk["chunk_number"]),
+                    "chunk_count": int(insurance_payout_chunk["chunk_count"]),
+                    "amount": float(insurance_payout_chunk["amount"] or 0),
+                    "status": status,
+                    "completed_chunks": completed_chunks,
+                    "failed_chunks": failed_chunks,
+                    "result": result,
+                },
+            )
         if insurance_claim:
             if status == "completed":
                 db.execute("UPDATE insurance_claims SET status='paid', paid_at=?, updated_at=? WHERE id=? AND status='approved'", (now_iso(), now_iso(), insurance_claim["id"]))
@@ -12453,29 +12534,61 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("UPDATE myfaircroft_payment_codes SET target_user_id=COALESCE(target_user_id,?), used_by=?, used_at=? WHERE code_hash=? AND used_at IS NULL", (user_id, user_id, ts, code_hash))
         return row
 
-    def queue_insurance_bank_command(self, db: Database, user_id: int, amount: float, operation: str, reason: str) -> str | None:
+    def queue_insurance_bank_command(
+        self,
+        db: Database,
+        user_id: int,
+        amount: float,
+        operation: str,
+        reason: str,
+        requested_by: int | None = None,
+    ) -> str | None:
         link = one(db, "SELECT identity_id FROM arma_account_links WHERE user_id=? AND identity_id IS NOT NULL AND identity_id<>''", (user_id,))
         if not link or amount <= 0:
             return None
         command_id = f"fc-insurance-{operation}-{secrets.token_urlsafe(18)}"
-        db.execute("INSERT INTO bank_bridge_commands (command_id,idempotency_key,server_id,operation,target_user_id,identity_id,amount,currency,reason,status,requested_by,created_at) VALUES (?,?,?,?,?,?,?,'bank',?,'pending',?,?)", (command_id, f"insurance-{operation}-{secrets.token_urlsafe(18)}", "default", operation, user_id, str(link["identity_id"]), round(amount, 2), reason, user_id, now_iso()))
+        db.execute("INSERT INTO bank_bridge_commands (command_id,idempotency_key,server_id,operation,target_user_id,identity_id,amount,currency,reason,status,requested_by,created_at) VALUES (?,?,?,?,?,?,?,'bank',?,'pending',?,?)", (command_id, f"insurance-{operation}-{secrets.token_urlsafe(18)}", "default", operation, user_id, str(link["identity_id"]), round(amount, 2), reason, requested_by or user_id, now_iso()))
         return command_id
 
-    def run_due_insurance_claims(self, db: Database) -> None:
-        settings = get_system_settings(db)
-        due = all_rows(db, "SELECT c.*,p.policy_number FROM insurance_claims c JOIN insurance_policies p ON p.id=c.policy_id WHERE c.status='pending' AND c.auto_approve_at IS NOT NULL AND c.auto_approve_at<=? ORDER BY c.created_at LIMIT 100", (now_iso(),))
-        for claim in due:
-            payout_command = self.queue_insurance_bank_command(db, int(claim["user_id"]), float(claim["requested_amount"] or 0), "issue_funds", f"Insurance claim payout {claim['claim_number']}")
-            ts = now_iso()
-            db.execute("UPDATE insurance_claims SET status='approved',review_notes=?,reviewed_at=?,reviewed_by=NULL,payout_command_id=?,updated_at=? WHERE id=? AND status='pending'", ("Automatically approved after the configured review window.", ts, payout_command, ts, claim["id"]))
-            add_message(db, int(claim["user_id"]), "Insurance claim approved", f"Claim {claim['claim_number']} was automatically approved. The ${float(claim['requested_amount'] or 0):,.2f} in-game payout is queued through Bank Bridge.")
-            add_admin_audit(db, int(claim["user_id"]), "insurance.claim.auto_approved", int(claim["user_id"]), {"claim_number": claim["claim_number"], "amount": float(claim["requested_amount"] or 0), "payout_command_id": payout_command})
+    def queue_insurance_payout_batch(self, db: Database, claim: DbRow, requested_by: int) -> list[str]:
+        """Split a manually approved payout into bridge-safe, FIFO chunks."""
+        payout_total = int(round(float(claim.get("requested_amount") or 0)))
+        if payout_total <= 0:
+            raise ValueError("This claim does not contain a positive payout amount")
+        link = one(db, "SELECT identity_id FROM arma_account_links WHERE user_id=? AND identity_id IS NOT NULL AND identity_id<>''", (claim["user_id"],))
+        if not link:
+            raise ValueError("The claimant must have a linked Arma account before compensation can be approved")
+        chunk_count = int(math.ceil(payout_total / INSURANCE_BANK_COMMAND_MAX_AMOUNT))
+        command_ids: list[str] = []
+        remaining = payout_total
+        created_at = now_iso()
+        for chunk_number in range(1, chunk_count + 1):
+            chunk_amount = min(remaining, INSURANCE_BANK_COMMAND_MAX_AMOUNT)
+            reason = f"Insurance claim payout {claim['claim_number']} ({chunk_number}/{chunk_count})"
+            command_id = self.queue_insurance_bank_command(
+                db,
+                int(claim["user_id"]),
+                chunk_amount,
+                "issue_funds",
+                reason,
+                requested_by,
+            )
+            if not command_id:
+                raise ValueError("The insurance payout could not be queued for the linked Arma account")
+            db.execute(
+                """INSERT INTO insurance_claim_payout_commands
+                   (claim_id,command_id,chunk_number,chunk_count,amount,status,created_at)
+                   VALUES (?,?,?,?,?,'pending',?)""",
+                (claim["id"], command_id, chunk_number, chunk_count, chunk_amount, created_at),
+            )
+            command_ids.append(command_id)
+            remaining -= chunk_amount
+        return command_ids
 
     def api_insurance(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
         if err:
             self.error(403 if user else 401, err); return
-        self.run_due_insurance_claims(db)
         settings = get_system_settings(db)
         policies = all_rows(db, """SELECT p.*, c.character_name FROM insurance_policies p
             JOIN user_characters c ON c.id=p.character_id WHERE p.user_id=? ORDER BY p.created_at DESC""", (user["id"],))
@@ -12573,13 +12686,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         coverage_percent = float(policy.get("coverage_percent") or {"essential":50,"standard":70,"preferred":70,"premier":90}.get(policy["coverage_tier"], 0))
         requested = round(protected_balance * coverage_percent / 100.0, 2)
         ts = now_iso(); claim_number = f"FCIC-{utcnow().strftime('%y%m')}-{secrets.randbelow(900000)+100000}"
-        auto_approve_at = (utcnow() + dt.timedelta(seconds=int(settings["insurance_claim_auto_approve_seconds"]))).isoformat()
         db.execute("""INSERT INTO insurance_claims
             (claim_number,policy_id,user_id,character_id,incident_type,incident_summary,bank_balance_snapshot,coverage_percent,requested_amount,status,auto_approve_at,created_at,updated_at)
             VALUES (?,?,?,?, 'server_reset', ?,?,?,?,'pending',?,?,?)""",
-            (claim_number, policy_id, user["id"], policy["character_id"], summary, protected_balance, coverage_percent, requested, auto_approve_at, ts, ts))
+            (claim_number, policy_id, user["id"], policy["character_id"], summary, protected_balance, coverage_percent, requested, None, ts, ts))
         add_admin_audit(db, int(user["id"]), "insurance.claim.filed", int(user["id"]), {"claim_number":claim_number,"requested_amount":requested})
-        self.send_json(201, {"ok":True,"claim_number":claim_number,"requested_amount":requested,"status":"pending","auto_approve_at":auto_approve_at})
+        self.send_json(201, {"ok":True,"claim_number":claim_number,"requested_amount":requested,"status":"pending","review_mode":"manual"})
 
     def _gang_payload(self, db: Database, user: DbRow) -> dict[str, Any]:
         characters = all_rows(db, "SELECT id,character_name,is_active FROM user_characters WHERE user_id=? AND status='active' ORDER BY is_active DESC,created_at", (user["id"],))
@@ -19245,10 +19357,23 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 db,
                 """
                 SELECT ic.*,p.policy_number,p.coverage_tier,p.premium_amount,p.subject_label,
-                       u.name AS resident_name,u.civ_number,c.character_name,reviewer.name AS reviewed_by_name
+                       u.name AS resident_name,u.civ_number,c.character_name,reviewer.name AS reviewed_by_name,
+                       COALESCE(batch.payout_chunk_count,0) AS payout_chunk_count,
+                       COALESCE(batch.payout_completed_count,0) AS payout_completed_count,
+                       COALESCE(batch.payout_failed_count,0) AS payout_failed_count,
+                       COALESCE(batch.payout_queued_amount,0) AS payout_queued_amount,
+                       COALESCE(batch.payout_delivered_amount,0) AS payout_delivered_amount
                 FROM insurance_claims ic JOIN insurance_policies p ON p.id=ic.policy_id
                 JOIN users u ON u.id=ic.user_id JOIN user_characters c ON c.id=ic.character_id
                 LEFT JOIN users reviewer ON reviewer.id=ic.reviewed_by
+                LEFT JOIN (
+                    SELECT claim_id,COUNT(*) AS payout_chunk_count,
+                           SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS payout_completed_count,
+                           SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS payout_failed_count,
+                           SUM(amount) AS payout_queued_amount,
+                           SUM(CASE WHEN status='completed' THEN amount ELSE 0 END) AS payout_delivered_amount
+                    FROM insurance_claim_payout_commands GROUP BY claim_id
+                ) batch ON batch.claim_id=ic.id
                 ORDER BY CASE ic.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 WHEN 'paid' THEN 2 ELSE 3 END,
                          ic.created_at DESC LIMIT 500
                 """,
@@ -19267,7 +19392,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             payload["insurance_claims"] = {
                 "claims": [dict(row) for row in claims],
                 "settings": {
-                    "auto_approve_seconds": settings["insurance_claim_auto_approve_seconds"],
+                    "review_mode": "manual",
                     "state_of_emergency": settings["insurance_state_of_emergency"],
                     "tiers": settings["insurance_tiers"],
                 },
@@ -20043,10 +20168,21 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             JOIN user_characters ic ON ic.id=i.issued_by_character_id LEFT JOIN users redeemer ON redeemer.id=i.redeemed_by_user_id
             LEFT JOIN user_characters rc ON rc.id=i.redeemed_character_id ORDER BY i.created_at DESC LIMIT 500""")
         insurance_claims = all_rows(db, """SELECT ic.*,p.policy_number,p.coverage_tier,p.premium_amount,p.subject_label,
-            u.name AS resident_name,u.civ_number,c.character_name,reviewer.name AS reviewed_by_name
+            u.name AS resident_name,u.civ_number,c.character_name,reviewer.name AS reviewed_by_name,
+            COALESCE(batch.payout_chunk_count,0) AS payout_chunk_count,
+            COALESCE(batch.payout_completed_count,0) AS payout_completed_count,
+            COALESCE(batch.payout_failed_count,0) AS payout_failed_count,
+            COALESCE(batch.payout_queued_amount,0) AS payout_queued_amount,
+            COALESCE(batch.payout_delivered_amount,0) AS payout_delivered_amount
             FROM insurance_claims ic JOIN insurance_policies p ON p.id=ic.policy_id
             JOIN users u ON u.id=ic.user_id JOIN user_characters c ON c.id=ic.character_id
             LEFT JOIN users reviewer ON reviewer.id=ic.reviewed_by
+            LEFT JOIN (SELECT claim_id,COUNT(*) AS payout_chunk_count,
+                SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS payout_completed_count,
+                SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS payout_failed_count,
+                SUM(amount) AS payout_queued_amount,
+                SUM(CASE WHEN status='completed' THEN amount ELSE 0 END) AS payout_delivered_amount
+                FROM insurance_claim_payout_commands GROUP BY claim_id) batch ON batch.claim_id=ic.id
             ORDER BY CASE ic.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 WHEN 'paid' THEN 2 ELSE 3 END,ic.created_at DESC LIMIT 500""")
         insurance_claim_stats = one(db, """SELECT COUNT(*) AS total,
             COALESCE(SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END),0) AS pending,
@@ -20225,7 +20361,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 },
                 "insurance_claims": {
                     "claims": [dict(row) for row in insurance_claims],
-                    "settings": {"auto_approve_seconds": system_settings["insurance_claim_auto_approve_seconds"], "state_of_emergency": system_settings["insurance_state_of_emergency"], "tiers": system_settings["insurance_tiers"]},
+                    "settings": {"review_mode": "manual", "state_of_emergency": system_settings["insurance_state_of_emergency"], "tiers": system_settings["insurance_tiers"]},
                     "stats": {key: float(value or 0) if key in {"exposure","paid_total"} else int(value or 0)
                               for key, value in insurance_claim_stats.items()},
                 },
@@ -20619,9 +20755,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err); return
         payload = self.read_json()
-        try: seconds = int(payload.get("auto_approve_seconds") or 180)
-        except (TypeError, ValueError): seconds = 180
-        seconds = max(180, min(604800, seconds))
         state_of_emergency = str(payload.get("state_of_emergency") or "0").lower() in ("1", "true", "yes", "on")
         tiers = {}
         for name, fallback in (("essential", (50, 3500)), ("preferred", (70, 4250)), ("premier", (90, 5000))):
@@ -20632,44 +20765,49 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             if not (1 <= coverage <= 100 and 0.01 <= premium <= 1_000_000_000):
                 self.error(400, "Coverage must be 1–100% and premiums must be positive."); return
             tiers[name] = {"coverage_percent": round(coverage, 2), "premium": round(premium, 2)}
-        set_system_setting(db, "insurance_claim_auto_approve_seconds", str(seconds))
         set_system_setting(db, "insurance_state_of_emergency", "1" if state_of_emergency else "0")
         set_system_setting(db, "insurance_tiers", json.dumps(tiers, separators=(",", ":"), sort_keys=True))
-        add_admin_audit(db, int(user["id"]), "insurance.settings.updated", details={"auto_approve_seconds": seconds, "state_of_emergency": state_of_emergency, "tiers": tiers})
-        self.send_json(200, {"ok": True, "auto_approve_seconds": seconds, "state_of_emergency": state_of_emergency, "tiers": tiers})
+        add_admin_audit(db, int(user["id"]), "insurance.settings.updated", details={"review_mode": "manual", "state_of_emergency": state_of_emergency, "tiers": tiers})
+        self.send_json(200, {"ok": True, "review_mode": "manual", "state_of_emergency": state_of_emergency, "tiers": tiers})
 
     def api_dev_insurance_claim(self, db: Database, user: DbRow | None, claim_id: int) -> None:
         err = developer_required(user)
         if err:
             self.error(403 if user else 401, err); return
         claim = one(db, """SELECT ic.*,p.policy_number,u.name AS resident_name FROM insurance_claims ic
-            JOIN insurance_policies p ON p.id=ic.policy_id JOIN users u ON u.id=ic.user_id WHERE ic.id=?""", (claim_id,))
+            JOIN insurance_policies p ON p.id=ic.policy_id JOIN users u ON u.id=ic.user_id WHERE ic.id=? FOR UPDATE""", (claim_id,))
         if not claim:
             self.error(404, "Insurance claim not found"); return
         payload = self.read_json(); action = str(payload.get("action") or "").strip().lower()
         notes = str(payload.get("review_notes") or "").strip()[:1200]
-        transitions = {"approve": ("pending", "approved"), "deny": ("pending", "denied"), "paid": ("approved", "paid")}
+        transitions = {"approve": ("pending", "approved"), "deny": ("pending", "denied")}
         if action not in transitions:
-            self.error(400, "Choose approve, deny, or paid."); return
+            self.error(400, "Choose approve or deny."); return
         required_status, next_status = transitions[action]
         if claim["status"] != required_status:
             self.error(409, f"A {claim['status']} claim cannot be marked {next_status}."); return
         if action == "deny" and len(notes) < 10:
             self.error(400, "Document the denial reason for the resident."); return
         ts = now_iso()
+        payout_commands: list[str] = []
+        if action == "approve":
+            try:
+                payout_commands = self.queue_insurance_payout_batch(db, claim, int(user["id"]))
+            except ValueError as exc:
+                self.error(409, str(exc)); return
         db.execute("""UPDATE insurance_claims SET status=?,review_notes=?,reviewed_by=?,reviewed_at=?,
-            paid_at=CASE WHEN ?='paid' THEN ? ELSE paid_at END,updated_at=? WHERE id=?""",
-            (next_status, notes, user["id"], ts, next_status, ts, ts, claim_id))
-        titles = {"approved":"Continuity claim approved","denied":"Continuity claim decision","paid":"Continuity compensation completed"}
+            payout_command_id=COALESCE(?,payout_command_id),auto_approve_at=NULL,updated_at=? WHERE id=?""",
+            (next_status, notes, user["id"], ts, payout_commands[0] if payout_commands else None, ts, claim_id))
+        titles = {"approved":"Continuity claim approved","denied":"Continuity claim decision"}
+        payout_total = int(round(float(claim["requested_amount"] or 0)))
         body = {
-            "approved": f"Claim {claim['claim_number']} was approved for {float(claim['requested_amount'] or 0):,.2f}. Staff will complete the in-game compensation handoff.",
+            "approved": f"Claim {claim['claim_number']} was manually approved for {payout_total:,.0f} in-game credits. {len(payout_commands)} Bank Bridge command{'s were' if len(payout_commands) != 1 else ' was'} queued and will be delivered in order.",
             "denied": f"Claim {claim['claim_number']} was not approved. {notes}",
-            "paid": f"Claim {claim['claim_number']} was recorded as paid for {float(claim['requested_amount'] or 0):,.2f}."
         }[next_status]
         add_message(db, int(claim["user_id"]), titles[next_status], body)
         add_admin_audit(db, int(user["id"]), f"insurance.claim.{next_status}", int(claim["user_id"]),
-            {"claim_number":claim["claim_number"],"requested_amount":float(claim["requested_amount"] or 0),"notes":notes})
-        self.send_json(200, {"ok":True,"status":next_status})
+            {"claim_number":claim["claim_number"],"requested_amount":float(claim["requested_amount"] or 0),"queued_amount":payout_total if payout_commands else 0,"payout_commands":payout_commands,"notes":notes,"review_mode":"manual"})
+        self.send_json(200, {"ok":True,"status":next_status,"payout_commands":len(payout_commands),"queued_amount":payout_total if payout_commands else 0})
 
     def api_dev_emergency_unlink_all(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
