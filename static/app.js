@@ -13824,7 +13824,7 @@ function bindDevWorkspace() {
   }));
   $$(`[data-dev-bank-status]`).forEach((button) => button.addEventListener("click", async () => {
     const status = String(button.dataset.devBankStatus || "all").toLowerCase();
-    if (!["all", "pending", "completed", "failed"].includes(status)) return;
+    if (!["all", "pending", "completed", "failed", "cancelled"].includes(status)) return;
     state.devBankCommandStatus = status;
     state.devBankCommandPage = 1;
     await refreshDevTools({ force: true });
@@ -15466,7 +15466,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-legal-consent-v21").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-command-ledger-v22").catch(() => {}));
 }
 
 legalFooterLink?.addEventListener("click", () => {
