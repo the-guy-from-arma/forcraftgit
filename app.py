@@ -12760,7 +12760,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         number = len(existing) + 1
         db.execute("""INSERT INTO lottery_scratch_cards
             (user_id,card_date,card_number,status,outcome,bonus_entries,promo_id,reward_summary,purchase_cost,bank_command_id,cash_amount,revealed_at,created_at)
-            VALUES (?,?,?,'awaiting_debit',?,0,?,?,?, ?,NULL,?)""", (user["id"], today, number, reward_type, promo_id, reward_summary, settings["lottery_scratch_price"], command_id, cash_amount, created.isoformat()))
+            VALUES (?,?,?,'awaiting_debit',?,0,?,?,?,?,?,NULL,?)""", (user["id"], today, number, reward_type, promo_id, reward_summary, settings["lottery_scratch_price"], command_id, cash_amount, created.isoformat()))
         add_message(db, user["id"], "Faircroft Instant Scratch", f"Your scratch card revealed {reward_summary}. The prize will be deposited to your linked Arma bank after the ticket debit confirms.")
         add_admin_audit(db, int(user["id"]), "lottery.scratch.ticket.queued", int(user["id"]), {"command_id": command_id, "reward": reward_summary})
         self.send_json(201, {"ok": True, "outcome": reward_type, "bonus_entries": 0, "card_number": number, "promo_id": promo_id, "promo_code": promo_code, "reward_type": reward_type, "reward_summary": reward_summary, "status": "awaiting_debit", "command_id": command_id, "wallet": lottery_game_snapshot(db, int(user["id"]))})
