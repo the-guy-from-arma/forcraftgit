@@ -14790,7 +14790,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-casino-floor-v5").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-casino-floor-v6").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {
