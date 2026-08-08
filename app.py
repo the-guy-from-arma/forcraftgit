@@ -5769,8 +5769,25 @@ def casino_wallet_snapshot(db: Database, user_id: int) -> dict[str, Any]:
     }
 
 
+def casino_whole_credit_amount(amount: float | int) -> float:
+    """Round a non-negative casino settlement to the nearest whole credit.
+
+    Casino wagers are already restricted to whole credits. Keep winning
+    settlements on the same unit and use conventional half-up rounding rather
+    than Python's banker rounding so an exact .50 always rounds upward.
+    """
+    try:
+        value = max(0.0, float(amount))
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    if not math.isfinite(value):
+        return 0.0
+    return float(math.floor(value + 0.5))
+
+
 def casino_queue_command(db: Database, user_id: int, amount: float, operation: str, detail: str, identity_id: str = "") -> str | None:
-    if amount <= 0:
+    command_amount = casino_whole_credit_amount(amount) if operation == "issue_funds" else round(float(amount), 2)
+    if command_amount <= 0:
         return None
     if not identity_id:
         link = one(db, "SELECT identity_id FROM arma_account_links WHERE user_id=? AND identity_id IS NOT NULL AND identity_id<>''", (user_id,))
@@ -5780,7 +5797,7 @@ def casino_queue_command(db: Database, user_id: int, amount: float, operation: s
     command_id = f"fc-casino-{'debit' if operation == 'debit_funds' else 'payout'}-{secrets.token_urlsafe(18)}"
     db.execute(
         "INSERT INTO bank_bridge_commands (command_id,idempotency_key,server_id,operation,target_user_id,identity_id,amount,currency,reason,status,requested_by,created_at) VALUES (?,?,?,?,?,?,?,'bank',?,'pending',?,?)",
-        (command_id, f"casino-{operation}-{secrets.token_urlsafe(18)}", "default", operation, user_id, identity_id, round(amount, 2), detail[:500], user_id, now_iso()),
+        (command_id, f"casino-{operation}-{secrets.token_urlsafe(18)}", "default", operation, user_id, identity_id, command_amount, detail[:500], user_id, now_iso()),
     )
     return command_id
 
@@ -5862,7 +5879,7 @@ def casino_resolve_game(game_key: str, selection: dict[str, Any], bet: float, ho
         outcome = {"won": not hit, "mine_count": mine_count, "picks": picks, "mines": mines, "hit": hit, "headline": "Three clean tiles" if not hit else "Mine field breached"}
     else:
         raise ValueError("That casino game is not available.")
-    payout = round(bet * multiplier, 2) if multiplier else 0.0
+    payout = casino_whole_credit_amount(bet * multiplier) if multiplier else 0.0
     outcome["multiplier"] = multiplier
     outcome["payout"] = payout
     return outcome, multiplier, payout
@@ -12471,10 +12488,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     db.execute("UPDATE casino_rounds SET status='payout_failed',settled_at=? WHERE id=?", (now_iso(), casino_round["id"]))
                 add_admin_audit(db, int(casino_round["user_id"]), "casino.payout.result", int(row["target_user_id"]), {"round_id": casino_round["round_id"], "command_id": command_id, "status": status, "result": result})
             elif status == "completed":
-                payout_command = casino_queue_command(db, int(casino_round["user_id"]), float(casino_round["payout_amount"] or 0), "issue_funds", f"Casino payout {casino_round['round_id']}")
-                next_status = "won_pending_payout" if payout_command else "lost" if float(casino_round["payout_amount"] or 0) <= 0 else "payout_failed"
-                db.execute("UPDATE casino_rounds SET status=?,payout_command_id=?,settled_at=? WHERE id=?", (next_status, payout_command, now_iso(), casino_round["id"]))
-                add_admin_audit(db, int(casino_round["user_id"]), "casino.debit.completed", int(row["target_user_id"]), {"round_id": casino_round["round_id"], "command_id": command_id, "payout_command_id": payout_command, "payout": float(casino_round["payout_amount"] or 0)})
+                payout_amount = casino_whole_credit_amount(casino_round["payout_amount"] or 0)
+                payout_command = casino_queue_command(db, int(casino_round["user_id"]), payout_amount, "issue_funds", f"Casino payout {casino_round['round_id']}")
+                next_status = "won_pending_payout" if payout_command else "lost" if payout_amount <= 0 else "payout_failed"
+                db.execute("UPDATE casino_rounds SET status=?,payout_amount=?,payout_command_id=?,settled_at=? WHERE id=?", (next_status, payout_amount, payout_command, now_iso(), casino_round["id"]))
+                add_admin_audit(db, int(casino_round["user_id"]), "casino.debit.completed", int(row["target_user_id"]), {"round_id": casino_round["round_id"], "command_id": command_id, "payout_command_id": payout_command, "payout": payout_amount})
             elif status == "failed":
                 db.execute("UPDATE casino_rounds SET status='rejected',settled_at=? WHERE id=?", (now_iso(), casino_round["id"]))
                 add_admin_audit(db, int(casino_round["user_id"]), "casino.debit.failed", int(row["target_user_id"]), {"round_id": casino_round["round_id"], "command_id": command_id, "result": result})
