@@ -13,6 +13,8 @@ let deferredPwaInstallPrompt = null;
 let sessionRefreshTimer = null;
 let sessionRefreshInFlight = false;
 let marketLiveRefreshTimer = null;
+let marketDataRequest = null;
+let marketDataRequestPath = "";
 let devToolsRefreshTimer = null;
 const devToolsSectionRequests = new Map();
 
@@ -2639,6 +2641,30 @@ function scheduleDevToolsRefresh() {
   }, interval);
 }
 
+function wallstreetDataPath() {
+  const ticker = String(state.marketTicker || "").trim().toUpperCase();
+  return ticker ? `/api/wallstreet?ticker=${encodeURIComponent(ticker)}` : "/api/wallstreet";
+}
+
+async function fetchWallstreetData() {
+  const path = wallstreetDataPath();
+  if (marketDataRequest) {
+    if (marketDataRequestPath === path) return marketDataRequest;
+    try { await marketDataRequest; } catch (_) { /* The new selection still gets its own request. */ }
+  }
+  const request = api(path);
+  marketDataRequest = request;
+  marketDataRequestPath = path;
+  try {
+    return await request;
+  } finally {
+    if (marketDataRequest === request) {
+      marketDataRequest = null;
+      marketDataRequestPath = "";
+    }
+  }
+}
+
 async function loadAppData(id) {
   const loaders = {
     profile: () => api("/api/profile"),
@@ -2649,7 +2675,7 @@ async function loadAppData(id) {
     court: () => api(can("judge") || can("owner") ? "/api/court/cases" : "/api/court/my-cases"),
     properties: () => api("/api/properties"),
     bank: () => api("/api/bank"),
-    wallstreet: () => api("/api/wallstreet"),
+    wallstreet: () => fetchWallstreetData(),
     lottery: () => api("/api/lottery"),
     sportsbook: () => api("/api/sportsbook"),
     casino: () => api("/api/casino"),
@@ -5604,6 +5630,39 @@ function renderMarketWorkspaceV12() {
   </main>`.replace("<linearGradient id=\"marketV12Band\"", "</linearGradient><linearGradient id=\"marketV12Band\"");
 }
 
+function normalizeMarketPriceHistory(rows) {
+  const ordered = (rows || [])
+    .map(row => ({price: Number(row.price || 0), time: Date.parse(row.recorded_at || "")}))
+    .filter(row => row.price > 0 && Number.isFinite(row.time))
+    .sort((a, b) => a.time - b.time);
+  const deduplicated = [];
+  for (const row of ordered) {
+    const prior = deduplicated.at(-1);
+    if (prior && prior.time === row.time) deduplicated[deduplicated.length - 1] = row;
+    else deduplicated.push(row);
+  }
+  if (deduplicated.length < 5) return deduplicated;
+  const median = values => {
+    const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
+    if (!sorted.length) return 0;
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  };
+  return deduplicated.filter((row, index, history) => {
+    const left = history.slice(Math.max(0, index - 3), index).map(item => item.price);
+    const right = history.slice(index + 1, index + 4).map(item => item.price);
+    if (!left.length || !right.length) return true;
+    const leftMedian = median(left);
+    const rightMedian = median(right);
+    if (!leftMedian || !rightMedian) return true;
+    const surroundingRatio = leftMedian / rightMedian;
+    if (surroundingRatio < .65 || surroundingRatio > 1.55) return true;
+    const surroundingPrice = (leftMedian + rightMedian) / 2;
+    const quoteRatio = row.price / surroundingPrice;
+    return quoteRatio >= .4 && quoteRatio <= 2.5;
+  });
+}
+
 function renderMarketWorkspace() {
   const data = state.cache.wallstreet;
   if (!data) return `<main class="market-workspace market-v13"><div class="market-v13-loading"><i></i><strong>Opening Ravenhood</strong><span>Connecting to the Faircroft Exchange</span></div></main>`;
@@ -5620,10 +5679,7 @@ function renderMarketWorkspace() {
   const rangeMs = {"1D": 864e5, "1W": 6048e5, "1M": 2592e6, "1Y": 31536e6}[range];
   const currentPrice = Number(selected.price || 0);
   const previousPrice = Number(selected.previous_price || currentPrice);
-  const rawHistory = (data.price_history?.[selected.ticker] || [])
-    .map(row => ({price: Number(row.price || 0), time: Date.parse(row.recorded_at || "")}))
-    .filter(row => row.price > 0 && Number.isFinite(row.time))
-    .sort((a, b) => a.time - b.time);
+  const rawHistory = normalizeMarketPriceHistory(data.price_history?.[selected.ticker] || []);
   let history = rawHistory.filter(row => row.time >= now - rangeMs);
   if (history.length < 2) history = rawHistory.slice(-Math.max(2, {"1D": 32, "1W": 72, "1M": 144, "1Y": 360}[range]));
   if (!history.length) history = [{price: previousPrice, time: now - rangeMs}, {price: currentPrice, time: now}];
@@ -5822,7 +5878,8 @@ function renderMarketDialog(data, stockOptions) {
   const settledBuyingPower = Number(data.account?.cash_balance || 0);
   const pendingWithdrawal = Number(data.pending_withdrawal_amount || 0);
   const availableWithdrawal = Number(data.available_withdrawal_amount ?? Math.max(0, settledBuyingPower - pendingWithdrawal));
-  return `<div class="market-modal market-action-modal market-cash-modal"><form class="market-modal-card" data-market-cash><button type="button" data-close-market-dialog>&times;</button><p class="eyebrow">${deposit ? "Fund your account" : "Ravenhood cash desk"}</p><h2>${deposit ? "Deposit from game bank" : "Withdraw to game bank"}</h2><p>${deposit ? "Move an exact amount from your linked Arma bank into Ravenhood buying power." : "Move settled buying power—including proceeds from sold shares—back to your linked in-game bank."}</p>${deposit ? "" : `<div class="market-cash-availability"><span><small>BUYING POWER</small><strong>${money(settledBuyingPower)}</strong></span><span><small>PENDING</small><strong>${money(pendingWithdrawal)}</strong></span><span><small>AVAILABLE TO WITHDRAW</small><strong>${money(availableWithdrawal)}</strong></span></div>`}<ol><li>Enter the amount you want to move.</li><li>Faircroft queues a Bank Bridge command for your linked identity.</li><li>The buying-power balance changes only after the bridge confirms it.</li></ol><input type="hidden" name="transaction_type" value="${type}"/><label>Amount<input name="amount" type="number" min="0.01" max="${deposit ? "1000000000" : Math.max(0, availableWithdrawal).toFixed(2)}" step="0.01" inputmode="decimal" placeholder="0.00" required ${!deposit && availableWithdrawal <= 0 ? "disabled" : ""}/></label><div class="market-rule warning"><strong>${deposit ? "Deposit command: debit from the authoritative in-game bank." : "Withdrawal command: issue funds back to the authoritative in-game bank."}</strong><span>No stock PIN or Railway cash is used. The command remains queued safely if you are offline and is delivered when Bank Bridge can process it.</span></div><button class="market-primary" ${!deposit && availableWithdrawal <= 0 ? "disabled" : ""}>${deposit ? "Queue deposit" : availableWithdrawal > 0 ? "Send to in-game bank" : "No buying power available"}</button></form></div>`;
+  const wholeDollarWithdrawal = Math.floor(Math.max(0, availableWithdrawal));
+  return `<div class="market-modal market-action-modal market-cash-modal"><form class="market-modal-card" data-market-cash><button type="button" data-close-market-dialog>&times;</button><p class="eyebrow">${deposit ? "Fund your account" : "Ravenhood cash desk"}</p><h2>${deposit ? "Deposit from game bank" : "Withdraw to game bank"}</h2><p>${deposit ? "Move an exact amount from your linked Arma bank into Ravenhood buying power." : "Move settled buying power—including proceeds from sold shares—back to your linked in-game bank. Withdrawals are issued in whole dollars only."}</p>${deposit ? "" : `<div class="market-cash-availability"><span><small>BUYING POWER</small><strong>${money(settledBuyingPower)}</strong></span><span><small>PENDING</small><strong>${money(pendingWithdrawal)}</strong></span><span><small>WHOLE DOLLARS AVAILABLE</small><strong>${money(wholeDollarWithdrawal)}</strong></span></div>`}<ol><li>${deposit ? "Enter the amount you want to move." : "Enter a whole-dollar amount with no cents."}</li><li>Faircroft queues a Bank Bridge command for your linked identity.</li><li>The buying-power balance changes only after the bridge confirms it.</li></ol><input type="hidden" name="transaction_type" value="${type}"/><label>Amount<input name="amount" type="number" min="${deposit ? "0.01" : "1"}" max="${deposit ? "1000000000" : wholeDollarWithdrawal}" step="${deposit ? "0.01" : "1"}" inputmode="${deposit ? "decimal" : "numeric"}" placeholder="${deposit ? "0.00" : "0"}" required ${!deposit && wholeDollarWithdrawal < 1 ? "disabled" : ""}/></label><div class="market-rule warning"><strong>${deposit ? "Deposit command: debit from the authoritative in-game bank." : "Withdrawal command: issue whole-dollar funds back to the authoritative in-game bank."}</strong><span>No stock PIN or Railway cash is used. The command remains queued safely if you are offline and is delivered when Bank Bridge can process it.</span></div><button class="market-primary" ${!deposit && wholeDollarWithdrawal < 1 ? "disabled" : ""}>${deposit ? "Queue deposit" : wholeDollarWithdrawal > 0 ? "Send to in-game bank" : "No whole dollars available"}</button></form></div>`;
 }
 
 function bindMarketWorkspace() {
@@ -5833,7 +5890,22 @@ function bindMarketWorkspace() {
       if (!control || !app.contains(control)) return;
       event.preventDefault();
       event.stopPropagation();
-      if (control.matches("[data-market-ticker]")) { state.marketTicker = control.dataset.marketTicker; render(); return; }
+      if (control.matches("[data-market-ticker]")) {
+        const requestedTicker = String(control.dataset.marketTicker || "").toUpperCase();
+        state.marketTicker = requestedTicker;
+        render();
+        if (state.cache.wallstreet?.history_ticker === requestedTicker) return;
+        try {
+          const next = await fetchWallstreetData();
+          if (state.marketTicker === requestedTicker) {
+            state.cache.wallstreet = next;
+            render();
+          }
+        } catch (error) {
+          toast(error.message);
+        }
+        return;
+      }
       if (control.matches("[data-market-range]")) { state.marketRange = control.dataset.marketRange; render(); return; }
       if (control.matches("[data-market-dialog]")) { state.marketDialog = control.dataset.marketDialog; state.marketTransferRecipient = null; state.marketPromoSuccess = null; state.marketPromoError = ""; render(); return; }
       if (control.matches("[data-market-overview]")) { state.marketDialog = null; render(); requestAnimationFrame(() => ($(".market-v7-focus") || $(".market-terminal"))?.scrollIntoView({behavior:"smooth",block:"start"})); return; }
@@ -5841,7 +5913,7 @@ function bindMarketWorkspace() {
       if (control.matches("[data-close-market-dialog]")) { state.marketDialog = null; state.marketTransferRecipient = null; state.marketPromoSuccess = null; state.marketPromoError = ""; render(); return; }
       if (control.matches("[data-change-market-recipient]")) { state.marketTransferRecipient = null; render(); return; }
       if (control.matches("[data-market-theme]")) { state.marketTheme = state.marketTheme === "light" ? "dark" : "light"; localStorage.setItem("rp.market.theme", state.marketTheme); render(); return; }
-      if (control.matches("[data-refresh-market]")) { state.cache.wallstreet = await api("/api/wallstreet"); render(); return; }
+      if (control.matches("[data-refresh-market]")) { state.cache.wallstreet = await fetchWallstreetData(); render(); return; }
       if (control.matches("[data-create-market-account]")) { await api("/api/wallstreet/account", {method:"POST", body:JSON.stringify({})}); toast("Ravenhood account opened"); await loadAppData("wallstreet"); render(); return; }
       if (control.matches("[data-close-market]")) { if (marketLiveRefreshTimer) clearInterval(marketLiveRefreshTimer); marketLiveRefreshTimer = null; state.activeApp = null; state.marketDialog = null; state.marketTransferRecipient = null; state.marketPromoSuccess = null; render(); await loadSession(); }
     });
@@ -5866,7 +5938,7 @@ function bindMarketWorkspace() {
           body: { code },
           confirm: false,
         });
-        state.cache.wallstreet = await api("/api/wallstreet");
+        state.cache.wallstreet = await fetchWallstreetData();
         state.marketPromoSuccess = result;
         state.marketDialog = "promo_success";
         toast(`Promotion applied: ${result.reward_summary}`);
@@ -5932,8 +6004,8 @@ function bindMarketWorkspace() {
     });
   }
   $("[data-market-recipient-search]")?.addEventListener("submit", async event => { event.preventDefault(); const civ=String(new FormData(event.currentTarget).get("civ")||"").trim(); const result=await api(`/api/wallstreet/recipient?civ=${encodeURIComponent(civ)}`); state.marketTransferRecipient=result.recipient; render(); });
-  $("[data-market-order]")?.addEventListener("submit", async event => { event.preventDefault(); const body=Object.fromEntries(new FormData(event.currentTarget)); await api("/api/wallstreet/orders",{method:"POST",body:JSON.stringify(body)}); toast("Order executed"); await loadAppData("wallstreet"); render(); });
-  $("[data-market-cash]")?.addEventListener("submit", async event => { event.preventDefault(); const form=event.currentTarget,button=form.querySelector('button[type="submit"],button.market-primary'); if(button)button.disabled=true; try { const body=Object.fromEntries(new FormData(form)); const result=await api("/api/wallstreet/cash",{method:"POST",body:JSON.stringify(body)}); toast(body.transaction_type==="withdrawal"?`${money(result.amount)} queued for your in-game bank`:`${money(result.amount)} deposit queued from your in-game bank`); state.marketDialog=null; await loadAppData("wallstreet"); render(); } catch(error) { if(button)button.disabled=false; toast(error.message); } });
+  $("[data-market-order]")?.addEventListener("submit", async event => { event.preventDefault(); const form=event.currentTarget,button=form.querySelector('button[type="submit"],button.market-primary'); if(button?.disabled)return; const body=Object.fromEntries(new FormData(form)); if(button)button.disabled=true; try { await api("/api/wallstreet/orders",{method:"POST",body:JSON.stringify(body)}); toast("Order executed"); await loadAppData("wallstreet"); render(); } catch(error) { if(button)button.disabled=false; toast(error.message); } });
+  $("[data-market-cash]")?.addEventListener("submit", async event => { event.preventDefault(); const form=event.currentTarget,button=form.querySelector('button[type="submit"],button.market-primary'); const body=Object.fromEntries(new FormData(form)); if(body.transaction_type==="withdrawal"&&!Number.isInteger(Number(body.amount))){toast("Enter a whole-dollar withdrawal amount with no cents");return;} if(button)button.disabled=true; try { const result=await api("/api/wallstreet/cash",{method:"POST",body:JSON.stringify(body)}); toast(body.transaction_type==="withdrawal"?`${money(result.amount)} queued for your in-game bank`:`${money(result.amount)} deposit queued from your in-game bank`); state.marketDialog=null; await loadAppData("wallstreet"); render(); } catch(error) { if(button)button.disabled=false; toast(error.message); } });
   $("[data-market-transfer]")?.addEventListener("submit", async event => { event.preventDefault(); const body=Object.fromEntries(new FormData(event.currentTarget)); await api("/api/wallstreet/transfers",{method:"POST",body:JSON.stringify(body)}); toast(`Shares transferred to CIV ${body.recipient_civ_number}`); state.marketDialog=null; state.marketTransferRecipient=null; await loadAppData("wallstreet"); render(); });
   if (marketLiveRefreshTimer) clearInterval(marketLiveRefreshTimer);
   marketLiveRefreshTimer = setInterval(async () => {
@@ -5941,7 +6013,7 @@ function bindMarketWorkspace() {
     try {
       const prior = (state.cache.wallstreet?.securities || []).find(item => item.ticker === state.marketTicker);
       const priorPrice = Number(prior?.price || 0);
-      const next = await api("/api/wallstreet");
+      const next = await fetchWallstreetData();
       const current = (next.securities || []).find(item => item.ticker === state.marketTicker);
       const currentPrice = Number(current?.price || 0);
       state.cache.wallstreet = next;
@@ -15675,7 +15747,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-market-chart-v26").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-market-performance-v28").catch(() => {}));
 }
 
 legalFooterLink?.addEventListener("click", () => {

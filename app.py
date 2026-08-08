@@ -4365,6 +4365,13 @@ def ensure_migrations(db: Database) -> None:
         )
         """
     )
+    db.execute("CREATE INDEX IF NOT EXISTS idx_market_price_history_security_id ON market_price_history(security_id, id DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_market_orders_account_created ON market_orders(account_id, created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_market_cash_account_status ON market_cash_transactions(account_id, transaction_type, status, created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_market_transfers_from_created ON market_transfers(from_account_id, created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_market_transfers_to_created ON market_transfers(to_account_id, created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_market_promo_redemptions_account_created ON market_promo_redemptions(account_id, redeemed_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_market_programs_status ON market_price_programs(status, id)")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS lottery_draws (
@@ -5153,6 +5160,8 @@ def ensure_migrations(db: Database) -> None:
         )
         """
     )
+    db.execute("ALTER TABLE press_reports ADD COLUMN IF NOT EXISTS top_story INTEGER NOT NULL DEFAULT 0")
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS press_reports_one_top_story_idx ON press_reports (top_story) WHERE top_story=1")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS mdt_bolos (
@@ -5530,8 +5539,6 @@ def set_system_setting(db: Database, key: str, value: str) -> None:
         """,
         (key, value, now_iso()),
     )
-    db.execute("ALTER TABLE press_reports ADD COLUMN IF NOT EXISTS top_story INTEGER NOT NULL DEFAULT 0")
-    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS press_reports_one_top_story_idx ON press_reports (top_story) WHERE top_story=1")
 
 
 def lottery_funding_snapshot(db: Database, settings: dict[str, Any] | None = None) -> dict[str, float]:
@@ -6129,10 +6136,46 @@ def market_gemini_adjustment_cycle(db: Database) -> dict[str, Any]:
     return {"updated": len(applied), "adjustments": applied}
 
 
+def apply_market_price_programs(db: Database) -> int:
+    """Advance scheduled price programs outside resident-facing read requests."""
+    current = utcnow()
+    programs = all_rows(db, "SELECT * FROM market_price_programs WHERE status = 'active' ORDER BY id")
+    updated = 0
+    for program in programs:
+        try:
+            starts = parse_iso(program["starts_at"])
+            ends = parse_iso(program["ends_at"])
+        except (TypeError, ValueError):
+            db.execute("UPDATE market_price_programs SET status = 'cancelled' WHERE id = ?", (program["id"],))
+            continue
+        if current < starts:
+            continue
+        progress = 1.0 if current >= ends else max(0.0, min(1.0, (current - starts).total_seconds() / max(1, (ends - starts).total_seconds())))
+        targets = all_rows(
+            db,
+            "SELECT id, price FROM market_securities WHERE active = 1" + (" AND id = ?" if program.get("security_id") else ""),
+            ((program["security_id"],) if program.get("security_id") else ()),
+        )
+        for security in targets:
+            start_price = float(program.get("start_price") or security["price"])
+            new_price = max(0.01, start_price * (1 + float(program["percent_change"]) * progress / 100.0))
+            rounded_price = round(new_price, 4)
+            db.execute("UPDATE market_securities SET previous_price = price, price = ?, updated_at = ? WHERE id = ?", (rounded_price, current.isoformat(), security["id"]))
+            last_history = one(db, "SELECT price,recorded_at FROM market_price_history WHERE security_id=? ORDER BY id DESC LIMIT 1", (security["id"],))
+            last_time = parse_iso(last_history["recorded_at"]) if last_history and last_history.get("recorded_at") else None
+            if not last_history or abs(float(last_history["price"]) - rounded_price) >= 0.0001 or not last_time or (current - last_time).total_seconds() >= 300:
+                db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], rounded_price, "scheduled_program", current.isoformat()))
+            updated += 1
+        if progress >= 1:
+            db.execute("UPDATE market_price_programs SET status = 'completed' WHERE id = ?", (program["id"],))
+    return updated
+
+
 def market_automation_worker() -> None:
     while True:
         try:
             with conn() as db:
+                apply_market_price_programs(db)
                 settings = get_system_settings(db)
                 current = utcnow()
                 if settings["market_autopilot_enabled"]:
@@ -8638,7 +8681,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 elif path == "/api/bank" and method == "GET":
                     self.api_bank(db, user)
                 elif path == "/api/wallstreet" and method == "GET":
-                    self.api_wallstreet(db, user)
+                    self.api_wallstreet(db, user, query)
                 elif path == "/api/wallstreet/account" and method == "POST":
                     self.api_wallstreet_create_account(db, user)
                 elif path == "/api/wallstreet/cash" and method == "POST":
@@ -13401,31 +13444,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         else: self.error(400, "Choose a supported member action or gang role."); return
         self.send_json(200, {"ok": True})
 
-    def market_apply_programs(self, db: Database) -> None:
-        current = utcnow()
-        programs = all_rows(db, "SELECT * FROM market_price_programs WHERE status = 'active' ORDER BY id")
-        for program in programs:
-            try:
-                starts = parse_iso(program["starts_at"])
-                ends = parse_iso(program["ends_at"])
-            except (TypeError, ValueError):
-                db.execute("UPDATE market_price_programs SET status = 'cancelled' WHERE id = ?", (program["id"],))
-                continue
-            if current < starts:
-                continue
-            progress = 1.0 if current >= ends else max(0.0, min(1.0, (current - starts).total_seconds() / max(1, (ends - starts).total_seconds())))
-            targets = all_rows(db, "SELECT id, price FROM market_securities WHERE active = 1" + (" AND id = ?" if program.get("security_id") else ""), ((program["security_id"],) if program.get("security_id") else ()))
-            for security in targets:
-                start_price = float(program.get("start_price") or security["price"])
-                new_price = max(0.01, start_price * (1 + float(program["percent_change"]) * progress / 100.0))
-                db.execute("UPDATE market_securities SET previous_price = price, price = ?, updated_at = ? WHERE id = ?", (round(new_price, 4), now_iso(), security["id"]))
-                last_history = one(db, "SELECT price,recorded_at FROM market_price_history WHERE security_id=? ORDER BY id DESC LIMIT 1", (security["id"],))
-                last_time = parse_iso(last_history["recorded_at"]) if last_history and last_history.get("recorded_at") else None
-                if not last_history or abs(float(last_history["price"])-new_price) >= 0.0001 or not last_time or (current-last_time).total_seconds() >= 300:
-                    db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], round(new_price, 4), "scheduled_program", current.isoformat()))
-            if progress >= 1:
-                db.execute("UPDATE market_price_programs SET status = 'completed' WHERE id = ?", (program["id"],))
-
     def casino_round_public(self, row: DbRow | dict[str, Any]) -> dict[str, Any]:
         item = dict(row)
         for source, target in (("selection_json", "selection"), ("outcome_json", "outcome")):
@@ -14037,10 +14055,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             settled += 1
         return settled
 
-    def market_payload(self, db: Database, user: DbRow) -> dict[str, Any]:
-        self.market_apply_programs(db)
+    def market_payload(self, db: Database, user: DbRow, history_ticker: str = "") -> dict[str, Any]:
         settings = get_system_settings(db)
-        account = one(db, "SELECT * FROM market_accounts WHERE user_id = ? FOR UPDATE", (user["id"],))
+        account = one(db, "SELECT * FROM market_accounts WHERE user_id = ?", (user["id"],))
         securities = all_rows(db, "SELECT * FROM market_securities WHERE active = 1 ORDER BY security_type, ticker")
         holdings: list[DbRow] = []
         orders: list[DbRow] = []
@@ -14049,15 +14066,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         promo_redemptions: list[DbRow] = []
         pending_withdrawal_amount = 0.0
         available_withdrawal_amount = 0.0
-        price_history: dict[str, list[dict[str, Any]]] = {str(row["ticker"]): [] for row in securities}
-        history_rows = all_rows(db, """SELECT h.security_id,h.price,h.source,h.recorded_at,s.ticker
-            FROM market_price_history h JOIN market_securities s ON s.id=h.security_id
-            WHERE s.active=1 ORDER BY h.id DESC LIMIT 8000""")
-        for row in reversed(history_rows):
-            ticker = str(row["ticker"])
-            bucket = price_history.setdefault(ticker, [])
-            if len(bucket) < 400:
-                bucket.append({"price": float(row["price"] or 0), "source": row["source"], "recorded_at": row["recorded_at"]})
+        requested_ticker = str(history_ticker or "").upper().strip()[:12]
+        history_security = next((row for row in securities if str(row["ticker"]).upper() == requested_ticker), securities[0] if securities else None)
+        selected_ticker = str(history_security["ticker"]) if history_security else ""
+        price_history: dict[str, list[dict[str, Any]]] = {selected_ticker: []} if selected_ticker else {}
+        if history_security:
+            history_rows = all_rows(db, """SELECT price,source,recorded_at FROM market_price_history
+                WHERE security_id=? ORDER BY id DESC LIMIT 600""", (history_security["id"],))
+            price_history[selected_ticker] = [
+                {"price": float(row["price"] or 0), "source": row["source"], "recorded_at": row["recorded_at"]}
+                for row in reversed(history_rows)
+            ]
         if account:
             holdings = all_rows(db, """SELECT h.*, s.ticker, s.name, s.price, s.previous_price, s.security_type
                 FROM market_holdings h JOIN market_securities s ON s.id = h.security_id
@@ -14084,16 +14103,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "orders": [dict(x) for x in orders], "cash_transactions": [dict(x) for x in cash_log], "transfers": [dict(x) for x in transfers],
                 "promo_redemptions": [dict(x) for x in promo_redemptions],
                 "price_history": price_history,
+                "history_ticker": selected_ticker,
                 "pending_withdrawal_amount": pending_withdrawal_amount,
                 "available_withdrawal_amount": available_withdrawal_amount,
                 "portfolio_value": round(portfolio_value, 2), "market_open": settings["market_open"],
                 "transfer_fee_percent": settings["market_transfer_fee_percent"], "trade_fee_percent": settings["market_trade_fee_percent"]}
 
-    def api_wallstreet(self, db: Database, user: DbRow | None) -> None:
+    def api_wallstreet(self, db: Database, user: DbRow | None, query: dict[str, list[str]]) -> None:
         err = verified_required(user)
         if err:
             self.error(403 if user else 401, err); return
-        self.send_json(200, self.market_payload(db, user))
+        history_ticker = str((query.get("ticker") or [""])[0])
+        self.send_json(200, self.market_payload(db, user, history_ticker))
 
     def api_wallstreet_create_account(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -14111,10 +14132,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not account:
             self.error(409, "Create your Ravenhood account first."); return
         payload = self.read_json(); tx_type = str(payload.get("transaction_type") or "").lower()
-        try: amount = round(float(payload.get("amount") or 0), 2)
-        except (TypeError, ValueError): amount = 0
+        try: raw_amount = float(payload.get("amount") or 0)
+        except (TypeError, ValueError): raw_amount = 0
+        if not math.isfinite(raw_amount): raw_amount = 0
+        amount = round(raw_amount, 2)
         if tx_type not in ("deposit", "withdrawal") or amount <= 0 or amount > 1_000_000_000:
             self.error(400, "Choose a valid deposit or withdrawal amount."); return
+        if tx_type == "withdrawal" and not raw_amount.is_integer():
+            self.error(400, "Ravenhood withdrawals must be entered in whole dollar amounts with no cents."); return
         link = one(db, "SELECT identity_id FROM arma_account_links WHERE user_id=? AND identity_id IS NOT NULL AND identity_id<>''", (user["id"],))
         if not link:
             self.error(409, "Link your Arma account before moving Ravenhood funds."); return
