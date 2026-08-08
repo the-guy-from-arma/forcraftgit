@@ -4351,6 +4351,10 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE lottery_scratch_cards ADD COLUMN IF NOT EXISTS bank_command_id TEXT")
     db.execute("ALTER TABLE lottery_scratch_cards ADD COLUMN IF NOT EXISTS payout_command_id TEXT")
     db.execute("ALTER TABLE lottery_scratch_cards ADD COLUMN IF NOT EXISTS cash_amount NUMERIC(14,2) NOT NULL DEFAULT 0")
+    # Existing cards are considered acknowledged. Newly issued cards explicitly
+    # enter the sealed state until the resident finishes the scratch surface.
+    db.execute("ALTER TABLE lottery_scratch_cards ADD COLUMN IF NOT EXISTS surface_state TEXT NOT NULL DEFAULT 'legacy_revealed'")
+    db.execute("ALTER TABLE lottery_scratch_cards ADD COLUMN IF NOT EXISTS surface_revealed_at TEXT")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS lottery_quick_draws (
@@ -5329,9 +5333,9 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "lottery_enabled": str(raw.get("lottery_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "lottery_daily_entries": max(1, min(20, int(raw.get("lottery_daily_entries") or 3))),
         "lottery_daily_credit": 0.0,
-        "lottery_ticket_price": max(0.01, min(1000.0, float(raw.get("lottery_ticket_price") or 2))),
-        "lottery_scratch_price": max(0.01, min(1000.0, float(raw.get("lottery_scratch_price") or 3))),
-        "lottery_quick_draw_price": max(0.01, min(1000.0, float(raw.get("lottery_quick_draw_price") or 1))),
+        "lottery_ticket_price": max(0.01, min(1000000.0, float(raw.get("lottery_ticket_price") or 2))),
+        "lottery_scratch_price": max(0.01, min(1000000.0, float(raw.get("lottery_scratch_price") or 3))),
+        "lottery_quick_draw_price": max(0.01, min(1000000.0, float(raw.get("lottery_quick_draw_price") or 1))),
         "lottery_quick_draw_prize": max(0.01, min(10000.0, float(raw.get("lottery_quick_draw_prize") or 5))),
         "lottery_draw_weekday": max(0, min(6, int(raw.get("lottery_draw_weekday") or 1))),
         "lottery_draw_time": str(raw.get("lottery_draw_time") or "23:59")[:5],
@@ -8409,6 +8413,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_lottery_entry(db, user)
                 elif path == "/api/lottery/scratch" and method == "POST":
                     self.api_lottery_scratch(db, user)
+                elif path == "/api/lottery/scratch/reveal" and method == "POST":
+                    self.api_lottery_scratch_reveal(db, user)
                 elif path == "/api/lottery/quick-draw/entries" and method == "POST":
                     self.api_lottery_quick_draw_entry(db, user)
                 elif path == "/api/bank/collect" and method == "POST":
@@ -13566,6 +13572,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             LEFT JOIN market_promo_codes p ON p.id=c.promo_id
             LEFT JOIN market_securities s ON s.id=p.security_id
             WHERE c.user_id=? AND c.card_date=? ORDER BY c.card_number""", (user["id"], today))]
+        scratch_pending_card = one(db, """SELECT c.*,p.code_plain AS promo_code,p.reward_type,p.cash_amount,p.share_quantity,s.ticker
+            FROM lottery_scratch_cards c
+            LEFT JOIN market_promo_codes p ON p.id=c.promo_id
+            LEFT JOIN market_securities s ON s.id=p.security_id
+            WHERE c.user_id=? AND c.surface_state='sealed' AND c.status<>'rejected'
+            ORDER BY c.id DESC LIMIT 1""", (user["id"],))
+        scratch_unsettled_card = one(db, """SELECT id,status,surface_state FROM lottery_scratch_cards
+            WHERE user_id=? AND status<>'rejected' AND (surface_state='sealed' OR status='awaiting_debit')
+            ORDER BY id DESC LIMIT 1""", (user["id"],))
         scratch_account_purchased = int(one(db, "SELECT COUNT(*) AS count FROM lottery_scratch_cards WHERE user_id=? AND status<>'rejected'", (user["id"],))["count"] or 0)
         quick_draw = ensure_quick_draw(db, settings)
         quick_entries = [dict(row) for row in all_rows(db, "SELECT * FROM lottery_quick_draw_entries WHERE draw_id=? AND user_id=? ORDER BY entry_number", (quick_draw["id"], user["id"]))]
@@ -13608,7 +13623,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         active_ticket_count = sum(1 for item in purchased_tickets if item["result"] in {"active", "review"})
         winning_ticket_count = sum(1 for item in purchased_tickets if item["result"] == "winner")
         losing_ticket_count = sum(1 for item in purchased_tickets if item["result"] == "not_winner")
-        self.send_json(200, {"enabled": settings["lottery_enabled"], "draw": dict(draw), "funding": funding, "player_pool": lottery_player_pool_status(db, settings), "wallet": wallet, "wallet_transactions": wallet_transactions, "prices": {"weekly_ticket": settings["lottery_ticket_price"], "scratch": settings["lottery_scratch_price"], "quick_draw": settings["lottery_quick_draw_price"]}, "entries": [dict(row) for row in entries], "entries_today": today_count, "daily_limit": settings["lottery_daily_entries"], "remaining_today": 0, "role_weight": weight, "excluded": bool(excluded), "excluded_roles": excluded, "latest_result": dict(latest) if latest else None, "latest_special_prizes": latest_prizes, "timezone": settings["lottery_timezone"], "purchased_tickets": {"items": purchased_tickets, "active": active_ticket_count, "winners": winning_ticket_count, "not_winners": losing_ticket_count}, "scratch": {"enabled": settings["lottery_scratch_enabled"], "daily_limit": settings["lottery_scratch_daily_cards"], "account_limit": settings["lottery_scratch_account_limit"], "account_purchased": scratch_account_purchased, "account_remaining": max(0, settings["lottery_scratch_account_limit"] - scratch_account_purchased), "cards": scratch_cards, "price": settings["lottery_scratch_price"]}, "quick_draw": {"enabled": settings["lottery_quick_draw_enabled"], "draw": dict(quick_draw), "daily_limit": settings["lottery_quick_draw_ticket_limit"], "entries": quick_entries, "price": settings["lottery_quick_draw_price"], "prize": settings["lottery_quick_draw_prize"], "latest_result": dict(quick_latest) if quick_latest else None}})
+        self.send_json(200, {"enabled": settings["lottery_enabled"], "draw": dict(draw), "funding": funding, "player_pool": lottery_player_pool_status(db, settings), "wallet": wallet, "wallet_transactions": wallet_transactions, "prices": {"weekly_ticket": settings["lottery_ticket_price"], "scratch": settings["lottery_scratch_price"], "quick_draw": settings["lottery_quick_draw_price"]}, "entries": [dict(row) for row in entries], "entries_today": today_count, "daily_limit": settings["lottery_daily_entries"], "remaining_today": 0, "role_weight": weight, "excluded": bool(excluded), "excluded_roles": excluded, "latest_result": dict(latest) if latest else None, "latest_special_prizes": latest_prizes, "timezone": settings["lottery_timezone"], "purchased_tickets": {"items": purchased_tickets, "active": active_ticket_count, "winners": winning_ticket_count, "not_winners": losing_ticket_count}, "scratch": {"enabled": settings["lottery_scratch_enabled"], "daily_limit": settings["lottery_scratch_daily_cards"], "account_limit": settings["lottery_scratch_account_limit"], "account_purchased": scratch_account_purchased, "account_remaining": max(0, settings["lottery_scratch_account_limit"] - scratch_account_purchased), "cards": scratch_cards, "pending_card": dict(scratch_pending_card) if scratch_pending_card else None, "purchase_blocked": bool(scratch_unsettled_card), "purchase_block_reason": "Reveal your current scratch card before purchasing another." if scratch_unsettled_card and str(scratch_unsettled_card.get("surface_state") or "") == "sealed" else "Your current scratch-card debit is still settling through Bank Bridge." if scratch_unsettled_card else "", "price": settings["lottery_scratch_price"]}, "quick_draw": {"enabled": settings["lottery_quick_draw_enabled"], "draw": dict(quick_draw), "daily_limit": settings["lottery_quick_draw_ticket_limit"], "entries": quick_entries, "price": settings["lottery_quick_draw_price"], "prize": settings["lottery_quick_draw_prize"], "latest_result": dict(quick_latest) if quick_latest else None}})
 
     def api_lottery_entry(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -13661,9 +13676,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403, "This account is excluded from lottery participation by role policy."); return
         today = utcnow().astimezone(ZoneInfo(settings["lottery_timezone"])).date().isoformat()
         one(db, "SELECT id FROM users WHERE id=? FOR UPDATE", (user["id"],))
+        active_card = one(db, """SELECT id,status,surface_state FROM lottery_scratch_cards
+            WHERE user_id=? AND status<>'rejected' AND (surface_state='sealed' OR status='awaiting_debit')
+            ORDER BY id DESC LIMIT 1""", (user["id"],))
+        if active_card:
+            if str(active_card.get("surface_state") or "") == "sealed":
+                self.send_json(409, {"error": "Reveal your current scratch card before purchasing another.", "code": "scratch_card_reveal_required", "card_id": int(active_card["id"])})
+            else:
+                self.send_json(409, {"error": "Your current scratch-card purchase is still settling through Bank Bridge.", "code": "scratch_card_settlement_pending", "card_id": int(active_card["id"])})
+            return
         account_purchased = int(one(db, "SELECT COUNT(*) AS count FROM lottery_scratch_cards WHERE user_id=? AND status<>'rejected'", (user["id"],))["count"] or 0)
         if account_purchased >= settings["lottery_scratch_account_limit"]:
-            self.error(409, f"Scratch-off account limit reached ({settings['lottery_scratch_account_limit']} cards). Existing cards must be resolved before another purchase."); return
+            self.error(409, f"Scratch-off account purchase limit reached ({settings['lottery_scratch_account_limit']} cards)."); return
         existing = all_rows(db, "SELECT * FROM lottery_scratch_cards WHERE user_id=? AND card_date=? ORDER BY card_number", (user["id"], today))
         if len(existing) >= settings["lottery_scratch_daily_cards"]:
             self.error(409, "All daily scratch cards have already been revealed."); return
@@ -13701,12 +13725,35 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         created = utcnow()
         expires = created + dt.timedelta(days=30)
         number = len(existing) + 1
-        db.execute("""INSERT INTO lottery_scratch_cards
-            (user_id,card_date,card_number,status,outcome,bonus_entries,promo_id,reward_summary,purchase_cost,bank_command_id,cash_amount,revealed_at,created_at)
-            VALUES (?,?,?,'awaiting_debit',?,0,?,?,?,?,?,NULL,?)""", (user["id"], today, number, reward_type, promo_id, reward_summary, settings["lottery_scratch_price"], command_id, cash_amount, created.isoformat()))
+        card = db.execute("""INSERT INTO lottery_scratch_cards
+            (user_id,card_date,card_number,status,outcome,bonus_entries,promo_id,reward_summary,purchase_cost,bank_command_id,cash_amount,surface_state,revealed_at,created_at)
+            VALUES (?,?,?,'awaiting_debit',?,0,?,?,?,?,?,'sealed',NULL,?) RETURNING id""", (user["id"], today, number, reward_type, promo_id, reward_summary, settings["lottery_scratch_price"], command_id, cash_amount, created.isoformat())).fetchone()
         add_message(db, user["id"], "Faircroft Instant Scratch", f"Your scratch card revealed {reward_summary}. The prize will be deposited to your linked Arma bank after the ticket debit confirms.")
         add_admin_audit(db, int(user["id"]), "lottery.scratch.ticket.queued", int(user["id"]), {"command_id": command_id, "reward": reward_summary})
-        self.send_json(201, {"ok": True, "outcome": reward_type, "bonus_entries": 0, "card_number": number, "promo_id": promo_id, "promo_code": promo_code, "reward_type": reward_type, "reward_summary": reward_summary, "status": "awaiting_debit", "command_id": command_id, "wallet": lottery_game_snapshot(db, int(user["id"]))})
+        self.send_json(201, {"ok": True, "id": int(card["id"]), "card_id": int(card["id"]), "outcome": reward_type, "bonus_entries": 0, "card_number": number, "promo_id": promo_id, "promo_code": promo_code, "reward_type": reward_type, "reward_summary": reward_summary, "status": "awaiting_debit", "surface_state": "sealed", "command_id": command_id, "wallet": lottery_game_snapshot(db, int(user["id"]))})
+
+    def api_lottery_scratch_reveal(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        payload = self.read_json()
+        try:
+            card_id = int(payload.get("card_id") or 0)
+        except (TypeError, ValueError):
+            card_id = 0
+        if card_id <= 0:
+            self.error(400, "A valid scratch card is required."); return
+        one(db, "SELECT id FROM users WHERE id=? FOR UPDATE", (user["id"],))
+        card = one(db, "SELECT id,status,surface_state FROM lottery_scratch_cards WHERE id=? AND user_id=? FOR UPDATE", (card_id, user["id"]))
+        if not card:
+            self.error(404, "Scratch card not found."); return
+        if str(card.get("status") or "") == "rejected":
+            self.error(409, "This scratch-card purchase was rejected and cannot be revealed."); return
+        if str(card.get("surface_state") or "") != "revealed":
+            db.execute("UPDATE lottery_scratch_cards SET surface_state='revealed',surface_revealed_at=? WHERE id=?", (now_iso(), card_id))
+            add_admin_audit(db, int(user["id"]), "lottery.scratch.surface.revealed", int(user["id"]), {"ticket_id": card_id})
+        self.send_json(200, {"ok": True, "card_id": card_id, "surface_state": "revealed"})
 
     def api_lottery_quick_draw_entry(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -21442,9 +21489,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         payload = self.read_json()
         try:
             daily_credit = 0.0
-            ticket_price = max(0.01, min(1000.0, float(payload.get("ticket_price") or 2)))
-            scratch_price = max(0.01, min(1000.0, float(payload.get("scratch_price") or 3)))
-            quick_draw_price = max(0.01, min(1000.0, float(payload.get("quick_draw_price") or 1)))
+            ticket_price = max(0.01, min(1000000.0, float(payload.get("ticket_price") or 2)))
+            scratch_price = max(0.01, min(1000000.0, float(payload.get("scratch_price") or 3)))
+            quick_draw_price = max(0.01, min(1000000.0, float(payload.get("quick_draw_price") or 1)))
             quick_draw_prize = max(0.01, min(1000000.0, float(payload.get("quick_draw_prize") or 5)))
             quick_draw_ticket_limit = max(1, min(100, int(payload.get("quick_draw_ticket_limit") or 25)))
             payout_percent = max(1.0, min(100.0, float(payload.get("payout_percent") or 100)))

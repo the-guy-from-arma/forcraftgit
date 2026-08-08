@@ -127,6 +127,7 @@ const state = {
   pressSelectedReportId: null,
   leaderboardTab: "wealth",
   statsTab: "overview",
+  statsLens: "coverage",
   marketTicker: "FNN",
   marketTransferRecipient: null,
   sportsbookSport: "all",
@@ -1648,6 +1649,11 @@ function statsFullMoney(value) {
   return `FC$${Number(value || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
 }
 
+function statsAnimatedValue(value, formatted, format = "number", decimals = 0) {
+  const numeric = Number(value || 0);
+  return `<span class="stats4-count" data-stats-count="${Number.isFinite(numeric) ? numeric : 0}" data-stats-format="${escapeHtml(format)}" data-stats-decimals="${Math.max(0, Number(decimals || 0))}">${escapeHtml(String(formatted))}</span>`;
+}
+
 function renderStatsWorkspaceLegacy() {
   const data = state.cache.stats || {};
   const population = data.population || {};
@@ -1802,6 +1808,7 @@ function renderStatsWorkspace() {
   const commerce = data.commerce || {};
   const lottery = data.lottery || {};
   const casino = data.casino || {};
+  const currency = economy.currency || {};
   const validTabs = ["overview", "safety", "economy", "community", "activity", "gaming"];
   const tab = validTabs.includes(state.statsTab) ? state.statsTab : "overview";
   const nav = [
@@ -1810,43 +1817,92 @@ function renderStatsWorkspace() {
   ];
   const syncedAt = data.generated_at ? new Date(data.generated_at) : null;
   const gameNames = { neon_vault: "Neon Vault", faircroft_dice: "Faircroft Dice", civic_coin: "Civic Coin", midnight_keno: "Midnight Keno", blacksite: "Blacksite" };
-  const kpi = (label, value, detail, tone = "") => `<article class="stats3-kpi ${tone}"><small>${escapeHtml(label)}</small><strong>${escapeHtml(String(value))}</strong><span>${escapeHtml(detail)}</span></article>`;
+  const kpi = (label, value, detail, tone = "", rawValue = null, format = "number", decimals = 0) => `<article class="stats3-kpi ${tone}"><small>${escapeHtml(label)}</small><strong>${rawValue === null ? escapeHtml(String(value)) : statsAnimatedValue(rawValue, value, format, decimals)}</strong><span>${escapeHtml(detail)}</span></article>`;
   const line = (label, value, detail = "") => `<div class="stats3-line"><span>${escapeHtml(label)}${detail ? `<small>${escapeHtml(detail)}</small>` : ""}</span><strong>${escapeHtml(String(value))}</strong></div>`;
   const meter = (label, value, detail) => `<div class="stats3-meter"><header><span>${escapeHtml(label)}</span><strong>${statsPercent(value)}</strong></header><i><b style="--fill:${Math.max(0, Math.min(100, Number(value || 0)))}%"></b></i><small>${escapeHtml(detail)}</small></div>`;
+  const clampPercent = value => Math.max(0, Math.min(100, Number(value || 0)));
+  const lensData = {
+    coverage: {
+      label: "Resident reach",
+      score: (clampPercent(population.link_rate) + clampPercent(population.active_rate) + clampPercent(economy.funded_rate) + clampPercent(mobility.insurance_rate)) / 4,
+      summary: "How completely Faircroft's resident systems connect identity, activity, banking, and mobility.",
+      metrics: [
+        ["Identity link", population.link_rate, "Verified residents connected to Arma"],
+        ["30-day activity", population.active_rate, "Residents active during the last 30 days"],
+        ["Funded bank coverage", economy.funded_rate, "Linked identities with a synchronized balance"],
+        ["Vehicle insurance", mobility.insurance_rate, "Registered vehicles carrying active coverage"],
+      ],
+    },
+    services: {
+      label: "Public services",
+      score: (clampPercent(courts.completion_rate) + clampPercent(fire.clearance_rate) + clampPercent(commerce.active_rate) + clampPercent(housing.occupancy_rate)) / 4,
+      summary: "A live readiness view across courts, emergency response, licensed commerce, and housing.",
+      metrics: [
+        ["Court clearance", courts.completion_rate, "Completed matters as a share of filed cases"],
+        ["Emergency clearance", fire.clearance_rate, "Fire and EMS incidents cleared"],
+        ["Commerce active", commerce.active_rate, "Business licenses currently active"],
+        ["Housing occupied", housing.occupancy_rate, "Tracked properties presently held"],
+      ],
+    },
+    economy: {
+      label: "Economic footing",
+      score: (clampPercent(economy.funded_rate) + clampPercent(currency.market_breadth) + clampPercent(housing.occupancy_rate) + (100 - clampPercent(economy.supply_utilization))) / 4,
+      summary: "A normalized view of funding, market breadth, property use, and available supply capacity.",
+      metrics: [
+        ["Funded residents", economy.funded_rate, "Linked accounts reporting an in-game balance"],
+        ["Market breadth", currency.market_breadth, "Share of FCX listings currently advancing"],
+        ["Housing utilization", housing.occupancy_rate, "Property inventory currently occupied"],
+        ["Supply capacity", 100 - clampPercent(economy.supply_utilization), "Modeled monetary capacity remaining"],
+      ],
+    },
+    play: {
+      label: "Community activity",
+      score: (clampPercent(population.active_rate) + clampPercent(gameplay.live_share) + clampPercent(Number(casino.players || 0) / Math.max(1, Number(population.registered || 0)) * 100) + clampPercent(Number(lottery.players || 0) / Math.max(1, Number(population.registered || 0)) * 100)) / 4,
+      summary: "Participation across recent server activity, live play, casino tables, and lottery drawings.",
+      metrics: [
+        ["Recent activity", population.active_rate, "Residents active in the last 30 days"],
+        ["Live participation", gameplay.live_share, "Known identities represented online now"],
+        ["Casino participation", Number(casino.players || 0) / Math.max(1, Number(population.registered || 0)) * 100, "Residents represented in casino play"],
+        ["Lottery participation", Number(lottery.players || 0) / Math.max(1, Number(population.registered || 0)) * 100, "Residents represented in main drawings"],
+      ],
+    },
+  };
+  const activeLens = lensData[state.statsLens] ? state.statsLens : "coverage";
+  const renderLensPanel = (key, lens) => `<section class="stats4-lens-panel ${activeLens === key ? "active" : ""}" data-stats-lens-panel="${key}" ${activeLens === key ? "" : "hidden"}>
+    <div class="stats4-dial" style="--score:${clampPercent(lens.score)}"><svg viewBox="0 0 120 120" aria-hidden="true"><circle cx="60" cy="60" r="48" pathLength="100"></circle><circle class="stats4-dial-progress" cx="60" cy="60" r="48" pathLength="100"></circle></svg><span><strong>${statsAnimatedValue(lens.score, statsPercent(lens.score), "percent", 1)}</strong><small>composite signal</small></span></div>
+    <div class="stats4-lens-copy"><header><small>SELECTED SIGNAL</small><h3>${escapeHtml(lens.label)}</h3><p>${escapeHtml(lens.summary)}</p></header><div class="stats4-bars">${lens.metrics.map(([label, value, detail], index) => `<article tabindex="0" style="--value:${clampPercent(value)}%;--delay:${index}"><header><span>${escapeHtml(label)}</span><strong>${statsPercent(value)}</strong></header><i><b></b></i><p>${escapeHtml(detail)}</p></article>`).join("")}</div></div>
+  </section>`;
+  const activitySignals = [
+    ["Sessions", Number(gameplay.sessions || 0), "recorded"],
+    ["Eliminations", Number(gameplay.kills || 0), "confirmed"],
+    ["Deaths", Number(gameplay.deaths || 0), "recorded"],
+    ["Self-inflicted", Number(gameplay.suicides || 0), "recorded"],
+    ["Collective hours", Number(gameplay.total_hours || 0), "hours"],
+    ["Active 30d", Number(population.active_30d || 0), "residents"],
+  ];
+  const activityPeak = Math.max(1, ...activitySignals.map(item => Number(item[1] || 0)));
 
   const overview = `<section class="stats3-section">
     <header class="stats3-section-head"><div><small>STATE BRIEF / LIVE AGGREGATES</small><h2>The numbers that matter now.</h2><p>A readable statewide picture, grouped by subject instead of buried in a long report.</p></div><time>${syncedAt ? `Updated ${syncedAt.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}` : "Awaiting synchronization"}</time></header>
     <div class="stats3-kpis">
-      ${kpi("Residents online", Number(population.online || 0).toLocaleString(), `${Number(population.known_players || 0).toLocaleString()} known game identities`, "live")}
-      ${kpi("Verified residents", Number(population.verified || 0).toLocaleString(), `${statsPercent(population.link_rate)} linked to Arma`)}
-      ${kpi("Game-bank circulation", statsFullMoney(economy.circulation), `${Number(economy.funded_accounts || 0).toLocaleString()} synchronized accounts`, "gold")}
-      ${kpi("Casino revenue", statsFullMoney(casino.revenue), `${Number(casino.resolved_rounds || 0).toLocaleString()} resolved rounds`, "green")}
+      ${kpi("Residents online", Number(population.online || 0).toLocaleString(), `${Number(population.known_players || 0).toLocaleString()} known game identities`, "live", population.online, "number")}
+      ${kpi("Verified residents", Number(population.verified || 0).toLocaleString(), `${statsPercent(population.link_rate)} linked to Arma`, "", population.verified, "number")}
+      ${kpi("Game-bank circulation", statsFullMoney(economy.circulation), `${Number(economy.funded_accounts || 0).toLocaleString()} synchronized accounts`, "gold", economy.circulation, "money", 2)}
+      ${kpi("FC Dollar / U.S. Dollar", `$${Number(currency.usd_reference_rate || 0).toFixed(4)} USD`, `FC$1 reference · ${currency.status || "awaiting index"}`, "green", currency.usd_reference_rate, "usd", 4)}
     </div>
-    <div class="stats3-overview-grid">
-      <section class="stats3-brief"><header><small>PUBLIC CONDITIONS</small><h3>State signal</h3></header>
-        ${line("Criminal filing rate", `${Number(safety.crime_rate_per_100 || 0).toFixed(1)} / 100`, `${Number(safety.criminal || 0)} criminal filings`)}
-        ${line("Court clearance", statsPercent(courts.completion_rate), `${Number(courts.completed || 0)} completed matters`)}
-        ${line("Emergency response", statsPercent(fire.clearance_rate), `${Number(fire.open || 0)} incidents still open`)}
-        ${line("Housing occupancy", statsPercent(housing.occupancy_rate), `${Number(housing.available || 0)} properties available`)}
-      </section>
-      <section class="stats3-brief"><header><small>ECONOMIC CONDITIONS</small><h3>Capital & play</h3></header>
-        ${line("Resident securities", statsFullMoney(markets.held_value), `${Number(markets.listings || 0)} active listings`)}
-        ${line("Lottery jackpot", statsFullMoney(lottery.current_jackpot), `${Number(lottery.active_tickets || 0)} active tickets`)}
-        ${line("Casino play volume", statsFullMoney(casino.wagered), `${Number(casino.players || 0)} participating residents`)}
-        ${line("Public obligations", statsFullMoney(economy.public_obligations), "fines and taxes due")}
-      </section>
-    </div>
-    <div class="stats3-health">
-      ${meter("Identity coverage", population.link_rate, "Verified residents linked to their in-game identity")}
-      ${meter("Commerce active", commerce.active_rate, "Business licenses currently active")}
-      ${meter("Housing occupied", housing.occupancy_rate, "Tracked properties currently held")}
-      ${meter("Vehicle coverage", mobility.insurance_rate, "Registered vehicles carrying insurance")}
+    <section class="stats4-pulse-studio">
+      <header><div><small>INTERACTIVE STATE PULSE</small><h3>Move through the live signal.</h3><p>Select a lens to compare the systems behind the headline figures.</p></div><nav aria-label="State signal lens">${Object.entries(lensData).map(([key, lens]) => `<button type="button" class="${activeLens === key ? "active" : ""}" data-stats-lens="${key}" aria-selected="${activeLens === key ? "true" : "false"}">${escapeHtml(lens.label)}</button>`).join("")}</nav></header>
+      <div class="stats4-lens-deck">${Object.entries(lensData).map(([key, lens]) => renderLensPanel(key, lens)).join("")}</div>
+    </section>
+    <div class="stats3-overview-grid stats4-summary-ledger">
+      <section class="stats3-brief"><header><small>PUBLIC CONDITIONS</small><h3>State signal</h3></header>${line("Criminal filing rate", `${Number(safety.crime_rate_per_100 || 0).toFixed(1)} / 100`, `${Number(safety.criminal || 0)} criminal filings`)}${line("Court clearance", statsPercent(courts.completion_rate), `${Number(courts.completed || 0)} completed matters`)}${line("Emergency response", statsPercent(fire.clearance_rate), `${Number(fire.open || 0)} incidents still open`)}${line("Housing occupancy", statsPercent(housing.occupancy_rate), `${Number(housing.available || 0)} properties available`)}</section>
+      <section class="stats3-brief"><header><small>ECONOMIC CONDITIONS</small><h3>Capital & play</h3></header>${line("Resident securities", statsFullMoney(markets.held_value), `${Number(markets.listings || 0)} active listings`)}${line("Lottery jackpot", statsFullMoney(lottery.current_jackpot), `${Number(lottery.active_tickets || 0)} active tickets`)}${line("Casino play volume", statsFullMoney(casino.wagered), `${Number(casino.players || 0)} participating residents`)}${line("Public obligations", statsFullMoney(economy.public_obligations), "fines and taxes due")}</section>
     </div>
   </section>`;
 
   const safetyView = `<section class="stats3-section">
-    <header class="stats3-section-head"><div><small>PUBLIC SAFETY & JUSTICE</small><h2>Filings, outcomes, and response.</h2><p>Traffic activity is separated from criminal filings, and violent classifications are shown independently.</p></div><strong class="stats3-head-number">${Number(safety.total_filings || 0).toLocaleString()}<small>total filings</small></strong></header>
-    <div class="stats3-kpis">${kpi("Violent filings", Number(safety.violent || 0), statsPercent(safety.violent_share), "red")}${kpi("Non-violent filings", Number(safety.nonviolent || 0), statsPercent(safety.nonviolent_share))}${kpi("Traffic citations", Number(safety.citations || 0), `${Number(safety.parking || 0)} parking matters`, "gold")}${kpi("Active notices", Number(safety.active_warrants || 0) + Number(safety.active_bolos || 0), "warrants and BOLOs", "live")}</div>
+    <header class="stats3-section-head"><div><small>PUBLIC SAFETY & JUSTICE</small><h2>Filings, outcomes, and response.</h2><p>Traffic activity is separated from criminal filings, and violent classifications are shown independently.</p></div><strong class="stats3-head-number">${statsAnimatedValue(safety.total_filings, Number(safety.total_filings || 0).toLocaleString(), "number")}<small>total filings</small></strong></header>
+    <div class="stats3-kpis">${kpi("Violent filings", Number(safety.violent || 0), statsPercent(safety.violent_share), "red", safety.violent, "number")}${kpi("Non-violent filings", Number(safety.nonviolent || 0), statsPercent(safety.nonviolent_share), "", safety.nonviolent, "number")}${kpi("Traffic citations", Number(safety.citations || 0), `${Number(safety.parking || 0)} parking matters`, "gold", safety.citations, "number")}${kpi("Active notices", Number(safety.active_warrants || 0) + Number(safety.active_bolos || 0), "warrants and BOLOs", "live", Number(safety.active_warrants || 0) + Number(safety.active_bolos || 0), "number")}</div>
     <div class="stats3-data-columns">
       <section><header><small>CRIMINAL ACTIVITY</small><h3>Violent classifications</h3></header>${statsRankField(safety.violent_categories || [], "No violent filings recorded")}</section>
       <section><header><small>CRIMINAL ACTIVITY</small><h3>Non-violent classifications</h3></header>${statsRankField(safety.nonviolent_categories || [], "No non-violent filings recorded")}</section>
@@ -1856,8 +1912,16 @@ function renderStatsWorkspace() {
   </section>`;
 
   const economyView = `<section class="stats3-section">
-    <header class="stats3-section-head"><div><small>STATE ECONOMY</small><h2>Money in motion, privacy intact.</h2><p>Statewide totals and market activity are published without exposing a single resident balance.</p></div><strong class="stats3-head-number">${statsFullMoney(economy.circulation)}<small>game-bank circulation</small></strong></header>
-    <div class="stats3-kpis">${kpi("Average bank position", statsFullMoney(economy.average_balance), `${Number(economy.funded_accounts || 0)} funded accounts`)}${kpi("Median bank position", statsFullMoney(economy.median_balance), `${statsPercent(economy.funded_rate)} funding coverage`)}${kpi("Securities held", statsFullMoney(markets.held_value), `${Number(markets.trades || 0)} executions`, "green")}${kpi("Trade volume", statsFullMoney(markets.volume), `${statsFullMoney(markets.fees)} fees`, "gold")}</div>
+    <header class="stats3-section-head"><div><small>STATE ECONOMY</small><h2>Money in motion, privacy intact.</h2><p>Statewide totals and market activity are published without exposing a single resident balance.</p></div><strong class="stats3-head-number">${statsAnimatedValue(economy.circulation, statsFullMoney(economy.circulation), "money", 2)}<small>game-bank circulation</small></strong></header>
+    <section class="stats4-currency-stage">
+      <header><div><small>FAIRCROFT DOLLAR / PURCHASING POWER</small><h3>The FC Dollar reference is back.</h3></div><span class="${Number(currency.index || 0) >= 85 ? "up" : "down"}"><i></i>${escapeHtml(currency.status || "Awaiting index")}</span></header>
+      <div class="stats4-fx-layout">
+        <div class="stats4-fx-quote"><nav aria-label="Currency direction"><button type="button" class="active" data-stats-fx="fc-usd">FC$ → USD</button><button type="button" data-stats-fx="usd-fc">USD → FC$</button></nav><div class="stats4-fx-pane active" data-stats-fx-panel="fc-usd"><small>ONE FAIRCROFT DOLLAR</small><strong><span>FC$1</span><i>≈</i>${statsAnimatedValue(currency.usd_reference_rate, `$${Number(currency.usd_reference_rate || 0).toFixed(4)}`, "usd-number", 4)}<em>USD</em></strong></div><div class="stats4-fx-pane" data-stats-fx-panel="usd-fc" hidden><small>ONE U.S. DOLLAR REFERENCE</small><strong><span>$1 USD</span><i>≈</i>${statsAnimatedValue(currency.fc_per_usd, Number(currency.fc_per_usd || 0).toFixed(4), "decimal", 4)}<em>FC$</em></strong></div><div class="stats4-index-track"><span>INDEX FLOOR</span><i><b style="--index:${clampPercent(currency.index)}%"></b></i><strong>${Number(currency.index || 0).toFixed(2)}</strong></div></div>
+        <aside>${line("100 FC$ reference", `$${Number(currency.usd_per_100_fc || 0).toFixed(2)} USD`)}${line("Per verified resident", statsFullMoney(economy.per_verified_resident))}${line("Exchange breadth", statsPercent(currency.market_breadth), `${Number(markets.gainers || 0)} advancing listings`)}${line("Market liquidity", `${Number(economy.liquidity_ratio || 0).toFixed(2)}%`, "resident securities vs. circulation")}</aside>
+      </div>
+      <footer>${escapeHtml(currency.disclaimer || "Internal RP purchasing-power reference only; FC Dollars are not redeemable for real-world currency.")}</footer>
+    </section>
+    <div class="stats3-kpis">${kpi("Average bank position", statsFullMoney(economy.average_balance), `${Number(economy.funded_accounts || 0)} funded accounts`, "", economy.average_balance, "money", 2)}${kpi("Median bank position", statsFullMoney(economy.median_balance), `${statsPercent(economy.funded_rate)} funding coverage`, "", economy.median_balance, "money", 2)}${kpi("Securities held", statsFullMoney(markets.held_value), `${Number(markets.trades || 0)} executions`, "green", markets.held_value, "money", 2)}${kpi("Trade volume", statsFullMoney(markets.volume), `${statsFullMoney(markets.fees)} fees`, "gold", markets.volume, "money", 2)}</div>
     <div class="stats3-data-columns"><section><header><small>HOUSEHOLD ECONOMY</small><h3>Balance distribution</h3></header>${statsDistribution(economy.distribution || [])}</section><section><header><small>STATE BALANCE SHEET</small><h3>Public position</h3></header>${line("Modeled state assets", statsFullMoney(economy.total_state_assets))}${line("Resident market assets", statsFullMoney(economy.resident_market_assets))}${line("Housing assessed base", statsFullMoney(economy.housing_assessed_base))}${line("Public obligations", statsFullMoney(economy.public_obligations))}${line("Net position", statsFullMoney(economy.state_net_position))}</section></div>
     <section class="stats3-market-table"><header><small>FCX MARKET</small><h3>Largest current movements</h3></header><div>${(markets.movers || []).map(item => `<article><span><b>${escapeHtml(item.ticker || "")}</b><small>${escapeHtml(item.name || "")}</small></span><strong>${statsFullMoney(item.price)}</strong><em class="${Number(item.change || 0) >= 0 ? "up" : "down"}">${Number(item.change || 0) >= 0 ? "+" : ""}${Number(item.change || 0).toFixed(2)}%</em></article>`).join("") || `<p class="empty">Market quotes are awaiting synchronization.</p>`}</div></section>
   </section>`;
@@ -1873,15 +1937,15 @@ function renderStatsWorkspace() {
   </section>`;
 
   const activityView = `<section class="stats3-section">
-    <header class="stats3-section-head"><div><small>SERVER LIFE</small><h2>How Faircroft spends its time.</h2><p>Community-wide gameplay telemetry only; no individual resident dossier is published here.</p></div><strong class="stats3-head-number">${Number(gameplay.total_hours || 0).toLocaleString(undefined, {maximumFractionDigits: 1})}<small>collective hours</small></strong></header>
-    <div class="stats3-kpis">${kpi("Recorded sessions", Number(gameplay.sessions || 0).toLocaleString(), `${Number(gameplay.average_sessions || 0).toFixed(1)} per player`, "live")}${kpi("Average career", `${Number(gameplay.average_hours || 0).toFixed(1)} hrs`, "per tracked identity")}${kpi("Community K/D", Number(gameplay.community_kd || 0).toFixed(2), `${Number(gameplay.kills || 0).toLocaleString()} eliminations`, "gold")}${kpi("Active in 30 days", Number(population.active_30d || 0).toLocaleString(), statsPercent(population.active_rate), "green")}</div>
-    <div class="stats3-activity-figure"><div>${statsSparkline([gameplay.sessions, gameplay.kills, gameplay.deaths, gameplay.suicides, gameplay.total_hours, population.active_30d], "violet")}</div><dl>${line("Recorded eliminations", Number(gameplay.kills || 0).toLocaleString())}${line("Recorded deaths", Number(gameplay.deaths || 0).toLocaleString())}${line("Self-inflicted deaths", Number(gameplay.suicides || 0).toLocaleString())}${line("Live participation", statsPercent(gameplay.live_share))}</dl></div>
+    <header class="stats3-section-head"><div><small>SERVER LIFE</small><h2>How Faircroft spends its time.</h2><p>Community-wide gameplay telemetry only; no individual resident dossier is published here.</p></div><strong class="stats3-head-number">${statsAnimatedValue(gameplay.total_hours, Number(gameplay.total_hours || 0).toLocaleString(undefined, {maximumFractionDigits: 1}), "decimal", 1)}<small>collective hours</small></strong></header>
+    <div class="stats3-kpis">${kpi("Recorded sessions", Number(gameplay.sessions || 0).toLocaleString(), `${Number(gameplay.average_sessions || 0).toFixed(1)} per player`, "live", gameplay.sessions, "number")}${kpi("Average career", `${Number(gameplay.average_hours || 0).toFixed(1)} hrs`, "per tracked identity", "", gameplay.average_hours, "hours", 1)}${kpi("Community K/D", Number(gameplay.community_kd || 0).toFixed(2), `${Number(gameplay.kills || 0).toLocaleString()} eliminations`, "gold", gameplay.community_kd, "decimal", 2)}${kpi("Active in 30 days", Number(population.active_30d || 0).toLocaleString(), statsPercent(population.active_rate), "green", population.active_30d, "number")}</div>
+    <section class="stats4-activity-console"><header><div><small>INTERACTIVE COMMUNITY SIGNAL</small><h3>Activity composition</h3><p>Hover, tap, or focus any moving bar to inspect its verified aggregate.</p></div><output><small id="statsSignalLabel">${escapeHtml(activitySignals[0][0])}</small><strong id="statsSignalValue">${Number(activitySignals[0][1]).toLocaleString()}</strong><span id="statsSignalUnit">${escapeHtml(activitySignals[0][2])}</span></output></header><div class="stats4-signal-bars">${activitySignals.map(([label, value, unit], index) => `<button type="button" data-stats-signal data-label="${escapeHtml(label)}" data-value="${Number(value || 0)}" data-unit="${escapeHtml(unit)}" style="--height:${Math.max(4, Number(value || 0) / activityPeak * 100)}%;--delay:${index}"><i><b></b></i><span>${escapeHtml(label)}</span></button>`).join("")}</div><footer><span><i></i>LIVE AGGREGATE</span><strong>${statsPercent(gameplay.live_share)} participating now</strong></footer></section>
   </section>`;
 
   const casinoRevenueTone = Number(casino.revenue || 0) >= 0 ? "green" : "red";
   const gamingView = `<section class="stats3-section stats3-gaming">
-    <header class="stats3-section-head"><div><small>GAMING & LOTTERY</small><h2>Faircroft entertainment economy.</h2><p>Casino and lottery activity shown as anonymous public totals. Internal odds and player records remain private.</p></div><strong class="stats3-head-number">${statsFullMoney(Number(casino.wagered || 0) + Number(lottery.ticket_sales || 0))}<small>combined play volume</small></strong></header>
-    <div class="stats3-kpis">${kpi("Casino revenue", statsFullMoney(casino.revenue), `${Number(casino.resolved_rounds || 0).toLocaleString()} resolved rounds`, casinoRevenueTone)}${kpi("Casino play volume", statsFullMoney(casino.wagered), `${Number(casino.players || 0)} participating residents`)}${kpi("Lottery ticket sales", statsFullMoney(lottery.ticket_sales), `${Number(lottery.tickets || 0) + Number(lottery.quick_tickets || 0) + Number(lottery.scratch_cards || 0)} tickets and cards`, "gold")}${kpi("Lottery prizes", statsFullMoney(lottery.prizes_awarded), "recorded prize value", "green")}</div>
+    <header class="stats3-section-head"><div><small>GAMING & LOTTERY</small><h2>Faircroft entertainment economy.</h2><p>Casino and lottery activity shown as anonymous public totals. Internal odds and player records remain private.</p></div><strong class="stats3-head-number">${statsAnimatedValue(Number(casino.wagered || 0) + Number(lottery.ticket_sales || 0), statsFullMoney(Number(casino.wagered || 0) + Number(lottery.ticket_sales || 0)), "money", 2)}<small>combined play volume</small></strong></header>
+    <div class="stats3-kpis">${kpi("Casino revenue", statsFullMoney(casino.revenue), `${Number(casino.resolved_rounds || 0).toLocaleString()} resolved rounds`, casinoRevenueTone, casino.revenue, "money", 2)}${kpi("Casino play volume", statsFullMoney(casino.wagered), `${Number(casino.players || 0)} participating residents`, "", casino.wagered, "money", 2)}${kpi("Lottery ticket sales", statsFullMoney(lottery.ticket_sales), `${Number(lottery.tickets || 0) + Number(lottery.quick_tickets || 0) + Number(lottery.scratch_cards || 0)} tickets and cards`, "gold", lottery.ticket_sales, "money", 2)}${kpi("Lottery prizes", statsFullMoney(lottery.prizes_awarded), "recorded prize value", "green", lottery.prizes_awarded, "money", 2)}</div>
     <div class="stats3-gaming-split">
       <section class="stats3-casino-ledger"><header><div><small>THE RESERVE</small><h3>Casino activity</h3></div><span>Last 30 days: ${statsFullMoney(casino.revenue_30d)} revenue</span></header>
         <div class="stats3-casino-summary">${line("Resolved rounds", Number(casino.resolved_rounds || 0).toLocaleString())}${line("Average wager", statsFullMoney(casino.average_wager))}${line("Winning rounds", Number(casino.winning_rounds || 0).toLocaleString())}${line("Pending settlement", Number(casino.pending_rounds || 0).toLocaleString())}</div>
@@ -1905,17 +1969,91 @@ function renderStatsWorkspace() {
   const views = { overview, safety: safetyView, economy: economyView, community: communityView, activity: activityView, gaming: gamingView };
   return `<main class="stats-workspace stats-workspace-v3">
     <header class="stats3-topbar"><button class="stats3-brand" type="button" data-close-stats><span>FC</span><div><small>STATE OF FAIRCROFT</small><strong>Public Data Bureau</strong></div></button><div class="stats3-top-actions"><span><i></i> LIVE DATA</span><button type="button" data-refresh-stats>Sync now</button><button type="button" data-close-stats>Exit</button></div></header>
-    <section class="stats3-hero"><div><small>FAIRCROFT OPEN DATA</small><h1>Faircroft,<br><em>at a glance.</em></h1><p>Clear public statistics for residents, government, the economy, and Faircroft entertainment.</p></div><aside><span><i></i>${Number(population.online || 0).toLocaleString()} online now</span><strong>${Number(population.registered || 0).toLocaleString()}</strong><small>registered resident profiles</small><time>${syncedAt ? syncedAt.toLocaleString() : "Awaiting first sync"}</time></aside></section>
+    <section class="stats3-hero"><div><small>FAIRCROFT OPEN DATA</small><h1>Faircroft,<br><em>in motion.</em></h1><p>Explore the live statewide signal. Every figure is an anonymous aggregate synchronized from Faircroft systems.</p></div><aside><span><i></i>${Number(population.online || 0).toLocaleString()} online now</span><strong>${statsAnimatedValue(population.registered, Number(population.registered || 0).toLocaleString(), "number")}</strong><small>registered resident profiles</small><time>${syncedAt ? syncedAt.toLocaleString() : "Awaiting first sync"}</time></aside></section>
+    <div class="stats4-live-rail" aria-label="Live statewide indicators"><div>${[["FC/USD", `$${Number(currency.usd_reference_rate || 0).toFixed(4)}`], ["FCX", `${Number(markets.index_change || 0) >= 0 ? "+" : ""}${Number(markets.index_change || 0).toFixed(2)}%`], ["Court clearance", statsPercent(courts.completion_rate)], ["Housing", statsPercent(housing.occupancy_rate)], ["Casino volume", statsFullMoney(casino.wagered)], ["Lottery jackpot", statsFullMoney(lottery.current_jackpot)]].map(([label, value]) => `<span><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong></span>`).join("")}${[["FC/USD", `$${Number(currency.usd_reference_rate || 0).toFixed(4)}`], ["FCX", `${Number(markets.index_change || 0) >= 0 ? "+" : ""}${Number(markets.index_change || 0).toFixed(2)}%`], ["Court clearance", statsPercent(courts.completion_rate)], ["Housing", statsPercent(housing.occupancy_rate)], ["Casino volume", statsFullMoney(casino.wagered)], ["Lottery jackpot", statsFullMoney(lottery.current_jackpot)]].map(([label, value]) => `<span aria-hidden="true"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong></span>`).join("")}</div></div>
     <nav class="stats3-nav" aria-label="Statistics sections">${nav.map(([key, label]) => `<button type="button" class="${tab === key ? "active" : ""}" data-stats-tab="${key}">${escapeHtml(label)}</button>`).join("")}</nav>
     <div class="stats3-view">${views[tab]}</div>
     <footer class="stats3-footer"><span>FC / PUBLIC AGGREGATES</span><p>${escapeHtml(data.privacy || "Aggregate public statistics only.")}</p><button type="button" data-refresh-stats>Refresh data</button></footer>
   </main>`;
 }
 
+function formatStatsCounter(element, value) {
+  const format = element.dataset.statsFormat || "number";
+  const decimals = Math.max(0, Number(element.dataset.statsDecimals || 0));
+  if (format === "money") return statsFullMoney(value);
+  if (format === "percent") return `${Number(value).toFixed(decimals || 1)}%`;
+  if (format === "hours") return `${Number(value).toFixed(decimals || 1)} hrs`;
+  if (format === "decimal") return Number(value).toLocaleString(undefined, {minimumFractionDigits: decimals, maximumFractionDigits: decimals});
+  if (format === "usd") return `$${Number(value).toFixed(decimals || 4)} USD`;
+  if (format === "usd-number") return `$${Number(value).toFixed(decimals || 4)}`;
+  return Math.round(Number(value)).toLocaleString();
+}
+
+function activateStatsMotion() {
+  const root = $('.stats-workspace-v3');
+  if (!root) return;
+  requestAnimationFrame(() => root.classList.add('is-ready'));
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+  $$('[data-stats-count]', root).forEach((element, index) => {
+    const target = Number(element.dataset.statsCount || 0);
+    if (!Number.isFinite(target)) return;
+    const duration = 750 + Math.min(550, Math.abs(target).toString().length * 55);
+    const startedAt = performance.now() + Math.min(index * 30, 240);
+    const update = now => {
+      const elapsed = Math.max(0, now - startedAt);
+      const progress = Math.min(1, elapsed / duration);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      element.textContent = formatStatsCounter(element, target * eased);
+      if (progress < 1) requestAnimationFrame(update);
+    };
+    requestAnimationFrame(update);
+  });
+}
+
 function bindStatsWorkspace() {
-  $$('[data-stats-tab]').forEach(button => button.addEventListener('click', () => { state.statsTab = button.dataset.statsTab; render(); }));
+  $$('[data-stats-tab]').forEach(button => button.addEventListener('click', () => {
+    const changeTab = () => { state.statsTab = button.dataset.statsTab; render(); };
+    if (document.startViewTransition) document.startViewTransition(changeTab);
+    else changeTab();
+  }));
+  $$('[data-stats-lens]').forEach(button => button.addEventListener('click', () => {
+    const lens = button.dataset.statsLens;
+    state.statsLens = lens;
+    $$('[data-stats-lens]').forEach(item => {
+      const active = item.dataset.statsLens === lens;
+      item.classList.toggle('active', active);
+      item.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    $$('[data-stats-lens-panel]').forEach(panel => {
+      const active = panel.dataset.statsLensPanel === lens;
+      panel.hidden = !active;
+      panel.classList.toggle('active', active);
+    });
+  }));
+  $$('[data-stats-fx]').forEach(button => button.addEventListener('click', () => {
+    const direction = button.dataset.statsFx;
+    $$('[data-stats-fx]').forEach(item => item.classList.toggle('active', item.dataset.statsFx === direction));
+    $$('[data-stats-fx-panel]').forEach(panel => {
+      const active = panel.dataset.statsFxPanel === direction;
+      panel.hidden = !active;
+      panel.classList.toggle('active', active);
+    });
+  }));
+  $$('[data-stats-signal]').forEach(button => {
+    const inspect = () => {
+      $$('[data-stats-signal]').forEach(item => item.classList.toggle('active', item === button));
+      const label = $('#statsSignalLabel'), value = $('#statsSignalValue'), unit = $('#statsSignalUnit');
+      if (label) label.textContent = button.dataset.label || '';
+      if (value) value.textContent = Number(button.dataset.value || 0).toLocaleString(undefined, {maximumFractionDigits: 1});
+      if (unit) unit.textContent = button.dataset.unit || '';
+    };
+    button.addEventListener('mouseenter', inspect);
+    button.addEventListener('focus', inspect);
+    button.addEventListener('click', inspect);
+  });
   $$('[data-refresh-stats]').forEach(button => button.addEventListener('click', async () => { button.disabled = true; await loadAppData('stats'); render(); }));
   $$('[data-close-stats]').forEach(button => button.addEventListener('click', async event => { event.preventDefault(); state.activeApp = null; await loadSession(); }));
+  activateStatsMotion();
 }
 
 function leaderboardMetric(board, item) {
@@ -4478,7 +4616,7 @@ function renderLotteryNumbersWorkspace() {
   const data=state.cache.lottery;
   if(!data)return `<main class="fc-lotto"><div class="empty">Opening Faircroft Lottery Live...</div></main>`;
   const draw=data.draw||{},funding=data.funding||{},poolState=data.player_pool||{},wallet=data.wallet||{},prices=data.prices||{},entries=data.entries||[];
-  const scratch=data.scratch||{},cards=scratch.cards||[],cardsRemaining=Math.max(0,Number(scratch.daily_limit||1)-cards.length),accountRemaining=Math.max(0,Number(scratch.account_remaining ?? scratch.account_limit ?? 10)),latestCard=cards[cards.length-1],scratchReveal=state.lotteryScratchReveal||null;
+  const scratch=data.scratch||{},cards=scratch.cards||[],cardsRemaining=Math.max(0,Number(scratch.daily_limit||1)-cards.length),accountRemaining=Math.max(0,Number(scratch.account_remaining ?? scratch.account_limit ?? 10)),latestCard=cards[cards.length-1],scratchReveal=state.lotteryScratchReveal||scratch.pending_card||null,purchaseBlocked=Boolean(scratch.purchase_blocked);
   const quick=data.quick_draw||{},quickDraw=quick.draw||{},quickEntries=quick.entries||[],quickRemaining=Math.max(0,Number(quick.daily_limit||0)-quickEntries.length);
   const scheduled=draw.scheduled_at?new Date(draw.scheduled_at):null,quickAt=quickDraw.scheduled_at?new Date(quickDraw.scheduled_at):null;
   const until=Math.max(0,(scheduled?.getTime()||Date.now())-Date.now()),days=Math.floor(until/86400000),hours=Math.floor(until%86400000/3600000),minutes=Math.floor(until%3600000/60000);
@@ -4487,7 +4625,7 @@ function renderLotteryNumbersWorkspace() {
   const weeklyWinning=lotteryNumbers(data.latest_result?.winning_numbers),quickWinning=lotteryNumbers(quick.latest_result?.winning_numbers);
   const game=`${panel==="weekly"?`<section class="lottery-pick-stage"><header><span>WEEKLY NUMBER DRAW</span><h2>Build your five-number line.</h2><p>Choose five unique numbers from 1 through 49, or let Quick Pick securely generate your complete line. An exact match wins the official Faircroft pool.</p></header>${lotteryNumberField("weekly",1,49,5)}<footer><span data-pick-status="weekly">Choose 5 numbers or use Quick Pick</span><div class="lottery-pick-actions"><button class="lottery-quick-pick" data-lottery-quick-pick ${!data.enabled||data.excluded||Number(purchased.active||0)>=5?"disabled":""}>Quick Pick &amp; Buy - ${money(prices.weekly_ticket||0)}</button><button data-lottery-enter disabled>Buy selected line - ${money(prices.weekly_ticket||0)}</button></div></footer></section>`:""}
     ${panel==="quick"?`<section class="lottery-pick-stage quick"><header><span>QUICK DRAW</span><h2>Pick three digits.</h2><p>Match all three official digits. The next result posts ${quickAt?quickAt.toLocaleString():"soon"}; a winning line earns ${money(quick.prize||0)} directly in your linked Arma bank.</p></header>${lotteryNumberField("quick",0,9,3)}<footer><span data-pick-status="quick">Choose 3 digits</span><button data-lottery-quick-entry disabled>Purchase line - ${money(quick.price||0)}</button></footer></section>`:""}
-    ${panel==="scratch"?`<section class="lottery-scratch-stage"><header><span>FAIRCROFT INSTANT</span><h2>Scratch. Reveal. Invest.</h2><p>Each ${money(scratch.price||0)} card reveals an automatic in-game cash payout or a Ravenhood stock redemption code.</p><small class="lottery-account-cap">${accountRemaining} of ${Number(scratch.account_limit||10)} account purchases remaining</small></header>${scratchReveal?`<div class="fc-lotto-scratch-ticket" data-scratch-ticket>${renderLotteryScratchReward(scratchReveal)}<canvas data-scratch-surface></canvas></div><strong class="fc-lotto-result" data-scratch-instruction>SCRATCH AT LEAST 45% TO REVEAL</strong>`:latestCard?renderLotteryScratchReward(latestCard,true):`<div class="fc-lotto-scratch-card"><div><b>FC</b><span>SEALED RAVENHOOD REWARD</span><i>READY FOR PURCHASE</i></div></div>`}${!scratchReveal?`<button data-lottery-scratch ${!scratch.enabled||data.excluded||cardsRemaining<=0||accountRemaining<=0?"disabled":""}>${accountRemaining<=0?"Account scratch limit reached":cardsRemaining?`Buy scratch card - ${money(scratch.price||0)}`:"Daily card limit reached"}</button>`:""}</section>`:""}
+    ${panel==="scratch"?`<section class="lottery-scratch-stage"><header><span>FAIRCROFT INSTANT</span><h2>Scratch. Reveal. Invest.</h2><p>Each ${money(scratch.price||0)} card reveals an automatic in-game cash payout or a Ravenhood stock redemption code.</p><small class="lottery-account-cap">${accountRemaining} of ${Number(scratch.account_limit||10)} account purchases remaining</small></header>${scratchReveal?`<div class="fc-lotto-scratch-ticket" data-scratch-ticket>${renderLotteryScratchReward(scratchReveal)}<canvas data-scratch-surface></canvas></div><strong class="fc-lotto-result" data-scratch-instruction>SCRATCH AT LEAST 45% TO REVEAL</strong>`:latestCard?renderLotteryScratchReward(latestCard,true):`<div class="fc-lotto-scratch-card"><div><b>FC</b><span>SEALED RAVENHOOD REWARD</span><i>READY FOR PURCHASE</i></div></div>`}${!scratchReveal?`<button data-lottery-scratch ${!scratch.enabled||data.excluded||cardsRemaining<=0||accountRemaining<=0||purchaseBlocked?"disabled":""}>${accountRemaining<=0?"Account scratch limit reached":purchaseBlocked?escapeHtml(scratch.purchase_block_reason||"Current card still processing"):cardsRemaining?`Buy scratch card - ${money(scratch.price||0)}`:"Daily card limit reached"}</button>`:""}</section>`:""}
     ${panel==="tickets"?`<section class="lottery-purchased-board"><header><div><span>YOUR PURCHASED TICKETS</span><h2>Every line. Every result.</h2><p>Weekly and Quick Draw tickets remain here after the drawing, with the official numbers and outcome attached.</p></div><dl><div><dt>ACTIVE</dt><dd>${Number(purchased.active||0)}</dd></div><div><dt>WINNERS</dt><dd>${Number(purchased.winners||0)}</dd></div><div><dt>COMPLETED</dt><dd>${Number(purchased.not_winners||0)}</dd></div></dl></header><div class="lottery-ticket-section"><div class="lottery-ticket-section-title"><span>LIVE FIELD</span><h3>Active tickets</h3><strong>${activeTickets.length}</strong></div>${activeTickets.length?`<div class="lottery-purchased-list">${activeTickets.map(renderLotteryPurchasedTicket).join("")}</div>`:`<div class="lottery-purchased-empty"><i>FC</i><strong>No active tickets</strong><span>Purchase a Weekly Pick 5 or Quick Draw line and it will appear here immediately.</span></div>`}</div><div class="lottery-ticket-section completed"><div class="lottery-ticket-section-title"><span>OFFICIAL ARCHIVE</span><h3>Winners & completed tickets</h3><strong>${completedTickets.length}</strong></div>${completedTickets.length?`<div class="lottery-purchased-list">${completedTickets.map(renderLotteryPurchasedTicket).join("")}</div>`:`<div class="lottery-purchased-empty"><i>00</i><strong>No completed drawings yet</strong><span>After a drawing, each ticket will be permanently marked Winner or Not a Winner here.</span></div>`}</div>${weeklyWinning.length||quickWinning.length?`<aside class="lottery-latest-results"><span>LATEST OFFICIAL RESULTS</span>${weeklyWinning.length?`<div><small>WEEKLY PICK 5</small>${renderLotteryTicketNumbers(weeklyWinning)}</div>`:""}${data.latest_result&&!data.latest_result.winner_user_id&&Number(data.latest_result.rollover_amount||0)>0?`<div class="lottery-rollover-result"><small>NO EXACT MATCH</small><strong>${money(data.latest_result.rollover_amount)} ROLLED OVER</strong></div>`:""}${quickWinning.length?`<div><small>QUICK DRAW</small>${renderLotteryTicketNumbers(quickWinning)}</div>`:""}</aside>`:""}</section>`:""}
     ${panel==="about"?`<section class="lottery-how"><span>OFFICIAL PLAY GUIDE</span><h2>Play from your linked Arma bank.</h2><p>Your latest game-bank snapshot is the available play balance. Weekly draw numbers are generated independently before eligible ticket lines are loaded and matched. If no line matches all five numbers, the unpaid jackpot remains in the pool for the next weekly drawing.</p><dl><div><dt>Weekly ticket</dt><dd>${money(prices.weekly_ticket||0)}</dd></div><div><dt>Quick Pick</dt><dd>5 secure random numbers</dd></div><div><dt>No exact weekly match</dt><dd>Jackpot rolls over</dd></div><div><dt>Quick Draw</dt><dd>${money(quick.price||0)}</dd></div><div><dt>Scratch card</dt><dd>${money(scratch.price||0)}</dd></div><div><dt>Available game balance</dt><dd>${wallet.available == null ? "Awaiting sync" : money(wallet.available)}</dd></div></dl></section>`:""}`;
   return `<main class="fc-lotto lottery-numbers-workspace"><canvas class="fc-lotto-canvas" data-lottery-canvas></canvas><header class="fc-lotto-nav"><div class="fc-lotto-wordmark"><i><b>FC</b></i><span><small>STATE OF FAIRCROFT</small><strong>LOTTERY LIVE</strong><em>OFFICIAL NUMBER DRAW NETWORK</em></span></div><div class="fc-lotto-onair"><i></i><span>${data.enabled?"ENTRIES OPEN":"ENTRIES PAUSED"}</span><small>${Number(poolState.online_players||0)} verified players online</small></div><nav><button data-refresh-lottery>Sync</button><button data-close-lottery>Exit Lottery</button></nav></header>
@@ -4879,7 +5017,7 @@ function startLotteryScratchSurface(){
   let drawing=false,revealed=false,last=null,checks=0;
   const resize=()=>{const rect=canvas.getBoundingClientRect(),ratio=Math.max(1,window.devicePixelRatio||1);canvas.width=Math.max(1,Math.round(rect.width*ratio));canvas.height=Math.max(1,Math.round(rect.height*ratio));context.setTransform(ratio,0,0,ratio,0,0);const gradient=context.createLinearGradient(0,0,rect.width,rect.height);gradient.addColorStop(0,'#665d55');gradient.addColorStop(.22,'#f5eee0');gradient.addColorStop(.48,'#8d8278');gradient.addColorStop(.72,'#fff8e9');gradient.addColorStop(1,'#5c534c');context.fillStyle=gradient;context.fillRect(0,0,rect.width,rect.height);context.fillStyle='rgba(28,18,12,.86)';context.font='900 14px Inter, Arial';context.textAlign='center';context.textBaseline='middle';context.fillText('SCRATCH TO REVEAL',rect.width/2,rect.height/2);context.globalCompositeOperation='destination-out';};
   const point=event=>{const rect=canvas.getBoundingClientRect();return{x:event.clientX-rect.left,y:event.clientY-rect.top}};
-  const reveal=()=>{if(revealed)return;revealed=true;ticket?.classList.add('revealed');canvas.style.pointerEvents='none';const instruction=$('[data-scratch-instruction]'),reward=state.lotteryScratchReveal||{};if(instruction)instruction.textContent=isLotteryStockReward(reward)?'STOCK REWARD REVEALED · COPY YOUR CODE':'CASH PRIZE REVEALED · AUTOMATIC IN-GAME DEPOSIT';toast(isLotteryStockReward(reward)?`Stock reward revealed: ${reward.reward_summary||'Ravenhood reward'}`:`Cash prize revealed: ${reward.reward_summary||'in-game bank payout'}`);};
+  const reveal=()=>{if(revealed)return;revealed=true;ticket?.classList.add('revealed');canvas.style.pointerEvents='none';const instruction=$('[data-scratch-instruction]'),reward=state.lotteryScratchReveal||state.cache.lottery?.scratch?.pending_card||{};if(instruction)instruction.textContent=isLotteryStockReward(reward)?'STOCK REWARD REVEALED · COPY YOUR CODE':'CASH PRIZE REVEALED · AUTOMATIC IN-GAME DEPOSIT';toast(isLotteryStockReward(reward)?`Stock reward revealed: ${reward.reward_summary||'Ravenhood reward'}`:`Cash prize revealed: ${reward.reward_summary||'in-game bank payout'}`);const cardId=Number(reward.card_id||reward.id||0);if(cardId>0){api('/api/lottery/scratch/reveal',{method:'POST',body:{card_id:cardId},confirm:false}).then(async result=>{reward.surface_state=result.surface_state||'revealed';if(state.lotteryScratchReveal)state.lotteryScratchReveal.surface_state=reward.surface_state;await loadAppData('lottery');}).catch(error=>toast(`Scratch reveal could not be recorded: ${error.message}`));}};
   const measure=(force=false)=>{if(revealed||(!force&&++checks%4))return;const pixels=context.getImageData(0,0,canvas.width,canvas.height).data;let clear=0,total=0;for(let index=3;index<pixels.length;index+=320){total++;if(pixels[index]<40)clear++;}if(total&&clear/total>=.45)reveal();};
   const erase=event=>{if(!drawing)return;event.preventDefault();const next=point(event),rect=canvas.getBoundingClientRect();context.lineWidth=Math.max(34,Math.min(rect.width,rect.height)*.17);context.lineCap='round';context.lineJoin='round';context.beginPath();context.moveTo(last?.x??next.x,last?.y??next.y);context.lineTo(next.x,next.y);context.stroke();last=next;measure();};
   canvas.addEventListener('pointerdown',event=>{drawing=true;last=point(event);canvas.setPointerCapture?.(event.pointerId);erase(event)});
@@ -4892,7 +5030,7 @@ function startLotteryScratchSurface(){
 function bindLotteryWorkspace(){
   startLotteryCinematicEffects();
   startLotteryScratchSurface();
-  $$('[data-lottery-panel]').forEach(button=>button.addEventListener("click",()=>{state.lotteryPanel=button.dataset.lotteryPanel||"";render();}));
+  $$('[data-lottery-panel]').forEach(button=>button.addEventListener("click",()=>{const nextPanel=button.dataset.lotteryPanel||"";if(state.lotteryScratchReveal?.surface_state==='revealed')state.lotteryScratchReveal=null;state.lotteryPanel=nextPanel;render();}));
   $("[data-close-lottery]")?.addEventListener("click",async()=>{if(state.lotteryAnimation)cancelAnimationFrame(state.lotteryAnimation);if(state.lotteryPoolTimer)clearInterval(state.lotteryPoolTimer);state.lotteryAnimation=null;state.lotteryPoolTimer=null;state.lotteryPanel="";state.activeApp=null;await loadSession();});
   $("[data-refresh-lottery]")?.addEventListener("click",async()=>{await loadAppData("lottery");render();});
   $$('[data-lottery-number]').forEach(button=>button.addEventListener("click",()=>{
@@ -4915,7 +5053,7 @@ function bindLotteryWorkspace(){
   const purchaseWeeklyTicket=async(body,button)=>{if(button)button.disabled=true;try{const result=await api("/api/lottery/entries",{method:"POST",body});const numbers=result.numbers||body.numbers||[];toast(`${result.quick_pick?"Quick Pick":"Weekly line"} ${numbers.join(" - ")} purchased`);state.lotteryPanel="tickets";await loadAppData("lottery");render();}catch(error){if(button)button.disabled=false;toast(error.message);}};
   $("[data-lottery-enter]")?.addEventListener("click",event=>{const numbers=[...document.querySelectorAll('[data-lottery-number="weekly"].selected')].map(item=>Number(item.dataset.number));purchaseWeeklyTicket({numbers},event.currentTarget);});
   $("[data-lottery-quick-pick]")?.addEventListener("click",event=>purchaseWeeklyTicket({quick_pick:true},event.currentTarget));
-  $("[data-lottery-scratch]")?.addEventListener("click",async()=>{try{const result=await api("/api/lottery/scratch",{method:"POST",body:{}});state.lotteryScratchReveal=result;await loadAppData("lottery");render();}catch(error){toast(error.message);}});
+  $("[data-lottery-scratch]")?.addEventListener("click",async event=>{const button=event.currentTarget;button.disabled=true;try{const result=await api("/api/lottery/scratch",{method:"POST",body:{}});state.lotteryScratchReveal=result;await loadAppData("lottery");render();}catch(error){button.disabled=false;toast(error.message);}});
   $("[data-lottery-quick-entry]")?.addEventListener("click",async()=>{try{const numbers=[...document.querySelectorAll('[data-lottery-number="quick"].selected')].map(item=>Number(item.dataset.number));await api("/api/lottery/quick-draw/entries",{method:"POST",body:{numbers}});toast(`Quick Draw line ${numbers.join(" - ")} purchased`);await loadAppData("lottery");render();}catch(error){toast(error.message);}});
 }
 
@@ -11943,14 +12081,13 @@ function renderDevLotterySettingsLegacy(lottery){
     <section class="lottery-attendance-engine"><header><div><span>LIVE ATTENDANCE ENGINE</span><h2>Player-powered prize velocity</h2><p>The verified Anti-Cheat roster drives a timed pool adjustment. Every tick is recorded without changing game-server money.</p></div><div class="lottery-attendance-live"><i></i><strong>${Number(playerPool.online_players||0)}</strong><span>ONLINE NOW</span></div></header><div class="lottery-attendance-flow"><div><small>PER PLAYER / MINUTE</small><strong>${playerPool.direction==="decrease"?"−":"+"}${money(playerPool.rate_per_player_minute||0)}</strong></div><b>×</b><div><small>VERIFIED ONLINE</small><strong>${Number(playerPool.online_players||0)}</strong></div><b>=</b><div class="${Number(playerPool.change_per_minute||0)>=0?"positive":"negative"}"><small>CURRENT POOL VELOCITY</small><strong>${Number(playerPool.change_per_minute||0)>=0?"+":"−"}${money(Math.abs(Number(playerPool.change_per_minute||0)))}/MIN</strong><em>${Number(playerPool.change_per_second||0)>=0?"+":"−"}${money(Math.abs(Number(playerPool.change_per_second||0)))}/SEC</em></div></div><div class="lottery-attendance-controls"><form id="devLotteryPlayerPoolForm"><label class="dev-certify"><input name="enabled" type="checkbox" ${playerPool.enabled?"checked":""}/> Enable player-driven pool movement</label><label>Movement<select name="direction"><option value="increase" ${playerPool.direction!=="decrease"?"selected":""}>Increase pool</option><option value="decrease" ${playerPool.direction==="decrease"?"selected":""}>Decrease pool</option></select></label><label>Rate per online player, per minute<input name="rate_per_player_minute" type="number" min="0" max="1000000" step="0.01" value="${Number(playerPool.rate_per_player_minute||0)}"/></label><button class="primary">Apply live rate</button></form><div class="lottery-attendance-ledger">${playerAccruals.slice(0,8).map(item=>`<p><time>${new Date(item.created_at).toLocaleTimeString()}</time><span>${Number(item.player_count)} online × ${money(item.rate_per_minute)}/min</span><strong class="${Number(item.amount)>=0?"positive":"negative"}">${Number(item.amount)>=0?"+":"−"}${money(Math.abs(Number(item.amount)))}</strong></p>`).join("")||`<div class="empty">The activity ledger begins on the next timed tick.</div>`}</div></div></section>
     <section class="dev-card lottery-fund-authority"><div class="dev-card-header"><div><span>PRIZE FUND AUTHORITY</span><h2>Add funds to the lottery</h2><p>Manual additions immediately increase the available drawing pool and are permanently attributed to the issuing developer.</p></div><strong>AUDITED</strong></div><div class="dev-grid-2"><form id="devLotteryFundsForm" class="form-grid"><label>Amount to add<input name="amount" type="number" min="0.01" max="1000000000" step="0.01" required placeholder="0.00"/></label><label class="wide">Funding reason<textarea name="reason" minlength="5" maxlength="300" required placeholder="Community event allocation, authorized prize increase, or other documented RP source"></textarea></label><button class="primary wide">Authorize lottery funding</button></form><div class="dev-detail-list">${adjustments.map(item=>`<div><strong>+${money(item.amount)} · ${escapeHtml(item.created_by_name)}</strong><small>${escapeHtml(item.reason)} · ${new Date(item.created_at).toLocaleString()}</small></div>`).join("")||`<div class="empty">No manual lottery funding has been issued.</div>`}</div></div></section>
     <section class="dev-card lottery-special-prize-control"><div class="dev-card-header"><div><span>SEALED BONUS VAULT</span><h2>Special drawing prizes</h2><p>Add platform gift cards and custom prizes. Active details remain invisible to residents until the drawing completes.</p></div><strong>${prizes.filter(item=>item.status==="active").reduce((total,item)=>total+Number(item.quantity||1),0)} SEALED</strong></div><div class="dev-grid-2"><form id="devLotteryPrizeForm" class="form-grid"><label>Prize name<input name="prize_name" maxlength="120" required placeholder="Steam Gift Card"/></label><label>Provider<select name="provider"><option value="steam">Steam</option><option value="xbox">Xbox</option><option value="playstation">PlayStation</option><option value="discord">Discord</option><option value="faircroft">Faircroft</option><option value="other">Other</option></select></label><label>Prize type<select name="prize_type"><option value="gift_card">Gift card</option><option value="digital_code">Digital code</option><option value="membership">Membership</option><option value="merchandise">Merchandise</option><option value="custom">Custom prize</option></select></label><label>Display value<input name="display_value" maxlength="80" placeholder="$25.00 or 3 months"/></label><label>Quantity<input name="quantity" type="number" min="1" max="100" value="1"/></label><label>Sponsor<input name="sponsor" maxlength="120" placeholder="Faircroft Community"/></label><label class="wide">Private fulfillment notes<textarea name="fulfillment_notes" maxlength="1000" placeholder="Code location, purchasing developer, delivery requirements, or redemption instructions. Never shown before the draw."></textarea></label><button class="primary wide">Seal prize for next drawing</button></form><div class="lottery-prize-vault">${prizes.map(item=>`<article class="${escapeHtml(item.status)}"><div><span>${escapeHtml(item.provider.toUpperCase())}</span><strong>${escapeHtml(item.prize_name)}${Number(item.quantity||1)>1?` ×${Number(item.quantity)}`:""}</strong><small>${escapeHtml(item.display_value||"Value not published")} · ${escapeHtml(item.status.toUpperCase())} · added by ${escapeHtml(item.created_by_name)}</small>${item.winner_name?`<em>Awarded to ${escapeHtml(item.winner_name)}</em>`:""}</div>${item.status!=="awarded"?`<aside><button type="button" data-lottery-prize-action="${item.status==="active"?"disable":"restore"}" data-prize-id="${item.id}">${item.status==="active"?"Remove from draw":"Return to draw"}</button><button class="danger" type="button" data-lottery-prize-action="delete" data-prize-id="${item.id}">Delete</button></aside>`:""}</article>`).join("")||`<div class="empty">The special-prize vault is empty.</div>`}</div></div></section>
-    <section class="dev-card"><div class="dev-card-header"><div><span>DRAW POLICY</span><h2>Schedule and eligibility engine</h2></div><strong>${lottery.enabled?"OPEN":"PAUSED"}</strong></div><form id="devLotterySettingsForm" class="form-grid"><label class="dev-certify wide"><input name="enabled" type="checkbox" ${lottery.enabled?"checked":""}/> Accept resident lottery entries</label><label>Daily entries per resident<input name="daily_entries" type="number" min="1" max="20" value="${Number(lottery.daily_entries||3)}"/></label><label>Drawing weekday<select name="draw_weekday">${["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].map((day,index)=>`<option value="${index}" ${Number(lottery.draw_weekday)===index?"selected":""}>${day}</option>`).join("")}</select></label><label>Drawing time<input name="draw_time" type="time" value="${escapeHtml(lottery.draw_time||"23:59")}"/></label><label>Timezone<input name="timezone" value="${escapeHtml(lottery.timezone||"America/New_York")}"/></label><label>Payout percentage<input name="payout_percent" type="number" min="1" max="100" step=".01" value="${Number(lottery.payout_percent||100)}"/><small>Percentage of available pool awarded.</small></label><label class="dev-certify wide"><input name="scratch_enabled" type="checkbox" ${lottery.scratch_enabled?"checked":""}/> Enable the daily scratch-card release</label><label>Scratch cards per day<input name="scratch_daily_cards" type="number" min="1" max="5" value="${Number(lottery.scratch_daily_cards||1)}"/></label><label class="dev-certify wide"><input name="quick_draw_enabled" type="checkbox" ${lottery.quick_draw_enabled?"checked":""}/> Enable Quick Draw timed rounds</label><label>Quick Draw interval (minutes)<input name="quick_draw_interval_minutes" type="number" min="30" max="1440" value="${Number(lottery.quick_draw_interval_minutes||240)}"/></label><label>Entries per Quick Draw<input name="quick_draw_entries" type="number" min="1" max="5" value="${Number(lottery.quick_draw_entries||1)}"/></label><label class="wide">Role winning weights (JSON)<textarea name="role_weights" placeholder='{"beta":1.25,"civ":1}'>${escapeHtml(JSON.stringify(lottery.role_weights||{},null,2))}</textarea><small>1.0 is standard odds; 2.0 doubles an eligible entry's draw weight.</small></label><label class="wide">Excluded roles<input name="excluded_roles" value="${escapeHtml((lottery.excluded_roles||[]).join(", "))}" placeholder="owner, dev, admin"/><small>Comma-separated roles that cannot enter or win.</small></label><button class="primary wide">Save lottery governance</button></form></section>
+    <section class="dev-card"><div class="dev-card-header"><div><span>DRAW POLICY</span><h2>Schedule, pricing, and eligibility</h2><p>Published prices apply to the next purchase and debit the resident's linked in-game bank through Bank Bridge.</p></div><strong>${lottery.enabled?"OPEN":"PAUSED"}</strong></div><form id="devLotterySettingsForm" class="form-grid"><label class="dev-certify wide"><input name="enabled" type="checkbox" ${lottery.enabled?"checked":""}/> Accept resident lottery entries</label><label>Daily entries per resident<input name="daily_entries" type="number" min="1" max="20" value="${Number(lottery.daily_entries||3)}"/></label><label>Weekly Pick 5 line price<input name="ticket_price" type="number" min=".01" max="1000000" step=".01" value="${Number(lottery.ticket_price||2)}"/><small>Charged for selected lines and Quick Pick lines.</small></label><label>Quick Draw line price<input name="quick_draw_price" type="number" min=".01" max="1000000" step=".01" value="${Number(lottery.quick_draw_price||1)}"/></label><label>Scratch card price<input name="scratch_price" type="number" min=".01" max="1000000" step=".01" value="${Number(lottery.scratch_price||3)}"/></label><label class="wide">Scratch-off cash prizes<input name="scratch_prizes" value="${escapeHtml((lottery.scratch_prizes||[25,50,75,100,150,250,500]).join(", "))}" placeholder="25, 50, 100, 500, 10000"/><small>Comma-separated in-game payouts. One configured amount is selected for each cash-prize card.</small></label><label>Drawing weekday<select name="draw_weekday">${["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].map((day,index)=>`<option value="${index}" ${Number(lottery.draw_weekday)===index?"selected":""}>${day}</option>`).join("")}</select></label><label>Drawing time<input name="draw_time" type="time" value="${escapeHtml(lottery.draw_time||"23:59")}"/></label><label>Timezone<input name="timezone" value="${escapeHtml(lottery.timezone||"America/New_York")}"/></label><label>Payout percentage<input name="payout_percent" type="number" min="1" max="100" step=".01" value="${Number(lottery.payout_percent||100)}"/><small>Percentage of available pool awarded.</small></label><label class="dev-certify wide"><input name="scratch_enabled" type="checkbox" ${lottery.scratch_enabled?"checked":""}/> Enable the daily scratch-card release</label><label>Scratch cards per day<input name="scratch_daily_cards" type="number" min="1" max="5" value="${Number(lottery.scratch_daily_cards||1)}"/></label><label class="dev-certify wide"><input name="quick_draw_enabled" type="checkbox" ${lottery.quick_draw_enabled?"checked":""}/> Enable Quick Draw timed rounds</label><label>Quick Draw interval (minutes)<input name="quick_draw_interval_minutes" type="number" min="30" max="1440" value="${Number(lottery.quick_draw_interval_minutes||240)}"/></label><label>Entries per Quick Draw<input name="quick_draw_entries" type="number" min="1" max="5" value="${Number(lottery.quick_draw_entries||1)}"/></label><label class="wide">Role winning weights (JSON)<textarea name="role_weights" placeholder='{"beta":1.25,"civ":1}'>${escapeHtml(JSON.stringify(lottery.role_weights||{},null,2))}</textarea><small>1.0 is standard odds; 2.0 doubles an eligible entry's draw weight.</small></label><label class="wide">Excluded roles<input name="excluded_roles" value="${escapeHtml((lottery.excluded_roles||[]).join(", "))}" placeholder="owner, dev, admin"/><small>Comma-separated roles that cannot enter or win.</small></label><button class="primary wide">Save lottery governance</button></form></section>
     <div class="dev-grid-2"><section class="dev-card"><div class="dev-card-header"><div><span>DRAW OVERSIGHT</span><h2>Drawing history</h2></div><button class="danger" type="button" data-lottery-run-draw>Run supervised draw now</button></div><div class="dev-detail-list">${draws.map(draw=>`<div><strong>${new Date(draw.scheduled_at).toLocaleString()} · ${escapeHtml(draw.status)}</strong><small>${draw.winner_name?`${escapeHtml(draw.winner_name)} · CIV ${escapeHtml(draw.winner_civ)} · ${money(draw.payout_amount)}`:`${money(draw.prize_pool)} pool`}</small></div>`).join("")||`<div class="empty">No drawings recorded</div>`}</div></section><section class="dev-card"><div class="dev-card-header"><div><span>INTEGRITY QUEUE</span><h2>Entry review</h2></div><strong>${entries.filter(x=>x.fraud_flag||x.status==="excluded").length} FLAGGED</strong></div><div class="lottery-review-list">${entries.map(entry=>`<article><div><strong>${escapeHtml(entry.name)} · CIV ${escapeHtml(entry.civ_number)}</strong><small>Entry FC-${String(entry.id).padStart(7,"0")} · ${escapeHtml(entry.entry_date)} · weight ${Number(entry.role_weight).toFixed(2)}×</small></div><span class="${entry.fraud_flag||entry.status==="excluded"?"warning":"valid"}">${entry.fraud_flag?"FLAGGED":escapeHtml(entry.status.toUpperCase())}</span><div><button data-lottery-review="${entry.id}" data-action="${entry.fraud_flag?"clear":"flag"}">${entry.fraud_flag?"Clear flag":"Flag fraud"}</button><button data-lottery-review="${entry.id}" data-action="${entry.status==="excluded"?"restore":"exclude"}">${entry.status==="excluded"?"Restore":"Exclude"}</button></div></article>`).join("")||`<div class="empty">No submitted entries</div>`}</div></section></div>
   </div>`;
 }
 
 function renderDevLotterySettings(lottery){
   const rendered = renderDevLotterySettingsLegacy(lottery)
-    .replace(/<label>Daily entries per resident.*?<\/label>/, `<label>Daily entries per resident<input name="daily_entries" type="number" min="1" max="20" value="${Number(lottery.daily_entries||3)}"/></label><label>Weekly Pick 5 line price<input name="ticket_price" type="number" min=".01" max="1000000" step=".01" value="${Number(lottery.ticket_price||2)}"/></label><label>Quick Draw line price<input name="quick_draw_price" type="number" min=".01" max="1000000" step=".01" value="${Number(lottery.quick_draw_price||1)}"/></label><label>Scratch card price<input name="scratch_price" type="number" min=".01" max="1000000" step=".01" value="${Number(lottery.scratch_price||3)}"/></label><label class="wide">Scratch-off prize pool<input name="scratch_prizes" value="${escapeHtml((lottery.scratch_prizes||[25,50,75,100,150,250,500]).join(", "))}" placeholder="25, 50, 100, 500, 10000"/><small>Comma-separated in-game payouts. A random amount is selected for each new scratch card.</small></label>`)
     .replace(/<label>Quick Draw interval \(minutes\).*?<\/label>/, `<label>Quick Draw interval (minutes)<input name="quick_draw_interval_minutes" type="number" min="5" max="1440" value="${Number(lottery.quick_draw_interval_minutes||30)}"/></label>`)
     .replace(/<label>Entries per Quick Draw.*?<\/label>/, `<label>Entries per Quick Draw<input name="quick_draw_entries" type="number" min="1" max="5" value="${Number(lottery.quick_draw_entries||1)}"/></label><label>Winning Quick Draw payout<input name="quick_draw_prize" type="number" min=".01" max="1000000" step=".01" value="${Number(lottery.quick_draw_prize||5)}"/></label><label>Maximum lines per Quick Draw<input name="quick_draw_ticket_limit" type="number" min="1" max="100" value="${Number(lottery.quick_draw_ticket_limit||25)}"/></label>`)
     .replace("Control the weekly benefit draw, review entries, investigate fraud, and govern role-based eligibility.", "Control ticket pricing, scratch-off rewards, frequent draws, entry review, and eligibility.")
@@ -14966,7 +15103,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-casino-queue-v12").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-stats-motion-v14").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {
