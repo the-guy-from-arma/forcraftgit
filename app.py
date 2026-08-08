@@ -5667,11 +5667,11 @@ def casino_resolve_game(game_key: str, selection: dict[str, Any], bet: float, ho
 def casino_admin_snapshot(db: Database, settings: dict[str, Any] | None = None) -> dict[str, Any]:
     games = casino_game_settings_payload(db)
     totals = one(db, """SELECT COUNT(*) AS rounds,
-        COALESCE(SUM(CASE WHEN status NOT LIKE 'cancelled%' THEN bet_amount ELSE 0 END),0) AS wagered,
-        COALESCE(SUM(CASE WHEN status NOT LIKE 'cancelled%' THEN payout_amount ELSE 0 END),0) AS scheduled_payouts,
+        COALESCE(SUM(CASE WHEN status NOT LIKE 'cancelled%%' THEN bet_amount ELSE 0 END),0) AS wagered,
+        COALESCE(SUM(CASE WHEN status NOT LIKE 'cancelled%%' THEN payout_amount ELSE 0 END),0) AS scheduled_payouts,
         COUNT(*) FILTER (WHERE status IN ('awaiting_debit','won_pending_payout')) AS pending,
         COUNT(*) FILTER (WHERE status='rejected') AS rejected,
-        COUNT(*) FILTER (WHERE status LIKE 'cancelled%') AS cancelled FROM casino_rounds""") or {}
+        COUNT(*) FILTER (WHERE status LIKE 'cancelled%%') AS cancelled FROM casino_rounds""") or {}
     queue_accounts = all_rows(
         db,
         """
@@ -12504,7 +12504,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         rounds = [self.casino_round_public(row) for row in all_rows(db, "SELECT * FROM casino_rounds WHERE user_id=? ORDER BY id DESC LIMIT 100", (user["id"],))]
         today_start = utcnow().date().isoformat() + "T00:00:00+00:00"
         today = one(db, """SELECT COALESCE(SUM(bet_amount),0) AS wagered,COALESCE(SUM(payout_amount),0) AS payouts,COUNT(*) AS rounds
-            FROM casino_rounds WHERE user_id=? AND created_at>=? AND status<>'rejected' AND status NOT LIKE 'cancelled%'""", (user["id"], today_start)) or {}
+            FROM casino_rounds WHERE user_id=? AND created_at>=? AND status<>'rejected' AND status NOT LIKE 'cancelled%%'""", (user["id"], today_start)) or {}
         daily_net = max(0.0, float(today.get("wagered") or 0) - float(today.get("payouts") or 0))
         self.send_json(200, {
             "enabled": settings["casino_enabled"],
@@ -12569,7 +12569,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(409, f"Insufficient available in-game balance. Available: ${float(wallet['available']):,.2f}")
             return
         today_start = utcnow().date().isoformat() + "T00:00:00+00:00"
-        today = one(db, "SELECT COALESCE(SUM(bet_amount),0) AS wagered,COALESCE(SUM(payout_amount),0) AS payouts FROM casino_rounds WHERE user_id=? AND created_at>=? AND status<>'rejected' AND status NOT LIKE 'cancelled%'", (user["id"], today_start)) or {}
+        today = one(db, "SELECT COALESCE(SUM(bet_amount),0) AS wagered,COALESCE(SUM(payout_amount),0) AS payouts FROM casino_rounds WHERE user_id=? AND created_at>=? AND status<>'rejected' AND status NOT LIKE 'cancelled%%'", (user["id"], today_start)) or {}
         current_loss = max(0.0, float(today.get("wagered") or 0) - float(today.get("payouts") or 0))
         if current_loss + bet > float(settings["casino_daily_loss_limit"]):
             self.error(409, f"This wager exceeds your Faircroft Casino daily play limit. Remaining: ${max(0.0, float(settings['casino_daily_loss_limit']) - current_loss):,.2f}")
