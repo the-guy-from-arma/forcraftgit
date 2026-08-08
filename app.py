@@ -187,6 +187,7 @@ CASINO_MIN_HOUSE_EDGE = 1.0
 CASINO_MAX_HOUSE_EDGE = 95.0
 CASINO_WAGER_REQUEST_INTERVAL_SECONDS = 2.5
 CASINO_MAX_QUEUED_ROUNDS = 5
+LOTTERY_MAX_OPEN_TICKETS = 50
 CASINO_WAGER_REQUEST_TIMES: dict[str, float] = {}
 CASINO_WAGER_REQUEST_LOCK = threading.Lock()
 
@@ -5995,6 +5996,43 @@ def lottery_active_ticket_count(db: Database, user_id: int) -> int:
     return int((weekly or {}).get("count") or 0) + int((quick or {}).get("count") or 0)
 
 
+def lottery_pending_settlements(db: Database) -> list[dict[str, Any]]:
+    """Return lottery purchases whose application record still awaits a debit.
+
+    Bank Bridge command state is included so Lottery Settings can distinguish a
+    real pending payment from an already completed, failed, cancelled, or
+    missing command that left a stale application lock behind.
+    """
+    pending: list[dict[str, Any]] = []
+    sources = (
+        ("weekly", "lottery_entries", "ticket_cost"),
+        ("quick_draw", "lottery_quick_draw_entries", "ticket_cost"),
+        ("scratch", "lottery_scratch_cards", "purchase_cost"),
+    )
+    for ticket_type, table, amount_column in sources:
+        rows = all_rows(
+            db,
+            f"""
+            SELECT t.id,t.user_id,t.status AS ticket_status,t.bank_command_id,t.created_at,
+                   t.{amount_column} AS amount,u.name AS player_name,u.civ_number,
+                   c.status AS command_status,c.claimed_at,c.completed_at,c.result_json
+            FROM {table} t
+            JOIN users u ON u.id=t.user_id
+            LEFT JOIN bank_bridge_commands c ON c.command_id=t.bank_command_id
+            WHERE t.status IN ('awaiting_debit','pending')
+            ORDER BY t.created_at
+            LIMIT 250
+            """,
+        )
+        for row in rows:
+            item = dict(row)
+            item["ticket_type"] = ticket_type
+            item["command_status"] = str(item.get("command_status") or "missing")
+            pending.append(item)
+    pending.sort(key=lambda item: str(item.get("created_at") or ""))
+    return pending
+
+
 def run_lottery_player_pool_tick(db: Database, settings: dict[str, Any] | None = None) -> dict[str, Any]:
     settings = settings or get_system_settings(db)
     current = utcnow()
@@ -8883,6 +8921,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_lottery_prize_update(db, user, self.path_int(path, 4))
                 elif path.startswith("/api/dev-tools/lottery/entries/") and path.endswith("/review") and method == "PATCH":
                     self.api_dev_lottery_entry_review(db, user, self.path_int(path, 4))
+                elif path == "/api/dev-tools/lottery/queue/resolve" and method == "POST":
+                    self.api_dev_lottery_queue_resolve(db, user)
                 elif path == "/api/dev-tools/lottery/draw" and method == "POST":
                     self.api_dev_lottery_draw(db, user)
                 elif path == "/api/dev-tools/casino/settings" and method == "PATCH":
@@ -14304,7 +14344,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         active_ticket_count = sum(1 for item in purchased_tickets if item["result"] in {"active", "review"})
         winning_ticket_count = sum(1 for item in purchased_tickets if item["result"] == "winner")
         losing_ticket_count = sum(1 for item in purchased_tickets if item["result"] == "not_winner")
-        self.send_json(200, {"enabled": settings["lottery_enabled"], "draw": dict(draw), "funding": funding, "player_pool": lottery_player_pool_status(db, settings), "wallet": wallet, "wallet_transactions": wallet_transactions, "prices": {"weekly_ticket": settings["lottery_ticket_price"], "scratch": settings["lottery_scratch_price"], "quick_draw": settings["lottery_quick_draw_price"]}, "entries": [dict(row) for row in entries], "entries_today": today_count, "daily_limit": settings["lottery_daily_entries"], "remaining_today": 0, "role_weight": weight, "excluded": bool(excluded), "excluded_roles": excluded, "latest_result": dict(latest) if latest else None, "latest_special_prizes": latest_prizes, "timezone": settings["lottery_timezone"], "purchased_tickets": {"items": purchased_tickets, "active": active_ticket_count, "winners": winning_ticket_count, "not_winners": losing_ticket_count}, "scratch": {"enabled": settings["lottery_scratch_enabled"], "daily_limit": settings["lottery_scratch_daily_cards"], "account_limit": settings["lottery_scratch_account_limit"], "account_purchased": scratch_account_purchased, "account_remaining": max(0, settings["lottery_scratch_account_limit"] - scratch_account_purchased), "cards": scratch_cards, "pending_card": dict(scratch_pending_card) if scratch_pending_card else None, "purchase_blocked": bool(scratch_unsettled_card), "purchase_block_reason": "Reveal your current scratch card before purchasing another." if scratch_unsettled_card and str(scratch_unsettled_card.get("surface_state") or "") == "sealed" else "Your current scratch-card debit is still settling through Bank Bridge." if scratch_unsettled_card else "", "price": settings["lottery_scratch_price"]}, "quick_draw": {"enabled": settings["lottery_quick_draw_enabled"], "draw": dict(quick_draw), "daily_limit": settings["lottery_quick_draw_ticket_limit"], "entries": quick_entries, "price": settings["lottery_quick_draw_price"], "prize": settings["lottery_quick_draw_prize"], "latest_result": dict(quick_latest) if quick_latest else None}})
+        open_ticket_count = lottery_active_ticket_count(db, int(user["id"]))
+        open_ticket_remaining = max(0, LOTTERY_MAX_OPEN_TICKETS - open_ticket_count)
+        self.send_json(200, {"enabled": settings["lottery_enabled"], "draw": dict(draw), "funding": funding, "player_pool": lottery_player_pool_status(db, settings), "wallet": wallet, "wallet_transactions": wallet_transactions, "prices": {"weekly_ticket": settings["lottery_ticket_price"], "scratch": settings["lottery_scratch_price"], "quick_draw": settings["lottery_quick_draw_price"]}, "entries": [dict(row) for row in entries], "entries_today": today_count, "daily_limit": settings["lottery_daily_entries"], "remaining_today": max(0, int(settings["lottery_daily_entries"]) - today_count), "open_ticket_count": open_ticket_count, "open_ticket_limit": LOTTERY_MAX_OPEN_TICKETS, "open_ticket_remaining": open_ticket_remaining, "role_weight": weight, "excluded": bool(excluded), "excluded_roles": excluded, "latest_result": dict(latest) if latest else None, "latest_special_prizes": latest_prizes, "timezone": settings["lottery_timezone"], "purchased_tickets": {"items": purchased_tickets, "active": active_ticket_count, "winners": winning_ticket_count, "not_winners": losing_ticket_count}, "scratch": {"enabled": settings["lottery_scratch_enabled"], "daily_limit": settings["lottery_scratch_daily_cards"], "account_limit": settings["lottery_scratch_account_limit"], "account_purchased": scratch_account_purchased, "account_remaining": max(0, settings["lottery_scratch_account_limit"] - scratch_account_purchased), "cards": scratch_cards, "pending_card": dict(scratch_pending_card) if scratch_pending_card else None, "purchase_blocked": bool(scratch_unsettled_card), "purchase_block_reason": "Reveal your current scratch card before purchasing another." if scratch_unsettled_card and str(scratch_unsettled_card.get("surface_state") or "") == "sealed" else "Your current scratch-card debit is still settling through Bank Bridge." if scratch_unsettled_card else "", "price": settings["lottery_scratch_price"]}, "quick_draw": {"enabled": settings["lottery_quick_draw_enabled"], "draw": dict(quick_draw), "daily_limit": settings["lottery_quick_draw_ticket_limit"], "entries": quick_entries, "price": settings["lottery_quick_draw_price"], "prize": settings["lottery_quick_draw_prize"], "latest_result": dict(quick_latest) if quick_latest else None}})
 
     def api_lottery_entry(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -14327,8 +14369,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 self.error(400, str(exc)); return
         draw = ensure_lottery_draw(db, settings); today = utcnow().astimezone(ZoneInfo(settings["lottery_timezone"])).date().isoformat()
-        if lottery_active_ticket_count(db, int(user["id"])) >= 5:
-            self.error(409, "You already have five open lottery tickets. Wait for one draw to close before purchasing another."); return
+        if lottery_active_ticket_count(db, int(user["id"])) >= LOTTERY_MAX_OPEN_TICKETS:
+            self.error(409, f"You already have {LOTTERY_MAX_OPEN_TICKETS} open lottery tickets. Wait for one draw to close before purchasing another."); return
         # Serialize this resident's daily entry allocation. The database key is
         # (user_id, entry_date, entry_number), not draw_id, so draw rollover and
         # fast repeated requests must share one daily number sequence.
@@ -14455,8 +14497,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(400, str(exc)); return
         run_due_quick_draws(db, settings)
         draw = ensure_quick_draw(db, settings)
-        if lottery_active_ticket_count(db, int(user["id"])) >= 5:
-            self.error(409, "You already have five open lottery tickets. Wait for one draw to close before purchasing another."); return
+        if lottery_active_ticket_count(db, int(user["id"])) >= LOTTERY_MAX_OPEN_TICKETS:
+            self.error(409, f"You already have {LOTTERY_MAX_OPEN_TICKETS} open lottery tickets. Wait for one draw to close before purchasing another."); return
         one(db, "SELECT id FROM users WHERE id=? FOR UPDATE", (user["id"],))
         active_count = int(one(db, """SELECT COUNT(*) AS count FROM lottery_quick_draw_entries
             WHERE draw_id=? AND user_id=? AND status IN ('awaiting_debit','eligible')""", (draw["id"], user["id"]))["count"] or 0)
@@ -20462,6 +20504,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "fund_adjustments": [dict(row) for row in all_rows(db, "SELECT a.*,u.name AS created_by_name FROM lottery_fund_adjustments a JOIN users u ON u.id=a.created_by ORDER BY a.created_at DESC LIMIT 100")],
                 "special_prizes": [dict(row) for row in all_rows(db, "SELECT p.*,u.name AS created_by_name,w.name AS winner_name FROM lottery_special_prizes p JOIN users u ON u.id=p.created_by LEFT JOIN users w ON w.id=p.winner_user_id ORDER BY CASE p.status WHEN 'active' THEN 0 WHEN 'disabled' THEN 1 ELSE 2 END,p.created_at DESC")],
                 "scratch_cards": [dict(row) for row in all_rows(db, "SELECT c.*,u.name AS player_name,u.civ_number FROM lottery_scratch_cards c JOIN users u ON u.id=c.user_id ORDER BY c.created_at DESC LIMIT 250")],
+                "open_ticket_limit": LOTTERY_MAX_OPEN_TICKETS,
+                "pending_settlements": lottery_pending_settlements(db),
             }
         elif section == "sportsbook-settings":
             payload["sportsbook_settings"] = {
@@ -21281,6 +21325,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "fund_adjustments": [dict(row) for row in all_rows(db, """SELECT a.*,u.name AS created_by_name FROM lottery_fund_adjustments a JOIN users u ON u.id=a.created_by ORDER BY a.created_at DESC LIMIT 100""")],
                     "special_prizes": [dict(row) for row in all_rows(db, """SELECT p.*,u.name AS created_by_name,w.name AS winner_name FROM lottery_special_prizes p JOIN users u ON u.id=p.created_by LEFT JOIN users w ON w.id=p.winner_user_id ORDER BY CASE p.status WHEN 'active' THEN 0 WHEN 'disabled' THEN 1 ELSE 2 END,p.created_at DESC""")],
                     "scratch_cards": [dict(row) for row in all_rows(db, """SELECT c.*,u.name AS player_name,u.civ_number FROM lottery_scratch_cards c JOIN users u ON u.id=c.user_id ORDER BY c.created_at DESC LIMIT 250""")],
+                    "open_ticket_limit": LOTTERY_MAX_OPEN_TICKETS,
+                    "pending_settlements": lottery_pending_settlements(db),
                 },
                 "sportsbook_settings": {
                     "enabled": SPORTS_BETTING_ENABLED,
@@ -22445,6 +22491,92 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         }.items(): set_system_setting(db, key, value)
         ensure_lottery_draw(db, get_system_settings(db))
         self.send_json(200, {"ok": True})
+
+    def api_dev_lottery_queue_resolve(self, db: Database, user: DbRow | None) -> None:
+        """Reconcile or release one lottery purchase stuck awaiting its debit."""
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        payload = self.read_json()
+        ticket_type = str(payload.get("ticket_type") or "").strip().lower()
+        reason = str(payload.get("reason") or "").strip()[:500]
+        try:
+            ticket_id = int(payload.get("ticket_id") or 0)
+        except (TypeError, ValueError):
+            ticket_id = 0
+        if ticket_type not in {"weekly", "quick_draw", "scratch"} or ticket_id <= 0:
+            self.error(400, "Choose a valid pending lottery ticket"); return
+        if len(reason) < 5:
+            self.error(400, "Document why this lottery payment lock is being resolved"); return
+
+        if ticket_type == "scratch":
+            ticket = one(db, "SELECT * FROM lottery_scratch_cards WHERE id=? FOR UPDATE", (ticket_id,))
+            table = "lottery_scratch_cards"
+        elif ticket_type == "quick_draw":
+            ticket = one(db, "SELECT * FROM lottery_quick_draw_entries WHERE id=? FOR UPDATE", (ticket_id,))
+            table = "lottery_quick_draw_entries"
+        else:
+            ticket = one(db, "SELECT * FROM lottery_entries WHERE id=? FOR UPDATE", (ticket_id,))
+            table = "lottery_entries"
+        if not ticket:
+            self.error(404, "Lottery ticket was not found"); return
+        if str(ticket.get("status") or "") not in {"awaiting_debit", "pending"}:
+            self.error(409, f"This lottery ticket is already {ticket.get('status') or 'resolved'}"); return
+
+        command_id = str(ticket.get("bank_command_id") or "")
+        command = one(db, "SELECT * FROM bank_bridge_commands WHERE command_id=? FOR UPDATE", (command_id,)) if command_id else None
+        command_status = str(command.get("status") or "missing") if command else "missing"
+        if command_status == "claimed":
+            self.error(409, "The Bank Bridge has already claimed this debit. Wait for its result before clearing the ticket so the resident is not charged without receiving it."); return
+
+        resolved_at = now_iso()
+        resolution = "released"
+        payout_command = ""
+        if command_status == "completed":
+            resolution = "reconciled"
+            if ticket_type == "scratch":
+                cash_amount = float(ticket.get("cash_amount") or 0)
+                if cash_amount > 0 and not ticket.get("payout_command_id"):
+                    payout_command = queue_lottery_bank_payout(db, int(ticket["user_id"]), cash_amount, f"Lottery scratch payout FCS-{ticket_id:07d}") or ""
+                db.execute(
+                    "UPDATE lottery_scratch_cards SET status='revealed',revealed_at=COALESCE(revealed_at,?),payout_command_id=COALESCE(payout_command_id,?) WHERE id=?",
+                    (resolved_at, payout_command or None, ticket_id),
+                )
+            else:
+                db.execute(f"UPDATE {table} SET status='eligible' WHERE id=?", (ticket_id,))
+        else:
+            result = {
+                "message": "Lottery payment lock cleared in Lottery Settings.",
+                "reason": reason,
+                "ticket_type": ticket_type,
+                "ticket_id": ticket_id,
+                "cleared_by": int(user["id"]),
+                "cleared_at": resolved_at,
+            }
+            if command_status == "pending":
+                db.execute(
+                    "UPDATE bank_bridge_commands SET status='cancelled',completed_at=?,claimed_at=NULL,result_json=? WHERE command_id=? AND status='pending'",
+                    (resolved_at, json.dumps(result, separators=(",", ":")), command_id),
+                )
+            if ticket_type == "scratch":
+                db.execute(
+                    "UPDATE lottery_scratch_cards SET status='rejected',surface_state='cancelled',surface_revealed_at=COALESCE(surface_revealed_at,?) WHERE id=?",
+                    (resolved_at, ticket_id),
+                )
+                if ticket.get("promo_id"):
+                    db.execute("UPDATE market_promo_codes SET active=0 WHERE id=?", (ticket["promo_id"],))
+            else:
+                db.execute(f"UPDATE {table} SET status='rejected' WHERE id=?", (ticket_id,))
+
+        add_admin_audit(
+            db,
+            int(user["id"]),
+            f"lottery.queue.{resolution}",
+            int(ticket["user_id"]),
+            {"ticket_type": ticket_type, "ticket_id": ticket_id, "command_id": command_id, "command_status": command_status, "payout_command_id": payout_command, "reason": reason},
+        )
+        self.send_json(200, {"ok": True, "resolution": resolution, "ticket_type": ticket_type, "ticket_id": ticket_id, "command_id": command_id, "command_status": command_status, "payout_command_id": payout_command})
 
     def api_dev_lottery_player_pool(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
