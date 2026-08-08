@@ -170,6 +170,9 @@ TREASURY_MAX_PROOF_CHARS = 1_800_000
 REFERRAL_BONUS_AMOUNT = 50000.00
 CASINO_MIN_HOUSE_EDGE = 1.0
 CASINO_MAX_HOUSE_EDGE = 95.0
+CASINO_WAGER_REQUEST_INTERVAL_SECONDS = 2.5
+CASINO_WAGER_REQUEST_TIMES: dict[str, float] = {}
+CASINO_WAGER_REQUEST_LOCK = threading.Lock()
 
 
 def now_iso() -> str:
@@ -5514,10 +5517,39 @@ def casino_game_settings_payload(db: Database) -> list[dict[str, Any]]:
     return games
 
 
+def casino_active_round_queue(db: Database, user_id: int) -> dict[str, Any]:
+    rows = all_rows(
+        db,
+        """
+        SELECT r.round_id,r.status,r.bet_amount,r.created_at,
+               debit.status AS debit_command_status,payout.status AS payout_command_status
+        FROM casino_rounds r
+        LEFT JOIN bank_bridge_commands debit ON debit.command_id=r.bank_command_id
+        LEFT JOIN bank_bridge_commands payout ON payout.command_id=r.payout_command_id
+        WHERE r.user_id=? AND (
+            (r.status='awaiting_debit' AND debit.status IN ('pending','claimed'))
+            OR (r.status='won_pending_payout' AND payout.status IN ('pending','claimed'))
+            OR (r.status='cancelled_refund_pending' AND payout.status IN ('pending','claimed'))
+        )
+        ORDER BY r.id
+        """,
+        (user_id,),
+    )
+    first = rows[0] if rows else None
+    return {
+        "locked": bool(rows),
+        "count": len(rows),
+        "queued_wagers": round(sum(float(row.get("bet_amount") or 0) for row in rows if row.get("status") == "awaiting_debit"), 2),
+        "round_id": str(first.get("round_id") or "") if first else "",
+        "status": str(first.get("status") or "") if first else "",
+        "created_at": first.get("created_at") if first else None,
+    }
+
+
 def casino_wallet_snapshot(db: Database, user_id: int) -> dict[str, Any]:
     link = one(db, "SELECT identity_id FROM arma_account_links WHERE user_id=? AND identity_id IS NOT NULL AND identity_id<>''", (user_id,))
     if not link:
-        return {"linked": False, "balance": None, "reserved": 0.0, "available": None, "synced_at": None}
+        return {"linked": False, "balance": None, "reserved": 0.0, "available": None, "synced_at": None, "round_gate": {"locked": False, "count": 0, "queued_wagers": 0.0, "round_id": "", "status": "", "created_at": None}}
     snapshot = one(db, "SELECT balance,synced_at FROM arma_game_bank_balances WHERE identity_id=?", (link["identity_id"],))
     pending = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM bank_bridge_commands WHERE target_user_id=? AND operation='debit_funds' AND status IN ('pending','claimed')", (user_id,))
     reserved = round(float((pending or {}).get("total") or 0), 2)
@@ -5529,6 +5561,7 @@ def casino_wallet_snapshot(db: Database, user_id: int) -> dict[str, Any]:
         "reserved": reserved,
         "available": round(max(0.0, balance - reserved), 2) if balance is not None else None,
         "synced_at": snapshot.get("synced_at") if snapshot else None,
+        "round_gate": casino_active_round_queue(db, user_id),
     }
 
 
@@ -5633,9 +5666,28 @@ def casino_resolve_game(game_key: str, selection: dict[str, Any], bet: float, ho
 
 def casino_admin_snapshot(db: Database, settings: dict[str, Any] | None = None) -> dict[str, Any]:
     games = casino_game_settings_payload(db)
-    totals = one(db, """SELECT COUNT(*) AS rounds,COALESCE(SUM(bet_amount),0) AS wagered,COALESCE(SUM(payout_amount),0) AS scheduled_payouts,
+    totals = one(db, """SELECT COUNT(*) AS rounds,
+        COALESCE(SUM(CASE WHEN status NOT LIKE 'cancelled%' THEN bet_amount ELSE 0 END),0) AS wagered,
+        COALESCE(SUM(CASE WHEN status NOT LIKE 'cancelled%' THEN payout_amount ELSE 0 END),0) AS scheduled_payouts,
         COUNT(*) FILTER (WHERE status IN ('awaiting_debit','won_pending_payout')) AS pending,
-        COUNT(*) FILTER (WHERE status='rejected') AS rejected FROM casino_rounds""") or {}
+        COUNT(*) FILTER (WHERE status='rejected') AS rejected,
+        COUNT(*) FILTER (WHERE status LIKE 'cancelled%') AS cancelled FROM casino_rounds""") or {}
+    queue_accounts = all_rows(
+        db,
+        """
+        SELECT r.user_id,u.name AS player_name,u.civ_number,
+               COUNT(*) FILTER (WHERE cmd.status='pending') AS pending_count,
+               COUNT(*) FILTER (WHERE cmd.status='claimed') AS claimed_count,
+               COALESCE(SUM(r.bet_amount),0) AS queued_amount,
+               MIN(r.created_at) AS oldest_created_at
+        FROM casino_rounds r
+        JOIN users u ON u.id=r.user_id
+        JOIN bank_bridge_commands cmd ON cmd.command_id=r.bank_command_id
+        WHERE r.status='awaiting_debit' AND cmd.status IN ('pending','claimed')
+        GROUP BY r.user_id,u.name,u.civ_number
+        ORDER BY queued_amount DESC,r.user_id
+        """,
+    )
     recent = all_rows(db, """SELECT r.*,u.name AS player_name,u.civ_number FROM casino_rounds r JOIN users u ON u.id=r.user_id ORDER BY r.id DESC LIMIT 200""")
     for row in recent:
         for field in ("selection_json", "outcome_json"):
@@ -5650,7 +5702,16 @@ def casino_admin_snapshot(db: Database, settings: dict[str, Any] | None = None) 
     return {
         "settings": settings or get_system_settings(db),
         "games": games,
-        "totals": {"rounds": int(totals.get("rounds") or 0), "wagered": float(totals.get("wagered") or 0), "scheduled_payouts": float(totals.get("scheduled_payouts") or 0), "pending": int(totals.get("pending") or 0), "rejected": int(totals.get("rejected") or 0)},
+        "totals": {"rounds": int(totals.get("rounds") or 0), "wagered": float(totals.get("wagered") or 0), "scheduled_payouts": float(totals.get("scheduled_payouts") or 0), "pending": int(totals.get("pending") or 0), "rejected": int(totals.get("rejected") or 0), "cancelled": int(totals.get("cancelled") or 0)},
+        "queue_accounts": [
+            {
+                **dict(row),
+                "pending_count": int(row.get("pending_count") or 0),
+                "claimed_count": int(row.get("claimed_count") or 0),
+                "queued_amount": float(row.get("queued_amount") or 0),
+            }
+            for row in queue_accounts
+        ],
         "recent_rounds": [dict(row) for row in recent],
         "cycles": [dict(row) for row in cycles],
         "gemini_configured": bool(GEMINI_API_KEY),
@@ -7987,6 +8048,23 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         morsel = jar.get(COOKIE_NAME)
         return morsel.value if morsel else None
 
+    def casino_wager_retry_after(self) -> float:
+        token = self.cookie_token() or "anonymous"
+        remote = str(self.client_address[0] if self.client_address else "unknown")
+        key = hashlib.sha256(f"{remote}|{token}".encode("utf-8")).hexdigest()
+        current = time.monotonic()
+        with CASINO_WAGER_REQUEST_LOCK:
+            previous = CASINO_WAGER_REQUEST_TIMES.get(key, 0.0)
+            retry_after = max(0.0, CASINO_WAGER_REQUEST_INTERVAL_SECONDS - (current - previous))
+            if retry_after <= 0:
+                CASINO_WAGER_REQUEST_TIMES[key] = current
+            if len(CASINO_WAGER_REQUEST_TIMES) > 4096:
+                stale_before = current - 120.0
+                for stale_key, seen_at in list(CASINO_WAGER_REQUEST_TIMES.items()):
+                    if seen_at < stale_before:
+                        CASINO_WAGER_REQUEST_TIMES.pop(stale_key, None)
+            return retry_after
+
     def current_user(self, db: Database) -> DbRow | None:
         user_id = read_session(self.cookie_token())
         if not user_id:
@@ -8059,6 +8137,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
 
     def route_api(self, path: str, query: dict[str, list[str]]) -> None:
         method = self.command
+        if path == "/api/casino/rounds" and method == "POST":
+            retry_after = self.casino_wager_retry_after()
+            if retry_after > 0:
+                wait_seconds = max(1, math.ceil(retry_after))
+                self.send_json(
+                    429,
+                    {"error": f"Please wait {wait_seconds} second(s) before requesting another casino round.", "code": "casino_request_throttled", "retry_after_seconds": wait_seconds},
+                    {"Retry-After": str(wait_seconds)},
+                )
+                return
         try:
             with conn() as db:
                 user = self.current_user(db)
@@ -8492,6 +8580,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_casino_settings(db, user)
                 elif path == "/api/dev-tools/casino/balance-cycle" and method == "POST":
                     self.api_dev_casino_balance_cycle(db, user)
+                elif path == "/api/dev-tools/casino/cancel-pending" and method == "POST":
+                    self.api_dev_casino_cancel_pending(db, user)
                 elif path == "/api/dev-tools/casino/gemini" and method == "POST":
                     self.api_dev_casino_gemini(db, user)
                 elif path == "/api/dev-tools/gangs/settings" and method == "PATCH":
@@ -11769,6 +11859,45 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if row["status"] == "completed":
             self.send_json(200, {"ok": True, "command_id": command_id, "status": "completed", "idempotent": True})
             return
+        if row["status"] == "cancelled":
+            cancelled_round = one(db, "SELECT * FROM casino_rounds WHERE bank_command_id=?", (command_id,))
+            if not cancelled_round:
+                self.error(409, "Command is already cancelled")
+                return
+            late_result = {
+                "message": "Late Bank Bridge result received after an administrative casino cancellation.",
+                "bridge_status": status,
+                "result": result,
+            }
+            if status == "completed":
+                refund_command = str(cancelled_round.get("payout_command_id") or "")
+                if not refund_command:
+                    refund_command = casino_queue_command(
+                        db,
+                        int(cancelled_round["user_id"]),
+                        float(cancelled_round["bet_amount"] or 0),
+                        "issue_funds",
+                        f"Casino cancellation refund {cancelled_round['round_id']}",
+                        str(row.get("identity_id") or ""),
+                    ) or ""
+                    db.execute(
+                        "UPDATE casino_rounds SET status=?,payout_command_id=?,settled_at=? WHERE id=?",
+                        ("cancelled_refund_pending" if refund_command else "cancelled_refund_failed", refund_command or None, now_iso(), cancelled_round["id"]),
+                    )
+                    add_admin_audit(
+                        db,
+                        int(row["requested_by"]),
+                        "casino.cancelled_debit.late_completion",
+                        int(row["target_user_id"]),
+                        {"round_id": cancelled_round["round_id"], "command_id": command_id, "refund_command_id": refund_command, "amount": float(cancelled_round["bet_amount"] or 0)},
+                    )
+                late_result["refund_command_id"] = refund_command
+            db.execute(
+                "UPDATE bank_bridge_commands SET result_json=? WHERE command_id=? AND status='cancelled'",
+                (json.dumps(late_result, separators=(",", ":"), default=str)[:4000], command_id),
+            )
+            self.send_json(200, {"ok": True, "command_id": command_id, "status": "cancelled", "late_result": status, "refund_command_id": late_result.get("refund_command_id", "")})
+            return
         if row["status"] not in ("claimed", "pending"):
             self.error(409, f"Command is already {row['status']}")
             return
@@ -11847,7 +11976,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if casino_round:
             is_casino_payout = str(casino_round.get("payout_command_id") or "") == command_id
             if is_casino_payout:
-                if status == "completed":
+                is_cancellation_refund = str(casino_round.get("status") or "") == "cancelled_refund_pending"
+                if is_cancellation_refund and status == "completed":
+                    db.execute("UPDATE casino_rounds SET status='cancelled_refunded',settled_at=? WHERE id=?", (now_iso(), casino_round["id"]))
+                elif is_cancellation_refund and status == "failed":
+                    db.execute("UPDATE casino_rounds SET status='cancelled_refund_failed',settled_at=? WHERE id=?", (now_iso(), casino_round["id"]))
+                elif status == "completed":
                     db.execute("UPDATE casino_rounds SET status='paid',settled_at=? WHERE id=?", (now_iso(), casino_round["id"]))
                 elif status == "failed":
                     db.execute("UPDATE casino_rounds SET status='payout_failed',settled_at=? WHERE id=?", (now_iso(), casino_round["id"]))
@@ -12370,7 +12504,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         rounds = [self.casino_round_public(row) for row in all_rows(db, "SELECT * FROM casino_rounds WHERE user_id=? ORDER BY id DESC LIMIT 100", (user["id"],))]
         today_start = utcnow().date().isoformat() + "T00:00:00+00:00"
         today = one(db, """SELECT COALESCE(SUM(bet_amount),0) AS wagered,COALESCE(SUM(payout_amount),0) AS payouts,COUNT(*) AS rounds
-            FROM casino_rounds WHERE user_id=? AND created_at>=? AND status<>'rejected'""", (user["id"], today_start)) or {}
+            FROM casino_rounds WHERE user_id=? AND created_at>=? AND status<>'rejected' AND status NOT LIKE 'cancelled%'""", (user["id"], today_start)) or {}
         daily_net = max(0.0, float(today.get("wagered") or 0) - float(today.get("payouts") or 0))
         self.send_json(200, {
             "enabled": settings["casino_enabled"],
@@ -12391,6 +12525,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         settings = get_system_settings(db)
         if not settings["casino_enabled"]:
             self.error(409, "Faircroft Casino is currently closed")
+            return
+        round_gate = casino_active_round_queue(db, int(user["id"]))
+        if round_gate["locked"]:
+            queued_count = int(round_gate["count"])
+            self.send_json(
+                429,
+                {
+                    "error": f"Your previous casino activity is still settling through Bank Bridge ({queued_count} queued round{'s' if queued_count != 1 else ''}). New wagers unlock automatically after settlement.",
+                    "code": "casino_settlement_pending",
+                    "retry_after_seconds": 5,
+                    "round_gate": round_gate,
+                },
+                {"Retry-After": "5"},
+            )
             return
         payload = self.read_json()
         game_key = str(payload.get("game_key") or "").strip().lower()[:30]
@@ -12421,7 +12569,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(409, f"Insufficient available in-game balance. Available: ${float(wallet['available']):,.2f}")
             return
         today_start = utcnow().date().isoformat() + "T00:00:00+00:00"
-        today = one(db, "SELECT COALESCE(SUM(bet_amount),0) AS wagered,COALESCE(SUM(payout_amount),0) AS payouts FROM casino_rounds WHERE user_id=? AND created_at>=? AND status<>'rejected'", (user["id"], today_start)) or {}
+        today = one(db, "SELECT COALESCE(SUM(bet_amount),0) AS wagered,COALESCE(SUM(payout_amount),0) AS payouts FROM casino_rounds WHERE user_id=? AND created_at>=? AND status<>'rejected' AND status NOT LIKE 'cancelled%'", (user["id"], today_start)) or {}
         current_loss = max(0.0, float(today.get("wagered") or 0) - float(today.get("payouts") or 0))
         if current_loss + bet > float(settings["casino_daily_loss_limit"]):
             self.error(409, f"This wager exceeds your Faircroft Casino daily play limit. Remaining: ${max(0.0, float(settings['casino_daily_loss_limit']) - current_loss):,.2f}")
@@ -20764,6 +20912,76 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         result = casino_balance_cycle(db, int(user["id"]), "automatic")
         add_admin_audit(db, int(user["id"]), "casino.balance_cycle.completed", details={"changes": len(result["applied"]), "applied": result["applied"]})
         self.send_json(200, {"ok": True, **result})
+
+    def api_dev_casino_cancel_pending(self, db: Database, user: DbRow | None) -> None:
+        err = admin_tools_member_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        try:
+            target_user_id = int(payload.get("user_id") or 0)
+        except (TypeError, ValueError):
+            target_user_id = 0
+        if target_user_id <= 0:
+            self.error(400, "Choose the resident whose casino queue must be cancelled")
+            return
+        target = one(db, "SELECT id,name,civ_number FROM users WHERE id=? FOR UPDATE", (target_user_id,))
+        if not target:
+            self.error(404, "Resident account was not found")
+            return
+        cancelled_at = now_iso()
+        reason = str(payload.get("reason") or "Casino queue flood recovery").strip()[:500] or "Casino queue flood recovery"
+        result_json = json.dumps(
+            {"message": "Casino wager cancelled by an authorized operator before settlement.", "reason": reason, "cancelled_by": int(user["id"]), "cancelled_at": cancelled_at},
+            separators=(",", ":"),
+        )
+        cancelled = all_rows(
+            db,
+            """
+            UPDATE bank_bridge_commands
+            SET status='cancelled',completed_at=?,result_json=?
+            WHERE command_id IN (
+                SELECT bank_command_id FROM casino_rounds
+                WHERE user_id=? AND status='awaiting_debit'
+            )
+              AND operation='debit_funds'
+              AND status IN ('pending','claimed')
+            RETURNING command_id,amount,claimed_at
+            """,
+            (cancelled_at, result_json, target_user_id),
+        )
+        db.execute(
+            """
+            UPDATE casino_rounds
+            SET status='cancelled',settled_at=?
+            WHERE user_id=? AND status='awaiting_debit'
+              AND bank_command_id IN (SELECT command_id FROM bank_bridge_commands WHERE status='cancelled')
+            """,
+            (cancelled_at, target_user_id),
+        )
+        claimed_count = sum(1 for row in cancelled if row.get("claimed_at"))
+        cancelled_amount = round(sum(float(row.get("amount") or 0) for row in cancelled), 2)
+        add_admin_audit(
+            db,
+            int(user["id"]),
+            "casino.queue.bulk_cancelled",
+            target_user_id,
+            {"reason": reason, "commands": len(cancelled), "amount": cancelled_amount, "already_claimed": claimed_count, "unclaimed": len(cancelled) - claimed_count},
+        )
+        self.send_json(
+            200,
+            {
+                "ok": True,
+                "resident": {"id": int(target["id"]), "name": target["name"], "civ_number": target.get("civ_number") or ""},
+                "cancelled_commands": len(cancelled),
+                "cancelled_amount": cancelled_amount,
+                "unclaimed_cancelled": len(cancelled) - claimed_count,
+                "claimed_cancelled": claimed_count,
+                "late_claimed_policy": "Any cancelled debit that later completes is automatically refunded through Bank Bridge.",
+            },
+        )
 
     def api_dev_casino_gemini(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
