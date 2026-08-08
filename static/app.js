@@ -5649,9 +5649,25 @@ function renderMarketWorkspace() {
   const chartSpan = Math.max(.01, chartMax - chartMin);
   const yFor = value => 286 - ((value - chartMin) / chartSpan) * 238;
   const actualEndX = 925;
-  const actualPoints = history.map((row, index) => `${(28 + index / Math.max(1, history.length - 1) * (actualEndX - 28)).toFixed(1)},${yFor(row.price).toFixed(1)}`).join(" ");
+  const chartSeries = history.map((row, index) => ({
+    x: Number((28 + index / Math.max(1, history.length - 1) * (actualEndX - 28)).toFixed(1)),
+    y: Number(yFor(row.price).toFixed(1)),
+    price: row.price,
+    time: row.time,
+    fromOpen: open ? (row.price / open - 1) * 100 : 0,
+  }));
+  const actualPoints = chartSeries.map(point => `${point.x},${point.y}`).join(" ");
   const forecastPoints = [`${actualEndX},${yFor(currentPrice).toFixed(1)}`, ...forecast.map((value, index) => `${(actualEndX + (index + 1) * 51).toFixed(1)},${yFor(value).toFixed(1)}`)].join(" ");
   const chartId = `rh-${String(selected.ticker || "market").replace(/[^a-z0-9]/gi, "")}`;
+  const chartSeriesPayload = escapeHtml(JSON.stringify(chartSeries));
+  const priceMove = currentPrice - open;
+  const rangePosition = high > low ? Math.max(0, Math.min(100, (currentPrice - low) / (high - low) * 100)) : 50;
+  const periodSwing = open ? (high - low) / open * 100 : 0;
+  const directionLabel = change > .25 ? "Rising" : change < -.25 ? "Falling" : "Holding steady";
+  const directionCopy = change > .25 ? "Buy-side pressure across this view" : change < -.25 ? "Defensive pressure across this view" : "Trading close to the period open";
+  const momentumPrice = Number(forecast.at(-1) || currentPrice);
+  const momentumChange = currentPrice ? (momentumPrice / currentPrice - 1) * 100 : 0;
+  const lastRecordedAt = history.at(-1)?.time || now;
 
   const invested = Number(data.portfolio_value || 0);
   const cash = Number(account.cash_balance || 0);
@@ -5680,7 +5696,16 @@ function renderMarketWorkspace() {
       <aside class="market-v13-discovery"><header><small>MARKET PULSE</small><h2>Hot right now</h2></header>${movers.slice(0, 7).map((item, index) => `<button type="button" class="${item.ticker === selected.ticker ? "active" : ""}" data-market-ticker="${escapeHtml(item.ticker)}"><i>${String(index + 1).padStart(2, "0")}</i><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}</small></span><strong>${money(item.price)}<em class="${marketChange(item) >= 0 ? "up" : "down"}">${marketChange(item) >= 0 ? "+" : ""}${marketChange(item).toFixed(2)}%</em></strong></button>`).join("")}</aside>
       <section class="market-v13-stage">
         <header class="market-v13-instrument"><div><small>${escapeHtml(selected.sector || "FAIRCROFT MARKET")} / ${escapeHtml(humanLabel(selected.security_type || "stock"))}</small><h1>${escapeHtml(selected.ticker || "--")}<span>${escapeHtml(selected.name || "Select a listing")}</span></h1><p>${escapeHtml(selected.description || `${selected.name || selected.ticker} is actively traded through Ravenhood.`)}</p></div><aside><small>LIVE QUOTE</small><strong>${money(currentPrice)}</strong><span class="${change >= 0 ? "up" : "down"}">${change >= 0 ? "+" : ""}${change.toFixed(2)}% / ${range}</span></aside></header>
-        <section class="market-v13-chart"><header><div><small>VERIFIED PERFORMANCE + MOMENTUM PATH</small><h2>${escapeHtml(selected.ticker || "Market")} live price desk</h2><span data-market-live-clock>Live synchronization armed</span></div><nav>${["1D", "1W", "1M", "1Y"].map(item => `<button type="button" class="${range === item ? "active" : ""}" data-market-range="${item}">${item}</button>`).join("")}</nav></header><div class="market-v13-canvas ${change >= 0 ? "positive" : "negative"}"><div class="market-v13-gridlines"></div><svg viewBox="0 0 1360 320" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(selected.ticker || "Market")} price history and projected momentum"><defs><linearGradient id="${chartId}-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".34"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs><polygon class="area" points="28,304 ${actualPoints} ${actualEndX},304" fill="url(#${chartId}-area)"/><polyline class="actual" points="${actualPoints}"/><polyline class="forecast" points="${forecastPoints}"/><line class="divider" x1="${actualEndX}" y1="24" x2="${actualEndX}" y2="304"/><circle class="pulse" cx="${actualEndX}" cy="${yFor(currentPrice).toFixed(1)}" r="7"/></svg><div class="market-v13-chart-labels"><span>${range === "1D" ? "Open" : "Period start"}</span><span>Recorded market</span><span>Now</span><span>Momentum path</span></div></div><footer><span><small>OPEN</small><b>${money(open)}</b></span><span><small>${range} LOW</small><b>${money(low)}</b></span><span><small>${range} HIGH</small><b>${money(high)}</b></span><span><small>YOUR POSITION</small><b>${owned ? `${owned.toLocaleString(undefined, {maximumFractionDigits: 4})} shares` : "Not held"}</b></span></footer></section>
+        <section class="market-v13-chart"><header><div><small>VERIFIED PERFORMANCE + MOMENTUM PATH</small><h2>${escapeHtml(selected.ticker || "Market")} live price desk</h2><span data-market-live-clock>Live synchronization armed · hover the recorded line for exact quotes</span></div><nav>${["1D", "1W", "1M", "1Y"].map(item => `<button type="button" class="${range === item ? "active" : ""}" data-market-range="${item}">${item}</button>`).join("")}</nav></header>
+          <div class="market-v13-canvas ${change >= 0 ? "positive" : "negative"}" data-market-price-chart data-market-points="${chartSeriesPayload}" tabindex="0" aria-label="Interactive ${escapeHtml(selected.ticker || "Market")} price history. Hover or use arrow keys to inspect recorded quotes.">
+            <div class="market-v13-gridlines"></div><div class="market-v13-y-axis"><span>${money(chartMax)}</span><span>${money((chartMax + chartMin) / 2)}</span><span>${money(chartMin)}</span></div>
+            <svg viewBox="0 0 1360 320" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="${chartId}-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".34"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs><polygon class="area" points="28,304 ${actualPoints} ${actualEndX},304" fill="url(#${chartId}-area)"/><polyline class="actual" points="${actualPoints}"/><polyline class="forecast" points="${forecastPoints}"/><line class="divider" x1="${actualEndX}" y1="24" x2="${actualEndX}" y2="304"/><circle class="pulse" cx="${actualEndX}" cy="${yFor(currentPrice).toFixed(1)}" r="7"/></svg>
+            <div class="market-v13-hover-guide" aria-hidden="true"></div><div class="market-v13-hover-dot" aria-hidden="true"></div><aside class="market-v13-tooltip" aria-live="polite"><small data-market-tooltip-symbol>${escapeHtml(selected.ticker || "MARKET")} · RECORDED QUOTE</small><strong data-market-tooltip-price>${money(currentPrice)}</strong><time data-market-tooltip-time>${new Date(lastRecordedAt).toLocaleString()}</time><span data-market-tooltip-change>Current verified price</span></aside>
+            <div class="market-v13-chart-labels"><span>${range === "1D" ? "Open" : "Period start"}</span><span>Recorded market</span><span>Now</span><span>Momentum path</span></div>
+          </div>
+          <footer><span><small>OPEN</small><b>${money(open)}</b></span><span><small>${range} LOW</small><b>${money(low)}</b></span><span><small>${range} HIGH</small><b>${money(high)}</b></span><span><small>YOUR POSITION</small><b>${owned ? `${owned.toLocaleString(undefined, {maximumFractionDigits: 4})} shares` : "Not held"}</b></span></footer>
+          <div class="market-v13-analysis"><article><small>PERIOD DIRECTION</small><strong class="${change >= 0 ? "up" : "down"}">${directionLabel}</strong><span>${priceMove >= 0 ? "+" : ""}${money(priceMove)} · ${change >= 0 ? "+" : ""}${change.toFixed(2)}%</span><p>${directionCopy}</p></article><article class="range"><small>RANGE POSITION</small><strong>${rangePosition.toFixed(0)}th percentile</strong><i><b style="left:${rangePosition.toFixed(1)}%"></b></i><span>${money(low)} low · ${money(high)} high</span></article><article><small>REALIZED SWING</small><strong>${periodSwing.toFixed(2)}%</strong><span>${history.length} verified observation${history.length === 1 ? "" : "s"}</span><p>High-to-low movement in the selected view.</p></article><article><small>MOMENTUM OUTLOOK</small><strong class="${momentumChange >= 0 ? "up" : "down"}">${momentumChange >= 0 ? "Positive" : "Defensive"}</strong><span>${money(momentumPrice)} · ${momentumChange >= 0 ? "+" : ""}${momentumChange.toFixed(2)}%</span><p>Illustrative path, not a recorded quote.</p></article></div>
+        </section>
         <section class="market-v13-opportunities"><header><div><small>RAVENHOOD SIGNALS</small><h2>Today's momentum leaders</h2></div><span>Live repricing</span></header><div>${gainers.map(item => `<button type="button" data-market-ticker="${escapeHtml(item.ticker)}"><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}</small></span><strong>${money(item.price)}<em class="${marketChange(item) >= 0 ? "up" : "down"}">${marketChange(item) >= 0 ? "+" : ""}${marketChange(item).toFixed(2)}%</em></strong></button>`).join("")}</div></section>
         <section class="market-v13-portfolio" id="marketPortfolioDesk"><header><div><small>YOUR RAVENHOOD ACCOUNT</small><h2>Portfolio command</h2><p>Every position, current value, and unrealized result in one view.</p></div><strong class="${profit >= 0 ? "up" : "down"}">${profit >= 0 ? "+" : ""}${money(profit)}</strong></header><div>${holdingRows}</div></section>
         <section class="market-v13-board"><header><div><small>FCX LIVE BOARD</small><h2>Explore the exchange</h2></div><span>${securities.length} active listings</span></header><div>${securities.map(item => `<button type="button" class="${item.ticker === selected.ticker ? "active" : ""}" data-market-ticker="${escapeHtml(item.ticker)}"><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}</small></span><em>${escapeHtml(item.sector || "Market")}</em><strong>${money(item.price)}<small class="${marketChange(item) >= 0 ? "up" : "down"}">${marketChange(item) >= 0 ? "+" : ""}${marketChange(item).toFixed(2)}%</small></strong></button>`).join("")}</div></section>
@@ -5852,6 +5877,58 @@ function bindMarketWorkspace() {
         state.marketPromoSubmitting = false;
         render();
       }
+    });
+  }
+  const interactivePriceChart = $("[data-market-price-chart]");
+  if (interactivePriceChart) {
+    let chartPoints = [];
+    try { chartPoints = JSON.parse(interactivePriceChart.dataset.marketPoints || "[]"); } catch (_) { chartPoints = []; }
+    const tooltip = $(".market-v13-tooltip", interactivePriceChart);
+    const tooltipPrice = $("[data-market-tooltip-price]", interactivePriceChart);
+    const tooltipTime = $("[data-market-tooltip-time]", interactivePriceChart);
+    const tooltipChange = $("[data-market-tooltip-change]", interactivePriceChart);
+    const hideChartPoint = () => interactivePriceChart.classList.remove("is-hovering");
+    const showChartPoint = (point, index) => {
+      if (!point || !tooltip) return;
+      const rect = interactivePriceChart.getBoundingClientRect();
+      const x = Number(point.x || 0) / 1360 * rect.width;
+      const y = 18 + Number(point.y || 0) / 320 * Math.max(1, rect.height - 50);
+      interactivePriceChart.style.setProperty("--market-hover-x", `${x}px`);
+      interactivePriceChart.style.setProperty("--market-hover-y", `${y}px`);
+      interactivePriceChart.dataset.marketHoverIndex = String(index);
+      interactivePriceChart.classList.add("is-hovering");
+      tooltip.classList.toggle("tip-left", x > rect.width * .68);
+      tooltip.classList.toggle("tip-below", y < 105);
+      if (tooltipPrice) tooltipPrice.textContent = money(point.price);
+      if (tooltipTime) tooltipTime.textContent = new Date(Number(point.time)).toLocaleString([], { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+      if (tooltipChange) {
+        const fromOpen = Number(point.fromOpen || 0);
+        tooltipChange.textContent = `${fromOpen >= 0 ? "+" : ""}${fromOpen.toFixed(2)}% from the selected-period open`;
+        tooltipChange.className = fromOpen >= 0 ? "up" : "down";
+      }
+    };
+    const pointFromPointer = event => {
+      if (!chartPoints.length) return;
+      const rect = interactivePriceChart.getBoundingClientRect();
+      const chartX = (event.clientX - rect.left) / Math.max(1, rect.width) * 1360;
+      if (chartX < 14 || chartX > 945) { hideChartPoint(); return; }
+      let nearestIndex = 0;
+      for (let index = 1; index < chartPoints.length; index += 1) {
+        if (Math.abs(Number(chartPoints[index].x) - chartX) < Math.abs(Number(chartPoints[nearestIndex].x) - chartX)) nearestIndex = index;
+      }
+      showChartPoint(chartPoints[nearestIndex], nearestIndex);
+    };
+    interactivePriceChart.addEventListener("pointermove", pointFromPointer);
+    interactivePriceChart.addEventListener("pointerdown", pointFromPointer);
+    interactivePriceChart.addEventListener("pointerleave", hideChartPoint);
+    interactivePriceChart.addEventListener("focus", () => showChartPoint(chartPoints.at(-1), chartPoints.length - 1));
+    interactivePriceChart.addEventListener("blur", hideChartPoint);
+    interactivePriceChart.addEventListener("keydown", event => {
+      if (!["ArrowLeft", "ArrowRight"].includes(event.key) || !chartPoints.length) return;
+      event.preventDefault();
+      const currentIndex = Number(interactivePriceChart.dataset.marketHoverIndex ?? chartPoints.length - 1);
+      const nextIndex = Math.max(0, Math.min(chartPoints.length - 1, currentIndex + (event.key === "ArrowRight" ? 1 : -1)));
+      showChartPoint(chartPoints[nextIndex], nextIndex);
     });
   }
   $("[data-market-recipient-search]")?.addEventListener("submit", async event => { event.preventDefault(); const civ=String(new FormData(event.currentTarget).get("civ")||"").trim(); const result=await api(`/api/wallstreet/recipient?civ=${encodeURIComponent(civ)}`); state.marketTransferRecipient=result.recipient; render(); });
@@ -15598,7 +15675,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-insurance-certificate-v25").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-market-chart-v26").catch(() => {}));
 }
 
 legalFooterLink?.addEventListener("click", () => {
