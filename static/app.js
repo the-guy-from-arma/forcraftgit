@@ -119,6 +119,8 @@ const state = {
   casinoKenoPicks: [],
   casinoSelection: { coin: "crest", diceDirection: "under", diceTarget: 50, mineCount: 5 },
   casinoLastRound: null,
+  casinoAnimation: null,
+  casinoNotice: null,
   casinoGeminiReview: null,
   generatedMarketCode: null,
   iceSearchResults: [],
@@ -4438,15 +4440,24 @@ function casinoOutcomeMarkup(round) {
   return `<div class="casino-result ${won ? "win" : "loss"}"><span>${won ? "WINNING ROUND" : "ROUND COMPLETE"}</span>${visual}<h3>${escapeHtml(outcome.headline || "Result recorded")}</h3><div><strong>${won ? money(round.payout_amount) : money(0)}</strong><small>${won ? `${Number(round.multiplier || 0).toFixed(2)}× return` : `${money(round.bet_amount)} wager`}</small></div><em>${round.status === "awaiting_debit" ? "Awaiting authoritative game-bank debit" : round.status === "won_pending_payout" ? "Payout queued to your linked Arma bank" : escapeHtml(String(round.status || "recorded").replaceAll("_", " "))}</em></div>`;
 }
 
+function casinoAnimationMarkup(gameKey) {
+  if (gameKey === "slots") return `<div class="casino-play-animation slots" role="status" aria-label="Slot reels spinning"><div class="casino-animated-slots">${[0,1,2].map(index=>`<span style="--reel:${index}"><i><b>7</b><b>FC</b><b>♛</b><b>BAR</b><b>●</b><b>◇</b><b>7</b><b>FC</b></i></span>`).join("")}<em>PAYLINE</em></div><strong>Reels in motion</strong><small>Securing the authoritative round…</small></div>`;
+  if (gameKey === "dice") return `<div class="casino-play-animation dice" role="status" aria-label="Dice rolling"><div class="casino-dice-stage"><div class="casino-rolling-die"><i class="front">●</i><i class="back">● ●</i><i class="right">●<br/>●<br/>●</i><i class="left">● ●<br/>● ●</i><i class="top">● ●<br/>●<br/>● ●</i><i class="bottom">● ●<br/>● ●<br/>● ●</i></div><span></span></div><strong>Dice on the table</strong><small>Reading the final line…</small></div>`;
+  if (gameKey === "coin") return `<div class="casino-play-animation coin" role="status" aria-label="Coin flipping"><div class="casino-flipping-coin"><i>FC</i><b>♛</b></div><span class="casino-coin-shadow"></span><strong>Coin in the air</strong><small>Crest or Crown is being resolved…</small></div>`;
+  if (gameKey === "keno") return `<div class="casino-play-animation keno" role="status" aria-label="Keno draw in progress"><div class="casino-keno-chamber"><i></i>${Array.from({length:12},(_,index)=>`<b style="--ball:${index}">${index+1}</b>`).join("")}<span>FC</span></div><strong>Midnight draw live</strong><small>Ten numbers are entering the verified field…</small></div>`;
+  return `<div class="casino-play-animation mines" role="status" aria-label="Mine field scanning"><div class="casino-mines-scan">${Array.from({length:25},(_,index)=>`<i style="--tile:${index}"></i>`).join("")}<span></span></div><strong>Scanning the Blacksite</strong><small>Three positions are being verified…</small></div>`;
+}
+
 function renderCasinoGameStage(game) {
-  const key = game.game_key, meta = CASINO_GAME_META[key] || {};
+  const key = game.game_key, meta = CASINO_GAME_META[key] || {}, playing = state.casinoAnimation?.game_key === key;
   let controls = "";
   if (key === "slots") controls = `<div class="casino-slot-machine"><span><b>7</b></span><span><b>FC</b></span><span><b>♛</b></span><i>PAYLINE</i></div><p>Three matching symbols trigger the premium line. Any pair returns a smaller win.</p>`;
   if (key === "dice") controls = `<div class="casino-dice-control"><div class="casino-choice-pair"><button type="button" class="${state.casinoSelection.diceDirection === "under" ? "active" : ""}" data-casino-dice="under">ROLL UNDER</button><button type="button" class="${state.casinoSelection.diceDirection === "over" ? "active" : ""}" data-casino-dice="over">ROLL OVER</button></div><label>Target line <input data-casino-dice-target type="range" min="10" max="90" value="${Number(state.casinoSelection.diceTarget || 50)}"/><strong>${Number(state.casinoSelection.diceTarget || 50)}</strong></label></div>`;
   if (key === "coin") controls = `<div class="casino-coin-control"><button type="button" class="${state.casinoSelection.coin === "crest" ? "active" : ""}" data-casino-coin="crest"><i>FC</i><span>Crest</span></button><button type="button" class="${state.casinoSelection.coin === "crown" ? "active" : ""}" data-casino-coin="crown"><i>♛</i><span>Crown</span></button></div>`;
   if (key === "keno") controls = `<div class="casino-keno-control"><header><span>CHOOSE FIVE</span><button type="button" data-casino-keno-quick>Quick Pick</button></header><div>${Array.from({length:40},(_,index)=>{const number=index+1;return `<button type="button" class="${state.casinoKenoPicks.includes(number)?"active":""}" data-casino-keno="${number}">${number}</button>`;}).join("")}</div><small>${state.casinoKenoPicks.length} / 5 selected</small></div>`;
   if (key === "mines") controls = `<div class="casino-mines-control"><div class="casino-mini-field">${Array.from({length:25},(_,index)=>`<i>${index % 7 === 0 ? "◆" : ""}</i>`).join("")}</div><div><span>FIELD DENSITY</span>${[[3,"Low"],[5,"Standard"],[8,"High"]].map(([count,label])=>`<button type="button" class="${Number(state.casinoSelection.mineCount)===count?"active":""}" data-casino-mines="${count}"><b>${count} mines</b><small>${label} risk</small></button>`).join("")}</div></div>`;
-  return `<section class="casino-game-stage"><header><div><span>${escapeHtml(meta.type || "Casino")} / ${escapeHtml(meta.index || "")}</span><h2>${escapeHtml(game.display_name || meta.name)}</h2><p>${escapeHtml(meta.line || "Faircroft table")}</p></div><button data-casino-game="lobby">All games</button></header><div class="casino-table-layout"><div class="casino-table-play">${controls}</div><aside class="casino-wager-desk"><span>PLACE YOUR WAGER</span><dl><div><dt>Minimum</dt><dd>${money(game.min_bet)}</dd></div><div><dt>Maximum</dt><dd>${money(game.max_bet)}</dd></div><div><dt>Published edge</dt><dd>${Number(game.house_edge).toFixed(2)}%</dd></div></dl><form id="casinoGameForm" data-game-key="${escapeHtml(key)}"><label>In-game credits<input name="bet" type="number" min="${Number(game.min_bet)}" max="${Number(game.max_bet)}" step="1" value="${Math.max(10,Number(game.min_bet||10))}" required/></label><div class="casino-bet-shortcuts">${[100,500,1000].map(value=>`<button type="button" data-casino-bet="${value}">${value>=1000?`${value/1000}K`:value}</button>`).join("")}</div><button type="submit">PLAY ${escapeHtml(meta.name || game.display_name).toUpperCase()}</button><small>One wager creates one auditable Bank Bridge debit.</small></form></aside></div></section>`;
+  if (playing) controls = casinoAnimationMarkup(key);
+  return `<section class="casino-game-stage ${playing ? "round-active" : ""}"><header><div><span>${escapeHtml(meta.type || "Casino")} / ${escapeHtml(meta.index || "")}</span><h2>${escapeHtml(game.display_name || meta.name)}</h2><p>${playing ? "Round in progress. The server result is being secured." : escapeHtml(meta.line || "Faircroft table")}</p></div><button data-casino-game="lobby" ${playing ? "disabled" : ""}>All games</button></header><div class="casino-table-layout"><div class="casino-table-play">${controls}</div><aside class="casino-wager-desk"><span>${playing ? "ROUND STATUS" : "PLACE YOUR WAGER"}</span><dl><div><dt>Minimum</dt><dd>${money(game.min_bet)}</dd></div><div><dt>Maximum</dt><dd>${money(game.max_bet)}</dd></div><div><dt>Published edge</dt><dd>${Number(game.house_edge).toFixed(2)}%</dd></div></dl><form id="casinoGameForm" data-game-key="${escapeHtml(key)}"><label>In-game credits<input name="bet" type="number" min="${Number(game.min_bet)}" max="${Number(game.max_bet)}" step="1" value="${Math.max(10,Number(game.min_bet||10))}" ${playing ? "disabled" : ""} required/></label><div class="casino-bet-shortcuts">${[100,500,1000].map(value=>`<button type="button" data-casino-bet="${value}" ${playing ? "disabled" : ""}>${value>=1000?`${value/1000}K`:value}</button>`).join("")}</div><button type="submit" ${playing ? "disabled" : ""}>${playing ? "ROUND IN PROGRESS" : `PLAY ${escapeHtml(meta.name || game.display_name).toUpperCase()}`}</button><small>${playing ? "Do not resubmit. Your request is already secured." : "The play button records the round—no extra confirmation window."}</small></form></aside></div></section>`;
 }
 
 function renderCasinoWorkspace() {
@@ -4460,7 +4471,8 @@ function renderCasinoWorkspace() {
     <header class="casino-topbar"><div class="casino-brand"><i><b>FC</b></i><span><small>FAIRCROFT</small><strong>THE RESERVE</strong><em>CASINO &amp; SOCIAL CLUB</em></span></div><div class="casino-open-state"><i></i><span>${data.enabled ? "TABLES OPEN" : "CASINO CLOSED"}</span><small>Fictional in-game credits</small></div><button data-close-casino>Exit to RP OS</button></header>
     <section class="casino-hero"><div><span>WELCOME TO THE RESERVE</span><h1>Five tables.<br/><em>One verified bank.</em></h1><p>Original Faircroft games, transparent table limits, and every debit or payout recorded through the Arma Bank Bridge.</p></div><dl><div><dt>AVAILABLE</dt><dd>${wallet.available == null ? "Awaiting sync" : money(wallet.available)}</dd></div><div><dt>RESERVED</dt><dd>${money(wallet.reserved || 0)}</dd></div><div><dt>DAILY ROOM</dt><dd>${money(daily.remaining || 0)}</dd></div></dl></section>
     ${!wallet.linked ? `<div class="casino-gate"><strong>Link your Arma account to enter the tables.</strong><span>The casino never creates a separate Railway wallet.</span></div>` : wallet.available == null ? `<div class="casino-gate"><strong>Waiting for your authoritative game-bank snapshot.</strong><span>Join the game server so the current balance can sync.</span></div>` : ""}
-    <nav class="casino-game-nav"><button class="${state.casinoGame === "lobby" ? "active" : ""}" data-casino-game="lobby"><i>00</i><span>Lobby</span></button>${games.map(game=>{const meta=CASINO_GAME_META[game.game_key]||{};return `<button class="${state.casinoGame===game.game_key?"active":""}" data-casino-game="${escapeHtml(game.game_key)}" ${!game.enabled?"disabled":""}><i>${escapeHtml(meta.index||"")}</i><span>${escapeHtml(meta.name||game.display_name)}<small>${game.enabled?escapeHtml(meta.type||"Table"):"Table closed"}</small></span></button>`;}).join("")}</nav>
+    ${state.casinoNotice ? `<section class="casino-status-rail ${escapeHtml(state.casinoNotice.kind || "info")}" role="status"><i>${state.casinoNotice.kind === "success" ? "✓" : state.casinoNotice.kind === "error" ? "!" : "FC"}</i><div><strong>${escapeHtml(state.casinoNotice.title || "Casino update")}</strong><span>${escapeHtml(state.casinoNotice.detail || "")}</span></div>${state.casinoNotice.kind === "pending" ? `<em><b></b><b></b><b></b></em>` : `<button type="button" data-casino-notice-close aria-label="Dismiss casino update">×</button>`}</section>` : ""}
+    <nav class="casino-game-nav"><button class="${state.casinoGame === "lobby" ? "active" : ""}" data-casino-game="lobby" ${state.casinoAnimation ? "disabled" : ""}><i>00</i><span>Lobby</span></button>${games.map(game=>{const meta=CASINO_GAME_META[game.game_key]||{};return `<button class="${state.casinoGame===game.game_key?"active":""}" data-casino-game="${escapeHtml(game.game_key)}" ${!game.enabled||state.casinoAnimation?"disabled":""}><i>${escapeHtml(meta.index||"")}</i><span>${escapeHtml(meta.name||game.display_name)}<small>${game.enabled?escapeHtml(meta.type||"Table"):"Table closed"}</small></span></button>`;}).join("")}</nav>
     ${activeGame ? renderCasinoGameStage(activeGame) : `<section class="casino-lobby"><header><div><span>THE GAME FLOOR</span><h2>Choose your table.</h2><p>Fast rounds, published limits, and server-authoritative results.</p></div><button data-refresh-casino>Sync casino</button></header><div class="casino-game-gallery">${games.map(game=>{const meta=CASINO_GAME_META[game.game_key]||{};return `<article class="casino-game-card ${game.game_key} ${!game.enabled?"closed":""}"><div class="casino-game-art"><span>${escapeHtml(meta.mark||"FC")}</span><i>${escapeHtml(meta.index||"")}</i></div><div><small>${escapeHtml(meta.type||"Casino table")}</small><h3>${escapeHtml(game.display_name)}</h3><p>${escapeHtml(meta.line||"")}</p><dl><span>${money(game.min_bet)} minimum</span><span>${Number(game.house_edge).toFixed(2)}% edge</span></dl><button data-casino-game="${escapeHtml(game.game_key)}" ${!game.enabled||!data.enabled||wallet.available==null?"disabled":""}>${game.enabled?"Open table":"Table closed"}</button></div></article>`;}).join("")}</div></section>`}
     <section class="casino-lower-deck"><article class="casino-live-result"><header><span>LATEST ROUND</span><strong>${latest ? escapeHtml(latest.round_id) : "NO PLAY YET"}</strong></header>${casinoOutcomeMarkup(latest)}</article><article class="casino-ticket-ledger"><header><div><span>MY CASINO LEDGER</span><h2>Round history</h2></div><strong>${rounds.length}</strong></header><nav>${[["all","All"],["pending","Pending"],["won","Wins"],["lost","Losses"]].map(([key,label])=>`<button class="${state.casinoHistoryFilter===key?"active":""}" data-casino-history="${key}">${label}</button>`).join("")}</nav><div>${filtered.slice(0,12).map(round=>`<article class="${casinoRoundState(round)}"><span><strong>${escapeHtml(round.round_id)}</strong><small>${escapeHtml(CASINO_GAME_META[round.game_key]?.name||round.game_key)} · ${new Date(round.created_at).toLocaleString()}</small></span><b>${money(round.bet_amount)}</b><em>${escapeHtml(String(round.status||"").replaceAll("_"," "))}</em><strong>${round.payout_amount>0?money(round.payout_amount):"—"}</strong></article>`).join("")||`<p>No casino rounds in this view.</p>`}</div></article></section>
     <footer class="casino-disclosure"><span>18+ ROLEPLAY ENTERTAINMENT</span><p>${escapeHtml(data.notice||"")}</p><strong>Results use server-side secure randomness. Gemini may recommend future table settings but never selects winners.</strong></footer>
@@ -4468,9 +4480,10 @@ function renderCasinoWorkspace() {
 }
 
 function bindCasinoWorkspace() {
-  $$('[data-casino-game]').forEach(button=>button.addEventListener('click',()=>{state.casinoGame=button.dataset.casinoGame||'lobby';state.casinoLastRound=null;render();}));
+  $$('[data-casino-game]').forEach(button=>button.addEventListener('click',()=>{if(state.casinoAnimation)return;state.casinoGame=button.dataset.casinoGame||'lobby';state.casinoLastRound=null;state.casinoNotice=null;render();}));
   $$('[data-casino-history]').forEach(button=>button.addEventListener('click',()=>{state.casinoHistoryFilter=button.dataset.casinoHistory||'all';render();}));
-  $('[data-close-casino]')?.addEventListener('click',async()=>{state.activeApp=null;state.casinoGame='lobby';state.casinoLastRound=null;await loadSession();});
+  $('[data-close-casino]')?.addEventListener('click',async()=>{state.activeApp=null;state.casinoGame='lobby';state.casinoLastRound=null;state.casinoNotice=null;await loadSession();});
+  $('[data-casino-notice-close]')?.addEventListener('click',()=>{state.casinoNotice=null;render();});
   $('[data-refresh-casino]')?.addEventListener('click',async()=>{await loadAppData('casino');render();});
   $$('[data-casino-coin]').forEach(button=>button.addEventListener('click',()=>{state.casinoSelection.coin=button.dataset.casinoCoin;render();}));
   $$('[data-casino-dice]').forEach(button=>button.addEventListener('click',()=>{state.casinoSelection.diceDirection=button.dataset.casinoDice;render();}));
@@ -4479,7 +4492,34 @@ function bindCasinoWorkspace() {
   $$('[data-casino-keno]').forEach(button=>button.addEventListener('click',()=>{const value=Number(button.dataset.casinoKeno),index=state.casinoKenoPicks.indexOf(value);if(index>=0)state.casinoKenoPicks.splice(index,1);else if(state.casinoKenoPicks.length<5)state.casinoKenoPicks.push(value);state.casinoKenoPicks.sort((a,b)=>a-b);render();}));
   $('[data-casino-keno-quick]')?.addEventListener('click',()=>{const available=Array.from({length:40},(_,index)=>index+1),picked=[];while(picked.length<5){const index=crypto.getRandomValues(new Uint32Array(1))[0]%available.length;picked.push(available.splice(index,1)[0]);}state.casinoKenoPicks=picked.sort((a,b)=>a-b);render();});
   $$('[data-casino-bet]').forEach(button=>button.addEventListener('click',()=>{const input=$('#casinoGameForm [name=bet]');if(input)input.value=button.dataset.casinoBet;}));
-  $('#casinoGameForm')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,game_key=form.dataset.gameKey,selection={};if(game_key==='coin')selection.choice=state.casinoSelection.coin;if(game_key==='dice'){selection.direction=state.casinoSelection.diceDirection;selection.target=state.casinoSelection.diceTarget;}if(game_key==='keno')selection.picks=state.casinoKenoPicks;if(game_key==='mines')selection.mine_count=state.casinoSelection.mineCount;const button=form.querySelector('button[type=submit]');button.disabled=true;button.textContent='SECURING ROUND…';try{const result=await api('/api/casino/rounds',{method:'POST',body:{game_key,bet:Number(form.bet.value),selection}});state.casinoLastRound=result.round;await loadAppData('casino');toast(`${result.round.round_id} recorded · ${result.round.outcome?.won?'winning payout queued after debit':'round complete'}`);render();}catch(error){button.disabled=false;toast(error.message);}});
+  $('#casinoGameForm')?.addEventListener('submit',async event=>{
+    event.preventDefault();
+    if(state.casinoAnimation)return;
+    const form=event.currentTarget,game_key=form.dataset.gameKey,selection={},bet=Number(form.elements.bet.value);
+    if(game_key==='coin')selection.choice=state.casinoSelection.coin;
+    if(game_key==='dice'){selection.direction=state.casinoSelection.diceDirection;selection.target=state.casinoSelection.diceTarget;}
+    if(game_key==='keno')selection.picks=state.casinoKenoPicks;
+    if(game_key==='mines')selection.mine_count=state.casinoSelection.mineCount;
+    const duration={slots:2800,dice:1900,coin:2100,keno:2600,mines:2100}[game_key]||1900;
+    state.casinoAnimation={game_key,started_at:Date.now()};
+    state.casinoNotice={kind:'pending',title:'Round in progress',detail:`Recording ${money(bet)} against your linked in-game bank. Please wait for the table result.`};
+    render();
+    try{
+      const [result]=await Promise.all([
+        api('/api/casino/rounds',{method:'POST',body:{game_key,bet,selection},confirm:false}),
+        new Promise(resolve=>setTimeout(resolve,duration))
+      ]);
+      state.casinoLastRound=result.round;
+      state.casinoAnimation=null;
+      state.casinoNotice={kind:'success',title:`${result.round.round_id} recorded`,detail:result.round.outcome?.won?'The wager debit is queued. Your winning payout will queue automatically after that debit is confirmed.':'The wager debit is queued with the Bank Bridge and the round is now in your ledger.'};
+      await loadAppData('casino');
+      render();
+    }catch(error){
+      state.casinoAnimation=null;
+      state.casinoNotice={kind:'error',title:'Round not recorded',detail:error.message||'The casino could not secure this wager. No new round was created.'};
+      render();
+    }
+  });
 }
 
 function renderLotteryWorkspace() {
@@ -14529,7 +14569,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-casino-reserve").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-casino-motion").catch(() => {}));
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {
