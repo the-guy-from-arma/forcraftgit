@@ -3950,7 +3950,7 @@ def ensure_migrations(db: Database) -> None:
             code_hint TEXT NOT NULL,
             target_user_id INTEGER,
             authorized_amount NUMERIC(12,2) NOT NULL,
-            created_by INTEGER NOT NULL,
+            created_by INTEGER,
             expires_at TEXT NOT NULL,
             used_by INTEGER,
             used_at TEXT,
@@ -3958,7 +3958,7 @@ def ensure_migrations(db: Database) -> None:
             revoked_at TEXT,
             created_at TEXT NOT NULL,
             FOREIGN KEY (target_user_id) REFERENCES users(id) ON DELETE CASCADE,
-            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
             FOREIGN KEY (used_by) REFERENCES users(id) ON DELETE SET NULL,
             FOREIGN KEY (citation_id) REFERENCES citations(id) ON DELETE SET NULL
         )
@@ -4461,6 +4461,28 @@ def ensure_migrations(db: Database) -> None:
     )
     db.execute("CREATE INDEX IF NOT EXISTS casino_rounds_user_idx ON casino_rounds(user_id, created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS casino_rounds_status_idx ON casino_rounds(status, created_at)")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS casino_account_restrictions (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            restriction_type TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            starts_at TEXT NOT NULL,
+            expires_at TEXT,
+            created_by INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            revoked_by INTEGER,
+            revoked_at TEXT,
+            revoke_reason TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (revoked_by) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS casino_restrictions_user_idx ON casino_account_restrictions(user_id, revoked_at, expires_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS casino_restrictions_created_idx ON casino_account_restrictions(created_at DESC)")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS casino_balance_cycles (
@@ -5517,6 +5539,38 @@ def casino_game_settings_payload(db: Database) -> list[dict[str, Any]]:
     return games
 
 
+def casino_restriction_public(row: DbRow | dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    item = dict(row)
+    return {
+        "id": int(item.get("id") or 0),
+        "user_id": int(item.get("user_id") or 0),
+        "restriction_type": str(item.get("restriction_type") or "lock"),
+        "reason": str(item.get("reason") or "Casino access has been restricted by Faircroft staff."),
+        "starts_at": item.get("starts_at"),
+        "expires_at": item.get("expires_at"),
+        "created_at": item.get("created_at"),
+    }
+
+
+def casino_active_restriction(db: Database, user_id: int) -> dict[str, Any] | None:
+    current = now_iso()
+    row = one(
+        db,
+        """
+        SELECT r.*
+        FROM casino_account_restrictions r
+        WHERE r.user_id=? AND r.revoked_at IS NULL AND r.starts_at<=?
+          AND (r.expires_at IS NULL OR r.expires_at>?)
+        ORDER BY r.id DESC
+        LIMIT 1
+        """,
+        (user_id, current, current),
+    )
+    return casino_restriction_public(row)
+
+
 def casino_active_round_queue(db: Database, user_id: int) -> dict[str, Any]:
     rows = all_rows(
         db,
@@ -5699,6 +5753,31 @@ def casino_admin_snapshot(db: Database, settings: dict[str, Any] | None = None) 
         for field in ("bet_amount", "payout_amount", "multiplier"):
             row[field] = float(row.get(field) or 0)
     cycles = all_rows(db, "SELECT * FROM casino_balance_cycles ORDER BY id DESC LIMIT 20")
+    accounts = all_rows(db, "SELECT id,name,civ_number,email FROM users ORDER BY LOWER(name),id LIMIT 1000")
+    restriction_rows = all_rows(
+        db,
+        """
+        SELECT r.*,target.name AS player_name,target.civ_number,target.email,
+               creator.name AS created_by_name,revoker.name AS revoked_by_name
+        FROM casino_account_restrictions r
+        JOIN users target ON target.id=r.user_id
+        LEFT JOIN users creator ON creator.id=r.created_by
+        LEFT JOIN users revoker ON revoker.id=r.revoked_by
+        ORDER BY CASE WHEN r.revoked_at IS NULL THEN 0 ELSE 1 END,r.id DESC
+        LIMIT 250
+        """,
+    )
+    current_iso = now_iso()
+    restrictions: list[dict[str, Any]] = []
+    for row in restriction_rows:
+        item = dict(row)
+        item["active"] = bool(
+            not item.get("revoked_at")
+            and str(item.get("starts_at") or "") <= current_iso
+            and (not item.get("expires_at") or str(item.get("expires_at")) > current_iso)
+        )
+        item["status"] = "active" if item["active"] else "lifted" if item.get("revoked_at") else "expired"
+        restrictions.append(item)
     return {
         "settings": settings or get_system_settings(db),
         "games": games,
@@ -5714,6 +5793,8 @@ def casino_admin_snapshot(db: Database, settings: dict[str, Any] | None = None) 
         ],
         "recent_rounds": [dict(row) for row in recent],
         "cycles": [dict(row) for row in cycles],
+        "accounts": [dict(row) for row in accounts],
+        "restrictions": restrictions,
         "gemini_configured": bool(GEMINI_API_KEY),
     }
 
@@ -8582,6 +8663,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_casino_balance_cycle(db, user)
                 elif path == "/api/dev-tools/casino/cancel-pending" and method == "POST":
                     self.api_dev_casino_cancel_pending(db, user)
+                elif path == "/api/dev-tools/casino/restrictions" and method == "POST":
+                    self.api_dev_casino_restriction_create(db, user)
+                elif path.startswith("/api/dev-tools/casino/restrictions/") and path.endswith("/revoke") and method == "POST":
+                    self.api_dev_casino_restriction_revoke(db, user, self.path_int(path, 4))
                 elif path == "/api/dev-tools/casino/gemini" and method == "POST":
                     self.api_dev_casino_gemini(db, user)
                 elif path == "/api/dev-tools/gangs/settings" and method == "PATCH":
@@ -9930,6 +10015,96 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         market_index_change = round(((index_current - index_previous) / index_previous * 100.0), 2) if index_previous else 0.0
         lottery_row = one(db, "SELECT COALESCE(MAX(prize_pool), 0) AS pool FROM lottery_draws WHERE LOWER(status) IN ('scheduled','open')")
         lottery_pool = round(float((lottery_row or {}).get("pool") or 0), 2)
+        lottery_draw_stats = one(
+            db,
+            """SELECT COUNT(*) AS draws,
+                      COUNT(*) FILTER (WHERE status='completed') AS completed_draws,
+                      COUNT(*) FILTER (WHERE status='completed' AND winner_user_id IS NOT NULL) AS winning_draws,
+                      COALESCE(SUM(CASE WHEN status='completed' THEN payout_amount ELSE 0 END),0) AS draw_prizes,
+                      COALESCE(SUM(CASE WHEN status='completed' THEN rollover_amount ELSE 0 END),0) AS rollovers,
+                      COALESCE(MAX(CASE WHEN status='completed' THEN payout_amount ELSE 0 END),0) AS largest_draw_prize,
+                      MIN(CASE WHEN status='scheduled' THEN scheduled_at END) AS next_draw_at
+               FROM lottery_draws""",
+        ) or {}
+        lottery_ticket_stats = one(
+            db,
+            """SELECT COUNT(*) FILTER (WHERE e.status NOT IN ('awaiting_debit','rejected','voided','excluded')) AS tickets,
+                      COUNT(DISTINCT CASE WHEN e.status NOT IN ('awaiting_debit','rejected','voided','excluded') THEN e.user_id END) AS players,
+                      COALESCE(SUM(CASE WHEN e.status NOT IN ('awaiting_debit','rejected','voided','excluded') THEN e.ticket_cost ELSE 0 END),0) AS sales,
+                      COUNT(*) FILTER (WHERE e.status IN ('awaiting_debit','eligible') AND d.status='scheduled') AS active_tickets
+               FROM lottery_entries e JOIN lottery_draws d ON d.id=e.draw_id""",
+        ) or {}
+        lottery_quick_stats = one(
+            db,
+            """SELECT COUNT(*) FILTER (WHERE e.status NOT IN ('awaiting_debit','rejected','voided','excluded')) AS tickets,
+                      COALESCE(SUM(CASE WHEN e.status NOT IN ('awaiting_debit','rejected','voided','excluded') THEN e.ticket_cost ELSE 0 END),0) AS sales,
+                      COUNT(*) FILTER (WHERE d.status='completed' AND d.winner_user_id IS NOT NULL) AS winner_entries,
+                      COALESCE(SUM(CASE WHEN cmd.status='completed' THEN cmd.amount ELSE 0 END),0) AS paid_prizes
+               FROM lottery_quick_draw_entries e
+               JOIN lottery_quick_draws d ON d.id=e.draw_id
+               LEFT JOIN bank_bridge_commands cmd ON cmd.command_id=e.payout_command_id""",
+        ) or {}
+        lottery_scratch_stats = one(
+            db,
+            """SELECT COUNT(*) FILTER (WHERE status<>'rejected') AS cards,
+                      COUNT(*) FILTER (WHERE status='revealed') AS revealed,
+                      COUNT(*) FILTER (WHERE status='revealed' AND cash_amount>0) AS cash_winners,
+                      COUNT(*) FILTER (WHERE status='revealed' AND promo_id IS NOT NULL) AS stock_winners,
+                      COALESCE(SUM(CASE WHEN status<>'rejected' THEN purchase_cost ELSE 0 END),0) AS sales,
+                      COALESCE(SUM(CASE WHEN status='revealed' THEN cash_amount ELSE 0 END),0) AS cash_prizes,
+                      COALESCE(MAX(CASE WHEN status='revealed' THEN cash_amount ELSE 0 END),0) AS largest_cash_prize
+               FROM lottery_scratch_cards""",
+        ) or {}
+        lottery_sales = round(
+            float(lottery_ticket_stats.get("sales") or 0)
+            + float(lottery_quick_stats.get("sales") or 0)
+            + float(lottery_scratch_stats.get("sales") or 0),
+            2,
+        )
+        lottery_prizes = round(
+            float(lottery_draw_stats.get("draw_prizes") or 0)
+            + float(lottery_quick_stats.get("paid_prizes") or 0)
+            + float(lottery_scratch_stats.get("cash_prizes") or 0),
+            2,
+        )
+
+        casino_resolved_statuses = "('lost','won_pending_payout','paid','payout_failed')"
+        casino_stats = one(
+            db,
+            f"""SELECT COUNT(*) FILTER (WHERE status NOT LIKE 'cancelled%%' AND status<>'rejected') AS rounds,
+                       COUNT(*) FILTER (WHERE status IN {casino_resolved_statuses}) AS resolved_rounds,
+                       COUNT(DISTINCT CASE WHEN status NOT LIKE 'cancelled%%' AND status<>'rejected' THEN user_id END) AS players,
+                       COUNT(*) FILTER (WHERE status IN ('awaiting_debit','won_pending_payout')) AS pending_rounds,
+                       COUNT(*) FILTER (WHERE status IN ('won_pending_payout','paid','payout_failed')) AS winning_rounds,
+                       COALESCE(SUM(CASE WHEN status IN {casino_resolved_statuses} THEN bet_amount ELSE 0 END),0) AS wagered,
+                       COALESCE(SUM(CASE WHEN status IN {casino_resolved_statuses} THEN payout_amount ELSE 0 END),0) AS payouts,
+                       COUNT(*) FILTER (WHERE status IN {casino_resolved_statuses} AND created_at>=?) AS rounds_30d,
+                       COALESCE(SUM(CASE WHEN status IN {casino_resolved_statuses} AND created_at>=? THEN bet_amount ELSE 0 END),0) AS wagered_30d,
+                       COALESCE(SUM(CASE WHEN status IN {casino_resolved_statuses} AND created_at>=? THEN payout_amount ELSE 0 END),0) AS payouts_30d
+                FROM casino_rounds""",
+            (thirty_days_ago, thirty_days_ago, thirty_days_ago),
+        ) or {}
+        casino_games = [
+            {
+                "game_key": str(row.get("game_key") or ""),
+                "rounds": int(row.get("rounds") or 0),
+                "wagered": round(float(row.get("wagered") or 0), 2),
+                "payouts": round(float(row.get("payouts") or 0), 2),
+                "revenue": round(float(row.get("wagered") or 0) - float(row.get("payouts") or 0), 2),
+            }
+            for row in all_rows(
+                db,
+                f"""SELECT game_key,COUNT(*) AS rounds,
+                           COALESCE(SUM(bet_amount),0) AS wagered,
+                           COALESCE(SUM(payout_amount),0) AS payouts
+                    FROM casino_rounds WHERE status IN {casino_resolved_statuses}
+                    GROUP BY game_key ORDER BY wagered DESC,game_key""",
+            )
+        ]
+        casino_wagered = round(float(casino_stats.get("wagered") or 0), 2)
+        casino_payouts = round(float(casino_stats.get("payouts") or 0), 2)
+        casino_wagered_30d = round(float(casino_stats.get("wagered_30d") or 0), 2)
+        casino_payouts_30d = round(float(casino_stats.get("payouts_30d") or 0), 2)
 
         # The FC Dollar reference is an RP purchasing-power index, not a real
         # currency peg or promise of redemption. It responds to the same
@@ -9993,6 +10168,43 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "gainers": gainers, "decliners": decliners, "unchanged": unchanged,
                 "index_value": round(index_current, 2), "index_change": market_index_change,
                 "movers": market_movers[:8],
+            },
+            "lottery": {
+                "current_jackpot": lottery_pool,
+                "ticket_sales": lottery_sales,
+                "prizes_awarded": lottery_prizes,
+                "net_contribution": round(lottery_sales - lottery_prizes, 2),
+                "tickets": int(lottery_ticket_stats.get("tickets") or 0),
+                "active_tickets": int(lottery_ticket_stats.get("active_tickets") or 0),
+                "players": int(lottery_ticket_stats.get("players") or 0),
+                "draws": int(lottery_draw_stats.get("draws") or 0),
+                "completed_draws": int(lottery_draw_stats.get("completed_draws") or 0),
+                "winning_draws": int(lottery_draw_stats.get("winning_draws") or 0),
+                "rollovers": round(float(lottery_draw_stats.get("rollovers") or 0), 2),
+                "largest_draw_prize": round(float(lottery_draw_stats.get("largest_draw_prize") or 0), 2),
+                "next_draw_at": lottery_draw_stats.get("next_draw_at"),
+                "quick_tickets": int(lottery_quick_stats.get("tickets") or 0),
+                "scratch_cards": int(lottery_scratch_stats.get("cards") or 0),
+                "scratch_revealed": int(lottery_scratch_stats.get("revealed") or 0),
+                "scratch_cash_winners": int(lottery_scratch_stats.get("cash_winners") or 0),
+                "scratch_stock_winners": int(lottery_scratch_stats.get("stock_winners") or 0),
+                "largest_scratch_prize": round(float(lottery_scratch_stats.get("largest_cash_prize") or 0), 2),
+            },
+            "casino": {
+                "rounds": int(casino_stats.get("rounds") or 0),
+                "resolved_rounds": int(casino_stats.get("resolved_rounds") or 0),
+                "players": int(casino_stats.get("players") or 0),
+                "pending_rounds": int(casino_stats.get("pending_rounds") or 0),
+                "winning_rounds": int(casino_stats.get("winning_rounds") or 0),
+                "wagered": casino_wagered,
+                "payouts": casino_payouts,
+                "revenue": round(casino_wagered - casino_payouts, 2),
+                "average_wager": round(casino_wagered / max(1, int(casino_stats.get("resolved_rounds") or 0)), 2),
+                "rounds_30d": int(casino_stats.get("rounds_30d") or 0),
+                "wagered_30d": casino_wagered_30d,
+                "payouts_30d": casino_payouts_30d,
+                "revenue_30d": round(casino_wagered_30d - casino_payouts_30d, 2),
+                "games": casino_games,
             },
             "gameplay": {
                 "total_hours": round(sum(playtime_seconds) / 3600, 1),
@@ -12501,6 +12713,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         settings = get_system_settings(db)
         wallet = casino_wallet_snapshot(db, int(user["id"]))
+        restriction = casino_active_restriction(db, int(user["id"]))
         rounds = [self.casino_round_public(row) for row in all_rows(db, "SELECT * FROM casino_rounds WHERE user_id=? ORDER BY id DESC LIMIT 100", (user["id"],))]
         today_start = utcnow().date().isoformat() + "T00:00:00+00:00"
         today = one(db, """SELECT COALESCE(SUM(bet_amount),0) AS wagered,COALESCE(SUM(payout_amount),0) AS payouts,COUNT(*) AS rounds
@@ -12508,6 +12721,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         daily_net = max(0.0, float(today.get("wagered") or 0) - float(today.get("payouts") or 0))
         self.send_json(200, {
             "enabled": settings["casino_enabled"],
+            "restricted": bool(restriction),
+            "restriction": restriction,
             "wallet": wallet,
             "games": casino_game_settings_payload(db),
             "rounds": rounds,
@@ -12522,6 +12737,26 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         # Serialize wagers per account so simultaneous taps cannot spend the
         # same read-only game-bank snapshot before the first debit is reserved.
         one(db, "SELECT id FROM users WHERE id=? FOR UPDATE", (user["id"],))
+        restriction = casino_active_restriction(db, int(user["id"]))
+        if restriction:
+            restriction_label = {
+                "lock": "Casino lock",
+                "suspension": "Casino suspension",
+                "timeout": "Casino timeout",
+            }.get(str(restriction.get("restriction_type") or ""), "Casino restriction")
+            duration = f" Access returns after {restriction['expires_at']}." if restriction.get("expires_at") else " Manual release by Casino Operations is required."
+            restriction_reason = str(restriction.get("reason") or "Casino access has been restricted by Faircroft staff.").rstrip()
+            if restriction_reason[-1:] not in ".!?:":
+                restriction_reason += "."
+            self.send_json(
+                403,
+                {
+                    "error": f"{restriction_label}: {restriction_reason}{duration}",
+                    "code": "casino_account_restricted",
+                    "restriction": restriction,
+                },
+            )
+            return
         settings = get_system_settings(db)
         if not settings["casino_enabled"]:
             self.error(409, "Faircroft Casino is currently closed")
@@ -18634,6 +18869,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 page = max(1, int((query.get("page") or ["1"])[0]))
             except ValueError:
                 page = 1
+            status_filter = str((query.get("status") or ["all"])[0]).strip().lower()
+            if status_filter not in ("all", "pending", "completed", "failed"):
+                status_filter = "all"
             page_size = 100
             command_counts = one(
                 db,
@@ -18645,15 +18883,21 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 FROM bank_bridge_commands
                 """,
             ) or {}
-            commands = all_rows(
-                db,
-                """
+            command_query = """
                 SELECT c.*,target.name AS target_name,target.civ_number,requester.name AS requested_by_name
                 FROM bank_bridge_commands c JOIN users target ON target.id=c.target_user_id
                 JOIN users requester ON requester.id=c.requested_by
-                ORDER BY c.created_at DESC LIMIT ? OFFSET ?
-                """,
-                (page_size, (page - 1) * page_size),
+            """
+            command_params: list[Any] = []
+            if status_filter != "all":
+                command_query += " WHERE c.status=?"
+                command_params.append(status_filter)
+            command_query += " ORDER BY c.created_at DESC LIMIT ? OFFSET ?"
+            command_params.extend((page_size, (page - 1) * page_size))
+            commands = all_rows(
+                db,
+                command_query,
+                tuple(command_params),
             )
             for command in commands:
                 try:
@@ -18702,7 +18946,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "pending": int(command_counts.get("pending") or 0),
                 "completed": int(command_counts.get("completed") or 0),
                 "failed": int(command_counts.get("failed") or 0),
-                "history": {"page": page, "page_size": page_size, "total": int(command_counts.get("total") or 0)},
+                "history": {
+                    "page": page,
+                    "page_size": page_size,
+                    "total": int(command_counts.get(status_filter) or 0) if status_filter != "all" else int(command_counts.get("total") or 0),
+                    "all_total": int(command_counts.get("total") or 0),
+                    "status": status_filter,
+                },
                 "economy": {
                     "currency_in_circulation": float(economy.get("currency_in_circulation") or 0),
                     "average_balance": float(economy.get("average_balance") or 0),
@@ -20982,6 +21232,148 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "unclaimed_cancelled": len(cancelled) - claimed_count,
                 "claimed_cancelled": claimed_count,
                 "late_claimed_policy": "Any cancelled debit that later completes is automatically refunded through Bank Bridge.",
+            },
+        )
+
+    def api_dev_casino_restriction_create(self, db: Database, user: DbRow | None) -> None:
+        err = admin_tools_member_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        try:
+            target_user_id = int(payload.get("user_id") or 0)
+        except (TypeError, ValueError):
+            target_user_id = 0
+        restriction_type = str(payload.get("restriction_type") or "timeout").strip().lower()
+        reason = str(payload.get("reason") or "").strip()[:1000]
+        if target_user_id <= 0:
+            self.error(400, "Choose the resident whose casino access must be restricted")
+            return
+        if restriction_type not in ("lock", "suspension", "timeout"):
+            self.error(400, "Choose a casino lock, suspension, or timeout")
+            return
+        if len(reason) < 10:
+            self.error(400, "Document a casino-specific reason using at least 10 characters")
+            return
+        target = one(db, "SELECT id,name,civ_number,email FROM users WHERE id=? FOR UPDATE", (target_user_id,))
+        if not target:
+            self.error(404, "Resident account was not found")
+            return
+        duration_minutes = 0
+        expires_at: str | None = None
+        if restriction_type != "lock":
+            try:
+                duration_minutes = int(payload.get("duration_minutes") or 0)
+            except (TypeError, ValueError):
+                duration_minutes = 0
+            minimum = 1 if restriction_type == "timeout" else 60
+            maximum = 10080 if restriction_type == "timeout" else 525600
+            if duration_minutes < minimum or duration_minutes > maximum:
+                label = "Timeout" if restriction_type == "timeout" else "Suspension"
+                self.error(400, f"{label} duration must be between {minimum:,} and {maximum:,} minutes")
+                return
+            expires_at = (utcnow() + dt.timedelta(minutes=duration_minutes)).isoformat()
+        created_at = now_iso()
+        replacement_reason = f"Superseded by a new casino {restriction_type}"
+        db.execute(
+            """
+            UPDATE casino_account_restrictions
+            SET revoked_by=?,revoked_at=?,revoke_reason=?
+            WHERE user_id=? AND revoked_at IS NULL
+              AND (expires_at IS NULL OR expires_at>?)
+            """,
+            (user["id"], created_at, replacement_reason, target_user_id, created_at),
+        )
+        created = one(
+            db,
+            """
+            INSERT INTO casino_account_restrictions
+                (user_id,restriction_type,reason,starts_at,expires_at,created_by,created_at)
+            VALUES (?,?,?,?,?,?,?)
+            RETURNING id
+            """,
+            (target_user_id, restriction_type, reason, created_at, expires_at, user["id"], created_at),
+        )
+        restriction_id = int((created or {}).get("id") or 0)
+        restriction = casino_active_restriction(db, target_user_id)
+        add_admin_audit(
+            db,
+            int(user["id"]),
+            "casino.access.restricted",
+            target_user_id,
+            {
+                "restriction_id": restriction_id,
+                "restriction_type": restriction_type,
+                "reason": reason,
+                "duration_minutes": duration_minutes,
+                "expires_at": expires_at,
+                "scope": "casino_only",
+            },
+        )
+        self.send_json(
+            201,
+            {
+                "ok": True,
+                "resident": {"id": int(target["id"]), "name": target["name"], "civ_number": target.get("civ_number") or ""},
+                "restriction": restriction,
+                "scope": "casino_only",
+            },
+        )
+
+    def api_dev_casino_restriction_revoke(self, db: Database, user: DbRow | None, restriction_id: int) -> None:
+        err = admin_tools_member_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        reason = str(payload.get("reason") or "").strip()[:1000]
+        if len(reason) < 5:
+            self.error(400, "Document why casino access is being restored")
+            return
+        row = one(
+            db,
+            """
+            SELECT r.*,target.name AS player_name,target.civ_number
+            FROM casino_account_restrictions r
+            JOIN users target ON target.id=r.user_id
+            WHERE r.id=? FOR UPDATE
+            """,
+            (restriction_id,),
+        )
+        if not row:
+            self.error(404, "Casino restriction was not found")
+            return
+        if row.get("revoked_at"):
+            self.send_json(200, {"ok": True, "already_released": True, "restriction_id": restriction_id})
+            return
+        revoked_at = now_iso()
+        db.execute(
+            "UPDATE casino_account_restrictions SET revoked_by=?,revoked_at=?,revoke_reason=? WHERE id=?",
+            (user["id"], revoked_at, reason, restriction_id),
+        )
+        add_admin_audit(
+            db,
+            int(user["id"]),
+            "casino.access.restored",
+            int(row["user_id"]),
+            {
+                "restriction_id": restriction_id,
+                "restriction_type": row.get("restriction_type"),
+                "reason": reason,
+                "scope": "casino_only",
+            },
+        )
+        self.send_json(
+            200,
+            {
+                "ok": True,
+                "restriction_id": restriction_id,
+                "resident": {"id": int(row["user_id"]), "name": row["player_name"], "civ_number": row.get("civ_number") or ""},
+                "revoked_at": revoked_at,
+                "scope": "casino_only",
             },
         )
 
