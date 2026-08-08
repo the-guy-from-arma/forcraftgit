@@ -1,0 +1,353 @@
+THUNDERLINK CAD SYSTEM
+ END USER LICENSE AGREEMENT, TERMS OF USE, ACCEPTABLE USE POLICY & PRIVACY NOTICE
+Effective Date: August 8, 2026
+ Version 1.0
+Copyright © 2026 Thunder Buddies Studios. All Rights Reserved.
+IMPORTANT — PLEASE READ THIS AGREEMENT CAREFULLY.
+This End User License Agreement, Terms of Use, Acceptable Use Policy, and Privacy Notice (“Agreement”) governs access to and use of the ThunderLink CAD System and related ThunderLink technologies.
+By creating an account, linking an account, accessing, installing, connecting to, interacting with, or otherwise using ThunderLink, you acknowledge that you have read, understood, and agreed to this Agreement.
+If you do not agree, you must not access or use ThunderLink.
+DEFINITIONS
+For purposes of this Agreement:
+“Thunder Buddies Studios,” “TBS,” “we,” “our,” or “us” means Thunder Buddies Studios, the developer and creator of ThunderLink.
+“ThunderLink” or “System” means the ThunderLink CAD System and associated websites, applications, databases, APIs, integrations, synchronization systems, server-side software, administrative interfaces, artificial intelligence systems, automation systems, and related services.
+“User” means any individual accessing or interacting with ThunderLink.
+“Server Operator” means an individual or organization authorized to operate a game server connected to ThunderLink.
+“CAD Data” means information intentionally entered, created, submitted, generated, or maintained within ThunderLink.
+“Server-Derived Data” means information originating from a connected game server, server database, log, file, or other administrator-authorized server resource.
+“Fictional Currency” means virtual roleplay currency having no real-world monetary or redemption value.
+OWNERSHIP AND AUTHORSHIP
+ThunderLink is developed, authored, created, and maintained by Thunder Buddies Studios.
+Except for third-party intellectual property, Thunder Buddies Studios retains all applicable rights, title, and interest in ThunderLink and its original components, including source code, object code, server-side software, databases and database structures, APIs, documentation, interfaces, graphics, branding, workflows, designs, synchronization technology, artificial intelligence implementations, security systems, and other proprietary technologies.
+Access to ThunderLink does not transfer ownership to any User, administrator, community, or Server Operator.
+All rights not expressly granted under this Agreement are reserved by Thunder Buddies Studios.
+LIMITED LICENSE
+Subject to compliance with this Agreement, Thunder Buddies Studios grants authorized Users a limited, revocable, non-exclusive, non-transferable, and non-sublicensable license to access and use ThunderLink for its intended purposes.
+This license may be modified, restricted, suspended, or revoked as permitted by this Agreement.
+No User receives ownership rights in ThunderLink.
+RELATIONSHIP WITH BOHEMIA INTERACTIVE AND ARMA REFORGER
+ThunderLink may provide interoperability with servers operating Arma Reforger.
+Arma Reforger, Arma, Bohemia Interactive, Enfusion, and related names, trademarks, software, services, and intellectual property are owned by Bohemia Interactive a.s. and/or their respective rights holders.
+Thunder Buddies Studios is an independent developer.
+ThunderLink is not owned, operated, sponsored, certified, endorsed by, or affiliated with Bohemia Interactive unless expressly confirmed otherwise in writing by Bohemia Interactive.
+ThunderLink is intended to be operated in a manner consistent with applicable Bohemia Interactive terms, licenses, policies, Workshop requirements, server monetization requirements, and Arma Reforger agreements.
+Nothing contained in this Agreement authorizes a User or Server Operator to violate any applicable Bohemia Interactive agreement.
+If an applicable Bohemia Interactive requirement conflicts with use of ThunderLink in connection with Arma Reforger, the applicable Bohemia Interactive requirement controls regarding use of Bohemia Interactive products and services.
+THUNDERLINK PURPOSE
+ThunderLink is a roleplay, community management, synchronization, and computer-aided dispatch platform.
+Available functionality may include:
+• Computer-Aided Dispatch (“CAD”);
+ • Mobile Data Terminal (“MDT”) systems;
+ • roleplay law-enforcement records;
+ • civilian profiles;
+ • account linking;
+ • player identification;
+ • roleplay banking;
+ • fictional currency;
+ • citations and fines;
+ • taxation;
+ • property management;
+ • business management;
+ • insurance simulations;
+ • stock-market simulations;
+ • lottery simulations;
+ • casino simulations;
+ • sports-betting simulations;
+ • licensing;
+ • court systems;
+ • government records;
+ • statistics and leaderboards;
+ • administrative systems;
+ • security and anti-abuse systems;
+ • artificial intelligence technologies;
+ • automated systems;
+ • server synchronization; and
+ • additional roleplay or community-management features.
+Features may be added, removed, modified, suspended, or discontinued at any time.
+SERVER INTEGRATION
+ThunderLink may interact with information generated or maintained by an authorized Arma Reforger server.
+Where configured by an authorized Server Operator, ThunderLink may access server information through administrator-controlled technologies including server files, logs, SFTP-accessible information, APIs, databases, or other authorized interfaces.
+ThunderLink is designed to process information available to the Server Operator.
+ThunderLink is not intended to intercept, bypass, compromise, reverse engineer, or gain unauthorized access to protected Bohemia Interactive backend systems, authentication infrastructure, network services, or proprietary databases.
+Users may not use ThunderLink to attempt such access.
+SERVER-DERIVED DATA
+ThunderLink may read or process Server-Derived Data necessary for synchronization and operation.
+This may include player balances, server-generated identifiers, character information, gameplay information, server events, transactions, statistics, or other information made available through authorized server resources.
+Server-Derived Data accessed solely for synchronization is not intended to constitute a permanent off-site duplicate of the underlying Reforger server database unless the applicable ThunderLink functionality requires particular information to be maintained.
+Temporary processing, caching, memory storage, security logging, diagnostic information, and technically necessary processing may occur.
+ACCOUNT AND PLATFORM IDENTIFIERS
+ThunderLink may process identifiers necessary to associate Users with their accounts and characters.
+These may include:
+• Bohemia identifiers;
+ • Bohemia player IDs;
+ • Steam IDs;
+ • Xbox identifiers;
+ • console gamer identifiers;
+ • platform identifiers;
+ • server-generated player IDs;
+ • character IDs;
+ • Discord IDs where voluntarily linked;
+ • ThunderLink account IDs; and
+ • other identifiers necessary for account association.
+These identifiers may be processed for account linking, authentication, security, synchronization, anti-abuse measures, administration, record association, and maintaining accurate roleplay information.
+Thunder Buddies Studios does not sell this information.
+CAD DATA AND OFF-SITE STORAGE
+Information intentionally entered into, generated within, or maintained by ThunderLink may be stored on infrastructure separate from the connected Arma Reforger server.
+Such information may include:
+• CAD accounts;
+ • roleplay identities;
+ • reports;
+ • citations;
+ • warrants;
+ • arrest records;
+ • court records;
+ • licenses;
+ • vehicle records;
+ • property records;
+ • business records;
+ • fictional financial records;
+ • fictional banking transactions;
+ • taxes;
+ • fictional insurance information;
+ • applications;
+ • administrative records;
+ • audit records;
+ • security records;
+ • account-linking records;
+ • system configurations; and
+ • other ThunderLink-generated or User-submitted information.
+By using ThunderLink, Users acknowledge that this information may be processed and stored off-site to the extent permitted by applicable law.
+DATA COLLECTION AND PRIVACY
+Thunder Buddies Studios attempts to limit collection to information reasonably relevant to operation, security, account association, administration, and improvement of ThunderLink.
+Information may include information voluntarily provided by Users, platform identifiers, CAD information, technical information, security logs, account activity, timestamps, transaction records, administrative actions, and other information necessary for System functionality.
+Thunder Buddies Studios does not sell User personal information.
+Thunder Buddies Studios does not operate ThunderLink for the purpose of creating advertising profiles from User information.
+DATA DISCLOSURE
+Information may be disclosed where reasonably necessary:
+• to operate ThunderLink;
+ • to infrastructure or technology service providers;
+ • to maintain security;
+ • to investigate malicious activity;
+ • to prevent fraud or exploitation;
+ • to enforce this Agreement;
+ • to respond to valid legal process;
+ • to comply with applicable law;
+ • to protect Thunder Buddies Studios, Users, or third parties; or
+ • with the User’s authorization.
+Service providers may process information only as permitted by applicable arrangements and law.
+SENSITIVE INFORMATION
+ThunderLink is intended primarily for fictional roleplay and community information.
+Users should not unnecessarily submit real-world sensitive personal information.
+Users should not place Social Security numbers, banking passwords, payment-card credentials, medical records, government identification numbers, private authentication credentials, or similarly sensitive information into roleplay records unless specifically authorized and legitimately necessary.
+ARTIFICIAL INTELLIGENCE TECHNOLOGIES
+ThunderLink may incorporate artificial intelligence (“AI”), machine learning, algorithmic analysis, automated decision-support technologies, natural-language processing, pattern recognition, generative AI, or similar technologies.
+AI technologies may be developed by Thunder Buddies Studios or provided through third-party technology providers.
+AI may be used for purposes including:
+• assisting with CAD functionality;
+ • summarizing records;
+ • analyzing roleplay information;
+ • generating fictional roleplay content;
+ • assisting administrators;
+ • detecting unusual activity;
+ • identifying potential exploits;
+ • detecting fraud or manipulation;
+ • analyzing transactions;
+ • identifying potentially malicious behavior;
+ • identifying security threats;
+ • assisting moderation;
+ • categorizing information;
+ • searching records;
+ • generating recommendations;
+ • identifying duplicate or suspicious activity;
+ • assisting technical support;
+ • improving ThunderLink; and
+ • automating repetitive administrative functions.
+AI PROCESSING OF INFORMATION
+Information already lawfully processed by ThunderLink may, where appropriate, be analyzed by AI or automated technologies for ThunderLink-related purposes.
+Depending on configuration and functionality, this may include CAD Data, fictional financial transactions, reports, administrative records, security events, server activity, and other relevant System information.
+Thunder Buddies Studios will not intentionally use AI functionality as authorization to obtain information that ThunderLink otherwise has no right to access.
+Where a third-party AI service processes information, reasonable efforts may be made to minimize unnecessary transmission of personal information where technically and operationally appropriate.
+AI OUTPUTS ARE NOT GUARANTEED
+Artificial intelligence can make mistakes.
+AI-generated or AI-assisted information may be inaccurate, incomplete, misleading, outdated, inappropriate, or incorrectly interpreted.
+Users must not assume an AI output is factually correct solely because ThunderLink generated it.
+AI-generated information does not constitute legal, medical, financial, law-enforcement, or other professional advice.
+Roleplay administrators remain responsible for exercising reasonable judgment when making consequential community decisions.
+AUTOMATED SECURITY AND ANTI-ABUSE SYSTEMS
+ThunderLink may use automated systems to identify suspected:
+• account manipulation;
+ • unauthorized transactions;
+ • economic exploitation;
+ • duplicate transactions;
+ • abnormal fictional currency changes;
+ • account abuse;
+ • unauthorized access;
+ • malicious activity;
+ • security incidents;
+ • exploitation; or
+ • violations of this Agreement.
+Automated detection may result in an event being flagged for administrative review.
+Where reasonably necessary to protect ThunderLink, automated safeguards may temporarily restrict functionality or transactions while suspicious activity is evaluated.
+AI-GENERATED CONTENT
+ThunderLink may generate fictional reports, summaries, news, roleplay information, descriptions, administrative assistance, or other content using AI.
+Users acknowledge that generated material may require review before use.
+Users may not intentionally use ThunderLink’s AI functionality to generate unlawful content, malware, phishing material, fraudulent documents, instructions for attacking ThunderLink, or content intended to facilitate unauthorized access to computer systems.
+NO GUARANTEE OF HUMAN REVIEW
+Thunder Buddies Studios does not guarantee that every automated decision, alert, transaction, moderation event, security flag, or AI-generated result will receive individual human review.
+Thunder Buddies Studios may provide mechanisms for review or correction where reasonably appropriate.
+FICTIONAL CURRENCY
+Currency represented within ThunderLink for roleplay purposes is fictional.
+ThunderLink fictional currency:
+• has no real-world monetary value;
+ • is not legal tender;
+ • is not cryptocurrency;
+ • is not a security;
+ • is not a financial investment;
+ • cannot be redeemed through ThunderLink for real-world money;
+ • cannot be cashed out;
+ • cannot be purchased from Thunder Buddies Studios for gameplay advantage; and
+ • cannot be exchanged through ThunderLink for prizes or other items having real-world monetary value.
+A displayed fictional balance represents roleplay data only.
+SIMULATED GAMBLING
+ThunderLink may contain simulated:
+• casinos;
+ • slot machines;
+ • lotteries;
+ • scratch tickets;
+ • sportsbooks;
+ • betting;
+ • raffles;
+ • games of chance; or
+ • similar roleplay functionality.
+These systems are intended solely as fictional roleplay simulations.
+ThunderLink does not provide real-money gambling.
+Users may not use ThunderLink to conduct unauthorized real-money gambling.
+Fictional gambling winnings may not be redeemed through ThunderLink for real-world currency or real-world prizes.
+NO REAL-MONEY PURCHASE OF FICTIONAL CURRENCY
+Thunder Buddies Studios does not authorize Users or Server Operators to sell ThunderLink fictional currency for real-world currency.
+Users may not use ThunderLink as a mechanism to purchase fictional currency, gambling credits, economic advantages, or gameplay advantages using real-world money in violation of applicable Bohemia Interactive requirements.
+DONATIONS
+A donation must remain a donation.
+ThunderLink does not authorize donations to provide gameplay-affecting consideration.
+Donations must not provide:
+• fictional currency;
+ • increased fictional currency;
+ • weapons;
+ • vehicles;
+ • properties;
+ • businesses;
+ • economic advantages;
+ • gambling credits;
+ • lottery tickets;
+ • improved gambling odds;
+ • stock-market advantages;
+ • government advantages;
+ • law-enforcement advantages; or
+ • other gameplay-affecting benefits.
+Server Operators remain responsible for complying with applicable Bohemia Interactive monetization requirements.
+ThunderLink must not be used to circumvent those requirements.
+PROHIBITED CONDUCT
+Users may not:
+• hack ThunderLink;
+ • attempt unauthorized access;
+ • bypass authentication;
+ • bypass authorization controls;
+ • steal credentials;
+ • steal API keys;
+ • steal session tokens;
+ • reverse engineer protected ThunderLink technology except to the extent such restriction is prohibited by applicable law;
+ • decompile protected ThunderLink software;
+ • obtain source code without authorization;
+ • exploit vulnerabilities;
+ • manipulate databases;
+ • manipulate account balances;
+ • fabricate transactions;
+ • duplicate currency;
+ • manipulate gambling outcomes;
+ • manipulate lottery results;
+ • manipulate sportsbook results;
+ • manipulate stocks;
+ • submit fraudulent insurance claims through technical exploitation;
+ • manipulate property records;
+ • manipulate tax systems;
+ • interfere with synchronization;
+ • falsify server information through technical exploitation;
+ • perform SQL injection;
+ • perform command injection;
+ • conduct credential-stuffing attacks;
+ • introduce malware;
+ • introduce ransomware;
+ • introduce spyware;
+ • introduce backdoors;
+ • intentionally perform denial-of-service attacks;
+ • intentionally overload infrastructure;
+ • scrape protected information without authorization;
+ • probe ThunderLink for vulnerabilities without prior authorization;
+ • circumvent security controls;
+ • conceal malicious activity;
+ • alter audit logs;
+ • impersonate Thunder Buddies Studios;
+ • use another User’s account without authorization;
+ • distribute protected ThunderLink components without permission;
+ • create unauthorized commercial derivatives;
+ • use ThunderLink for unlawful activity; or
+ • assist another person in committing prohibited activity.
+REVERSE ENGINEERING
+Except where applicable law expressly provides otherwise, Users may not reverse engineer, decompile, disassemble, decode, derive source code from, circumvent technical protections of, or otherwise attempt to discover proprietary implementation details of ThunderLink.
+Nothing in this provision grants Thunder Buddies Studios rights over Bohemia Interactive software or third-party intellectual property.
+SECURITY RESEARCH
+Users discovering a potential vulnerability should report it privately to Thunder Buddies Studios.
+Discovery of a vulnerability does not authorize exploitation.
+Testing, accessing, modifying, extracting, deleting, or manipulating information beyond what is reasonably necessary to report an issue is prohibited unless Thunder Buddies Studios has provided prior authorization.
+ECONOMIC EXPLOITATION
+Users may not intentionally exploit bugs or vulnerabilities to create, duplicate, transfer, conceal, or manipulate fictional assets.
+Thunder Buddies Studios may correct, freeze, reverse, delete, or restore fictional balances, transactions, properties, stocks, insurance claims, prizes, or other records reasonably believed to have resulted from corruption, exploitation, error, or unauthorized activity.
+ADMINISTRATIVE ACCESS
+Authorized administrators may receive elevated System privileges.
+Administrative actions may be logged.
+Administrators may not intentionally use elevated privileges to obtain unauthorized personal benefit, manipulate systems for improper advantage, disclose protected information without authorization, circumvent security, or maliciously interfere with Users.
+Administrative privileges may be restricted or revoked at any time.
+LOGGING AND AUDITING
+ThunderLink may maintain logs relating to security, authentication, transactions, administrative actions, synchronization, errors, account activity, and System operations.
+Logs may be used to:
+• troubleshoot errors;
+ • investigate abuse;
+ • identify security incidents;
+ • verify transactions;
+ • investigate exploits;
+ • enforce this Agreement; and
+ • maintain System integrity.
+THIRD-PARTY SERVICES
+ThunderLink may depend on or interact with third-party hosting, database, networking, AI, game, platform, API, authentication, or infrastructure providers.
+Those services may be governed by separate agreements.
+Thunder Buddies Studios is not responsible for third-party services outside its reasonable control.
+THIRD-PARTY MODS AND CONTENT
+A ThunderLink license does not grant permission to use another developer’s copyrighted work, mod, software, trademark, model, texture, API, or other intellectual property.
+Server Operators are independently responsible for obtaining appropriate permissions and licenses for third-party content.
+ACCOUNT SECURITY
+Users are responsible for maintaining reasonable security of their ThunderLink credentials.
+Users must not intentionally share credentials in a manner that enables unauthorized access.
+Thunder Buddies Studios may require credential resets, terminate sessions, revoke tokens, or impose additional security measures where compromise is suspected.
+SUSPENSION AND TERMINATION
+Access to ThunderLink is revocable.
+To the maximum extent permitted by applicable law, Thunder Buddies Studios may suspend, restrict, disable, or permanently terminate access where reasonably necessary, including for:
+• violation of this Agreement;
+ • security concerns;
+ • suspected malicious activity;
+ • exploitation;
+ • abuse;
+ • technical reasons;
+ • discontinuation of service;
+ • legal requirements;
+ • third-party platform requirements; or
+ • protection of ThunderLink or its Users.
+No User has a guaranteed permanent right to access ThunderLink.
+SERVICE CHANGES
+Thunder Buddies Studios may modify, replace, update, restrict, suspend, or discontinue any ThunderLink functionality.
+No particular feature, API, integration, AI technology, database, game integration, or service is guaranteed to remain available indefinitely.
+SOFTWARE UPDATES
+ThunderLink may be updated without maintaining compatibility with every previous configuration.
+Changes to Arma Reforger, Enfusion, Bohemia Interactive services, operating systems
+
+
+

@@ -33,6 +33,15 @@ from psycopg.rows import dict_row
 
 APP_ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = APP_ROOT / "static"
+LEGAL_POLICY_VERSION = "1.0"
+LEGAL_POLICY_EFFECTIVE_DATE = "2026-08-08"
+LEGAL_POLICY_TITLE = "ThunderLink CAD System EULA, Terms of Use, Acceptable Use Policy & Privacy Notice"
+LEGAL_POLICY_PATH = STATIC_ROOT / "thunderlink-eula-v1.0.txt"
+try:
+    LEGAL_POLICY_TEXT = LEGAL_POLICY_PATH.read_text(encoding="utf-8").strip()
+except OSError:
+    LEGAL_POLICY_TEXT = ""
+LEGAL_POLICY_SHA256 = hashlib.sha256(LEGAL_POLICY_TEXT.encode("utf-8")).hexdigest()
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 DATABASE_MAX_CONNECTIONS = max(2, int(os.environ.get("DATABASE_MAX_CONNECTIONS", "5")))
 DATABASE_CONNECT_TIMEOUT_SECONDS = max(3, int(os.environ.get("DATABASE_CONNECT_TIMEOUT_SECONDS", "10")))
@@ -167,8 +176,10 @@ TREASURY_STIMULUS_AMOUNT = 75000.00
 TREASURY_MAX_REQUEST_AMOUNT = 10_000_000.00
 INSURANCE_BANK_COMMAND_MAX_AMOUNT = 10_000_000
 INSURANCE_PROPERTY_BASE_VALUE = 150_000.00
-INSURANCE_PROPERTY_PROTECTED_VALUE = 300_000.00
-INSURANCE_PROPERTY_PROTECTION_PREMIUM = 20_000.00
+INSURANCE_PROPERTY_PROTECTED_VALUE = 400_000.00
+INSURANCE_PROPERTY_PROTECTION_PREMIUM = 50_000.00
+INSURANCE_EVERYDAY_PROTECTION_PREMIUM = 45_000.00
+INSURANCE_EVERYDAY_CLAIM_TYPES = ("theft", "fire", "robbery", "car_accident")
 TREASURY_MAX_PROOFS = 4
 TREASURY_MAX_PROOF_CHARS = 1_800_000
 REFERRAL_BONUS_AMOUNT = 50000.00
@@ -2281,6 +2292,7 @@ ADMIN_TOOLS_SECTIONS = (
     ("autopilot", "Auto Pilot"),
     ("system-update", "System Update"),
     ("audit", "Activity Log"),
+    ("policy-settings", "Policy Settings"),
     ("fnn-settings", "FNN Settings"),
     ("settings", "Settings"),
     ("account-deletion", "Account Deletion"),
@@ -2288,7 +2300,7 @@ ADMIN_TOOLS_SECTIONS = (
 ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS = frozenset(
     ("dashboard", "accounts", "intelligence", "housing-market", "anticheat", "audit", "banking-settings", "sportsbook-settings", "casino-tools")
 )
-ADMIN_TOOLS_DEVELOPER_ONLY_SECTIONS = frozenset(("account-deletion",))
+ADMIN_TOOLS_DEVELOPER_ONLY_SECTIONS = frozenset(("account-deletion", "policy-settings"))
 ADMIN_TOOLS_CONFIGURABLE_SECTIONS = frozenset(
     section_id for section_id, _label in ADMIN_TOOLS_SECTIONS
     if section_id not in ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS
@@ -2464,6 +2476,22 @@ def ensure_schema() -> None:
                 created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS policy_acceptances (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                policy_version TEXT NOT NULL,
+                document_sha256 TEXT NOT NULL DEFAULT '',
+                accepted_at TEXT NOT NULL,
+                acceptance_source TEXT NOT NULL DEFAULT 'pwa',
+                accepted_ip TEXT NOT NULL DEFAULT '',
+                user_agent TEXT NOT NULL DEFAULT '',
+                UNIQUE (user_id, policy_version),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_policy_acceptances_version
+            ON policy_acceptances(policy_version, accepted_at);
+
             CREATE TABLE IF NOT EXISTS user_presence (
                 user_id INTEGER NOT NULL,
                 day TEXT NOT NULL,
@@ -2615,6 +2643,7 @@ def ensure_schema() -> None:
                 character_id INTEGER NOT NULL,
                 incident_type TEXT NOT NULL DEFAULT 'server_reset',
                 incident_summary TEXT NOT NULL DEFAULT '',
+                coverage_source TEXT NOT NULL DEFAULT 'continuity',
                 property_id TEXT,
                 property_name TEXT NOT NULL DEFAULT '',
                 bank_balance_snapshot NUMERIC(18,2) NOT NULL DEFAULT 0,
@@ -2644,8 +2673,8 @@ def ensure_schema() -> None:
                 property_id TEXT NOT NULL,
                 property_name TEXT NOT NULL DEFAULT '',
                 base_value NUMERIC(18,2) NOT NULL DEFAULT 150000,
-                coverage_amount NUMERIC(18,2) NOT NULL DEFAULT 300000,
-                premium_amount NUMERIC(18,2) NOT NULL DEFAULT 20000,
+                coverage_amount NUMERIC(18,2) NOT NULL DEFAULT 400000,
+                premium_amount NUMERIC(18,2) NOT NULL DEFAULT 50000,
                 status TEXT NOT NULL DEFAULT 'pending_payment',
                 bank_command_id TEXT,
                 payment_status TEXT NOT NULL DEFAULT 'pending',
@@ -2660,6 +2689,28 @@ def ensure_schema() -> None:
 
             CREATE INDEX IF NOT EXISTS insurance_property_protections_user_idx
                 ON insurance_property_protections (user_id, property_id, status);
+
+            CREATE TABLE IF NOT EXISTS insurance_everyday_protections (
+                id SERIAL PRIMARY KEY,
+                policy_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                character_id INTEGER NOT NULL,
+                premium_amount NUMERIC(18,2) NOT NULL DEFAULT 45000,
+                covered_incidents TEXT NOT NULL DEFAULT '["theft","fire","robbery","car_accident"]',
+                status TEXT NOT NULL DEFAULT 'pending_payment',
+                bank_command_id TEXT,
+                payment_status TEXT NOT NULL DEFAULT 'pending',
+                issued_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (policy_id) REFERENCES insurance_policies(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (character_id) REFERENCES user_characters(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS insurance_everyday_protections_user_idx
+                ON insurance_everyday_protections (user_id, policy_id, status);
 
             CREATE TABLE IF NOT EXISTS gangs (
                 id SERIAL PRIMARY KEY,
@@ -3946,8 +3997,8 @@ def ensure_migrations(db: Database) -> None:
         property_id TEXT NOT NULL,
         property_name TEXT NOT NULL DEFAULT '',
         base_value NUMERIC(18,2) NOT NULL DEFAULT 150000,
-        coverage_amount NUMERIC(18,2) NOT NULL DEFAULT 300000,
-        premium_amount NUMERIC(18,2) NOT NULL DEFAULT 20000,
+        coverage_amount NUMERIC(18,2) NOT NULL DEFAULT 400000,
+        premium_amount NUMERIC(18,2) NOT NULL DEFAULT 50000,
         status TEXT NOT NULL DEFAULT 'pending_payment',
         bank_command_id TEXT,
         payment_status TEXT NOT NULL DEFAULT 'pending',
@@ -3960,6 +4011,26 @@ def ensure_migrations(db: Database) -> None:
         FOREIGN KEY (character_id) REFERENCES user_characters(id) ON DELETE CASCADE
     )""")
     db.execute("CREATE INDEX IF NOT EXISTS insurance_property_protections_user_idx ON insurance_property_protections (user_id, property_id, status)")
+    db.execute("""CREATE TABLE IF NOT EXISTS insurance_everyday_protections (
+        id SERIAL PRIMARY KEY,
+        policy_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        character_id INTEGER NOT NULL,
+        premium_amount NUMERIC(18,2) NOT NULL DEFAULT 45000,
+        covered_incidents TEXT NOT NULL DEFAULT '["theft","fire","robbery","car_accident"]',
+        status TEXT NOT NULL DEFAULT 'pending_payment',
+        bank_command_id TEXT,
+        payment_status TEXT NOT NULL DEFAULT 'pending',
+        issued_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (policy_id) REFERENCES insurance_policies(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (character_id) REFERENCES user_characters(id) ON DELETE CASCADE
+    )""")
+    db.execute("CREATE INDEX IF NOT EXISTS insurance_everyday_protections_user_idx ON insurance_everyday_protections (user_id, policy_id, status)")
+    db.execute("ALTER TABLE insurance_claims ADD COLUMN IF NOT EXISTS coverage_source TEXT NOT NULL DEFAULT 'continuity'")
     db.execute("""CREATE TABLE IF NOT EXISTS insurance_claim_payout_commands (
         id SERIAL PRIMARY KEY,
         claim_id INTEGER NOT NULL,
@@ -7241,7 +7312,44 @@ def active_anticheat_profile_lock(db: Database, user_id: int) -> DbRow | None:
 
 
 def anticheat_lock_allowed_path(path: str) -> bool:
-    return path in {"/api/health", "/api/session", "/api/auth/logout", "/api/messages", "/api/presence"}
+    return path in {"/api/health", "/api/session", "/api/auth/logout", "/api/legal/current", "/api/legal/accept", "/api/messages", "/api/presence"}
+
+
+def legal_policy_payload(db: Database | None = None, user_id: int | None = None, include_document: bool = False) -> dict[str, Any]:
+    acceptance = None
+    if db is not None and user_id is not None:
+        acceptance = one(
+            db,
+            "SELECT policy_version,document_sha256,accepted_at,acceptance_source FROM policy_acceptances WHERE user_id=? AND policy_version=? AND document_sha256=? LIMIT 1",
+            (user_id, LEGAL_POLICY_VERSION, LEGAL_POLICY_SHA256),
+        )
+    payload: dict[str, Any] = {
+        "required": True,
+        "accepted": bool(acceptance),
+        "current_version": LEGAL_POLICY_VERSION,
+        "effective_date": LEGAL_POLICY_EFFECTIVE_DATE,
+        "title": LEGAL_POLICY_TITLE,
+        "document_sha256": LEGAL_POLICY_SHA256,
+        "accepted_at": acceptance.get("accepted_at") if acceptance else None,
+        "acceptance_source": acceptance.get("acceptance_source") if acceptance else None,
+    }
+    if include_document:
+        payload["document"] = LEGAL_POLICY_TEXT
+    return payload
+
+
+def legal_policy_accepted(db: Database, user_id: int) -> bool:
+    return bool(
+        one(
+            db,
+            "SELECT id FROM policy_acceptances WHERE user_id=? AND policy_version=? AND document_sha256=? LIMIT 1",
+            (user_id, LEGAL_POLICY_VERSION, LEGAL_POLICY_SHA256),
+        )
+    )
+
+
+def legal_policy_allowed_path(path: str) -> bool:
+    return path in {"/api/health", "/api/session", "/api/auth/logout", "/api/legal/current", "/api/legal/accept"}
 
 
 def upsert_anticheat_profile_lock(
@@ -8310,6 +8418,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         try:
             with conn() as db:
                 user = self.current_user(db)
+                if user and not legal_policy_allowed_path(path) and not legal_policy_accepted(db, int(user["id"])):
+                    self.send_json(
+                        428,
+                        {
+                            "error": "You must accept the current EULA, Terms of Use, Acceptable Use Policy, and Privacy Notice to continue.",
+                            "code": "legal_acceptance_required",
+                            "legal": legal_policy_payload(db, int(user["id"])),
+                        },
+                    )
+                    return
                 if path.startswith("/api/dev-tools"):
                     section_error = admin_tools_section_required(db, user, admin_tools_route_section(path))
                     if section_error:
@@ -8332,16 +8450,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                             self.error(403, f"Anti-cheat profile lock: {anticheat_lock['reason']}")
                             return
                     else:
-                        timeout_allowed = path in ("/api/health", "/api/profile", "/api/bank", "/api/presence")
+                        timeout_allowed = path in ("/api/health", "/api/profile", "/api/bank", "/api/presence", "/api/legal/current", "/api/legal/accept")
                         if block and not timeout_allowed:
                             self.error(403, f"Account {block['sanction_type']}: {block['reason']}")
                             return
-                        admin_allowed = path in ("/api/health", "/api/messages", "/api/presence")
+                        admin_allowed = path in ("/api/health", "/api/messages", "/api/presence", "/api/legal/current", "/api/legal/accept")
                         if admin_restriction and path not in admin_allowed:
                             self.error(403, f"CAD access restricted: {admin_restriction['reason']}")
                             return
                 if path == "/api/health" and method == "GET":
                     self.send_json(200, {"ok": True, "time": now_iso()})
+                elif path == "/api/legal/current" and method == "GET":
+                    self.api_legal_current(db, user)
+                elif path == "/api/legal/accept" and method == "POST":
+                    self.api_legal_accept(db, user)
                 elif path == "/api/auth/register" and method == "POST":
                     self.api_register(db)
                 elif path == "/api/auth/login" and method == "POST":
@@ -8370,6 +8492,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_insurance_create(db, user)
                 elif path == "/api/insurance/property-protections" and method == "POST":
                     self.api_insurance_property_protection_create(db, user)
+                elif path == "/api/insurance/everyday-protection" and method == "POST":
+                    self.api_insurance_everyday_protection_create(db, user)
                 elif path == "/api/insurance/claims" and method == "POST":
                     self.api_insurance_claim_create(db, user)
                 elif path == "/api/gangs" and method == "GET":
@@ -8870,11 +8994,63 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         parts = [part for part in path.split("/") if part]
         return int(parts[index])
 
+    def acceptance_request_metadata(self) -> tuple[str, str]:
+        forwarded = str(self.headers.get("X-Forwarded-For") or "").split(",", 1)[0].strip()
+        remote = forwarded or str(self.client_address[0] if self.client_address else "unknown")
+        return remote[:160], str(self.headers.get("User-Agent") or "")[:500]
+
+    def api_legal_current(self, db: Database, user: DbRow | None) -> None:
+        self.send_json(
+            200,
+            legal_policy_payload(db, int(user["id"]) if user else None, include_document=True),
+        )
+
+    def api_legal_accept(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        if not LEGAL_POLICY_TEXT:
+            self.error(503, "The current legal document is unavailable")
+            return
+        payload = self.read_json()
+        if str(payload.get("policy_version") or "") != LEGAL_POLICY_VERSION:
+            self.error(409, "The legal document changed. Review the current version before accepting.")
+            return
+        if payload.get("accepted") is not True or payload.get("read_confirmed") is not True:
+            self.error(400, "Review the full agreement and confirm acceptance to continue")
+            return
+        accepted_ip, user_agent = self.acceptance_request_metadata()
+        accepted_at = now_iso()
+        db.execute(
+            """
+            INSERT INTO policy_acceptances
+                (user_id,policy_version,document_sha256,accepted_at,acceptance_source,accepted_ip,user_agent)
+            VALUES (?,?,?,?,?,?,?)
+            ON CONFLICT (user_id,policy_version) DO UPDATE SET
+                document_sha256=EXCLUDED.document_sha256,
+                accepted_at=EXCLUDED.accepted_at,
+                acceptance_source=EXCLUDED.acceptance_source,
+                accepted_ip=EXCLUDED.accepted_ip,
+                user_agent=EXCLUDED.user_agent
+            """,
+            (int(user["id"]), LEGAL_POLICY_VERSION, LEGAL_POLICY_SHA256, accepted_at, "existing_user_gate", accepted_ip, user_agent),
+        )
+        self.send_json(200, {"ok": True, "legal": legal_policy_payload(db, int(user["id"]))})
+
     def api_register(self, db: Database) -> None:
         payload = self.read_json()
         missing = require_fields(payload, "name", "email", "car_entry_code", "password")
         if missing:
             self.error(400, missing)
+            return
+        if not LEGAL_POLICY_TEXT:
+            self.error(503, "The current legal document is unavailable")
+            return
+        if str(payload.get("policy_version") or "") != LEGAL_POLICY_VERSION:
+            self.error(409, "The legal document changed. Review the current version before registering.")
+            return
+        if payload.get("accept_legal") is not True or payload.get("read_confirmed") is not True:
+            self.error(400, "Read and accept the EULA, Terms of Use, Acceptable Use Policy, and Privacy Notice")
             return
         email = str(payload["email"]).strip().lower()
         try:
@@ -8909,6 +9085,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
         created = cur.fetchone()
         user_id = int(created["id"])
+        accepted_ip, user_agent = self.acceptance_request_metadata()
+        db.execute(
+            """
+            INSERT INTO policy_acceptances
+                (user_id,policy_version,document_sha256,accepted_at,acceptance_source,accepted_ip,user_agent)
+            VALUES (?,?,?,?,?,?,?)
+            """,
+            (user_id, LEGAL_POLICY_VERSION, LEGAL_POLICY_SHA256, ts, "registration", accepted_ip, user_agent),
+        )
         create_default_dmv(db, user_id)
         ensure_default_character(db, user_id, str(payload["name"]).strip())
         owner = one(db, "SELECT id FROM users WHERE email = ?", (OWNER_EMAIL,))
@@ -9028,6 +9213,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             200,
             {
                 "user": public_user_with_game_bank(db, user),
+                "legal": legal_policy_payload(db, int(user["id"])),
                 "apps": apps,
                 "unread_messages": int(unread["count"] if unread else 0),
                 "income": income_snapshot(db, user),
@@ -12298,6 +12484,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "SELECT id,user_id,property_name FROM insurance_property_protections WHERE bank_command_id=?",
             (command_id,),
         )
+        insurance_everyday_protection = one(
+            db,
+            "SELECT id,user_id FROM insurance_everyday_protections WHERE bank_command_id=?",
+            (command_id,),
+        )
         insurance_payout_chunk = one(
             db,
             """SELECT pc.*,ic.user_id,ic.claim_number,ic.incident_type,ic.property_name FROM insurance_claim_payout_commands pc
@@ -12323,7 +12514,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     db,
                     int(insurance_property_protection["user_id"]),
                     "Property protection active",
-                    f"{insurance_property_protection['property_name']} now carries FC$300,000 of insured value and may file theft, fire, or robbery claims without a State of Emergency.",
+                    f"{insurance_property_protection['property_name']} now carries FC$400,000 of insured value.",
                 )
             add_admin_audit(
                 db,
@@ -12331,6 +12522,27 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "insurance.property_protection.payment.result",
                 int(row["target_user_id"]),
                 {"command_id": command_id, "protection_id": insurance_property_protection["id"], "status": status, "result": result},
+            )
+        if insurance_everyday_protection:
+            protection_status = "active" if status == "completed" else "payment_failed" if status == "failed" else "pending_payment"
+            payment_status = "completed" if status == "completed" else "failed" if status == "failed" else "pending"
+            db.execute(
+                "UPDATE insurance_everyday_protections SET status=?,payment_status=?,updated_at=? WHERE id=?",
+                (protection_status, payment_status, now_iso(), insurance_everyday_protection["id"]),
+            )
+            if status == "completed":
+                add_message(
+                    db,
+                    int(insurance_everyday_protection["user_id"]),
+                    "Everyday Protection active",
+                    "Your theft, fire, robbery, and car-accident claim desk is now available without a State of Emergency or property requirement.",
+                )
+            add_admin_audit(
+                db,
+                int(insurance_everyday_protection["user_id"]),
+                "insurance.everyday_protection.payment.result",
+                int(row["target_user_id"]),
+                {"command_id": command_id, "protection_id": insurance_everyday_protection["id"], "status": status, "result": result},
             )
         if insurance_payout_chunk:
             chunk_status = "pending" if status == "retry" else status
@@ -12676,10 +12888,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             JOIN user_characters c ON c.id=p.character_id WHERE p.user_id=? ORDER BY p.created_at DESC""", (user["id"],))
         protections = all_rows(db, """SELECT * FROM insurance_property_protections
             WHERE user_id=? ORDER BY created_at DESC""", (user["id"],))
+        everyday_protections = all_rows(db, """SELECT * FROM insurance_everyday_protections
+            WHERE user_id=? ORDER BY created_at DESC""", (user["id"],))
         owned_properties = [item for item in self.realty_owned_properties(db, int(user["id"])) if item.get("holding_type") == "owned"]
         current_time = utcnow()
-        active_protection_keys = {
-            (int(item["policy_id"]), str(item["property_id"]))
+        active_protection_values = {
+            (int(item["policy_id"]), str(item["property_id"])): float(item.get("coverage_amount") or INSURANCE_PROPERTY_PROTECTED_VALUE)
             for item in protections
             if item["status"] == "active" and parse_iso(item["expires_at"]) > current_time
         }
@@ -12687,9 +12901,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         for row in policy_rows:
             item = dict(row)
             if item["policy_type"] == "compensation":
-                enhanced_count = sum(1 for prop in owned_properties if (int(item["id"]), str(prop["property_id"])) in active_protection_keys)
+                enhanced_values = [active_protection_values[(int(item["id"]), str(prop["property_id"]))] for prop in owned_properties
+                    if (int(item["id"]), str(prop["property_id"])) in active_protection_values]
+                enhanced_count = len(enhanced_values)
                 base_count = max(0, len(owned_properties) - enhanced_count)
-                property_value = base_count * INSURANCE_PROPERTY_BASE_VALUE + enhanced_count * INSURANCE_PROPERTY_PROTECTED_VALUE
+                property_value = base_count * INSURANCE_PROPERTY_BASE_VALUE + sum(enhanced_values)
                 item["bank_coverage_amount"] = float(item.get("coverage_amount") or 0)
                 item["property_coverage_amount"] = property_value
                 item["coverage_amount"] = round(item["bank_coverage_amount"] + property_value, 2)
@@ -12709,7 +12925,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "address": str(prop.get("address") or ""),
                 "property_type": str(prop.get("property_type") or "Property"),
                 "base_value": INSURANCE_PROPERTY_BASE_VALUE,
-                "insured_value": INSURANCE_PROPERTY_PROTECTED_VALUE if protection and protection["status"] == "active" else INSURANCE_PROPERTY_BASE_VALUE,
+                "insured_value": float(protection.get("coverage_amount") or INSURANCE_PROPERTY_PROTECTED_VALUE) if protection and protection["status"] == "active" else INSURANCE_PROPERTY_BASE_VALUE,
                 "protection": protection,
             })
         claims = all_rows(db, """SELECT c.*,p.policy_number,p.coverage_tier,uc.character_name
@@ -12723,11 +12939,19 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "state_of_emergency": settings["insurance_state_of_emergency"],
             "properties": property_payload,
             "property_protections": [dict(row) for row in protections],
+            "everyday_protections": [dict(row) for row in everyday_protections],
             "property_terms": {
                 "base_value": INSURANCE_PROPERTY_BASE_VALUE,
                 "protected_value": INSURANCE_PROPERTY_PROTECTED_VALUE,
                 "premium": INSURANCE_PROPERTY_PROTECTION_PREMIUM,
-                "claim_types": ["theft", "fire", "robbery"],
+                "claim_types": [],
+                "purpose": "continuity_value_upgrade",
+            },
+            "everyday_protection_terms": {
+                "premium": INSURANCE_EVERYDAY_PROTECTION_PREMIUM,
+                "claim_types": list(INSURANCE_EVERYDAY_CLAIM_TYPES),
+                "property_required": False,
+                "manual_review": True,
             },
             "tiers": [
                 {"id":"essential","name":"Continuity Essential",**settings["insurance_tiers"]["essential"]},
@@ -12795,6 +13019,59 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         })
         self.send_json(201, {"ok": True, "protection_id": int(created["id"]), "status": "pending_payment", "command_id": command_id})
 
+    def api_insurance_everyday_protection_create(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        payload = self.read_json()
+        try:
+            policy_id = int(payload.get("policy_id") or 0)
+        except (TypeError, ValueError):
+            policy_id = 0
+        policy = one(db, """SELECT * FROM insurance_policies WHERE id=? AND user_id=?
+            AND policy_type='compensation' AND status='active' AND expires_at>? FOR UPDATE""", (policy_id, user["id"], now_iso()))
+        if not policy:
+            self.error(409, "Add Everyday Protection to an active continuity plan."); return
+        existing = one(db, """SELECT id,status FROM insurance_everyday_protections
+            WHERE user_id=? AND policy_id=? AND status IN ('active','pending_payment') AND expires_at>? LIMIT 1""",
+            (user["id"], policy_id, now_iso()))
+        if existing:
+            self.error(409, "Everyday Protection is already active or awaiting payment for this plan."); return
+        bank = one(db, """SELECT b.balance FROM arma_account_links l JOIN arma_game_bank_balances b
+            ON b.identity_id=l.identity_id WHERE l.user_id=? ORDER BY l.linked_at DESC LIMIT 1""", (user["id"],))
+        pending = one(db, """SELECT COALESCE(SUM(amount),0) AS total FROM bank_bridge_commands
+            WHERE target_user_id=? AND operation='debit_funds' AND status IN ('pending','claimed')""", (user["id"],))
+        available = float(bank["balance"] or 0) - float((pending or {}).get("total") or 0) if bank else None
+        if available is None:
+            self.error(409, "Your linked Arma bank snapshot is not available yet."); return
+        if available + 0.0001 < INSURANCE_EVERYDAY_PROTECTION_PREMIUM:
+            self.error(409, f"Insufficient in-game funds. Everyday Protection costs ${INSURANCE_EVERYDAY_PROTECTION_PREMIUM:,.2f}."); return
+        issued_at = utcnow()
+        expires_at = parse_iso(policy["expires_at"])
+        command_id = self.queue_insurance_bank_command(
+            db,
+            int(user["id"]),
+            INSURANCE_EVERYDAY_PROTECTION_PREMIUM,
+            "debit_funds",
+            f"Insurance Everyday Protection {policy['policy_number']}",
+        )
+        if not command_id:
+            self.error(409, "Link your Arma account before purchasing Everyday Protection."); return
+        created = db.execute(
+            """INSERT INTO insurance_everyday_protections
+               (policy_id,user_id,character_id,premium_amount,covered_incidents,status,bank_command_id,payment_status,issued_at,expires_at,created_at,updated_at)
+               VALUES (?,?,?,?,?,'pending_payment',?,'pending',?,?,?,?) RETURNING id""",
+            (policy_id, user["id"], policy["character_id"], INSURANCE_EVERYDAY_PROTECTION_PREMIUM,
+             json.dumps(list(INSURANCE_EVERYDAY_CLAIM_TYPES), separators=(",", ":")), command_id,
+             issued_at.isoformat(), expires_at.isoformat(), issued_at.isoformat(), issued_at.isoformat()),
+        ).fetchone()
+        add_admin_audit(db, int(user["id"]), "insurance.everyday_protection.purchased", int(user["id"]), {
+            "protection_id": int(created["id"]), "policy_id": policy_id,
+            "premium": INSURANCE_EVERYDAY_PROTECTION_PREMIUM,
+            "claim_types": list(INSURANCE_EVERYDAY_CLAIM_TYPES), "command_id": command_id,
+        })
+        self.send_json(201, {"ok": True, "protection_id": int(created["id"]), "status": "pending_payment", "command_id": command_id})
+
     def api_insurance_create(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
         if err:
@@ -12809,6 +13086,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         subject = str(payload.get("subject_label") or "").strip()[:120]
         try: term_months = int(payload.get("term_months") or 1)
         except (TypeError, ValueError): term_months = 1
+        include_everyday_protection = str(payload.get("include_everyday_protection") or "").strip().lower() in {"1", "true", "on", "yes"}
         valid_types = {"compensation", "vehicle", "property", "life", "business", "general"}
         configured_tiers = settings["insurance_tiers"]
         tiers = {name: (float(item["coverage_percent"]), float(item["premium"])) for name, item in configured_tiers.items()}
@@ -12820,14 +13098,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             (user["id"], now_iso())):
             self.error(409, "An active continuity policy already protects this linked bank account."); return
         coverage_percent, monthly_premium_rate = tiers[tier]
-        premium = round(monthly_premium_rate * term_months, 2)
+        policy_premium = round(monthly_premium_rate * term_months, 2)
+        everyday_premium = INSURANCE_EVERYDAY_PROTECTION_PREMIUM if include_everyday_protection and policy_type == "compensation" else 0.0
+        total_premium = round(policy_premium + everyday_premium, 2)
         bank = one(db, """SELECT b.balance FROM arma_account_links l JOIN arma_game_bank_balances b
             ON b.identity_id=l.identity_id WHERE l.user_id=? ORDER BY l.linked_at DESC LIMIT 1""", (user["id"],))
-        pending = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM bank_bridge_commands WHERE target_user_id=? AND operation='debit_funds' AND status IN ('pending','claimed') AND reason LIKE 'Insurance premium %%'", (user["id"],))
+        pending = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM bank_bridge_commands WHERE target_user_id=? AND operation='debit_funds' AND status IN ('pending','claimed')", (user["id"],))
         available = float(bank["balance"] or 0) - float((pending or {}).get("total") or 0) if bank else None
         if available is None:
             self.error(409, "Your linked Arma bank snapshot is not available yet."); return
-        if available + 0.0001 < premium:
+        if available + 0.0001 < total_premium:
             self.error(409, f"Insufficient in-game funds for this premium. Available: ${available:,.2f}."); return
         protected_balance = max(0.0, float(bank["balance"] or 0)) if bank else 0.0
         coverage = round(protected_balance * coverage_percent / 100.0, 2)
@@ -12835,17 +13115,28 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         issued = utcnow(); expires = issued + dt.timedelta(days=30 * term_months)
         policy_number = f"FCI-{issued.strftime('%y%m')}-{secrets.randbelow(900000)+100000}"
         questionnaire = {key: str(payload.get(key) or "").strip()[:500] for key in ("risk_use", "location", "beneficiary", "notes")}
-        payment_command = self.queue_insurance_bank_command(db, int(user["id"]), premium, "debit_funds", f"Insurance premium {policy_number} ({term_months}-month locked rate)")
+        payment_reason = f"Insurance premium {policy_number} ({term_months}-month locked rate)"
+        if everyday_premium:
+            payment_reason += " + Everyday Protection"
+        payment_command = self.queue_insurance_bank_command(db, int(user["id"]), total_premium, "debit_funds", payment_reason)
         if not payment_command:
             self.error(409, "Link your Arma account before purchasing insurance."); return
-        db.execute("""INSERT INTO insurance_policies
+        created_policy = db.execute("""INSERT INTO insurance_policies
             (user_id,character_id,policy_number,policy_type,coverage_tier,subject_label,coverage_amount,coverage_percent,protected_bank_balance,premium_amount,monthly_premium_rate,term_months,rate_locked_until,deductible_amount,questionnaire,status,receipt_code_id,bank_command_id,payment_status,issued_at,expires_at,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending_payment',NULL,?,'pending',?,?,?,?)""",
-            (user["id"], character_id, policy_number, policy_type, tier, subject, coverage, coverage_percent, protected_balance, premium,
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending_payment',NULL,?,'pending',?,?,?,?) RETURNING id""",
+            (user["id"], character_id, policy_number, policy_type, tier, subject, coverage, coverage_percent, protected_balance, policy_premium,
              monthly_premium_rate, term_months, expires.isoformat(), deductible, json.dumps(questionnaire, separators=(",", ":")),
-             payment_command, issued.isoformat(), expires.isoformat(), issued.isoformat(), issued.isoformat()))
-        add_admin_audit(db, int(user["id"]), "insurance.policy.issued", int(user["id"]), {"policy_number": policy_number, "character_id": character_id, "premium": premium, "monthly_premium_rate": monthly_premium_rate, "term_months": term_months, "rate_locked_until": expires.isoformat()})
-        self.send_json(201, {"ok": True, "policy_number": policy_number, "status": "pending_payment", "command_id": payment_command, "premium": premium, "monthly_premium_rate": monthly_premium_rate, "term_months": term_months, "rate_locked_until": expires.isoformat()})
+             payment_command, issued.isoformat(), expires.isoformat(), issued.isoformat(), issued.isoformat())).fetchone()
+        policy_row = created_policy
+        if everyday_premium and policy_row:
+            db.execute("""INSERT INTO insurance_everyday_protections
+                (policy_id,user_id,character_id,premium_amount,covered_incidents,status,bank_command_id,payment_status,issued_at,expires_at,created_at,updated_at)
+                VALUES (?,?,?,?,?,'pending_payment',?,'pending',?,?,?,?)""",
+                (policy_row["id"], user["id"], character_id, everyday_premium,
+                 json.dumps(list(INSURANCE_EVERYDAY_CLAIM_TYPES), separators=(",", ":")), payment_command,
+                 issued.isoformat(), expires.isoformat(), issued.isoformat(), issued.isoformat()))
+        add_admin_audit(db, int(user["id"]), "insurance.policy.issued", int(user["id"]), {"policy_number": policy_number, "character_id": character_id, "premium": policy_premium, "everyday_protection_premium": everyday_premium, "total_premium": total_premium, "monthly_premium_rate": monthly_premium_rate, "term_months": term_months, "rate_locked_until": expires.isoformat()})
+        self.send_json(201, {"ok": True, "policy_number": policy_number, "status": "pending_payment", "command_id": payment_command, "premium": policy_premium, "everyday_protection_premium": everyday_premium, "total_premium": total_premium, "monthly_premium_rate": monthly_premium_rate, "term_months": term_months, "rate_locked_until": expires.isoformat()})
 
     def api_insurance_claim_create(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -12864,6 +13155,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             ON b.identity_id=l.identity_id WHERE l.user_id=? ORDER BY l.linked_at DESC LIMIT 1""", (user["id"],))
         current_balance = max(0.0, float(bank["balance"] or 0)) if bank else 0.0
         incident_type = str(payload.get("incident_type") or "server_reset").strip().lower()
+        coverage_source = str(payload.get("coverage_source") or "continuity").strip().lower()
         property_id: str | None = None
         property_name = ""
         protected_balance = max(current_balance, float(policy.get("protected_bank_balance") or 0))
@@ -12881,6 +13173,31 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             property_value = sum(INSURANCE_PROPERTY_PROTECTED_VALUE if str(item["property_id"]) in protected_ids else INSURANCE_PROPERTY_BASE_VALUE for item in properties)
             requested = round(protected_balance * coverage_percent / 100.0 + property_value, 2)
             claim_prefix = "FCIC"
+            coverage_source = "continuity"
+        elif incident_type in INSURANCE_EVERYDAY_CLAIM_TYPES and (coverage_source == "everyday" or incident_type == "car_accident"):
+            protection = one(db, """SELECT * FROM insurance_everyday_protections
+                WHERE policy_id=? AND user_id=? AND status='active' AND expires_at>? ORDER BY created_at DESC LIMIT 1""",
+                (policy_id, user["id"], now_iso()))
+            if not protection:
+                self.error(409, "This claim requires active Everyday Protection. No property is required."); return
+            if len(summary) < 20 or not bool(payload.get("confirmed_loss")):
+                self.error(400, "Confirm the reported loss and provide at least 20 characters of claim details."); return
+            if one(db, """SELECT id FROM insurance_claims WHERE policy_id=? AND coverage_source='everyday'
+                AND incident_type=? AND status IN ('pending','approved')""", (policy_id, incident_type)):
+                self.error(409, f"An active {incident_type.replace('_', ' ')} claim is already under review."); return
+            try:
+                requested = round(float(payload.get("requested_amount") or 0), 2)
+            except (TypeError, ValueError):
+                requested = 0.0
+            used = one(db, """SELECT COALESCE(SUM(requested_amount),0) AS total FROM insurance_claims
+                WHERE policy_id=? AND coverage_source='everyday' AND status IN ('pending','approved','paid')""", (policy_id,))
+            remaining = max(0.0, float(policy.get("coverage_amount") or 0) - float((used or {}).get("total") or 0))
+            if requested <= 0 or requested > remaining + 0.0001:
+                self.error(400, f"Enter a claim amount between $0.01 and the remaining ${remaining:,.2f} plan limit."); return
+            property_name = str(payload.get("loss_subject") or incident_type.replace("_", " ").title()).strip()[:180]
+            coverage_percent = 100.0
+            coverage_source = "everyday"
+            claim_prefix = "FCIE"
         elif incident_type in {"theft", "fire", "robbery"}:
             property_id = str(payload.get("property_id") or "").strip()
             owned = {str(item["property_id"]): item for item in self.realty_owned_properties(db, int(user["id"])) if item.get("holding_type") == "owned"}
@@ -12907,17 +13224,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 self.error(400, f"Enter a claim amount between $0.01 and the remaining ${remaining:,.2f} property limit."); return
             property_name = str(property_record.get("name") or protection["property_name"] or property_id)[:180]
             coverage_percent = 100.0
+            coverage_source = "property"
             claim_prefix = "FCIP"
         else:
-            self.error(400, "Choose server reset, theft, fire, or robbery as the incident type."); return
+            self.error(400, "Choose server reset, theft, fire, robbery, or car accident as the incident type."); return
         ts = now_iso(); claim_number = f"{claim_prefix}-{utcnow().strftime('%y%m')}-{secrets.randbelow(900000)+100000}"
         db.execute("""INSERT INTO insurance_claims
-            (claim_number,policy_id,user_id,character_id,incident_type,incident_summary,property_id,property_name,bank_balance_snapshot,coverage_percent,requested_amount,status,auto_approve_at,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,?)""",
-            (claim_number, policy_id, user["id"], policy["character_id"], incident_type, summary, property_id, property_name,
+            (claim_number,policy_id,user_id,character_id,incident_type,incident_summary,coverage_source,property_id,property_name,bank_balance_snapshot,coverage_percent,requested_amount,status,auto_approve_at,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,?)""",
+            (claim_number, policy_id, user["id"], policy["character_id"], incident_type, summary, coverage_source, property_id, property_name,
              protected_balance, coverage_percent, requested, None, ts, ts))
         add_admin_audit(db, int(user["id"]), "insurance.claim.filed", int(user["id"]), {
-            "claim_number": claim_number, "incident_type": incident_type, "property_id": property_id,
+            "claim_number": claim_number, "incident_type": incident_type, "coverage_source": coverage_source, "property_id": property_id,
             "property_name": property_name, "requested_amount": requested, "review_mode": "manual",
         })
         self.send_json(201, {"ok":True,"claim_number":claim_number,"requested_amount":requested,"status":"pending","review_mode":"manual"})
@@ -19133,6 +19451,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         casino_purchase = one(db, "SELECT id FROM casino_rounds WHERE bank_command_id=? AND status='awaiting_debit'", (command_id,))
         insurance_purchase = one(db, "SELECT id FROM insurance_policies WHERE bank_command_id=? AND status='pending_payment'", (command_id,))
         property_protection_purchase = one(db, "SELECT id FROM insurance_property_protections WHERE bank_command_id=? AND status='pending_payment'", (command_id,))
+        everyday_protection_purchase = one(db, "SELECT id FROM insurance_everyday_protections WHERE bank_command_id=? AND status='pending_payment'", (command_id,))
         if market_purchase:
             released_services.append(f"Ravenhood {market_purchase['transaction_type']}")
         if sportsbook_purchase:
@@ -19149,6 +19468,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             released_services.append("insurance policy purchase")
         if property_protection_purchase:
             released_services.append("property-protection purchase")
+        if everyday_protection_purchase:
+            released_services.append("Everyday Protection purchase")
         result = {
             "message": "Pending Bank Bridge command cancelled in Banking Settings before delivery.",
             "reason": reason,
@@ -19182,6 +19503,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("UPDATE casino_rounds SET status='payout_failed',settled_at=? WHERE payout_command_id=? AND status='won_pending_payout'", (cancelled_at, command_id))
         db.execute("UPDATE insurance_policies SET status='payment_cancelled',payment_status='cancelled',updated_at=? WHERE bank_command_id=? AND status='pending_payment'", (cancelled_at, command_id))
         db.execute("UPDATE insurance_property_protections SET status='payment_cancelled',payment_status='cancelled',updated_at=? WHERE bank_command_id=? AND status='pending_payment'", (cancelled_at, command_id))
+        db.execute("UPDATE insurance_everyday_protections SET status='payment_cancelled',payment_status='cancelled',updated_at=? WHERE bank_command_id=? AND status='pending_payment'", (cancelled_at, command_id))
         payout_chunk = one(db, "SELECT claim_id FROM insurance_claim_payout_commands WHERE command_id=?", (command_id,))
         if payout_chunk:
             note = f"Payout command {command_id} was cancelled in Banking Settings: {reason}"
@@ -19901,6 +20223,45 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 (page_size, (page - 1) * page_size),
             )]
             payload["audit_history"] = {"page": page, "page_size": page_size, "total": total}
+        elif section == "policy-settings":
+            policy_stats = one(
+                db,
+                """
+                SELECT COUNT(*) AS total_accounts,
+                       COUNT(p.id) AS accepted_accounts,
+                       COUNT(*) FILTER (WHERE p.id IS NULL) AS pending_accounts
+                FROM users u
+                LEFT JOIN policy_acceptances p
+                  ON p.user_id=u.id AND p.policy_version=? AND p.document_sha256=?
+                """,
+                (LEGAL_POLICY_VERSION, LEGAL_POLICY_SHA256),
+            ) or {}
+            policy_records = all_rows(
+                db,
+                """
+                SELECT u.id,u.name,u.email,u.civ_number,u.verified,u.created_at,
+                       p.policy_version,p.document_sha256,p.accepted_at,p.acceptance_source
+                FROM users u
+                LEFT JOIN policy_acceptances p
+                  ON p.user_id=u.id AND p.policy_version=? AND p.document_sha256=?
+                ORDER BY CASE WHEN p.id IS NULL THEN 0 ELSE 1 END,u.name,u.id
+                """,
+                (LEGAL_POLICY_VERSION, LEGAL_POLICY_SHA256),
+            )
+            total_accounts = int(policy_stats.get("total_accounts") or 0)
+            accepted_accounts = int(policy_stats.get("accepted_accounts") or 0)
+            payload["policy_settings"] = {
+                "title": LEGAL_POLICY_TITLE,
+                "current_version": LEGAL_POLICY_VERSION,
+                "effective_date": LEGAL_POLICY_EFFECTIVE_DATE,
+                "document_sha256": LEGAL_POLICY_SHA256,
+                "document_available": bool(LEGAL_POLICY_TEXT),
+                "total_accounts": total_accounts,
+                "accepted_accounts": accepted_accounts,
+                "pending_accounts": int(policy_stats.get("pending_accounts") or 0),
+                "acceptance_percent": round((accepted_accounts / total_accounts) * 100, 1) if total_accounts else 0,
+                "records": [dict(row) for row in policy_records],
+            }
         elif section == "campaigns":
             payload["experience"] = {
                 "system_banner_enabled": settings["system_banner_enabled"],

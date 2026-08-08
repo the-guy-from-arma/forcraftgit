@@ -2,6 +2,8 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const app = $("#app");
 const toastEl = $("#toast");
+const legalPortal = $("#legalPortal");
+const legalFooterLink = $("#legalFooterLink");
 const OS_VERSION = "0.3.0";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const SESSION_REFRESH_MS = 15000;
@@ -26,6 +28,7 @@ const DEV_TOOLS_REFRESH_MS = {
   "insurance-claims": 30000,
   "banking-settings": 15000,
   "sportsbook-settings": 120000,
+  "policy-settings": 60000,
 };
 
 const state = {
@@ -35,6 +38,8 @@ const state = {
     lastError: "",
   },
   authMode: "login",
+  legalDocument: null,
+  registerLegalRead: false,
   session: null,
   activeApp: null,
   returnToMdtOnClose: false,
@@ -153,6 +158,7 @@ const state = {
   insuranceSelectedPolicy: null,
   insuranceCoverageTier: "preferred",
   insuranceTermMonths: 1,
+  insuranceIncludeEverydayProtection: false,
   gangSelectedMembership: null,
   businessTab: "apply",
   businessReviewFilter: "active",
@@ -315,6 +321,105 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+async function loadLegalDocument(force = false) {
+  if (state.legalDocument && !force) return state.legalDocument;
+  state.legalDocument = await api("/api/legal/current", { timeoutMs: 12000 });
+  return state.legalDocument;
+}
+
+function legalDocumentView(documentData) {
+  const documentText = String(documentData?.document || "").trim();
+  return `<div class="legal-document" data-legal-scroll tabindex="0" aria-label="Full legal agreement">${documentText ? escapeHtml(documentText) : "The legal document could not be loaded."}</div>`;
+}
+
+function renderLegalPortal(documentData, { blocking = false, loading = false, error = "" } = {}) {
+  if (!legalPortal) return;
+  const signedIn = Boolean(state.session?.user);
+  const acceptanceRequired = signedIn && state.session?.legal?.required && !state.session?.legal?.accepted;
+  const mustAccept = blocking || acceptanceRequired;
+  legalPortal.dataset.blocking = mustAccept ? "true" : "false";
+  legalPortal.innerHTML = `<div class="legal-gate-backdrop ${mustAccept ? "required" : "viewer"}">
+    <section class="legal-gate" role="dialog" aria-modal="true" aria-labelledby="legalGateTitle">
+      <header><div class="legal-seal">TL</div><div><span>THUNDERLINK CAD SYSTEM</span><h1 id="legalGateTitle">${mustAccept ? "Review required before continuing" : "EULA, Terms & Privacy"}</h1><p>Version ${escapeHtml(documentData?.current_version || "1.0")} · Effective ${escapeHtml(documentData?.effective_date || "August 8, 2026")}</p></div>${mustAccept ? `<strong>REQUIRED</strong>` : `<button type="button" data-legal-close aria-label="Close legal document">×</button>`}</header>
+      ${loading ? `<div class="legal-loading"><i></i><span>Loading the controlled agreement…</span></div>` : error ? `<div class="legal-error"><strong>Agreement unavailable</strong><p>${escapeHtml(error)}</p></div>` : legalDocumentView(documentData)}
+      <footer>
+        <div><strong>${mustAccept ? "Scroll through the complete agreement to unlock acceptance." : "Controlled document"}</strong><small>${mustAccept ? "Accepting records the document version, timestamp, and account." : `SHA-256 ${escapeHtml(String(documentData?.document_sha256 || "").slice(0, 18))}…`}</small></div>
+        <div class="legal-actions">
+          ${mustAccept ? `<button type="button" class="secondary" data-legal-logout>Log out</button><button type="button" class="primary" data-legal-accept disabled>Accept and continue</button>` : `<button type="button" class="primary" data-legal-close>Done</button>`}
+        </div>
+      </footer>
+    </section>
+  </div>`;
+  bindLegalPortal(documentData, mustAccept, loading || Boolean(error));
+}
+
+function bindLegalPortal(documentData, mustAccept, unavailable = false) {
+  if (!legalPortal) return;
+  $$('[data-legal-close]', legalPortal).forEach(button => button.addEventListener('click', () => {
+    if (legalPortal.dataset.blocking === "true") return;
+    legalPortal.innerHTML = "";
+  }));
+  const scroll = $('[data-legal-scroll]', legalPortal);
+  const acceptButton = $('[data-legal-accept]', legalPortal);
+  if (scroll && acceptButton && !unavailable) {
+    const updateReadState = () => {
+      const complete = scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 18;
+      acceptButton.disabled = !complete;
+      acceptButton.classList.toggle("ready", complete);
+    };
+    scroll.addEventListener('scroll', updateReadState, { passive: true });
+    requestAnimationFrame(updateReadState);
+  }
+  acceptButton?.addEventListener('click', async () => {
+    if (acceptButton.disabled) return;
+    acceptButton.disabled = true;
+    acceptButton.textContent = "Recording acceptance…";
+    try {
+      const result = await api('/api/legal/accept', {
+        method: 'POST',
+        confirm: false,
+        body: { policy_version: documentData.current_version, accepted: true, read_confirmed: true },
+      });
+      if (state.session) state.session.legal = result.legal;
+      legalPortal.innerHTML = "";
+      await loadSession();
+      toast("Agreement accepted");
+    } catch (error) {
+      acceptButton.disabled = false;
+      acceptButton.textContent = "Accept and continue";
+      toast(error.message);
+    }
+  });
+  $('[data-legal-logout]', legalPortal)?.addEventListener('click', async () => {
+    try { await api('/api/auth/logout', { method: 'POST', confirm: false }); } catch {}
+    stopSessionRefresh();
+    state.session = null;
+    state.activeApp = null;
+    legalPortal.innerHTML = "";
+    render();
+  });
+}
+
+async function openLegalPortal({ blocking = false } = {}) {
+  renderLegalPortal(state.legalDocument || state.session?.legal || {}, { blocking, loading: !state.legalDocument });
+  try {
+    const documentData = await loadLegalDocument();
+    renderLegalPortal(documentData, { blocking });
+  } catch (error) {
+    renderLegalPortal(state.session?.legal || {}, { blocking, error: error.message || "Unable to load the agreement." });
+  }
+}
+
+async function syncLegalGate() {
+  const legal = state.session?.legal;
+  if (state.session?.user && legal?.required && !legal?.accepted) {
+    state.activeApp = null;
+    await openLegalPortal({ blocking: true });
+    return;
+  }
+  if (legalPortal?.dataset.blocking === "true") legalPortal.innerHTML = "";
+}
+
 function selectedAttr(value, current) {
   return String(value) === String(current) ? " selected" : "";
 }
@@ -337,7 +442,7 @@ function isMutationMethod(method) {
 
 function actionConfirmExempt(path) {
   const cleanPath = String(path || "").split("?")[0];
-  return cleanPath === "/api/presence" || cleanPath === "/api/auth/login" || cleanPath === "/api/auth/logout";
+  return cleanPath === "/api/presence" || cleanPath === "/api/auth/login" || cleanPath === "/api/auth/logout" || cleanPath === "/api/auth/register" || cleanPath === "/api/legal/accept";
 }
 
 function actionFingerprint(method, path, body = "") {
@@ -504,7 +609,14 @@ async function refreshSessionInBackground() {
     if (!nextSession?.user) {
       stopSessionRefresh();
       state.activeApp = null;
+      if (legalPortal) legalPortal.innerHTML = "";
       render();
+      return;
+    }
+    if (nextSession?.legal?.required && !nextSession?.legal?.accepted) {
+      state.activeApp = null;
+      render();
+      await syncLegalGate();
       return;
     }
     if (nextLock !== previousLock) {
@@ -531,12 +643,19 @@ async function loadSession() {
   state.session = await api("/api/session", { timeoutMs: SESSION_BOOT_TIMEOUT_MS });
   if (state.session?.user) startSessionRefresh();
   else stopSessionRefresh();
+  if (state.session?.user && state.session?.legal?.required && !state.session?.legal?.accepted) {
+    state.activeApp = null;
+    render();
+    await syncLegalGate();
+    return;
+  }
   if (state.session?.user && (state.pendingArmaCode || state.armaLinkDeepLink) && !state.activeApp) {
     state.activeApp = "profile";
     state.profileView = "connections";
     await loadAppData("profile");
   }
   render();
+  await syncLegalGate();
 }
 
 function renderBootScreen() {
@@ -788,6 +907,8 @@ function render() {
 
 function renderAuth() {
   const register = state.authMode === "register";
+  const legal = state.legalDocument || {};
+  const legalText = String(legal.document || "").trim();
   return `
     <section class="auth-card">
       <div class="brand-lockup">
@@ -806,23 +927,61 @@ function renderAuth() {
         ${register ? `<label>Car entry code<input name="car_entry_code" autocomplete="off" maxlength="32" pattern="[A-Za-z0-9_-]{2,32}" placeholder="In-game vehicle access code" required /></label>` : ""}
         <label>Email<input name="email" type="email" autocomplete="email" required /></label>
         <label>Password<input name="password" type="password" autocomplete="${register ? "new-password" : "current-password"}" minlength="6" required /></label>
-        <button class="primary" type="submit">${register ? "Create civilian" : "Unlock phone"}</button>
+        ${register ? `<section class="auth-legal-consent">
+          <header><div><span>REQUIRED AGREEMENT</span><strong>EULA, Terms of Use & Privacy</strong></div><small>Version ${escapeHtml(legal.current_version || "1.0")}</small></header>
+          <div class="auth-legal-scroll" data-register-legal-scroll tabindex="0">${legalText ? escapeHtml(legalText) : "Loading the controlled ThunderLink agreement…"}</div>
+          <p data-register-legal-hint>${legalText ? "Scroll to the end to enable acceptance." : "The registration button will unlock after the agreement loads and is reviewed."}</p>
+          <label class="auth-legal-check"><input type="checkbox" name="accept_legal" disabled required/><span>I have read and accept the EULA, Terms of Use, Acceptable Use Policy, and Privacy Notice.</span></label>
+          <input type="hidden" name="policy_version" value="${escapeHtml(legal.current_version || "")}"/>
+        </section>` : ""}
+        <button class="primary" type="submit" ${register ? "disabled data-register-submit" : ""}>${register ? "Create civilian" : "Unlock phone"}</button>
       </form>
     </section>
   `;
 }
 
 function bindAuth() {
+  if (state.authMode === "register" && !state.legalDocument) {
+    loadLegalDocument().then(() => {
+      if (!state.session?.user && state.authMode === "register") render();
+    }).catch(error => toast(error.message));
+  }
   $$("[data-auth-mode]").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
       state.authMode = button.dataset.authMode;
+      state.registerLegalRead = false;
       render();
+      if (state.authMode === "register" && !state.legalDocument) {
+        try { await loadLegalDocument(); render(); } catch (error) { toast(error.message); }
+      }
     });
   });
+  const legalScroll = $('[data-register-legal-scroll]');
+  const legalCheckbox = $('#authForm [name="accept_legal"]');
+  const registerSubmit = $('[data-register-submit]');
+  if (legalScroll && legalCheckbox && state.legalDocument?.document) {
+    const updateRegisterRead = () => {
+      const complete = legalScroll.scrollTop + legalScroll.clientHeight >= legalScroll.scrollHeight - 18;
+      if (complete) state.registerLegalRead = true;
+      legalCheckbox.disabled = !state.registerLegalRead;
+      const hint = $('[data-register-legal-hint]');
+      if (hint && state.registerLegalRead) hint.textContent = "Review complete. Check the acceptance box to continue.";
+    };
+    legalScroll.addEventListener('scroll', updateRegisterRead, { passive: true });
+    legalCheckbox.addEventListener('change', () => {
+      if (registerSubmit) registerSubmit.disabled = !(state.registerLegalRead && legalCheckbox.checked);
+    });
+    requestAnimationFrame(updateRegisterRead);
+  }
   $("#authForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const payload = Object.fromEntries(form.entries());
+    if (state.authMode === "register") {
+      payload.accept_legal = form.get("accept_legal") === "on";
+      payload.read_confirmed = state.registerLegalRead === true;
+      payload.policy_version = state.legalDocument?.current_version || payload.policy_version || "";
+    }
     try {
       await api(state.authMode === "register" ? "/api/auth/register" : "/api/auth/login", {
         method: "POST",
@@ -2763,12 +2922,14 @@ function renderInsuranceWorkspaceLegacy() {
     </section></main></section>`;
 }
 
-function renderInsuranceWorkspace() {
+function renderInsuranceWorkspaceV5() {
   const data = state.cache.insurance || { policies: [], claims: [], characters: [], tiers: [] };
   const policies = (data.policies || []).filter(policy => policy.policy_type === "compensation");
   const claims = data.claims || [];
   const properties = data.properties || [];
-  const propertyTerms = data.property_terms || { base_value: 150000, protected_value: 300000, premium: 20000 };
+  const propertyTerms = data.property_terms || { base_value: 150000, protected_value: 400000, premium: 50000 };
+  const everydayTerms = data.everyday_protection_terms || { premium: 45000, claim_types: ["theft", "fire", "robbery", "car_accident"] };
+  const everydayProtections = data.everyday_protections || [];
   const enhancedProperties = properties.filter(property => property.protection?.status === "active");
   const tiers = data.tiers || [];
   const active = policies.filter(policy => policy.status === "active");
@@ -2780,9 +2941,10 @@ function renderInsuranceWorkspace() {
   const bankBalance = Number(data.bank?.balance || 0);
   const quotePercent = Number(quoteTier.coverage_percent || 0);
   const monthlyRate = Number(quoteTier.premium || 0);
-  const totalPremium = monthlyRate * termMonths;
+  const includeEverydayProtection = Boolean(state.insuranceIncludeEverydayProtection);
+  const totalPremium = monthlyRate * termMonths + (includeEverydayProtection ? Number(everydayTerms.premium || 45000) : 0);
   const basePropertyValue = properties.length * Number(propertyTerms.base_value || 150000);
-  const enhancedPropertyValue = enhancedProperties.length * Number(propertyTerms.protected_value || 300000) + (properties.length - enhancedProperties.length) * Number(propertyTerms.base_value || 150000);
+  const enhancedPropertyValue = properties.reduce((total, property) => total + Number(property.insured_value || propertyTerms.base_value || 150000), 0);
   const quoteCoverage = bankBalance * quotePercent / 100 + basePropertyValue;
   const lockDate = new Date(Date.now() + termMonths * 30 * 86400000);
   const selectedPercent = Number(selected?.coverage_percent || quotePercent);
@@ -2805,6 +2967,9 @@ function renderInsuranceWorkspace() {
   ];
   const emergencyOpen = Boolean(data.state_of_emergency);
   const activePlan = active[0] || null;
+  const everydayProtection = everydayProtections.find(protection => String(protection.policy_id) === String(activePlan?.id) && ["active", "pending_payment"].includes(protection.status));
+  const everydayActive = everydayProtection?.status === "active";
+  const everydayPending = everydayProtection?.status === "pending_payment";
   const propertyCards = properties.map(property => {
     const protection = property.protection;
     const activeProtection = protection?.status === "active";
@@ -2828,7 +2993,7 @@ function renderInsuranceWorkspace() {
   </section>`;
 }
 
-function bindInsuranceWorkspace() {
+function bindInsuranceWorkspaceV5() {
   $(`[data-insurance-policy]`) && $$('[data-insurance-policy]').forEach((button) => button.addEventListener('click', () => { state.insuranceSelectedPolicy = button.dataset.insurancePolicy; render(); }));
   $$('[data-insurance-scroll]').forEach((button) => button.addEventListener('click', () => document.getElementById(button.dataset.insuranceScroll)?.scrollIntoView({behavior:'smooth'})));
   $('[data-close-insurance]')?.addEventListener('click', async () => { state.activeApp=null; await loadSession(); });
@@ -2839,6 +3004,94 @@ function bindInsuranceWorkspace() {
   $('#insurancePolicyForm')?.addEventListener('submit', async (event) => { event.preventDefault(); const button=$('button[type="submit"]',event.currentTarget); if(button)button.disabled=true; try { const result=await api('/api/insurance/policies',{method:'POST',body:Object.fromEntries(new FormData(event.currentTarget))}); toast(`Certificate ${result.policy_number} issued`); state.cache.insurance=await api('/api/insurance'); state.insuranceSelectedPolicy=state.cache.insurance.policies?.[0]?.id; render(); } catch(error){if(button)button.disabled=false;toast(error.message);} });
   $('#insuranceClaimForm')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,body=Object.fromEntries(new FormData(form));body.confirmed_reset=form.confirmed_reset.checked;try{const result=await api('/api/insurance/claims',{method:'POST',body});toast(`Claim ${result.claim_number} is pending review`);state.cache.insurance=await api('/api/insurance');render();}catch(error){toast(error.message);}});
   $('#insurancePropertyClaimForm')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,body=Object.fromEntries(new FormData(form));body.confirmed_loss=form.confirmed_loss.checked;const button=$('button[type="submit"]',form);if(button)button.disabled=true;try{const result=await api('/api/insurance/claims',{method:'POST',body});toast(`Property claim ${result.claim_number} is pending manual review`);state.cache.insurance=await api('/api/insurance');render();document.getElementById('claims')?.scrollIntoView({behavior:'smooth',block:'start'});}catch(error){if(button)button.disabled=false;toast(error.message);}});
+}
+
+function renderInsuranceWorkspace() {
+  const data = state.cache.insurance || { policies: [], claims: [], characters: [], tiers: [] };
+  const policies = (data.policies || []).filter(policy => policy.policy_type === "compensation");
+  const claims = data.claims || [];
+  const properties = data.properties || [];
+  const propertyTerms = data.property_terms || { base_value: 150000, protected_value: 400000, premium: 50000 };
+  const everydayTerms = data.everyday_protection_terms || { premium: 45000, claim_types: ["theft", "fire", "robbery", "car_accident"] };
+  const everydayProtections = data.everyday_protections || [];
+  const tiers = data.tiers || [];
+  const activePolicies = policies.filter(policy => policy.status === "active");
+  const selected = policies.find(policy => String(policy.id) === String(state.insuranceSelectedPolicy)) || policies[0] || null;
+  const activePlan = activePolicies[0] || null;
+  const coveragePlan = activePlan || policies.find(policy => policy.status === "pending_payment") || null;
+  const everydayProtection = everydayProtections.find(item => String(item.policy_id) === String(coveragePlan?.id) && ["active", "pending_payment"].includes(item.status));
+  const everydayActive = everydayProtection?.status === "active";
+  const everydayPending = everydayProtection?.status === "pending_payment";
+  const enhancedProperties = properties.filter(property => property.protection?.status === "active");
+  const purchaseBlocked = policies.some(policy => ["active", "pending_payment"].includes(policy.status) && new Date(policy.expires_at).getTime() > Date.now());
+  const tierId = tiers.some(tier => tier.id === state.insuranceCoverageTier) ? state.insuranceCoverageTier : (tiers[1]?.id || tiers[0]?.id || "preferred");
+  const quoteTier = tiers.find(tier => tier.id === tierId) || tiers[0] || { id: "preferred", name: "Continuity Preferred", coverage_percent: 70, premium: 4250 };
+  const termMonths = [1, 3, 6].includes(Number(state.insuranceTermMonths)) ? Number(state.insuranceTermMonths) : 1;
+  const includeEveryday = Boolean(state.insuranceIncludeEverydayProtection);
+  const bankBalance = Number(data.bank?.balance || 0);
+  const quotePercent = Number(quoteTier.coverage_percent || 0);
+  const monthlyRate = Number(quoteTier.premium || 0);
+  const planPremium = monthlyRate * termMonths;
+  const everydayPremium = Number(everydayTerms.premium || 45000);
+  const totalPremium = planPremium + (includeEveryday ? everydayPremium : 0);
+  const basePropertyValue = properties.length * Number(propertyTerms.base_value || 150000);
+  const portfolioValue = properties.reduce((total, property) => total + Number(property.insured_value || propertyTerms.base_value || 150000), 0);
+  const quoteCoverage = bankBalance * quotePercent / 100 + basePropertyValue;
+  const selectedPercent = Number(selected?.coverage_percent || quotePercent);
+  const selectedTerm = Math.max(1, Number(selected?.term_months || 1));
+  const selectedMonthlyRate = Number(selected?.monthly_premium_rate || (Number(selected?.premium_amount || 0) / selectedTerm));
+  const lockDate = new Date(Date.now() + termMonths * 30 * 86400000);
+  const emergencyOpen = Boolean(data.state_of_emergency);
+  const selectedClaims = claims.filter(claim => String(claim.policy_id) === String(selected?.id));
+  const continuityClaimOpen = selectedClaims.some(claim => claim.incident_type === "server_reset" && ["pending", "approved"].includes(claim.status));
+  const everydayClaimLimit = Number(activePlan?.bank_coverage_amount || activePlan?.coverage_amount || 0);
+  const characters = (data.characters || []).map(character => `<option value="${character.id}">${escapeHtml(character.character_name)}${character.is_active ? " — active" : ""}</option>`).join("");
+  const tierCopy = {
+    essential: { title: "Essential", note: "A practical recovery floor.", points: ["50% bank snapshot", `FC$${Number(propertyTerms.base_value || 150000).toLocaleString()} per owned house`, "Manual claim review"] },
+    preferred: { title: "Preferred", note: "Balanced protection for established residents.", points: ["70% bank snapshot", `FC$${Number(propertyTerms.base_value || 150000).toLocaleString()} per owned house`, "Rate-lock eligible"] },
+    premier: { title: "Premier", note: "The strongest continuity position.", points: ["90% bank snapshot", `FC$${Number(propertyTerms.base_value || 150000).toLocaleString()} per owned house`, "Maximum reset recovery"] }
+  };
+  const termOptions = [
+    { months: 1, label: "Monthly", detail: "30-day term" },
+    { months: 3, label: "3 months", detail: "Rate locked 90 days" },
+    { months: 6, label: "6 months", detail: "Rate locked 180 days" }
+  ];
+  const propertyCards = properties.map(property => {
+    const protection = property.protection;
+    const isActive = protection?.status === "active";
+    const isPending = protection?.status === "pending_payment";
+    const canBuy = activePlan && !isActive && !isPending && bankBalance >= Number(propertyTerms.premium || 50000);
+    return `<article class="${isActive ? "protected" : isPending ? "pending" : ""}"><header><span>${isActive ? "FC$400K ACTIVE" : isPending ? "PAYMENT PENDING" : "FC$150K INCLUDED"}</span><strong>${escapeHtml(property.property_type || "Property")}</strong></header><h3>${escapeHtml(property.name)}</h3><p>${escapeHtml(property.address || "Synchronized owned property")}</p><div><span><small>Continuity value</small><strong>${money(property.insured_value || propertyTerms.base_value)}</strong></span><span><small>Upgrade price</small><strong>${isActive ? "Purchased" : money(propertyTerms.premium)}</strong></span></div><footer><small>${isActive ? "Raised from FC$150,000 to FC$400,000" : "This upgrade changes house value only"}</small><button data-insurance-property-protection="${escapeHtml(property.property_id)}" ${canBuy ? "" : "disabled"}>${isActive ? "Upgrade active" : isPending ? "Processing" : !activePlan ? "Active plan required" : "Raise to FC$400K"}</button></footer></article>`;
+  }).join("");
+  const everydayStatus = everydayActive ? "ACTIVE" : everydayPending ? "PAYMENT PENDING" : "AVAILABLE";
+  return `<section class="insurance-workspace insurance-continuity insurance-v6">
+    <header class="ins5-topbar"><div class="ins5-brand"><img src="/static/brand/faircroft-emblem.webp" alt="Faircroft"/><span><small>FAIRCROFT INSURANCE</small><strong>Continuity</strong></span></div><nav><button data-insurance-scroll="plans">Coverage</button><button data-insurance-scroll="protection">My policy</button><button data-insurance-scroll="everyday-protection">Everyday protection</button><button data-insurance-scroll="property-protection">Properties</button><button data-insurance-scroll="claims">Claims</button></nav><div><span><i></i>SECURE NETWORK</span><button data-refresh-insurance>Refresh</button><button class="primary" data-close-insurance>Exit</button></div></header>
+    <main>
+      <section class="ins5-hero"><div class="ins5-hero-copy"><span>PROTECTION FOR YOUR FAIRCROFT STORY</span><h1>Keep what you<br/><em>worked to build.</em></h1><p>Your main plan protects the verified bank snapshot and automatically values every owned house at ${money(propertyTerms.base_value)}. Optional protections stay separate and easy to understand.</p><div><button class="primary" data-insurance-scroll="plans">Build coverage</button><button data-insurance-scroll="everyday-protection">See Everyday Protection</button></div><small>All premiums and approved claims use Faircroft in-game currency through Bank Bridge. No payment PIN.</small></div><aside class="ins5-hero-policy"><header><span>YOUR LIVE POSITION</span><i>${data.bank?.synced_at ? "SYNCED" : "AWAITING SYNC"}</i></header><strong>${money(bankBalance)}</strong><p>Verified game-bank balance · ${properties.length} owned ${properties.length === 1 ? "house" : "houses"}</p><div class="ins5-cover-ring" style="--coverage:${selectedPercent}"><span><b>${selectedPercent}%</b><small>${selected ? "CURRENT COVERAGE" : "QUOTE PREVIEW"}</small></span></div><footer><span>${activePolicies.length ? "Plan active" : "No active plan"}</span><b>${everydayActive ? "EVERYDAY CLAIMS READY" : emergencyOpen ? "EMERGENCY CLAIMS OPEN" : "CLAIMS STANDBY"}</b></footer></aside></section>
+      <section class="ins5-trust-strip"><article><b>01</b><span><strong>Main plan</strong><small>Bank coverage plus ${money(propertyTerms.base_value)} for every owned house.</small></span></article><article><b>02</b><span><strong>Everyday Protection</strong><small>${money(everydayPremium)} unlocks theft, fire, robbery, and car-accident claims. No property required.</small></span></article><article><b>03</b><span><strong>House upgrade</strong><small>${money(propertyTerms.premium)} raises one owned house from ${money(propertyTerms.base_value)} to ${money(propertyTerms.protected_value)}.</small></span></article></section>
+      <section class="ins5-policy" id="protection"><header><div><span>YOUR COVERAGE</span><h2>Policy center</h2><p>Your plan, add-ons, values, and dates in one record.</p></div><strong>${activePolicies.length} ACTIVE</strong></header><div class="ins5-policy-layout"><aside>${policies.map(policy => `<button class="${selected?.id === policy.id ? "active" : ""}" data-insurance-policy="${policy.id}"><span><i></i><strong>${escapeHtml(humanLabel(policy.coverage_tier))}</strong><small>${escapeHtml(policy.character_name)}</small></span><b>${Number(policy.coverage_percent || 0)}%</b><em>${escapeHtml(policy.policy_number)}</em></button>`).join("") || `<div class="ins5-no-policy"><b>+</b><strong>No policy yet</strong><span>Your first quote is ready below.</span></div>`}</aside><article>${selected ? `<header><div><span>OFFICIAL CONTINUITY CERTIFICATE</span><h3>${escapeHtml(selected.character_name)}</h3><p>${escapeHtml(selected.policy_number)}</p></div><strong class="${selected.status === "active" ? "active" : ""}">${escapeHtml(humanLabel(selected.status))}</strong></header><div class="ins5-policy-amount"><span><small>Bank snapshot</small><strong>${money(selected.protected_bank_balance)}</strong></span><span><small>House continuity value</small><strong>${money(selected.property_coverage_amount || 0)}</strong></span><span><small>Total recovery ceiling</small><strong>${money(selected.coverage_amount)}</strong></span></div><div class="ins5-policy-meter"><span><b style="width:${selectedPercent}%"></b></span><strong>${selectedPercent}% bank protection</strong></div><dl><div><dt>Coverage</dt><dd>${escapeHtml(humanLabel(selected.coverage_tier))}</dd></div><div><dt>Policy term</dt><dd>${selectedTerm} month${selectedTerm === 1 ? "" : "s"}</dd></div><div><dt>Locked monthly rate</dt><dd>${money(selectedMonthlyRate)}</dd></div><div><dt>Plan premium</dt><dd>${money(selected.premium_amount)}</dd></div><div><dt>Everyday Protection</dt><dd>${String(everydayProtection?.policy_id) === String(selected.id) ? escapeHtml(humanLabel(everydayProtection.status)) : "Not added"}</dd></div><div><dt>Expires</dt><dd>${new Date(selected.expires_at).toLocaleDateString()}</dd></div></dl><footer><img src="/static/brand/faircroft-emblem.webp" alt=""/><span>Rate and coverage terms are stored with this certificate.</span><code>${escapeHtml(selected.policy_number.replaceAll("-", ""))}</code></footer>` : `<div class="ins5-policy-empty"><span>FC</span><h3>Your protection starts with a clear quote.</h3><p>Choose a plan, term, and optional Everyday Protection below.</p><button class="primary" data-insurance-scroll="plans">Build my quote</button></div>`}</article></div></section>
+      <section class="ins5-plans" id="plans"><header><div><span>COMPARE COVERAGE</span><h2>Choose your recovery level.</h2><p>Every plan includes automatic FC$150,000 continuity value for each owned house. The percentage controls bank-snapshot protection.</p></div><aside><span>VERIFIED BALANCE</span><strong>${money(bankBalance)}</strong></aside></header><div class="ins5-plan-grid">${tiers.map((tier, index) => { const copy = tierCopy[tier.id] || tierCopy.preferred; const chosen = tier.id === tierId; return `<button type="button" data-insurance-tier="${escapeHtml(tier.id)}" class="${chosen ? "active" : ""}"><header><small>OPTION ${String(index + 1).padStart(2, "0")}</small><strong>${escapeHtml(copy.title)}</strong><i>${chosen ? "✓" : "+"}</i></header><div><b>${Number(tier.coverage_percent)}<em>%</em></b><span>of the verified bank snapshot</span></div><p>${escapeHtml(copy.note)}</p><ul>${copy.points.map(point => `<li><i>✓</i>${escapeHtml(point)}</li>`).join("")}</ul><footer><span><small>FROM</small><strong>${money(tier.premium)}<em>/ month</em></strong></span><b>${chosen ? "Selected" : "Choose"}</b></footer></button>`; }).join("")}</div><div class="ins5-coverage-explainer"><span>QUOTE FORMULA</span><p><b>${money(bankBalance)}</b> × <b>${quotePercent}%</b> plus <b>${properties.length}</b> owned ${properties.length === 1 ? "house" : "houses"} at ${money(propertyTerms.base_value)} creates a current estimate of <strong>${money(quoteCoverage)}</strong>.</p></div></section>
+      <section class="ins6-everyday" id="everyday-protection"><header><div><span>OPTIONAL RIDER · NO PROPERTY REQUIRED</span><h2>Everyday Protection.</h2><p>One add-on opens manual claims for losses that happen outside a declared State of Emergency.</p></div><aside><small>ONE-TIME PREMIUM</small><strong>${money(everydayPremium)}</strong><b class="${everydayActive ? "active" : everydayPending ? "pending" : ""}">${everydayStatus}</b></aside></header><div class="ins6-incident-line"><article><i>01</i><strong>Theft</strong><span>Stolen personal assets or possessions</span></article><article><i>02</i><strong>Fire</strong><span>Documented fire-related losses</span></article><article><i>03</i><strong>Robbery</strong><span>Losses resulting from an RP robbery</span></article><article><i>04</i><strong>Car accident</strong><span>Vehicle-loss claims after an accident</span></article></div><footer><div><strong>No house is needed.</strong><span>The rider follows the active character policy and every claim remains subject to manual developer review.</span></div><button class="primary" data-insurance-everyday-purchase ${!activePlan || everydayActive || everydayPending || bankBalance < everydayPremium ? "disabled" : ""}>${everydayActive ? "Protection active" : everydayPending ? "Payment processing" : !activePlan ? "Active plan required" : "Add for FC$45,000"}</button></footer></section>
+      <section class="ins5-property-protection" id="property-protection"><header><div><span>ADDITIONAL HOUSE COVERAGE</span><h2>Raise a home to FC$400,000.</h2><p>The main plan already values every owned house at ${money(propertyTerms.base_value)}. This separate ${money(propertyTerms.premium)} upgrade raises one selected house to ${money(propertyTerms.protected_value)} for continuity recovery.</p></div><aside><small>CURRENT PORTFOLIO VALUE</small><strong>${money(portfolioValue)}</strong><span>${enhancedProperties.length} upgraded · ${properties.length} owned</span></aside></header><div class="ins5-property-terms"><article><b>INCLUDED</b><span><strong>${money(propertyTerms.base_value)}</strong><small>Automatic value per owned house</small></span></article><article><b>UPGRADED</b><span><strong>${money(propertyTerms.protected_value)}</strong><small>Continuity value after upgrade</small></span></article><article><b>PRICE</b><span><strong>${money(propertyTerms.premium)}</strong><small>One-time debit per selected house</small></span></article></div><div class="ins5-property-grid">${propertyCards || `<div class="ins5-property-empty"><span>FC</span><strong>No owned properties found</strong><p>A property is not needed for Everyday Protection. Owned homes appear here only for the optional FC$400,000 upgrade.</p></div>`}</div><footer><strong>House upgrades do not unlock incident claims.</strong><span>Use Everyday Protection above for theft, fire, robbery, or car-accident claims.</span></footer></section>
+      <section class="ins5-enroll" id="enroll"><div class="ins5-enroll-main"><header><span>BUILD YOUR POLICY</span><h2>Lock today’s rate.</h2><p>Choose a term, identify the protected character, and decide whether to add Everyday Protection now.</p></header><div class="ins5-term-picker">${termOptions.map(term => `<button type="button" data-insurance-term="${term.months}" class="${term.months === termMonths ? "active" : ""}"><span><strong>${escapeHtml(term.label)}</strong><small>${escapeHtml(term.detail)}</small></span>${term.months > 1 ? `<em>RATE LOCK</em>` : ""}</button>`).join("")}</div><form id="insurancePolicyForm"><input type="hidden" name="policy_type" value="compensation"/><input type="hidden" name="coverage_tier" value="${escapeHtml(tierId)}"/><input type="hidden" name="term_months" value="${termMonths}"/><input type="hidden" name="subject_label" value="Server Continuity Compensation"/><input type="hidden" name="risk_use" value="Authorized server reset and wipe compensation"/><div><label>Protected character<select name="character_id" required><option value="">Select exact character</option>${characters}</select><small>The plan and optional rider follow this character.</small></label><label>Continuity notes <em>Optional</em><textarea name="notes" maxlength="500" placeholder="Anything you want recorded with this plan"></textarea></label></div><label class="ins6-new-plan-addon"><input type="checkbox" name="include_everyday_protection" value="true" ${includeEveryday ? "checked" : ""}/><span><b>ADD-ON</b><strong>Include Everyday Protection</strong><small>Theft · Fire · Robbery · Car accident · No property required</small></span><em>+${money(everydayPremium)}</em></label><label class="ins5-authorization"><input type="checkbox" required/><span><strong>I authorize one in-game bank debit of ${money(totalPremium)}.</strong><small>${money(planPremium)} plan${includeEveryday ? ` + ${money(everydayPremium)} Everyday Protection` : ""}. No four-digit PIN.</small></span></label><button class="primary" ${bankBalance < totalPremium || purchaseBlocked ? "disabled" : ""}>${purchaseBlocked ? "Current policy already on file" : bankBalance < totalPremium ? "Insufficient in-game balance" : `Purchase ${termMonths}-month protection`}</button></form></div><aside class="ins5-quote"><span>YOUR QUOTE</span><header><div><small>PLAN</small><strong>${escapeHtml((tierCopy[tierId] || tierCopy.preferred).title)}</strong></div><b>${quotePercent}%</b></header><dl><div><dt>Plan premium</dt><dd>${money(planPremium)}</dd></div><div><dt>Everyday Protection</dt><dd>${includeEveryday ? money(everydayPremium) : "Not selected"}</dd></div><div><dt>Rate-lock term</dt><dd>${termMonths} month${termMonths === 1 ? "" : "s"}</dd></div><div><dt>Coverage estimate</dt><dd>${money(quoteCoverage)}</dd></div><div><dt>Rate guaranteed until</dt><dd>${lockDate.toLocaleDateString()}</dd></div></dl><div><span>TOTAL DUE TODAY</span><strong>${money(totalPremium)}</strong><small>One Bank Bridge debit.</small></div></aside></section>
+      <section class="ins5-claims" id="claims"><header><div><span>MANUAL CLAIM DESK</span><h2>Two clear claim paths.</h2><p>Continuity claims need a declared State of Emergency. Everyday claims need the FC$45,000 rider, but never require a house or emergency declaration.</p></div><strong class="${emergencyOpen || everydayActive ? "open" : "closed"}"><i></i>${emergencyOpen || everydayActive ? "CLAIM DESK OPEN" : "STANDBY"}</strong></header><div class="ins5-claim-guide"><article><b>1</b><span><strong>Choose the right lane</strong><small>Reset continuity or an everyday incident.</small></span></article><article><b>2</b><span><strong>Document the exact loss</strong><small>Include enough detail for a manual decision.</small></span></article><article><b>3</b><span><strong>Developer review</strong><small>No claim pays automatically.</small></span></article></div><div class="ins5-claim-lanes"><section><header><span>CONTINUITY EVENT</span><strong>${emergencyOpen ? "OPEN" : "STATE OF EMERGENCY REQUIRED"}</strong></header>${emergencyOpen && activePlan ? `<form id="insuranceClaimForm"><input type="hidden" name="policy_id" value="${activePlan.id}"/><input type="hidden" name="incident_type" value="server_reset"/><div><span>FILE AGAINST ${escapeHtml(activePlan.policy_number)}</span><strong>Authorized reset or wipe</strong><p>Bank coverage and house values are calculated from the stored policy.</p></div><label>Reset date and loss details<textarea name="incident_summary" minlength="20" maxlength="1500" required placeholder="Describe the announced reset and what was lost."></textarea></label><label><input type="checkbox" name="confirmed_reset" value="true" required/><span>I confirm an authorized server reset or wipe occurred.</span></label><button class="primary" ${continuityClaimOpen ? "disabled" : ""}>${continuityClaimOpen ? "Claim already under review" : "Submit continuity claim"}</button></form>` : `<div class="ins5-claims-closed"><span>EMERGENCY WINDOW CLOSED</span><strong>${emergencyOpen ? "An active plan is required." : "Continuity claims are on standby."}</strong><p>The form opens when Insurance Command declares a State of Emergency.</p></div>`}</section><section class="everyday-lane"><header><span>EVERYDAY INCIDENT</span><strong>${everydayActive ? "AVAILABLE NOW" : everydayPending ? "PAYMENT PENDING" : "RIDER REQUIRED"}</strong></header>${activePlan && everydayActive ? `<form id="insuranceEverydayClaimForm"><input type="hidden" name="policy_id" value="${activePlan.id}"/><input type="hidden" name="coverage_source" value="everyday"/><div><span>NO PROPERTY REQUIRED</span><strong>Report the incident</strong><p>Choose the incident and request the documented loss amount for manual review.</p></div><div><label>Incident<select name="incident_type" required><option value="theft">Theft</option><option value="fire">Fire</option><option value="robbery">Robbery</option><option value="car_accident">Car accident</option></select></label><label>Requested amount<input name="requested_amount" type="number" min="0.01" max="${everydayClaimLimit}" step="0.01" required placeholder="Exact loss amount"/></label></div><label>Affected item, vehicle, or loss<input name="loss_subject" maxlength="180" required placeholder="Example: personal vehicle or stolen inventory"/></label><label>Incident report<textarea name="incident_summary" minlength="20" maxlength="1500" required placeholder="Explain what happened, when it occurred, and how the amount was calculated."></textarea></label><label><input type="checkbox" name="confirmed_loss" value="true" required/><span>I certify this is an accurate in-roleplay loss report and understand it requires manual approval.</span></label><button class="primary">Submit Everyday claim</button></form>` : `<div class="ins5-claims-closed"><span>EVERYDAY PROTECTION</span><strong>${everydayPending ? "Bank Bridge is confirming payment." : "Add the FC$45,000 rider first."}</strong><p>No house is required. The rider unlocks theft, fire, robbery, and car-accident claims.</p></div>`}</section></div><section class="ins5-claim-history"><header><span>CLAIM HISTORY</span><strong>${claims.length} RECORD${claims.length === 1 ? "" : "S"}</strong></header>${claims.map(claim => `<article><i class="${escapeHtml(claim.status)}"></i><span><small>${escapeHtml(claim.claim_number)} · ${escapeHtml(humanLabel(claim.incident_type || "server_reset"))}</small><strong>${escapeHtml(claim.property_name || claim.character_name)}</strong><p>${escapeHtml(claim.incident_summary)}</p></span><dl><div><dt>Coverage</dt><dd>${claim.coverage_source === "everyday" ? "Everyday Protection" : claim.property_id ? "House upgrade" : "Continuity"}</dd></div><div><dt>Claim value</dt><dd>${money(claim.requested_amount)}</dd></div></dl><b class="claim-${escapeHtml(claim.status)}">${escapeHtml(humanLabel(claim.status))}</b></article>`).join("") || `<p>No claims have been filed on this account.</p>`}</section></section>
+    </main>
+  </section>`;
+}
+
+function bindInsuranceWorkspace() {
+  $$('[data-insurance-policy]').forEach(button => button.addEventListener('click', () => { state.insuranceSelectedPolicy = button.dataset.insurancePolicy; render(); }));
+  $$('[data-insurance-scroll]').forEach(button => button.addEventListener('click', () => document.getElementById(button.dataset.insuranceScroll)?.scrollIntoView({ behavior: 'smooth', block: 'start' })));
+  $('[data-close-insurance]')?.addEventListener('click', async () => { state.activeApp = null; await loadSession(); });
+  $('[data-refresh-insurance]')?.addEventListener('click', async () => { await loadAppData('insurance'); render(); });
+  $$('[data-insurance-tier]').forEach(button => button.addEventListener('click', () => { state.insuranceCoverageTier = button.dataset.insuranceTier || 'preferred'; render(); document.getElementById('plans')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }));
+  $$('[data-insurance-term]').forEach(button => button.addEventListener('click', () => { state.insuranceTermMonths = Number(button.dataset.insuranceTerm || 1); render(); document.getElementById('enroll')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }));
+  $('[name="include_everyday_protection"]')?.addEventListener('change', event => { const form = event.currentTarget.form; const characterId = form?.character_id?.value || ''; const notes = form?.notes?.value || ''; state.insuranceIncludeEverydayProtection = event.currentTarget.checked; render(); const rebuilt = $('#insurancePolicyForm'); if (rebuilt?.character_id) rebuilt.character_id.value = characterId; if (rebuilt?.notes) rebuilt.notes.value = notes; document.getElementById('enroll')?.scrollIntoView({ block: 'start' }); });
+  $('[data-insurance-everyday-purchase]')?.addEventListener('click', async event => { const policy = (state.cache.insurance?.policies || []).find(item => item.policy_type === 'compensation' && item.status === 'active'); const premium = Number(state.cache.insurance?.everyday_protection_terms?.premium || 45000); if (!policy || !confirm(`Add Everyday Protection for FC$${premium.toLocaleString()}? This covers theft, fire, robbery, and car accidents without requiring a property.`)) return; const button = event.currentTarget; button.disabled = true; try { await api('/api/insurance/everyday-protection', { method: 'POST', body: { policy_id: policy.id } }); toast('Everyday Protection sent to Bank Bridge'); state.cache.insurance = await api('/api/insurance'); render(); document.getElementById('everyday-protection')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (error) { button.disabled = false; toast(error.message); } });
+  $$('[data-insurance-property-protection]').forEach(button => button.addEventListener('click', async () => { const policy = (state.cache.insurance?.policies || []).find(item => item.policy_type === 'compensation' && item.status === 'active'); const property = (state.cache.insurance?.properties || []).find(item => String(item.property_id) === String(button.dataset.insurancePropertyProtection)); const terms = state.cache.insurance?.property_terms || { premium: 50000, protected_value: 400000 }; if (!policy || !property || !confirm(`Spend FC$${Number(terms.premium).toLocaleString()} to raise ${property.name} from FC$150,000 to FC$${Number(terms.protected_value).toLocaleString()} in continuity value?`)) return; button.disabled = true; try { await api('/api/insurance/property-protections', { method: 'POST', body: { policy_id: policy.id, property_id: property.property_id } }); toast('House coverage upgrade sent to Bank Bridge'); state.cache.insurance = await api('/api/insurance'); render(); document.getElementById('property-protection')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (error) { button.disabled = false; toast(error.message); } }));
+  $('#insurancePolicyForm')?.addEventListener('submit', async event => { event.preventDefault(); const form = event.currentTarget; const body = Object.fromEntries(new FormData(form)); body.include_everyday_protection = form.include_everyday_protection?.checked || false; const button = $('button[type="submit"]', form); if (button) button.disabled = true; try { const result = await api('/api/insurance/policies', { method: 'POST', body }); toast(`Certificate ${result.policy_number} sent to Bank Bridge`); state.insuranceIncludeEverydayProtection = false; state.cache.insurance = await api('/api/insurance'); state.insuranceSelectedPolicy = state.cache.insurance.policies?.[0]?.id; render(); } catch (error) { if (button) button.disabled = false; toast(error.message); } });
+  $('#insuranceClaimForm')?.addEventListener('submit', async event => { event.preventDefault(); const form = event.currentTarget; const body = Object.fromEntries(new FormData(form)); body.confirmed_reset = form.confirmed_reset.checked; try { const result = await api('/api/insurance/claims', { method: 'POST', body }); toast(`Claim ${result.claim_number} is pending manual review`); state.cache.insurance = await api('/api/insurance'); render(); } catch (error) { toast(error.message); } });
+  $('#insuranceEverydayClaimForm')?.addEventListener('submit', async event => { event.preventDefault(); const form = event.currentTarget; const body = Object.fromEntries(new FormData(form)); body.confirmed_loss = form.confirmed_loss.checked; const button = $('button[type="submit"]', form); if (button) button.disabled = true; try { const result = await api('/api/insurance/claims', { method: 'POST', body }); toast(`Everyday claim ${result.claim_number} is pending manual review`); state.cache.insurance = await api('/api/insurance'); render(); document.getElementById('claims')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (error) { if (button) button.disabled = false; toast(error.message); } });
 }
 
 function renderGangWorkspace() {
@@ -11820,8 +12073,8 @@ const ADMIN_TOOL_NAV = [
   ["court-settings", "Court Settings", "18"], ["ice-settings", "ICE Settings", "19"],
   ["admin-2fa", "Admin 2FA", "20"], ["autopilot", "Auto Pilot", "21"],
   ["system-update", "System Update", "22"], ["audit", "Activity Log", "23"],
-  ["fnn-settings", "FNN Settings", "24"], ["settings", "Settings", "25"],
-  ["account-deletion", "Account Deletion", "26"],
+  ["policy-settings", "Policy Settings", "24"], ["fnn-settings", "FNN Settings", "25"], ["settings", "Settings", "26"],
+  ["account-deletion", "Account Deletion", "27"],
 ];
 
 function adminToolAccess() {
@@ -11858,6 +12111,7 @@ function renderDevWorkspace() {
     autopilot: ["Auto Pilot", "Control automated civilian account verification"],
     "system-update": ["System Update", "Publish and control Faircroft limited-service mode"],
     "fnn-settings": ["FNN Settings", "Control newsroom publishing and Press Pass capacity"],
+    "policy-settings": ["Policy Settings", "Monitor required EULA, Terms, acceptable-use, and privacy acceptance"],
     "gang-settings": ["Gang Settings", "Govern organizations, leaders, rosters, and recruitment PINs"],
     "market-settings": ["Stock Market Settings", "Operate Ravenhood pricing, settlement receipts, fees, and RP events"],
     "lottery-settings": ["Lottery Settings", "Govern entries, prize funding, role eligibility, fraud review, and weekly drawings"],
@@ -12303,6 +12557,34 @@ function renderDevCasinoTools(casino) {
   </div>`;
 }
 
+function renderDevPolicySettings(policy) {
+  const records = policy.records || [];
+  const accepted = Number(policy.accepted_accounts || 0);
+  const pending = Number(policy.pending_accounts || 0);
+  return `<div class="policy-console">
+    <header class="policy-console-hero">
+      <div><span>LEGAL ACCEPTANCE CONTROL</span><h2>One agreement. Verifiable consent.</h2><p>Every account must accept the current controlled ThunderLink agreement before RP OS access is restored.</p></div>
+      <div class="policy-version-stamp"><small>CURRENT VERSION</small><strong>${escapeHtml(policy.current_version || "—")}</strong><span>Effective ${escapeHtml(policy.effective_date || "—")}</span></div>
+    </header>
+    <section class="policy-compliance-strip">
+      <article><small>ACCEPTED</small><strong>${accepted}</strong><span>${Number(policy.acceptance_percent || 0).toFixed(1)}% compliance</span></article>
+      <article><small>AWAITING ACTION</small><strong>${pending}</strong><span>Access remains gated</span></article>
+      <article><small>TOTAL ACCOUNTS</small><strong>${Number(policy.total_accounts || 0)}</strong><span>Current registry</span></article>
+      <article class="hash"><small>DOCUMENT FINGERPRINT</small><code>${escapeHtml(String(policy.document_sha256 || "unavailable").slice(0, 24))}…</code><span>${policy.document_available ? "Controlled source online" : "Document unavailable"}</span></article>
+    </section>
+    <section class="policy-ledger">
+      <header><div><span>CONSENT LEDGER</span><h3>Account acceptance status</h3></div><div class="policy-ledger-tools"><label><span>⌕</span><input data-policy-search placeholder="Search name, email, or CIV"/></label><div><button class="active" data-policy-filter="all">All</button><button data-policy-filter="accepted">Accepted</button><button data-policy-filter="pending">Pending</button></div></div></header>
+      <div class="policy-ledger-head"><span>Resident</span><span>Status</span><span>Accepted</span><span>Source</span><span>Version</span></div>
+      <div class="policy-ledger-body">${records.map(record => {
+        const isAccepted = Boolean(record.accepted_at);
+        const haystack = `${record.name || ""} ${record.email || ""} ${record.civ_number || ""}`.toLowerCase();
+        return `<article data-policy-row data-policy-status="${isAccepted ? "accepted" : "pending"}" data-policy-search-value="${escapeHtml(haystack)}"><div><strong>${escapeHtml(record.name || "Unnamed account")}</strong><small>CIV ${escapeHtml(record.civ_number || "pending")} · ${escapeHtml(record.email || "")}</small></div><span class="policy-status ${isAccepted ? "accepted" : "pending"}"><i></i>${isAccepted ? "Accepted" : "Pending"}</span><time>${isAccepted ? escapeHtml(new Date(record.accepted_at).toLocaleString()) : "—"}</time><span>${isAccepted ? escapeHtml(humanLabel(record.acceptance_source || "pwa")) : "Required gate"}</span><code>${isAccepted ? escapeHtml(record.policy_version || policy.current_version || "") : "—"}</code></article>`;
+      }).join("") || `<div class="empty">No account records found.</div>`}</div>
+      <footer><span data-policy-visible-count>${records.length} accounts shown</span><button type="button" data-open-policy-document>Open controlled agreement</button></footer>
+    </section>
+  </div>`;
+}
+
 function renderDevTools() {
   const data = state.cache["dev-tools"] || {};
   const users = data.users || [], sanctions = data.sanctions || [], warnings = data.warnings || [], logs = data.audit_logs || [], codes = data.unlink_codes || [];
@@ -12322,6 +12604,7 @@ function renderDevTools() {
   if (state.devTab === "lottery-settings") return renderDevLotterySettings(data.lottery_settings || {});
   if (state.devTab === "sportsbook-settings") return renderDevSportsbookSettings(data.sportsbook_settings || {});
   if (state.devTab === "casino-tools") return renderDevCasinoTools(data.casino_tools || {});
+  if (state.devTab === "policy-settings") return renderDevPolicySettings(data.policy_settings || {});
   if (state.devTab === "gang-settings") return renderDevGangSettings(data.gang_operations || {});
   if (state.devTab === "mdt-settings") return renderDevMdtSettings(data.ice_settings || {});
   if (state.devTab === "ice-settings") return renderDevIceSettings(data.ice_settings || {});
@@ -13145,6 +13428,27 @@ function devDetailList(items, mapper) {
 function bindDevWorkspace() {
   bindDevTools();
   bindSystem();
+  const policySearch = $('[data-policy-search]');
+  const policyFilterButtons = $$('[data-policy-filter]');
+  const applyPolicyLedgerFilter = () => {
+    const query = String(policySearch?.value || '').trim().toLowerCase();
+    const filter = policyFilterButtons.find(button => button.classList.contains('active'))?.dataset.policyFilter || 'all';
+    let visible = 0;
+    $$('[data-policy-row]').forEach(row => {
+      const matchesStatus = filter === 'all' || row.dataset.policyStatus === filter;
+      const matchesQuery = !query || String(row.dataset.policySearchValue || '').includes(query);
+      row.hidden = !(matchesStatus && matchesQuery);
+      if (!row.hidden) visible += 1;
+    });
+    const count = $('[data-policy-visible-count]');
+    if (count) count.textContent = `${visible} account${visible === 1 ? '' : 's'} shown`;
+  };
+  policySearch?.addEventListener('input', applyPolicyLedgerFilter);
+  policyFilterButtons.forEach(button => button.addEventListener('click', () => {
+    policyFilterButtons.forEach(item => item.classList.toggle('active', item === button));
+    applyPolicyLedgerFilter();
+  }));
+  $('[data-open-policy-document]')?.addEventListener('click', () => openLegalPortal({ blocking: false }));
   $$('[data-insurance-claim-action]').forEach(button=>button.addEventListener('click',async()=>{const action=button.dataset.insuranceClaimAction;let review_notes='';if(action==='deny')review_notes=prompt('Document the denial reason for the resident:')||'';else if(action==='approve'){const amount=money(Number(button.dataset.claimAmount||0));if(!confirm(`Approve this ${amount} compensation claim? Railway will queue the payout now and split it into ordered commands when required.`))return;review_notes=prompt('Optional approval note:')||'';}if(action==='deny'&&review_notes.trim().length<10){toast('A denial reason is required');return;}button.disabled=true;try{const result=await api(`/api/dev-tools/insurance-claims/${button.dataset.claimId}`,{method:'PATCH',body:{action,review_notes}});toast(action==='approve'?`Claim approved · ${Number(result.payout_commands||0)} payout command(s) queued`:'Insurance claim denied');await refreshDevTools();}catch(error){button.disabled=false;toast(error.message);}}));
   $("#devInsuranceSettingsForm")?.addEventListener("submit", async event => { event.preventDefault(); const form=event.currentTarget; const body=Object.fromEntries(new FormData(form)); body.state_of_emergency=form.state_of_emergency.checked; try { await api("/api/dev-tools/insurance/settings", {method:"PATCH", body}); toast("Insurance Command settings saved"); await refreshDevTools(); } catch (error) { toast(error.message); } });
   $('#devGangSettingsForm')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget;try{await api('/api/dev-tools/gangs/settings',{method:'PATCH',body:{creation_enabled:form.creation_enabled.checked,global_limit:form.global_limit.value,default_member_limit:form.default_member_limit.value,max_creations_per_user:form.max_creations_per_user.value}});toast('Gang governance saved');await refreshDevTools();}catch(error){toast(error.message);}});
@@ -15162,8 +15466,13 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-purchase-rollback-v19").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-legal-consent-v21").catch(() => {}));
 }
+
+legalFooterLink?.addEventListener("click", () => {
+  const blocking = Boolean(state.session?.user && state.session?.legal?.required && !state.session?.legal?.accepted);
+  openLegalPortal({ blocking });
+});
 
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();

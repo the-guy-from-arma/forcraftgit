@@ -1,9 +1,10 @@
-const CACHE = "faircroft-rp-v030-purchase-rollback-v19";
+const CACHE = "faircroft-rp-v030-legal-consent-v21";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.3.0-purchase-rollback-v19",
+  "/static/styles.css?v=0.3.0-legal-consent-v21",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.3.0-purchase-rollback-v19",
+  "/static/app.js?v=0.3.0-legal-consent-v21",
+  "/static/thunderlink-eula-v1.0.txt",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
   "/static/brand/platforms/playstation.svg",
