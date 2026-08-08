@@ -12034,8 +12034,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             JOIN users u ON u.id = c.target_user_id
             LEFT JOIN arma_account_links l ON l.user_id = c.target_user_id
             WHERE c.server_id = ? AND c.status = 'pending'
+            -- Release one command per bridge poll. This keeps a reconnecting
+            -- player from receiving an entire accumulated banking queue in a
+            -- single game frame while preserving FIFO order for everything
+            -- that remains pending in Railway.
             ORDER BY c.created_at, c.id
-            LIMIT 25
+            LIMIT 1
             """,
             (server_id,),
         )
