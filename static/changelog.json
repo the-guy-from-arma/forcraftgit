@@ -1,6 +1,45 @@
 {
-  "version": "0.3.0",
+  "version": "0.3.1",
   "entries": [
+    {
+      "date": "2026-08-09",
+      "version": "0.3.1",
+      "title": "RP OS 0.3.1 · Markets, Protection and Platform Control",
+      "added": [
+        "Added true executed-order VWAP analytics to Ravenhood, including traded volume, trade count, buy and sell flow, and buy-pressure reporting for each selected market range.",
+        "Added recorded OHLC market candles, dynamic EMA trend guidance, volatility bands, synchronized spike and drop markers, and exact hover details for price, time, volume, and VWAP.",
+        "Added persistent 1-day, 1-week, 1-month, and 1-year Ravenhood views that use recorded quote timestamps instead of rebuilding artificial history in the browser.",
+        "Added Ravenhood company administration for new listings, generated companies, shareholder exposure, invested assets, and Chapter of Bankruptcy closure controls.",
+        "Added separate Ravenhood movement controls: Stop and keep current price preserves the live quote, while Stop and restore baseline performs an explicit rollback.",
+        "Added in-app bank transaction history for supported RP OS debits, deposits, wagers, premiums, market transfers, and payouts while clearly separating unsupported in-game purchases and transfers.",
+        "Added casino-only account restrictions, bulk pending-command recovery controls, command resend actions, and clearer Bank Bridge status filtering for authorized staff.",
+        "Added configurable Lottery ticket pricing, Quick Pick purchases, rollover jackpots, expanded purchase allowances, pending-ticket controls, and split payouts for awards above the per-command bridge limit.",
+        "Added Faircroft Continuity plan terms, optional everyday-loss protection, enhanced owned-property protection, stock-loss protection, manual claims, policy cancellation, and official resident insurance certificates.",
+        "Added mandatory EULA, Terms of Use, Acceptable Use, and Privacy acceptance tracking for new and existing accounts with a Developer Tools compliance ledger."
+      ],
+      "changed": [
+        "Rebuilt the Ravenhood live price desk around continuous recorded market movement so authentic scheduled spikes, crashes, and recoveries remain visible at every supported range.",
+        "Expanded the Ravenhood order ticket with live share-cost, commission, and total-order estimates before execution and whole-dollar withdrawal enforcement.",
+        "Modernized the Faircroft Casino floor, game navigation, result animations, wager history, and operational controls while keeping internal return and house-performance metrics restricted to staff.",
+        "Modernized Lottery, Insurance, Statistics, Sportsbook, Banking Settings, and Developer Tools layouts for clearer navigation, mobile behavior, and faster read-only loading.",
+        "Changed Insurance claims to authorized manual review and approval, including multi-command payouts when approved compensation exceeds the Bank Bridge command limit.",
+        "Changed RP OS command protections to limit user-originated outstanding purchases without throttling valid Bank Bridge delivery after the player becomes available."
+      ],
+      "fixed": [
+        "Fixed Ravenhood history flattening or hiding genuine price spikes and drops during long-range sampling.",
+        "Fixed market charts displaying disconnected vertical price bars, synthetic low-price points, and range buttons that did not retain the selected recorded period.",
+        "Fixed excessive read-only Developer Tools requests competing for PostgreSQL connection slots during background market, SFTP, and presence synchronization.",
+        "Fixed Lottery Scratch navigation bypassing purchase limits, stale pending tickets leaving accounts locked, and cash prizes displaying stock-code redemption instructions.",
+        "Fixed command-ledger status counters and pending-command controls not opening their matching Completed, Failed, Cancelled, or Pending records.",
+        "Fixed cancelled or failed commerce commands leaving the originating insurance, casino, lottery, or market purchase permanently reserved.",
+        "Fixed Insurance add-on confirmation prompts appearing beneath the workspace and blocking residents from modifying existing policies."
+      ],
+      "removed": [
+        "Removed decorative browser-generated market forecasts that could disagree with recorded Ravenhood prices.",
+        "Removed resident-facing casino return multipliers, target-return figures, and scheduled-return wording reserved for authorized operations staff.",
+        "Removed automatic Insurance claim approval and payout timing in favor of documented manual decisions in Insurance Settings."
+      ]
+    },
     {
       "date": "2026-08-07",
       "version": "0.3.0",

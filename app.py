@@ -183,6 +183,8 @@ INSURANCE_PROPERTY_PROTECTED_VALUE = 400_000.00
 INSURANCE_PROPERTY_PROTECTION_PREMIUM = 50_000.00
 INSURANCE_EVERYDAY_PROTECTION_PREMIUM = 45_000.00
 INSURANCE_EVERYDAY_CLAIM_TYPES = ("theft", "fire", "robbery", "car_accident")
+INSURANCE_STOCK_PROTECTION_PREMIUM = 20_000.00
+INSURANCE_STOCK_PROTECTION_LIMIT = 500_000.00
 TREASURY_MAX_PROOFS = 4
 TREASURY_MAX_PROOF_CHARS = 1_800_000
 REFERRAL_BONUS_AMOUNT = 50000.00
@@ -2716,6 +2718,28 @@ def ensure_schema() -> None:
             CREATE INDEX IF NOT EXISTS insurance_everyday_protections_user_idx
                 ON insurance_everyday_protections (user_id, policy_id, status);
 
+            CREATE TABLE IF NOT EXISTS insurance_stock_protections (
+                id SERIAL PRIMARY KEY,
+                policy_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                character_id INTEGER NOT NULL,
+                premium_amount NUMERIC(18,2) NOT NULL DEFAULT 20000,
+                coverage_amount NUMERIC(18,2) NOT NULL DEFAULT 500000,
+                status TEXT NOT NULL DEFAULT 'pending_payment',
+                bank_command_id TEXT,
+                payment_status TEXT NOT NULL DEFAULT 'pending',
+                issued_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (policy_id) REFERENCES insurance_policies(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (character_id) REFERENCES user_characters(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS insurance_stock_protections_user_idx
+                ON insurance_stock_protections (user_id, policy_id, status);
+
             CREATE TABLE IF NOT EXISTS gangs (
                 id SERIAL PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
@@ -4034,6 +4058,25 @@ def ensure_migrations(db: Database) -> None:
         FOREIGN KEY (character_id) REFERENCES user_characters(id) ON DELETE CASCADE
     )""")
     db.execute("CREATE INDEX IF NOT EXISTS insurance_everyday_protections_user_idx ON insurance_everyday_protections (user_id, policy_id, status)")
+    db.execute("""CREATE TABLE IF NOT EXISTS insurance_stock_protections (
+        id SERIAL PRIMARY KEY,
+        policy_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        character_id INTEGER NOT NULL,
+        premium_amount NUMERIC(18,2) NOT NULL DEFAULT 20000,
+        coverage_amount NUMERIC(18,2) NOT NULL DEFAULT 500000,
+        status TEXT NOT NULL DEFAULT 'pending_payment',
+        bank_command_id TEXT,
+        payment_status TEXT NOT NULL DEFAULT 'pending',
+        issued_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (policy_id) REFERENCES insurance_policies(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (character_id) REFERENCES user_characters(id) ON DELETE CASCADE
+    )""")
+    db.execute("CREATE INDEX IF NOT EXISTS insurance_stock_protections_user_idx ON insurance_stock_protections (user_id, policy_id, status)")
     db.execute("ALTER TABLE insurance_claims ADD COLUMN IF NOT EXISTS coverage_source TEXT NOT NULL DEFAULT 'continuity'")
     db.execute("""CREATE TABLE IF NOT EXISTS insurance_claim_payout_commands (
         id SERIAL PRIMARY KEY,
@@ -4252,6 +4295,7 @@ def ensure_migrations(db: Database) -> None:
         """
     )
     db.execute("CREATE INDEX IF NOT EXISTS market_security_writeoffs_security_idx ON market_security_writeoffs(security_id, created_at DESC)")
+    db.execute("ALTER TABLE market_security_writeoffs ADD COLUMN IF NOT EXISTS notice_acknowledged_at TEXT")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS market_cash_codes (
@@ -4397,6 +4441,7 @@ def ensure_migrations(db: Database) -> None:
     )
     db.execute("CREATE INDEX IF NOT EXISTS idx_market_price_history_security_id ON market_price_history(security_id, id DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_market_orders_account_created ON market_orders(account_id, created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_market_orders_security_created ON market_orders(security_id, created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_market_cash_account_status ON market_cash_transactions(account_id, transaction_type, status, created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_market_transfers_from_created ON market_transfers(from_account_id, created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_market_transfers_to_created ON market_transfers(to_account_id, created_at DESC)")
@@ -9001,6 +9046,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_insurance_policy_cancel(db, user, self.path_int(path, 3))
                 elif path == "/api/insurance/claims" and method == "POST":
                     self.api_insurance_claim_create(db, user)
+                elif path == "/api/market-bankruptcy-notice/acknowledge" and method == "POST":
+                    self.api_market_bankruptcy_notice_acknowledge(db, user)
                 elif path == "/api/gangs" and method == "GET":
                     self.api_gangs(db, user)
                 elif path == "/api/gangs" and method == "POST":
@@ -9355,6 +9402,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_market_security_bankruptcy(db, user, self.path_int(path, 4))
                 elif path == "/api/dev-tools/market/programs" and method == "POST":
                     self.api_dev_market_program(db, user)
+                elif path.startswith("/api/dev-tools/market/programs/") and path.endswith("/stop") and method == "PATCH":
+                    self.api_dev_market_program_stop(db, user, self.path_int(path, 4))
                 elif path.startswith("/api/dev-tools/market/programs/") and path.endswith("/cancel") and method == "PATCH":
                     self.api_dev_market_program_cancel(db, user, self.path_int(path, 4))
                 elif path == "/api/dev-tools/market/presets" and method == "POST":
@@ -9692,6 +9741,43 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                ORDER BY created_at, id LIMIT 1""",
             (user["id"],),
         )
+        market_bankruptcy_row = one(
+            db,
+            """SELECT w.id,w.security_id,w.quantity,w.average_cost,w.invested_basis,w.final_market_value,
+                      w.bankruptcy_chapter,w.reason,w.created_at,s.ticker,s.name AS security_name
+               FROM market_security_writeoffs w
+               JOIN market_accounts ma ON ma.id=w.account_id
+               JOIN market_securities s ON s.id=w.security_id
+               WHERE ma.user_id=? AND w.notice_acknowledged_at IS NULL
+               ORDER BY w.created_at,w.id LIMIT 1""",
+            (user["id"],),
+        )
+        market_bankruptcy_notice: dict[str, Any] | None = None
+        if market_bankruptcy_row:
+            market_bankruptcy_notice = dict(market_bankruptcy_row)
+            event_at = str(market_bankruptcy_row["created_at"])
+            stock_protection = one(
+                db,
+                """SELECT sp.id,sp.policy_id,sp.coverage_amount,p.policy_number
+                   FROM insurance_stock_protections sp
+                   JOIN insurance_policies p ON p.id=sp.policy_id
+                   WHERE sp.user_id=? AND sp.status='active' AND p.status='active'
+                     AND sp.issued_at<=? AND sp.expires_at>?
+                   ORDER BY sp.issued_at DESC LIMIT 1""",
+                (user["id"], event_at, event_at),
+            )
+            existing_claim = one(
+                db,
+                "SELECT id,claim_number,status FROM insurance_claims WHERE user_id=? AND coverage_source='stock' AND property_id=? ORDER BY created_at DESC LIMIT 1",
+                (user["id"], f"market-writeoff:{market_bankruptcy_row['id']}"),
+            )
+            market_bankruptcy_notice["recorded_loss"] = round(max(
+                float(market_bankruptcy_row.get("invested_basis") or 0),
+                float(market_bankruptcy_row.get("final_market_value") or 0),
+            ), 2)
+            market_bankruptcy_notice["stock_protected"] = bool(stock_protection)
+            market_bankruptcy_notice["stock_protection"] = dict(stock_protection) if stock_protection else None
+            market_bankruptcy_notice["claim"] = dict(existing_claim) if existing_claim else None
         beta_response = one(
             db,
             "SELECT response FROM beta_program_responses WHERE user_id = ? AND campaign_id = ?",
@@ -9753,6 +9839,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 },
                 "dmv_action_notice": dict(dmv_action_notice) if dmv_action_notice else None,
                 "settlement_notice": dict(settlement_notice) if settlement_notice else None,
+                "market_bankruptcy_notice": market_bankruptcy_notice,
                 "sanction": (
                     {
                         "type": block["sanction_type"],
@@ -13060,6 +13147,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "SELECT id,user_id FROM insurance_everyday_protections WHERE bank_command_id=?",
             (command_id,),
         )
+        insurance_stock_protections = all_rows(
+            db,
+            "SELECT id,user_id,coverage_amount FROM insurance_stock_protections WHERE bank_command_id=?",
+            (command_id,),
+        )
         insurance_payout_chunk = one(
             db,
             """SELECT pc.*,ic.user_id,ic.claim_number,ic.incident_type,ic.property_name FROM insurance_claim_payout_commands pc
@@ -13114,6 +13206,27 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "insurance.everyday_protection.payment.result",
                 int(row["target_user_id"]),
                 {"command_id": command_id, "protection_id": insurance_everyday_protection["id"], "status": status, "result": result},
+            )
+        for insurance_stock_protection in insurance_stock_protections:
+            protection_status = "active" if status == "completed" else "payment_failed" if status == "failed" else "pending_payment"
+            payment_status = "completed" if status == "completed" else "failed" if status == "failed" else "pending"
+            db.execute(
+                "UPDATE insurance_stock_protections SET status=?,payment_status=?,updated_at=? WHERE id=?",
+                (protection_status, payment_status, now_iso(), insurance_stock_protection["id"]),
+            )
+            if status == "completed":
+                add_message(
+                    db,
+                    int(insurance_stock_protection["user_id"]),
+                    "Stock Protection active",
+                    f"Up to ${float(insurance_stock_protection.get('coverage_amount') or INSURANCE_STOCK_PROTECTION_LIMIT):,.2f} of documented Ravenhood bankruptcy loss is now eligible for manual claim review during this policy term.",
+                )
+            add_admin_audit(
+                db,
+                int(insurance_stock_protection["user_id"]),
+                "insurance.stock_protection.payment.result",
+                int(row["target_user_id"]),
+                {"command_id": command_id, "protection_id": insurance_stock_protection["id"], "status": status, "result": result},
             )
         if insurance_payout_chunk:
             chunk_status = "pending" if status == "retry" else status
@@ -13461,6 +13574,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             WHERE user_id=? ORDER BY created_at DESC""", (user["id"],))
         everyday_protections = all_rows(db, """SELECT * FROM insurance_everyday_protections
             WHERE user_id=? ORDER BY created_at DESC""", (user["id"],))
+        stock_protections = all_rows(db, """SELECT sp.*,p.status AS policy_status,p.policy_number
+            FROM insurance_stock_protections sp JOIN insurance_policies p ON p.id=sp.policy_id
+            WHERE sp.user_id=? ORDER BY sp.created_at DESC""", (user["id"],))
         owned_properties = [item for item in self.realty_owned_properties(db, int(user["id"])) if item.get("holding_type") == "owned"]
         current_time = utcnow()
         active_protection_values = {
@@ -13502,6 +13618,30 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         claims = all_rows(db, """SELECT c.*,p.policy_number,p.coverage_tier,uc.character_name
             FROM insurance_claims c JOIN insurance_policies p ON p.id=c.policy_id
             JOIN user_characters uc ON uc.id=c.character_id WHERE c.user_id=? ORDER BY c.created_at DESC""", (user["id"],))
+        claims_by_writeoff = {
+            str(item.get("property_id") or ""): dict(item)
+            for item in claims
+            if str(item.get("coverage_source") or "") == "stock" and str(item.get("property_id") or "").startswith("market-writeoff:")
+        }
+        stock_writeoffs: list[dict[str, Any]] = []
+        for writeoff_row in all_rows(db, """SELECT w.id,w.security_id,w.quantity,w.average_cost,w.invested_basis,w.final_market_value,
+                w.bankruptcy_chapter,w.reason,w.created_at,s.ticker,s.name AS security_name
+            FROM market_security_writeoffs w
+            JOIN market_accounts ma ON ma.id=w.account_id
+            JOIN market_securities s ON s.id=w.security_id
+            WHERE ma.user_id=? ORDER BY w.created_at DESC,w.id DESC LIMIT 50""", (user["id"],)):
+            writeoff = dict(writeoff_row)
+            event_at = parse_iso(writeoff["created_at"])
+            eligible_protection = next((dict(item) for item in stock_protections
+                if item["status"] == "active" and item.get("policy_status") == "active"
+                and parse_iso(item["issued_at"]) <= event_at < parse_iso(item["expires_at"])), None)
+            claim_key = f"market-writeoff:{writeoff['id']}"
+            writeoff["recorded_loss"] = round(max(float(writeoff.get("invested_basis") or 0), float(writeoff.get("final_market_value") or 0)), 2)
+            writeoff["eligible"] = bool(eligible_protection)
+            writeoff["policy_id"] = int(eligible_protection["policy_id"]) if eligible_protection else None
+            writeoff["coverage_limit"] = float(eligible_protection.get("coverage_amount") or INSURANCE_STOCK_PROTECTION_LIMIT) if eligible_protection else 0.0
+            writeoff["claim"] = claims_by_writeoff.get(claim_key)
+            stock_writeoffs.append(writeoff)
         bank = one(db, """SELECT b.balance,b.synced_at FROM arma_account_links l
             JOIN arma_game_bank_balances b ON b.identity_id=l.identity_id
             WHERE l.user_id=? ORDER BY l.linked_at DESC LIMIT 1""", (user["id"],))
@@ -13511,6 +13651,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "properties": property_payload,
             "property_protections": [dict(row) for row in protections],
             "everyday_protections": [dict(row) for row in everyday_protections],
+            "stock_protections": [dict(row) for row in stock_protections],
+            "stock_writeoffs": stock_writeoffs,
             "property_terms": {
                 "base_value": INSURANCE_PROPERTY_BASE_VALUE,
                 "protected_value": INSURANCE_PROPERTY_PROTECTED_VALUE,
@@ -13522,6 +13664,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "premium": INSURANCE_EVERYDAY_PROTECTION_PREMIUM,
                 "claim_types": list(INSURANCE_EVERYDAY_CLAIM_TYPES),
                 "property_required": False,
+                "manual_review": True,
+            },
+            "stock_protection_terms": {
+                "premium": INSURANCE_STOCK_PROTECTION_PREMIUM,
+                "coverage_limit": INSURANCE_STOCK_PROTECTION_LIMIT,
+                "covered_incident": "chapter_7_bankruptcy",
                 "manual_review": True,
             },
             "tiers": [
@@ -13678,6 +13826,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             policy_id = 0
         include_everyday = str(payload.get("include_everyday_protection") or "").strip().lower() in {"1", "true", "on", "yes"}
+        include_stock = str(payload.get("include_stock_protection") or "").strip().lower() in {"1", "true", "on", "yes"}
         raw_property_ids = payload.get("property_ids") or []
         if isinstance(raw_property_ids, str):
             raw_property_ids = [item.strip() for item in raw_property_ids.split(",") if item.strip()]
@@ -13693,6 +13842,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             WHERE user_id=? AND policy_id=? AND status IN ('active','pending_payment') AND expires_at>? LIMIT 1""",
             (user["id"], policy_id, current.isoformat()))
         add_everyday = include_everyday and not everyday_exists
+        stock_exists = one(db, """SELECT id FROM insurance_stock_protections
+            WHERE user_id=? AND policy_id=? AND status IN ('active','pending_payment') AND expires_at>? LIMIT 1""",
+            (user["id"], policy_id, current.isoformat()))
+        add_stock = include_stock and not stock_exists
         owned = {
             str(item["property_id"]): item
             for item in self.realty_owned_properties(db, int(user["id"]))
@@ -13707,10 +13860,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 WHERE user_id=? AND status IN ('active','pending_payment') AND expires_at>?""", (user["id"], current.isoformat()))
         }
         new_property_ids = [property_id for property_id in property_ids if property_id not in protected_ids]
-        if not add_everyday and not new_property_ids:
+        if not add_everyday and not add_stock and not new_property_ids:
             self.error(409, "Select at least one protection that is not already active or awaiting payment."); return
         total_premium = round(
             (INSURANCE_EVERYDAY_PROTECTION_PREMIUM if add_everyday else 0.0)
+            + (INSURANCE_STOCK_PROTECTION_PREMIUM if add_stock else 0.0)
             + len(new_property_ids) * INSURANCE_PROPERTY_PROTECTION_PREMIUM,
             2,
         )
@@ -13723,7 +13877,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(409, "Your linked Arma bank snapshot is not available yet."); return
         if available + 0.0001 < total_premium:
             self.error(409, f"Insufficient in-game funds for these protections. Available: ${available:,.2f}."); return
-        protection_names = (["Everyday Protection"] if add_everyday else []) + [str(owned[item].get("name") or item) for item in new_property_ids]
+        protection_names = (["Everyday Protection"] if add_everyday else []) + (["Stock Protection"] if add_stock else []) + [str(owned[item].get("name") or item) for item in new_property_ids]
         command_id = self.queue_insurance_bank_command(
             db,
             int(user["id"]),
@@ -13746,6 +13900,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                  issued_at, expires_at, issued_at, issued_at),
             ).fetchone()
             everyday_id = int(created["id"])
+        stock_id: int | None = None
+        if add_stock:
+            created = db.execute(
+                """INSERT INTO insurance_stock_protections
+                   (policy_id,user_id,character_id,premium_amount,coverage_amount,status,bank_command_id,payment_status,issued_at,expires_at,created_at,updated_at)
+                   VALUES (?,?,?,?,?,'pending_payment',?,'pending',?,?,?,?) RETURNING id""",
+                (policy_id, user["id"], policy["character_id"], INSURANCE_STOCK_PROTECTION_PREMIUM,
+                 INSURANCE_STOCK_PROTECTION_LIMIT, command_id, issued_at, expires_at, issued_at, issued_at),
+            ).fetchone()
+            stock_id = int(created["id"])
         property_protection_ids: list[int] = []
         for property_id in new_property_ids:
             property_record = owned[property_id]
@@ -13764,6 +13928,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "command_id": command_id,
             "total_premium": total_premium,
             "everyday_protection_id": everyday_id,
+            "stock_protection_id": stock_id,
             "property_protection_ids": property_protection_ids,
             "property_ids": new_property_ids,
         })
@@ -13773,6 +13938,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "command_id": command_id,
             "total_premium": total_premium,
             "everyday_added": bool(add_everyday),
+            "stock_added": bool(add_stock),
             "property_count": len(property_protection_ids),
         })
 
@@ -13790,7 +13956,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         protection_rows = all_rows(db, """SELECT bank_command_id FROM insurance_property_protections
                 WHERE policy_id=? AND status IN ('active','pending_payment')
             UNION SELECT bank_command_id FROM insurance_everyday_protections
-                WHERE policy_id=? AND status IN ('active','pending_payment')""", (policy_id, policy_id))
+                WHERE policy_id=? AND status IN ('active','pending_payment')
+            UNION SELECT bank_command_id FROM insurance_stock_protections
+                WHERE policy_id=? AND status IN ('active','pending_payment')""", (policy_id, policy_id, policy_id))
         command_ids = list(dict.fromkeys(
             str(value).strip()
             for value in [policy.get("bank_command_id"), *(row.get("bank_command_id") for row in protection_rows)]
@@ -13838,6 +14006,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                updated_at=? WHERE policy_id=? AND status IN ('active','pending_payment')""",
             (cancelled_at, policy_id),
         )
+        db.execute(
+            """UPDATE insurance_stock_protections SET status='cancelled',
+               payment_status=CASE WHEN payment_status='pending' THEN 'cancelled' ELSE payment_status END,
+               updated_at=? WHERE policy_id=? AND status IN ('active','pending_payment')""",
+            (cancelled_at, policy_id),
+        )
         add_admin_audit(db, int(user["id"]), "insurance.policy.cancelled", int(user["id"]), {
             "policy_id": policy_id,
             "policy_number": policy["policy_number"],
@@ -13848,7 +14022,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             db,
             int(user["id"]),
             "Insurance policy cancelled",
-            f"Policy {policy['policy_number']} and its optional protections were cancelled with no cancellation fee. No new Bank Bridge debit was created.",
+            f"Policy {policy['policy_number']} and its optional protections were cancelled with no cancellation fee. No refund was issued for completed premiums, and the account is now unprotected.",
         )
         self.send_json(200, {
             "ok": True,
@@ -13856,6 +14030,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "status": "cancelled",
             "cancellation_fee": 0,
             "cancelled_commands": cancelled_commands,
+            "message": "Policy cancelled with no fee. Completed premiums were not refunded; you may purchase a new policy now.",
         })
 
     def api_insurance_create(self, db: Database, user: DbRow | None) -> None:
@@ -13881,6 +14056,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         try: term_months = int(payload.get("term_months") or 1)
         except (TypeError, ValueError): term_months = 1
         include_everyday_protection = str(payload.get("include_everyday_protection") or "").strip().lower() in {"1", "true", "on", "yes"}
+        include_stock_protection = str(payload.get("include_stock_protection") or "").strip().lower() in {"1", "true", "on", "yes"}
         raw_property_ids = payload.get("property_ids") or []
         if isinstance(raw_property_ids, str):
             raw_property_ids = [item.strip() for item in raw_property_ids.split(",") if item.strip()]
@@ -13900,6 +14076,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         coverage_percent, monthly_premium_rate = tiers[tier]
         policy_premium = round(monthly_premium_rate * term_months, 2)
         everyday_premium = INSURANCE_EVERYDAY_PROTECTION_PREMIUM if include_everyday_protection and policy_type == "compensation" else 0.0
+        stock_premium = INSURANCE_STOCK_PROTECTION_PREMIUM if include_stock_protection and policy_type == "compensation" else 0.0
         if policy_type != "compensation" and property_ids:
             self.error(400, "House coverage upgrades are available only with a continuity plan."); return
         owned_properties = {
@@ -13911,7 +14088,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if unknown_properties:
             self.error(403, "One or more selected houses are not owned by this linked account."); return
         property_premium = round(len(property_ids) * INSURANCE_PROPERTY_PROTECTION_PREMIUM, 2)
-        total_premium = round(policy_premium + everyday_premium + property_premium, 2)
+        total_premium = round(policy_premium + everyday_premium + stock_premium + property_premium, 2)
         bank = one(db, """SELECT b.balance FROM arma_account_links l JOIN arma_game_bank_balances b
             ON b.identity_id=l.identity_id WHERE l.user_id=? ORDER BY l.linked_at DESC LIMIT 1""", (user["id"],))
         pending = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM bank_bridge_commands WHERE target_user_id=? AND operation='debit_funds' AND status IN ('pending','claimed')", (user["id"],))
@@ -13929,6 +14106,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         payment_reason = f"Insurance premium {policy_number} ({term_months}-month locked rate)"
         if everyday_premium:
             payment_reason += " + Everyday Protection"
+        if stock_premium:
+            payment_reason += " + Stock Protection"
         if property_ids:
             payment_reason += f" + {len(property_ids)} house upgrade{'s' if len(property_ids) != 1 else ''}"
         payment_command = self.queue_insurance_bank_command(db, int(user["id"]), total_premium, "debit_funds", payment_reason)
@@ -13948,6 +14127,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 (policy_row["id"], user["id"], character_id, everyday_premium,
                  json.dumps(list(INSURANCE_EVERYDAY_CLAIM_TYPES), separators=(",", ":")), payment_command,
                  issued.isoformat(), expires.isoformat(), issued.isoformat(), issued.isoformat()))
+        if stock_premium and policy_row:
+            db.execute("""INSERT INTO insurance_stock_protections
+                (policy_id,user_id,character_id,premium_amount,coverage_amount,status,bank_command_id,payment_status,issued_at,expires_at,created_at,updated_at)
+                VALUES (?,?,?,?,?,'pending_payment',?,'pending',?,?,?,?)""",
+                (policy_row["id"], user["id"], character_id, stock_premium, INSURANCE_STOCK_PROTECTION_LIMIT,
+                 payment_command, issued.isoformat(), expires.isoformat(), issued.isoformat(), issued.isoformat()))
         if policy_row:
             for property_id in property_ids:
                 property_record = owned_properties[property_id]
@@ -13961,6 +14146,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         add_admin_audit(db, int(user["id"]), "insurance.policy.issued", int(user["id"]), {
             "policy_number": policy_number, "character_id": character_id, "premium": policy_premium,
             "everyday_protection_premium": everyday_premium, "property_protection_premium": property_premium,
+            "stock_protection_premium": stock_premium,
             "property_ids": property_ids, "total_premium": total_premium,
             "monthly_premium_rate": monthly_premium_rate, "term_months": term_months,
             "rate_locked_until": expires.isoformat(),
@@ -13969,6 +14155,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "ok": True, "policy_number": policy_number, "status": "pending_payment",
             "command_id": payment_command, "premium": policy_premium,
             "everyday_protection_premium": everyday_premium,
+            "stock_protection_premium": stock_premium,
             "property_protection_premium": property_premium,
             "property_count": len(property_ids), "total_premium": total_premium,
             "monthly_premium_rate": monthly_premium_rate, "term_months": term_months,
@@ -14011,6 +14198,41 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             requested = round(protected_balance * coverage_percent / 100.0 + property_value, 2)
             claim_prefix = "FCIC"
             coverage_source = "continuity"
+        elif incident_type == "stock_bankruptcy" and coverage_source == "stock":
+            try:
+                writeoff_id = int(payload.get("writeoff_id") or 0)
+            except (TypeError, ValueError):
+                writeoff_id = 0
+            writeoff = one(db, """SELECT w.*,s.ticker,s.name AS security_name
+                FROM market_security_writeoffs w
+                JOIN market_accounts ma ON ma.id=w.account_id
+                JOIN market_securities s ON s.id=w.security_id
+                WHERE w.id=? AND ma.user_id=?""", (writeoff_id, user["id"]))
+            if not writeoff:
+                self.error(404, "The Ravenhood bankruptcy loss record was not found."); return
+            event_at = str(writeoff["created_at"])
+            protection = one(db, """SELECT * FROM insurance_stock_protections
+                WHERE policy_id=? AND user_id=? AND status='active' AND issued_at<=? AND expires_at>?
+                ORDER BY issued_at DESC LIMIT 1""", (policy_id, user["id"], event_at, event_at))
+            if not protection:
+                self.error(409, "Stock Protection was not active when this company entered bankruptcy."); return
+            property_id = f"market-writeoff:{writeoff_id}"
+            if one(db, """SELECT id FROM insurance_claims WHERE user_id=? AND coverage_source='stock'
+                AND property_id=? AND status IN ('pending','approved','paid')""", (user["id"], property_id)):
+                self.error(409, "A Stock Protection claim already exists for this bankruptcy loss."); return
+            if len(summary) < 20 or not bool(payload.get("confirmed_loss")):
+                self.error(400, "Confirm the bankruptcy loss and provide at least 20 characters of claim details."); return
+            used = one(db, """SELECT COALESCE(SUM(requested_amount),0) AS total FROM insurance_claims
+                WHERE policy_id=? AND coverage_source='stock' AND status IN ('pending','approved','paid')""", (policy_id,))
+            remaining = max(0.0, float(protection.get("coverage_amount") or INSURANCE_STOCK_PROTECTION_LIMIT) - float((used or {}).get("total") or 0))
+            recorded_loss = max(float(writeoff.get("invested_basis") or 0), float(writeoff.get("final_market_value") or 0))
+            requested = round(min(recorded_loss, remaining), 2)
+            if requested <= 0:
+                self.error(409, "No Stock Protection coverage remains for this policy term."); return
+            property_name = f"{writeoff['security_name']} ({writeoff['ticker']})"
+            coverage_percent = 100.0
+            coverage_source = "stock"
+            claim_prefix = "FCIS"
         elif incident_type in INSURANCE_EVERYDAY_CLAIM_TYPES and (coverage_source == "everyday" or incident_type == "car_accident"):
             protection = one(db, """SELECT * FROM insurance_everyday_protections
                 WHERE policy_id=? AND user_id=? AND status='active' AND expires_at>? ORDER BY created_at DESC LIMIT 1""",
@@ -14064,7 +14286,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             coverage_source = "property"
             claim_prefix = "FCIP"
         else:
-            self.error(400, "Choose server reset, theft, fire, robbery, or car accident as the incident type."); return
+            self.error(400, "Choose server reset, stock bankruptcy, theft, fire, robbery, or car accident as the incident type."); return
         ts = now_iso(); claim_number = f"{claim_prefix}-{utcnow().strftime('%y%m')}-{secrets.randbelow(900000)+100000}"
         db.execute("""INSERT INTO insurance_claims
             (claim_number,policy_id,user_id,character_id,incident_type,incident_summary,coverage_source,property_id,property_name,bank_balance_snapshot,coverage_percent,requested_amount,status,auto_approve_at,created_at,updated_at)
@@ -14808,37 +15030,147 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if requested_range not in {"1D", "1W", "1M", "1Y"}:
             requested_range = "1D"
         history_days = {"1D": 1, "1W": 7, "1M": 30, "1Y": 365}[requested_range]
-        history_buckets = {"1D": 288, "1W": 336, "1M": 480, "1Y": 720}[requested_range]
+        history_buckets = {"1D": 192, "1W": 224, "1M": 320, "1Y": 480}[requested_range]
         history_start = (utcnow() - dt.timedelta(days=history_days)).isoformat()
+        history_end = utcnow().isoformat()
         history_security = next((row for row in securities if str(row["ticker"]).upper() == requested_ticker), securities[0] if securities else None)
         selected_ticker = str(history_security["ticker"]) if history_security else ""
         price_history: dict[str, list[dict[str, Any]]] = {selected_ticker: []} if selected_ticker else {}
+        market_analytics: dict[str, Any] = {
+            "ticker": selected_ticker,
+            "range": requested_range,
+            "vwap": None,
+            "traded_volume": 0.0,
+            "trade_count": 0,
+            "buy_volume": 0.0,
+            "sell_volume": 0.0,
+            "buy_pressure_percent": 50.0,
+            "quote_count": 0,
+            "last_quote_at": None,
+        }
         if history_security:
-            # Return the whole requested period without sending every five-minute
-            # quote to the browser. NTILE preserves observations across the full
-            # range instead of taking only the newest rows (which made every
-            # chart button look like the one-day chart).
+            # Bucket by clock time, not row count. Each bucket preserves its
+            # actual open/high/low/close so scheduled spikes and crashes remain
+            # visible even when the browser requests a long range.
             history_rows = all_rows(db, """WITH ranged AS (
                     SELECT id,price,source,recorded_at,
-                        NTILE(?) OVER (ORDER BY recorded_at ASC,id ASC) AS history_bucket
+                        LEAST(?, GREATEST(1, WIDTH_BUCKET(
+                            EXTRACT(EPOCH FROM recorded_at::timestamptz),
+                            EXTRACT(EPOCH FROM ?::timestamptz),
+                            EXTRACT(EPOCH FROM ?::timestamptz), ?
+                        )))::integer AS history_bucket
                     FROM market_price_history
                     WHERE security_id=? AND recorded_at>=?
-                ), sampled AS (
-                    SELECT id,price,source,recorded_at,
-                        ROW_NUMBER() OVER (PARTITION BY history_bucket ORDER BY recorded_at DESC,id DESC) AS bucket_row
-                    FROM ranged
                 )
-                SELECT price,source,recorded_at FROM sampled
-                WHERE bucket_row=1 ORDER BY recorded_at ASC,id ASC""",
-                (history_buckets, history_security["id"], history_start),
+                SELECT history_bucket,
+                    (ARRAY_AGG(price ORDER BY recorded_at::timestamptz ASC,id ASC))[1] AS open,
+                    MAX(price) AS high,
+                    MIN(price) AS low,
+                    (ARRAY_AGG(price ORDER BY recorded_at::timestamptz DESC,id DESC))[1] AS close,
+                    (ARRAY_AGG(source ORDER BY recorded_at::timestamptz DESC,id DESC))[1] AS source,
+                    MIN(recorded_at) AS bucket_start,
+                    MAX(recorded_at) AS recorded_at,
+                    COUNT(*) AS quote_count
+                FROM ranged GROUP BY history_bucket ORDER BY history_bucket ASC""",
+                (history_buckets, history_start, history_end, history_buckets,
+                 history_security["id"], history_start),
             )
             if len(history_rows) < 2:
-                history_rows = list(reversed(all_rows(db, """SELECT price,source,recorded_at FROM market_price_history
+                fallback_rows = list(reversed(all_rows(db, """SELECT price,source,recorded_at FROM market_price_history
                     WHERE security_id=? ORDER BY recorded_at DESC,id DESC LIMIT 2""", (history_security["id"],))))
-            price_history[selected_ticker] = [
-                {"price": float(row["price"] or 0), "source": row["source"], "recorded_at": row["recorded_at"]}
-                for row in history_rows
-            ]
+                history_rows = [
+                    {
+                        "history_bucket": index + 1,
+                        "open": row["price"], "high": row["price"], "low": row["price"], "close": row["price"],
+                        "source": row["source"], "bucket_start": row["recorded_at"], "recorded_at": row["recorded_at"],
+                        "quote_count": 1,
+                    }
+                    for index, row in enumerate(fallback_rows)
+                ]
+
+            volume_rows = all_rows(db, """WITH ranged AS (
+                    SELECT side,quantity,unit_price,created_at,
+                        LEAST(?, GREATEST(1, WIDTH_BUCKET(
+                            EXTRACT(EPOCH FROM created_at::timestamptz),
+                            EXTRACT(EPOCH FROM ?::timestamptz),
+                            EXTRACT(EPOCH FROM ?::timestamptz), ?
+                        )))::integer AS history_bucket
+                    FROM market_orders
+                    WHERE security_id=? AND created_at>=?
+                )
+                SELECT history_bucket,
+                    COALESCE(SUM(quantity),0) AS volume,
+                    COALESCE(SUM(CASE WHEN side='buy' THEN quantity ELSE 0 END),0) AS buy_volume,
+                    COALESCE(SUM(CASE WHEN side='sell' THEN quantity ELSE 0 END),0) AS sell_volume,
+                    CASE WHEN SUM(quantity)>0 THEN SUM(unit_price*quantity)/SUM(quantity) ELSE NULL END AS vwap,
+                    COUNT(*) AS trade_count
+                FROM ranged GROUP BY history_bucket ORDER BY history_bucket ASC""",
+                (history_buckets, history_start, history_end, history_buckets,
+                 history_security["id"], history_start),
+            )
+            price_buckets = [int(row["history_bucket"]) for row in history_rows]
+            volume_by_bucket: dict[int, dict[str, float | int]] = {}
+            for activity in volume_rows:
+                activity_bucket = int(activity["history_bucket"])
+                target_bucket = min(price_buckets, key=lambda item: abs(item - activity_bucket)) if price_buckets else activity_bucket
+                target = volume_by_bucket.setdefault(target_bucket, {
+                    "volume": 0.0, "buy_volume": 0.0, "sell_volume": 0.0,
+                    "weighted_value": 0.0, "trade_count": 0,
+                })
+                activity_volume = float(activity.get("volume") or 0)
+                activity_vwap = float(activity.get("vwap") or 0) if activity.get("vwap") is not None else 0.0
+                target["volume"] = float(target["volume"]) + activity_volume
+                target["buy_volume"] = float(target["buy_volume"]) + float(activity.get("buy_volume") or 0)
+                target["sell_volume"] = float(target["sell_volume"]) + float(activity.get("sell_volume") or 0)
+                target["weighted_value"] = float(target["weighted_value"]) + activity_vwap * activity_volume
+                target["trade_count"] = int(target["trade_count"]) + int(activity.get("trade_count") or 0)
+            selected_history: list[dict[str, Any]] = []
+            cumulative_value = 0.0
+            cumulative_volume = 0.0
+            total_buy_volume = 0.0
+            total_sell_volume = 0.0
+            total_trades = 0
+            for row in history_rows:
+                bucket = int(row["history_bucket"])
+                activity = volume_by_bucket.get(bucket, {})
+                volume = float(activity.get("volume") or 0)
+                bucket_vwap = float(activity.get("weighted_value") or 0) / volume if volume > 0 else None
+                if volume > 0 and bucket_vwap is not None:
+                    cumulative_value += bucket_vwap * volume
+                    cumulative_volume += volume
+                total_buy_volume += float(activity.get("buy_volume") or 0)
+                total_sell_volume += float(activity.get("sell_volume") or 0)
+                total_trades += int(activity.get("trade_count") or 0)
+                close_price = float(row["close"] or 0)
+                selected_history.append({
+                    "price": close_price,
+                    "open": float(row["open"] or close_price),
+                    "high": float(row["high"] or close_price),
+                    "low": float(row["low"] or close_price),
+                    "close": close_price,
+                    "volume": round(volume, 6),
+                    "trade_count": int(activity.get("trade_count") or 0),
+                    "bucket_vwap": round(bucket_vwap, 4) if bucket_vwap is not None else None,
+                    "cumulative_vwap": round(cumulative_value / cumulative_volume, 4) if cumulative_volume > 0 else None,
+                    "quote_count": int(row["quote_count"] or 0),
+                    "source": row["source"],
+                    "bucket_start": row["bucket_start"],
+                    "recorded_at": row["recorded_at"],
+                })
+            price_history[selected_ticker] = selected_history
+            total_volume = total_buy_volume + total_sell_volume
+            market_analytics = {
+                "ticker": selected_ticker,
+                "range": requested_range,
+                "vwap": round(cumulative_value / cumulative_volume, 4) if cumulative_volume > 0 else None,
+                "traded_volume": round(total_volume, 6),
+                "trade_count": total_trades,
+                "buy_volume": round(total_buy_volume, 6),
+                "sell_volume": round(total_sell_volume, 6),
+                "buy_pressure_percent": round(total_buy_volume / total_volume * 100, 2) if total_volume > 0 else 50.0,
+                "quote_count": sum(int(row.get("quote_count") or 0) for row in selected_history),
+                "last_quote_at": selected_history[-1]["recorded_at"] if selected_history else None,
+            }
         if account:
             holdings = all_rows(db, """SELECT h.*, s.ticker, s.name, s.price, s.previous_price, s.security_type
                 FROM market_holdings h JOIN market_securities s ON s.id = h.security_id
@@ -14865,6 +15197,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "orders": [dict(x) for x in orders], "cash_transactions": [dict(x) for x in cash_log], "transfers": [dict(x) for x in transfers],
                 "promo_redemptions": [dict(x) for x in promo_redemptions],
                 "price_history": price_history,
+                "market_analytics": market_analytics,
                 "history_ticker": selected_ticker,
                 "history_range": requested_range,
                 "history_range_start": history_start,
@@ -19775,7 +20108,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         request = urllib.request.Request(
             package_url,
             headers={
-                "User-Agent": "Faircroft-RP-Release-Delivery/0.3.0",
+                "User-Agent": "Faircroft-RP-Release-Delivery/0.3.1",
                 "Accept": "application/octet-stream,*/*",
             },
         )
@@ -20306,6 +20639,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         insurance_purchase = one(db, "SELECT id FROM insurance_policies WHERE bank_command_id=? AND status='pending_payment'", (command_id,))
         property_protection_purchase = one(db, "SELECT id FROM insurance_property_protections WHERE bank_command_id=? AND status='pending_payment'", (command_id,))
         everyday_protection_purchase = one(db, "SELECT id FROM insurance_everyday_protections WHERE bank_command_id=? AND status='pending_payment'", (command_id,))
+        stock_protection_purchase = one(db, "SELECT id FROM insurance_stock_protections WHERE bank_command_id=? AND status='pending_payment'", (command_id,))
         if market_purchase:
             released_services.append(f"Ravenhood {market_purchase['transaction_type']}")
         if sportsbook_purchase:
@@ -20324,6 +20658,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             released_services.append("property-protection purchase")
         if everyday_protection_purchase:
             released_services.append("Everyday Protection purchase")
+        if stock_protection_purchase:
+            released_services.append("Stock Protection purchase")
         result_json = json.dumps(result, separators=(",", ":"))
         db.execute("UPDATE market_cash_transactions SET status='cancelled' WHERE command_id=? AND status='pending'", (command_id,))
         db.execute("UPDATE sportsbook_bets SET status='rejected',result_json=? WHERE wallet_command_id=? AND status='awaiting_debit'", (result_json, command_id))
@@ -20346,6 +20682,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("UPDATE insurance_policies SET status='payment_cancelled',payment_status='cancelled',updated_at=? WHERE bank_command_id=? AND status='pending_payment'", (cancelled_at, command_id))
         db.execute("UPDATE insurance_property_protections SET status='payment_cancelled',payment_status='cancelled',updated_at=? WHERE bank_command_id=? AND status='pending_payment'", (cancelled_at, command_id))
         db.execute("UPDATE insurance_everyday_protections SET status='payment_cancelled',payment_status='cancelled',updated_at=? WHERE bank_command_id=? AND status='pending_payment'", (cancelled_at, command_id))
+        db.execute("UPDATE insurance_stock_protections SET status='payment_cancelled',payment_status='cancelled',updated_at=? WHERE bank_command_id=? AND status='pending_payment'", (cancelled_at, command_id))
         payout_chunk = one(db, "SELECT claim_id FROM insurance_claim_payout_commands WHERE command_id=?", (command_id,))
         if payout_chunk:
             note = f"Payout command {command_id} was cancelled in Banking Settings: {result.get('reason') or 'queue recovery'}"
@@ -20495,6 +20832,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         insurance_purchase = one(db, "SELECT id FROM insurance_policies WHERE bank_command_id=? AND status='pending_payment'", (command_id,))
         property_protection_purchase = one(db, "SELECT id FROM insurance_property_protections WHERE bank_command_id=? AND status='pending_payment'", (command_id,))
         everyday_protection_purchase = one(db, "SELECT id FROM insurance_everyday_protections WHERE bank_command_id=? AND status='pending_payment'", (command_id,))
+        stock_protection_purchase = one(db, "SELECT id FROM insurance_stock_protections WHERE bank_command_id=? AND status='pending_payment'", (command_id,))
         if market_purchase:
             released_services.append(f"Ravenhood {market_purchase['transaction_type']}")
         if sportsbook_purchase:
@@ -20513,6 +20851,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             released_services.append("property-protection purchase")
         if everyday_protection_purchase:
             released_services.append("Everyday Protection purchase")
+        if stock_protection_purchase:
+            released_services.append("Stock Protection purchase")
         result = {
             "message": "Pending Bank Bridge command cancelled in Banking Settings before delivery.",
             "reason": reason,
@@ -20550,6 +20890,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("UPDATE insurance_policies SET status='payment_cancelled',payment_status='cancelled',updated_at=? WHERE bank_command_id=? AND status='pending_payment'", (cancelled_at, command_id))
         db.execute("UPDATE insurance_property_protections SET status='payment_cancelled',payment_status='cancelled',updated_at=? WHERE bank_command_id=? AND status='pending_payment'", (cancelled_at, command_id))
         db.execute("UPDATE insurance_everyday_protections SET status='payment_cancelled',payment_status='cancelled',updated_at=? WHERE bank_command_id=? AND status='pending_payment'", (cancelled_at, command_id))
+        db.execute("UPDATE insurance_stock_protections SET status='payment_cancelled',payment_status='cancelled',updated_at=? WHERE bank_command_id=? AND status='pending_payment'", (cancelled_at, command_id))
         payout_chunk = one(db, "SELECT claim_id FROM insurance_claim_payout_commands WHERE command_id=?", (command_id,))
         if payout_chunk:
             note = f"Payout command {command_id} was cancelled in Banking Settings: {reason}"
@@ -23152,6 +23493,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                ON CONFLICT(security_id,account_id) DO NOTHING""",
             (security["price"], chapter, reason, user["id"], timestamp, security["id"]),
         )
+        affected_holders = all_rows(db, """SELECT w.id,w.quantity,w.invested_basis,w.final_market_value,ma.user_id
+            FROM market_security_writeoffs w JOIN market_accounts ma ON ma.id=w.account_id
+            WHERE w.security_id=? ORDER BY w.id""", (security["id"],))
+        for holder in affected_holders:
+            recorded_loss = max(float(holder.get("invested_basis") or 0), float(holder.get("final_market_value") or 0))
+            add_message(
+                db,
+                int(holder["user_id"]),
+                f"Ravenhood bankruptcy loss: {security['ticker']}",
+                f"{security['name']} entered {chapter}. Your {float(holder.get('quantity') or 0):,.6f} share(s) were written down to zero, recording a ${recorded_loss:,.2f} loss. Open Faircroft Insurance to review Stock Protection claim eligibility.",
+                int(user["id"]),
+            )
         active_programs = int((one(db, "SELECT COUNT(*) AS count FROM market_price_programs WHERE security_id=? AND status='active'", (security["id"],)) or {}).get("count") or 0)
         active_promotions = int((one(db, "SELECT COUNT(*) AS count FROM market_promo_codes WHERE security_id=? AND active=1", (security["id"],)) or {}).get("count") or 0)
         db.execute("UPDATE market_holdings SET quantity=0 WHERE security_id=? AND quantity>0", (security["id"],))
@@ -23275,6 +23628,34 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('program_cancelled',?,?,?,?)", (f"Stopped: {program['event_name']}", f"Restored {restored} security price(s) to their pre-movement baseline.", user["id"], now_iso()))
         add_admin_audit(db, int(user["id"]), "market.program.cancelled", details={"program_id": program_id, "event_name": program["event_name"], "restored": restored})
         self.send_json(200, {"ok": True, "cancelled": len(related), "restored": restored})
+
+    def api_dev_market_program_stop(self, db: Database, user: DbRow | None, program_id: int | None) -> None:
+        """End a scheduled movement while preserving every current market quote."""
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        program = one(db, "SELECT * FROM market_price_programs WHERE id=?", (program_id,)) if program_id else None
+        if not program:
+            self.error(404, "Market movement not found."); return
+        if program["status"] != "active":
+            self.error(409, "That market movement is no longer active."); return
+        related = all_rows(db, "SELECT * FROM market_price_programs WHERE status='active' AND event_name=? AND created_at=? ORDER BY id", (program["event_name"], program["created_at"]))
+        stopped_at = now_iso()
+        held = 0
+        held_quotes: list[dict[str, Any]] = []
+        for item in related:
+            if item.get("security_id"):
+                security = one(db, "SELECT ticker,price FROM market_securities WHERE id=?", (item["security_id"],))
+                if security:
+                    held_price = max(0.01, float(security["price"] or 0.01))
+                    db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (item["security_id"], held_price, "program_stopped_at_market", stopped_at))
+                    held_quotes.append({"ticker": security["ticker"], "price": round(held_price, 4)})
+                    held += 1
+            db.execute("UPDATE market_price_programs SET status='stopped' WHERE id=?", (item["id"],))
+        detail = f"Stopped {len(related)} scheduled movement(s) without restoring baseline prices; held {held} current market quote(s)."
+        db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('program_stopped',?,?,?,?)", (f"Held: {program['event_name']}", detail, user["id"], stopped_at))
+        add_admin_audit(db, int(user["id"]), "market.program.stopped", details={"program_id": program_id, "event_name": program["event_name"], "stopped": len(related), "held_quotes": held_quotes})
+        self.send_json(200, {"ok": True, "stopped": len(related), "held": held, "held_quotes": held_quotes})
 
     def api_dev_market_preset(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
@@ -24425,6 +24806,31 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         db.execute("UPDATE dmv_records SET action_notice_pending = 0 WHERE user_id = ?", (user["id"],))
         self.send_json(200, {"ok": True})
+
+    def api_market_bankruptcy_notice_acknowledge(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        payload = self.read_json()
+        try:
+            writeoff_id = int(payload.get("writeoff_id") or 0)
+        except (TypeError, ValueError):
+            writeoff_id = 0
+        writeoff = one(
+            db,
+            """SELECT w.id FROM market_security_writeoffs w
+               JOIN market_accounts ma ON ma.id=w.account_id
+               WHERE w.id=? AND ma.user_id=? AND w.notice_acknowledged_at IS NULL""",
+            (writeoff_id, user["id"]),
+        )
+        if not writeoff:
+            self.error(404, "Bankruptcy loss notice not found")
+            return
+        db.execute(
+            "UPDATE market_security_writeoffs SET notice_acknowledged_at=? WHERE id=?",
+            (now_iso(), writeoff_id),
+        )
+        self.send_json(200, {"ok": True, "writeoff_id": writeoff_id})
 
     def api_settlement_notice_acknowledge(self, db: Database, user: DbRow | None) -> None:
         if not user:

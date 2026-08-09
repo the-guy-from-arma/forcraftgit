@@ -4,7 +4,7 @@ const app = $("#app");
 const toastEl = $("#toast");
 const legalPortal = $("#legalPortal");
 const legalFooterLink = $("#legalFooterLink");
-const OS_VERSION = "0.3.0";
+const OS_VERSION = "0.3.1";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const SESSION_REFRESH_MS = 15000;
 const pendingMutations = new Map();
@@ -165,6 +165,8 @@ const state = {
   insuranceCoverageTier: "preferred",
   insuranceTermMonths: 1,
   insuranceIncludeEverydayProtection: false,
+  insuranceIncludeStockProtection: false,
+  insuranceCancelConfirm: false,
   gangSelectedMembership: null,
   businessTab: "apply",
   businessReviewFilter: "active",
@@ -592,6 +594,11 @@ function antiCheatLockToken(session) {
   return lock ? `${lock.id || ""}:${lock.player_uid || ""}:${lock.grey_screened_at || ""}` : "";
 }
 
+function marketBankruptcyNoticeToken(session) {
+  const notice = session?.market_bankruptcy_notice;
+  return notice ? `${notice.id || ""}:${notice.created_at || ""}:${notice.claim?.status || ""}` : "";
+}
+
 function startSessionRefresh() {
   if (sessionRefreshTimer) return;
   sessionRefreshTimer = window.setInterval(refreshSessionInBackground, SESSION_REFRESH_MS);
@@ -608,9 +615,11 @@ async function refreshSessionInBackground() {
   sessionRefreshInFlight = true;
   try {
     const previousLock = antiCheatLockToken(state.session);
+    const previousBankruptcyNotice = marketBankruptcyNoticeToken(state.session);
     const previousUnread = Number(state.session?.unread_messages || 0);
     const nextSession = await api("/api/session", { timeoutMs: 8000 });
     const nextLock = antiCheatLockToken(nextSession);
+    const nextBankruptcyNotice = marketBankruptcyNoticeToken(nextSession);
     state.session = nextSession;
     if (!nextSession?.user) {
       stopSessionRefresh();
@@ -632,6 +641,10 @@ async function refreshSessionInBackground() {
       } else {
         toast("Anti-Cheat profile lock removed");
       }
+      render();
+      return;
+    }
+    if (nextBankruptcyNotice !== previousBankruptcyNotice) {
       render();
       return;
     }
@@ -1072,7 +1085,21 @@ function renderCallsignRequiredModal() {
 
 function renderRequiredProfileModals() {
   if (state.session?.sanction?.type === "timeout") return "";
-  return renderLegacyCharacterAssignmentModal() || renderDmvActionNoticeModal() || renderSettlementNoticeModal() || renderSystemSplash() || renderPressPassNoticeModal() || renderCarEntryRequiredModal() || renderArmaLinkRequiredModal() || renderDmvComplianceModal() || renderBetaInviteModal();
+  return renderLegacyCharacterAssignmentModal() || renderMarketBankruptcyNoticeModal() || renderDmvActionNoticeModal() || renderSettlementNoticeModal() || renderSystemSplash() || renderPressPassNoticeModal() || renderCarEntryRequiredModal() || renderArmaLinkRequiredModal() || renderDmvComplianceModal() || renderBetaInviteModal();
+}
+
+function renderMarketBankruptcyNoticeModal() {
+  const notice = state.session?.market_bankruptcy_notice;
+  if (!notice) return "";
+  const protectedLoss = Boolean(notice.stock_protected);
+  const claim = notice.claim;
+  return `<div class="modal-backdrop market-loss-notice-backdrop"><section class="mdt-modal market-loss-notice-modal" role="alertdialog" aria-modal="true" aria-label="Ravenhood bankruptcy loss notice">
+    <header><div class="market-loss-seal">R</div><div><p class="eyebrow">RAVENHOOD SECURITIES · MATERIAL LOSS NOTICE</p><h2>${escapeHtml(notice.security_name)} filed ${escapeHtml(notice.bankruptcy_chapter || "Chapter 7")}</h2><p>${escapeHtml(notice.ticker)} shares have been written down to zero.</p></div></header>
+    <div class="market-loss-ledger"><span><small>SHARES FORFEITED</small><strong>${Number(notice.quantity || 0).toLocaleString(undefined, { maximumFractionDigits: 6 })}</strong></span><span><small>INVESTED BASIS</small><strong>${money(notice.invested_basis)}</strong></span><span><small>VALUE ERASED</small><strong>${money(notice.recorded_loss)}</strong></span></div>
+    <section class="market-loss-guidance"><div><small>WHAT HAPPENED</small><p>${escapeHtml(notice.reason || "The company closed and all outstanding shares were forfeited under the bankruptcy filing.")}</p></div><div><small>WAYS TO REDUCE FUTURE RISK</small><ul><li>Spread buying power across multiple companies and sectors.</li><li>Review company direction and avoid concentrating your portfolio in one security.</li><li>Consider Stock Protection before a bankruptcy event occurs.</li></ul></div></section>
+    <aside class="${protectedLoss ? "protected" : "unprotected"}"><strong>${claim ? `Claim ${escapeHtml(claim.claim_number)} is ${escapeHtml(humanLabel(claim.status))}` : protectedLoss ? "This loss may qualify for Stock Protection review" : "Stock Protection was not active for this event"}</strong><p>${claim ? "Track the claim from Faircroft Insurance." : protectedLoss ? "Your active endorsement can cover up to FC$500,000 of documented bankruptcy loss, subject to manual review." : "Coverage cannot be purchased retroactively, but you can protect qualifying future Ravenhood losses."}</p></aside>
+    <footer><button type="button" class="secondary" data-market-loss-acknowledge="${notice.id}">Acknowledge loss</button><button type="button" class="primary" data-market-loss-insurance="${notice.id}" data-market-loss-target="${protectedLoss ? "claims" : "extras"}">${claim ? "Open claim record" : protectedLoss ? "File insurance claim" : "View Stock Protection"}</button></footer>
+  </section></div>`;
 }
 
 function renderSettlementNoticeModal() {
@@ -1209,6 +1236,30 @@ function bindRequiredProfileModals() {
       await api("/api/profile/assign-character-record", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget).entries()) });
       await loadSession();
     } catch (error) {
+      toast(error.message);
+    }
+  });
+  $(`[data-market-loss-acknowledge]`)?.addEventListener("click", async (event) => {
+    try {
+      await api("/api/market-bankruptcy-notice/acknowledge", { method: "POST", body: { writeoff_id: Number(event.currentTarget.dataset.marketLossAcknowledge) } });
+      await loadSession();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $(`[data-market-loss-insurance]`)?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    const section = button.dataset.marketLossTarget || "extras";
+    button.disabled = true;
+    try {
+      await api("/api/market-bankruptcy-notice/acknowledge", { method: "POST", body: { writeoff_id: Number(button.dataset.marketLossInsurance) } });
+      state.session.market_bankruptcy_notice = null;
+      state.activeApp = "insurance";
+      await loadAppData("insurance");
+      render();
+      window.setTimeout(() => document.getElementById(section)?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+    } catch (error) {
+      button.disabled = false;
       toast(error.message);
     }
   });
@@ -1469,7 +1520,7 @@ function renderUpdateLockdownHome(apps) {
     <section class="update-lockdown-screen faircroft-update-mode">
       <header><img src="/static/brand/faircroft-emblem.webp" alt="" /><div><span>FAIRCROFT RELEASE OPERATIONS</span><strong>Limited-service mode</strong></div><i></i></header>
       <article class="faircroft-update-brief">
-        <div class="faircroft-update-sequence"><span>RP OS</span><strong>0.3.0</strong></div>
+        <div class="faircroft-update-sequence"><span>RP OS</span><strong>${OS_VERSION}</strong></div>
         <div><p class="eyebrow">Platform maintenance</p><h2>${escapeHtml(title)}</h2><p>${escapeHtml(updateLockdownMessage())}</p></div>
         <div class="faircroft-update-progress"><span></span></div>
         <footer><span><i></i> Essential network online</span><strong>${escapeHtml(eta)}</strong></footer>
@@ -2963,6 +3014,9 @@ function renderInsuranceWorkspaceV5() {
   const propertyTerms = data.property_terms || { base_value: 150000, protected_value: 400000, premium: 50000 };
   const everydayTerms = data.everyday_protection_terms || { premium: 45000, claim_types: ["theft", "fire", "robbery", "car_accident"] };
   const everydayProtections = data.everyday_protections || [];
+  const stockTerms = data.stock_protection_terms || { premium: 20000, coverage_limit: 500000 };
+  const stockProtections = data.stock_protections || [];
+  const stockWriteoffs = data.stock_writeoffs || [];
   const enhancedProperties = properties.filter(property => property.protection?.status === "active");
   const tiers = data.tiers || [];
   const active = policies.filter(policy => policy.status === "active");
@@ -3047,6 +3101,9 @@ function renderInsuranceWorkspaceV6() {
   const propertyTerms = data.property_terms || { base_value: 150000, protected_value: 400000, premium: 50000 };
   const everydayTerms = data.everyday_protection_terms || { premium: 45000, claim_types: ["theft", "fire", "robbery", "car_accident"] };
   const everydayProtections = data.everyday_protections || [];
+  const stockTerms = data.stock_protection_terms || { premium: 20000, coverage_limit: 500000 };
+  const stockProtections = data.stock_protections || [];
+  const stockWriteoffs = data.stock_writeoffs || [];
   const tiers = data.tiers || [];
   const activePolicies = policies.filter(policy => policy.status === "active");
   const selected = policies.find(policy => String(policy.id) === String(state.insuranceSelectedPolicy)) || policies[0] || null;
@@ -3061,12 +3118,15 @@ function renderInsuranceWorkspaceV6() {
   const quoteTier = tiers.find(tier => tier.id === tierId) || tiers[0] || { id: "preferred", name: "Continuity Preferred", coverage_percent: 70, premium: 4250 };
   const termMonths = [1, 3, 6].includes(Number(state.insuranceTermMonths)) ? Number(state.insuranceTermMonths) : 1;
   const includeEveryday = Boolean(state.insuranceIncludeEverydayProtection);
+  const includeStock = Boolean(state.insuranceIncludeStockProtection);
   const bankBalance = Number(data.bank?.balance || 0);
   const quotePercent = Number(quoteTier.coverage_percent || 0);
   const monthlyRate = Number(quoteTier.premium || 0);
   const planPremium = monthlyRate * termMonths;
   const everydayPremium = Number(everydayTerms.premium || 45000);
-  const totalPremium = planPremium + (includeEveryday ? everydayPremium : 0);
+  const stockPremium = Number(stockTerms.premium || 20000);
+  const stockCoverageLimit = Number(stockTerms.coverage_limit || 500000);
+  const totalPremium = planPremium + (includeEveryday ? everydayPremium : 0) + (includeStock ? stockPremium : 0);
   const basePropertyValue = properties.length * Number(propertyTerms.base_value || 150000);
   const portfolioValue = properties.reduce((total, property) => total + Number(property.insured_value || propertyTerms.base_value || 150000), 0);
   const quoteCoverage = bankBalance * quotePercent / 100 + basePropertyValue;
@@ -3131,12 +3191,15 @@ function renderInsuranceWorkspace() {
   const quoteTier = tiers.find(tier => tier.id === tierId) || tiers[0] || { id: "preferred", name: "Continuity Preferred", coverage_percent: 70, premium: 4250 };
   const termMonths = [1, 3, 6].includes(Number(state.insuranceTermMonths)) ? Number(state.insuranceTermMonths) : 1;
   const includeEveryday = Boolean(state.insuranceIncludeEverydayProtection);
+  const includeStock = Boolean(state.insuranceIncludeStockProtection);
   const bankBalance = Number(data.bank?.balance || 0);
   const quotePercent = Number(quoteTier.coverage_percent || 0);
   const monthlyRate = Number(quoteTier.premium || 0);
   const planPremium = monthlyRate * termMonths;
   const everydayPremium = Number(everydayTerms.premium || 45000);
-  const totalPremium = planPremium + (includeEveryday ? everydayPremium : 0);
+  const stockPremium = Number(stockTerms.premium || 20000);
+  const stockCoverageLimit = Number(stockTerms.coverage_limit || 500000);
+  const totalPremium = planPremium + (includeEveryday ? everydayPremium : 0) + (includeStock ? stockPremium : 0);
   const basePropertyValue = properties.length * Number(propertyTerms.base_value || 150000);
   const quoteCoverage = bankBalance * quotePercent / 100 + basePropertyValue;
   const lockDate = new Date(Date.now() + termMonths * 30 * 86400000);
@@ -3149,6 +3212,11 @@ function renderInsuranceWorkspace() {
   const everydayProtection = everydayProtections.find(item => String(item.policy_id) === String(coveragePlan?.id) && ["active", "pending_payment"].includes(item.status));
   const everydayActive = everydayProtection?.status === "active";
   const everydayPending = everydayProtection?.status === "pending_payment";
+  const stockProtection = stockProtections.find(item => String(item.policy_id) === String(coveragePlan?.id) && ["active", "pending_payment"].includes(item.status));
+  const stockActive = stockProtection?.status === "active";
+  const stockPending = stockProtection?.status === "pending_payment";
+  const eligibleStockWriteoffs = stockWriteoffs.filter(item => item.eligible);
+  const openStockWriteoffs = eligibleStockWriteoffs.filter(item => !item.claim);
   const everydayClaimLimit = Number(activePlan?.bank_coverage_amount || activePlan?.coverage_amount || 0);
   const enhancedProperties = properties.filter(property => property.protection?.status === "active");
   const portfolioValue = properties.reduce((total, property) => total + Number(property.insured_value || propertyTerms.base_value || 150000), 0);
@@ -3170,6 +3238,7 @@ function renderInsuranceWorkspace() {
       ? "Insufficient in-game balance"
       : `Purchase coverage · ${money(totalPremium)}`;
   const everydayStatus = everydayActive ? "ACTIVE" : everydayPending ? "PAYMENT PENDING" : "AVAILABLE";
+  const stockStatus = stockActive ? "ACTIVE" : stockPending ? "PAYMENT PENDING" : "AVAILABLE";
   const planCards = tiers.map((tier, index) => {
     const copy = tierCopy[tier.id] || tierCopy.preferred;
     const chosen = tier.id === tierId;
@@ -3184,6 +3253,7 @@ function renderInsuranceWorkspace() {
   const termCards = termOptions.map(term => `<button type="button" data-insurance-term="${term.months}" class="${term.months === termMonths ? "active" : ""}" aria-pressed="${term.months === termMonths}"><span><strong>${escapeHtml(term.label)}</strong><small>${escapeHtml(term.detail)}</small></span><b>${money(monthlyRate * term.months)}</b>${term.months > 1 ? "<em>LOCKED RATE</em>" : ""}</button>`).join("");
   const policyTabs = policies.map(policy => `<button class="${selected?.id === policy.id ? "active" : ""}" data-insurance-policy="${policy.id}"><span><strong>${escapeHtml(humanLabel(policy.coverage_tier))}</strong><small>${escapeHtml(policy.character_name)}</small></span><b>${Number(policy.coverage_percent || 0)}%</b></button>`).join("");
   const selectedEverydayProtection = everydayProtections.find(item => String(item.policy_id) === String(selected?.id) && ["active", "pending_payment"].includes(item.status));
+  const selectedStockProtection = stockProtections.find(item => String(item.policy_id) === String(selected?.id) && ["active", "pending_payment"].includes(item.status));
   const selectedPropertyProtections = properties.filter(property => String(property.protection?.policy_id) === String(selected?.id) && ["active", "pending_payment"].includes(property.protection?.status));
   const certificateDate = value => {
     const parsed = value ? new Date(value) : null;
@@ -3194,6 +3264,11 @@ function renderInsuranceWorkspace() {
       name: "Everyday Protection",
       detail: "Theft · Fire · Robbery · Car accident",
       status: selectedEverydayProtection.status
+    }] : []),
+    ...(selectedStockProtection ? [{
+      name: "Stock Protection",
+      detail: `${money(selectedStockProtection.coverage_amount || stockCoverageLimit)} Ravenhood bankruptcy protection`,
+      status: selectedStockProtection.status
     }] : []),
     ...selectedPropertyProtections.map(property => ({
       name: "House coverage upgrade",
@@ -3221,20 +3296,22 @@ function renderInsuranceWorkspace() {
     const canBuy = activePlan && !isActive && !isPending && bankBalance >= Number(propertyTerms.premium || 50000);
     return `<article class="${isActive ? "active" : isPending ? "pending" : ""}"><div><small>${escapeHtml(property.property_type || "Owned house")}</small><strong>${escapeHtml(property.name)}</strong><span>${escapeHtml(property.address || "Synchronized property record")}</span></div><dl><div><dt>Current value</dt><dd>${money(property.insured_value || propertyTerms.base_value)}</dd></div><div><dt>Upgrade</dt><dd>${isActive ? "Complete" : money(propertyTerms.premium)}</dd></div></dl><button type="button" data-insurance-property-protection="${escapeHtml(property.property_id)}" ${canBuy ? "" : "disabled"}>${isActive ? "FC$400K active" : isPending ? "Payment pending" : !activePlan ? "Plan required" : "Upgrade to FC$400K"}</button></article>`;
   }).join("");
+  const stockClaimMarkup = `<section class="ins7-stock-claim"><header><span>STOCK LOSS CLAIM</span><b>${stockActive ? openStockWriteoffs.length ? "LOSS FOUND" : "PROTECTED" : stockPending ? "PAYMENT PENDING" : "EXTRA REQUIRED"}</b></header>${activePlan && stockActive && openStockWriteoffs.length ? `<form id="insuranceStockClaimForm"><input type="hidden" name="policy_id" value="${activePlan.id}"/><input type="hidden" name="incident_type" value="stock_bankruptcy"/><input type="hidden" name="coverage_source" value="stock"/><label>Bankruptcy loss<select name="writeoff_id" required>${openStockWriteoffs.map(item => `<option value="${item.id}">${escapeHtml(item.ticker)} · ${money(item.recorded_loss)} recorded loss · ${new Date(item.created_at).toLocaleDateString()}</option>`).join("")}</select></label><label>Claim statement<textarea name="incident_summary" minlength="20" maxlength="1500" required placeholder="Describe the Ravenhood loss and the investment affected."></textarea></label><label class="ins7-authorize"><input type="checkbox" name="confirmed_loss" value="true" required/><span>I certify this bankruptcy-loss claim is accurate and understand it will be reviewed manually.</span></label><button class="primary">Submit Stock Protection claim</button></form>` : `<div class="ins7-claim-closed"><strong>${stockPending ? "Bank Bridge is confirming payment." : stockActive && eligibleStockWriteoffs.length ? "All eligible losses already have claims." : stockActive ? "No qualifying bankruptcy loss is on file." : "Stock Protection is required before a bankruptcy filing."}</strong><p>${stockActive ? `Coverage can reimburse up to ${money(stockCoverageLimit)} of documented Ravenhood bankruptcy losses.` : `Add the ${money(stockPremium)} endorsement from Extras to protect qualifying future losses.`}</p></div>`}</section>`;
   return `<section class="insurance-workspace insurance-v7">
-    <header class="ins7-topbar"><div class="ins7-brand"><img src="/static/brand/faircroft-emblem.webp" alt="Faircroft"/><span><small>FAIRCROFT INSURANCE</small><strong>Continuity</strong></span></div><nav><button data-insurance-scroll="plans">Shop plans</button><button data-insurance-scroll="protection">My coverage</button><button data-insurance-scroll="extras">Extras</button><button data-insurance-scroll="claims">Claims</button></nav><div><span class="ins7-secure"><i></i>SECURE</span><button data-refresh-insurance>Refresh</button><button class="primary" data-close-insurance>Exit</button></div></header>
+    <header class="ins7-topbar"><div class="ins7-brand"><img src="/static/brand/faircroft-emblem.webp" alt="Faircroft"/><span><small>FAIRCROFT INSURANCE</small><strong>Continuity</strong></span></div><nav><button data-insurance-scroll="plans">Shop plans</button><button data-insurance-scroll="protection">My coverage</button><button data-insurance-scroll="extras">Extras</button><button data-insurance-scroll="claims">Claims</button>${coveragePlan ? `<button class="ins7-cancel-nav" data-insurance-cancel-open>Cancel policy</button>` : ""}</nav><div><span class="ins7-secure"><i></i>SECURE</span><button data-refresh-insurance>Refresh</button><button class="primary" data-close-insurance>Exit</button></div></header>
     <main>
-      <section class="ins7-intro"><div><span>CLEAR COVERAGE. ONE DECISION AT A TIME.</span><h1>Build protection<br/>without the maze.</h1><p>Choose a plan, lock a rate, add only the extras you want, and see the complete debit before anything is sent to Bank Bridge.</p><button class="primary" data-insurance-scroll="plans">${purchaseBlocked ? "Review plans and coverage" : "Start my quote"}</button></div><aside><header><small>YOUR VERIFIED POSITION</small><b>${data.bank?.synced_at ? "LIVE" : "AWAITING SYNC"}</b></header><strong>${money(bankBalance)}</strong><p>Available in-game bank snapshot</p><dl><div><dt>Main plan</dt><dd>${planState}</dd></div><div><dt>Everyday extra</dt><dd>${everydayStatus}</dd></div><div><dt>Owned houses</dt><dd>${properties.length}</dd></div></dl></aside></section>
+      <section class="ins7-intro"><div><span>CLEAR COVERAGE. ONE DECISION AT A TIME.</span><h1>Build protection<br/>without the maze.</h1><p>Choose a plan, lock a rate, add only the extras you want, and see the complete debit before anything is sent to Bank Bridge.</p><button class="primary" data-insurance-scroll="plans">${purchaseBlocked ? "Review plans and coverage" : "Start my quote"}</button></div><aside><header><small>YOUR VERIFIED POSITION</small><b>${data.bank?.synced_at ? "LIVE" : "AWAITING SYNC"}</b></header><strong>${money(bankBalance)}</strong><p>Available in-game bank snapshot</p><dl><div><dt>Main plan</dt><dd>${planState}</dd></div><div><dt>Everyday</dt><dd>${everydayStatus}</dd></div><div><dt>Stocks</dt><dd>${stockStatus}</dd></div><div><dt>Owned houses</dt><dd>${properties.length}</dd></div></dl></aside></section>
       <nav class="ins7-progress" aria-label="Insurance purchase steps"><span class="active"><b>1</b>Pick a plan</span><span><b>2</b>Lock your rate</span><span><b>3</b>Choose extras</span><span><b>4</b>Review & purchase</span></nav>
       <section class="ins7-shop" id="plans"><header><div><span>NEW COVERAGE</span><h2>Your plan builder</h2><p>Everything required to purchase is on this screen. Nothing is hidden below another section.</p></div><strong>${purchaseBlocked ? "PLAN ON FILE" : "QUOTE READY"}</strong></header><div class="ins7-shop-layout"><div class="ins7-config">
         <section class="ins7-step"><header><b>01</b><div><h3>Pick a coverage level</h3><p>The percentage applies to your verified bank snapshot. Every plan also includes ${money(propertyTerms.base_value)} for each owned house.</p></div></header><div class="ins7-plan-list">${planCards}</div></section>
         <section class="ins7-step"><header><b>02</b><div><h3>Choose your rate term</h3><p>Three- and six-month terms preserve today’s monthly price even if future rates change.</p></div></header><div class="ins7-term-list">${termCards}</div></section>
-        <section class="ins7-step"><header><b>03</b><div><h3>Add optional protection</h3><p>Extras are never required to buy the main plan.</p></div></header><label class="ins7-extra-choice ${includeEveryday ? "active" : ""}"><input type="checkbox" name="include_everyday_preview" ${includeEveryday ? "checked" : ""} ${purchaseBlocked ? "disabled" : ""}/><span><b>EVERYDAY PROTECTION</b><strong>Theft, fire, robbery and car accidents</strong><small>No property required · manual claim review · one-time price</small></span><em>+${money(everydayPremium)}</em></label><div class="ins7-house-note"><span>HOUSE UPGRADES</span><p>Owned houses already receive ${money(propertyTerms.base_value)} each. Individual FC$400,000 upgrades are purchased from the Extras desk after the main plan is active.</p><button type="button" data-insurance-scroll="extras">View house extras</button></div></section>
-      </div><aside class="ins7-checkout" id="enroll"><header><span>04 · REVIEW</span><h3>Your quote</h3><p>One auditable in-game debit. No payment PIN.</p></header><div class="ins7-checkout-plan"><span><small>PLAN</small><strong>${escapeHtml((tierCopy[tierId] || tierCopy.preferred).title)}</strong></span><b>${quotePercent}%</b></div><dl><div><dt>Plan rate</dt><dd>${money(monthlyRate)} / month</dd></div><div><dt>Rate term</dt><dd>${termMonths} month${termMonths === 1 ? "" : "s"}</dd></div><div><dt>Plan premium</dt><dd>${money(planPremium)}</dd></div><div><dt>Everyday extra</dt><dd>${includeEveryday ? money(everydayPremium) : "Not selected"}</dd></div><div><dt>Coverage estimate</dt><dd>${money(quoteCoverage)}</dd></div><div><dt>Rate locked through</dt><dd>${lockDate.toLocaleDateString()}</dd></div></dl><div class="ins7-total"><span>TOTAL DUE TODAY</span><strong>${money(totalPremium)}</strong><small>Available: ${money(bankBalance)}</small></div><form id="insurancePolicyForm"><input type="hidden" name="policy_type" value="compensation"/><input type="hidden" name="coverage_tier" value="${escapeHtml(tierId)}"/><input type="hidden" name="term_months" value="${termMonths}"/><input type="hidden" name="subject_label" value="Server Continuity Compensation"/><input type="hidden" name="risk_use" value="Authorized server reset and wipe compensation"/><input type="hidden" name="include_everyday_protection" value="${includeEveryday ? "true" : "false"}"/><label>Protected character<select name="character_id" required ${purchaseBlocked ? "disabled" : ""}><option value="">Select character</option>${characters}</select></label><label>Policy note <em>Optional</em><textarea name="notes" maxlength="500" placeholder="Add a note to the certificate" ${purchaseBlocked ? "disabled" : ""}></textarea></label><label class="ins7-authorize"><input type="checkbox" required ${purchaseBlocked ? "disabled" : ""}/><span>I authorize the ${money(totalPremium)} in-game debit shown above.</span></label><button class="primary" ${purchaseBlocked || bankBalance < totalPremium ? "disabled" : ""}>${purchaseLabel}</button>${purchaseBlocked ? `<div class="ins7-existing-actions"><button type="button" data-insurance-scroll="protection">Open my coverage</button><button type="button" data-insurance-scroll="extras">Manage extras</button></div>` : ""}</form></aside></div></section>
+        <section class="ins7-step"><header><b>03</b><div><h3>Add optional protection</h3><p>Extras are never required to buy the main plan.</p></div></header><label class="ins7-extra-choice ${includeEveryday ? "active" : ""}"><input type="checkbox" name="include_everyday_preview" ${includeEveryday ? "checked" : ""} ${purchaseBlocked ? "disabled" : ""}/><span><b>EVERYDAY PROTECTION</b><strong>Theft, fire, robbery and car accidents</strong><small>No property required · manual claim review · one-time price</small></span><em>+${money(everydayPremium)}</em></label><label class="ins7-extra-choice ${includeStock ? "active" : ""}"><input type="checkbox" name="include_stock_preview" ${includeStock ? "checked" : ""} ${purchaseBlocked ? "disabled" : ""}/><span><b>STOCK PROTECTION</b><strong>Up to ${money(stockCoverageLimit)} for Ravenhood bankruptcy losses</strong><small>Must be active before bankruptcy · manual claim review · one-time price</small></span><em>+${money(stockPremium)}</em></label><div class="ins7-house-note"><span>HOUSE UPGRADES</span><p>Owned houses already receive ${money(propertyTerms.base_value)} each. Individual FC$400,000 upgrades are purchased from the Extras desk after the main plan is active.</p><button type="button" data-insurance-scroll="extras">View house extras</button></div></section>
+      </div><aside class="ins7-checkout" id="enroll"><header><span>04 · REVIEW</span><h3>Your quote</h3><p>One auditable in-game debit. No payment PIN.</p></header><div class="ins7-checkout-plan"><span><small>PLAN</small><strong>${escapeHtml((tierCopy[tierId] || tierCopy.preferred).title)}</strong></span><b>${quotePercent}%</b></div><dl><div><dt>Plan rate</dt><dd>${money(monthlyRate)} / month</dd></div><div><dt>Rate term</dt><dd>${termMonths} month${termMonths === 1 ? "" : "s"}</dd></div><div><dt>Plan premium</dt><dd>${money(planPremium)}</dd></div><div><dt>Everyday extra</dt><dd>${includeEveryday ? money(everydayPremium) : "Not selected"}</dd></div><div><dt>Stock extra</dt><dd>${includeStock ? money(stockPremium) : "Not selected"}</dd></div><div><dt>Coverage estimate</dt><dd>${money(quoteCoverage)}</dd></div><div><dt>Rate locked through</dt><dd>${lockDate.toLocaleDateString()}</dd></div></dl><div class="ins7-total"><span>TOTAL DUE TODAY</span><strong>${money(totalPremium)}</strong><small>Available: ${money(bankBalance)}</small></div><form id="insurancePolicyForm"><input type="hidden" name="policy_type" value="compensation"/><input type="hidden" name="coverage_tier" value="${escapeHtml(tierId)}"/><input type="hidden" name="term_months" value="${termMonths}"/><input type="hidden" name="subject_label" value="Server Continuity Compensation"/><input type="hidden" name="risk_use" value="Authorized server reset and wipe compensation"/><input type="hidden" name="include_everyday_protection" value="${includeEveryday ? "true" : "false"}"/><input type="hidden" name="include_stock_protection" value="${includeStock ? "true" : "false"}"/><label>Protected character<select name="character_id" required ${purchaseBlocked ? "disabled" : ""}><option value="">Select character</option>${characters}</select></label><label>Policy note <em>Optional</em><textarea name="notes" maxlength="500" placeholder="Add a note to the certificate" ${purchaseBlocked ? "disabled" : ""}></textarea></label><label class="ins7-authorize"><input type="checkbox" required ${purchaseBlocked ? "disabled" : ""}/><span>I authorize the ${money(totalPremium)} in-game debit shown above.</span></label><button class="primary" ${purchaseBlocked || bankBalance < totalPremium ? "disabled" : ""}>${purchaseLabel}</button>${purchaseBlocked ? `<div class="ins7-existing-actions"><button type="button" data-insurance-scroll="protection">Open my coverage</button><button type="button" data-insurance-scroll="extras">Manage extras</button></div>` : ""}</form></aside></div></section>
       <section class="ins7-policy" id="protection"><header><div><span>MY COVERAGE</span><h2>Policy record</h2><p>Status, values and rate terms without the extra noise.</p></div><strong>${activePolicies.length} ACTIVE</strong></header>${selected ? `<div class="ins7-policy-layout"><aside>${policyTabs}</aside><article><header><div><small>${escapeHtml(selected.policy_number)}</small><h3>${escapeHtml(selected.character_name)}</h3></div><b class="${escapeHtml(selected.status)}">${escapeHtml(humanLabel(selected.status))}</b></header><div class="ins7-policy-numbers"><span><small>BANK SNAPSHOT</small><strong>${money(selected.protected_bank_balance)}</strong></span><span><small>BANK COVERAGE</small><strong>${selectedPercent}%</strong></span><span><small>HOUSE VALUE</small><strong>${money(selected.property_coverage_amount || 0)}</strong></span><span><small>RECOVERY CEILING</small><strong>${money(selected.coverage_amount)}</strong></span></div><dl><div><dt>Plan</dt><dd>${escapeHtml(humanLabel(selected.coverage_tier))}</dd></div><div><dt>Rate</dt><dd>${money(selectedMonthlyRate)} / month</dd></div><div><dt>Term</dt><dd>${selectedTerm} month${selectedTerm === 1 ? "" : "s"}</dd></div><div><dt>Expires</dt><dd>${certificateDate(selected.expires_at)}</dd></div></dl></article></div>${certificateMarkup}` : `<div class="ins7-empty"><span>FC</span><strong>No policy is on file.</strong><p>Use the plan builder above to create your first quote.</p><button class="primary" data-insurance-scroll="plans">Choose a plan</button></div>`}</section>
-      <section class="ins7-extras" id="extras"><header><div><span>OPTIONAL EXTRAS</span><h2>Add only what fits.</h2><p>Extras are separate from the main plan and show their complete one-time price before purchase.</p></div><strong>${enhancedProperties.length + (everydayActive ? 1 : 0)} ACTIVE</strong></header><div class="ins7-extra-feature"><div><small>NO PROPERTY REQUIRED</small><h3>Everyday Protection</h3><p>Unlock manual claims for theft, fire, robbery and car accidents outside a declared State of Emergency.</p><ul><li>Theft</li><li>Fire</li><li>Robbery</li><li>Car accident</li></ul></div><aside><span>ONE-TIME PRICE</span><strong>${money(everydayPremium)}</strong><b class="${everydayActive ? "active" : everydayPending ? "pending" : ""}">${everydayStatus}</b><button type="button" data-insurance-everyday-purchase ${!activePlan || everydayActive || everydayPending || bankBalance < everydayPremium ? "disabled" : ""}>${everydayActive ? "Protection active" : everydayPending ? "Payment pending" : !activePlan ? "Active main plan required" : `Add for ${money(everydayPremium)}`}</button></aside></div><div class="ins7-property-desk"><header><div><span>OWNED HOUSE UPGRADES</span><h3>${money(propertyTerms.base_value)} included → ${money(propertyTerms.protected_value)} upgraded</h3><p>Pay ${money(propertyTerms.premium)} once per selected house. This changes continuity value only.</p></div><aside><small>PORTFOLIO VALUE</small><strong>${money(portfolioValue)}</strong></aside></header><div>${propertyRows || `<div class="ins7-empty compact"><strong>No owned houses found.</strong><p>You can still buy the main plan and Everyday Protection without a property.</p></div>`}</div></div></section>
-      <section class="ins7-claims" id="claims"><header><div><span>CLAIM CENTER</span><h2>Choose the correct claim.</h2><p>Every claim is reviewed manually. Approved amounts are sent through Bank Bridge by an authorized developer.</p></div><strong class="${emergencyOpen || everydayActive ? "open" : ""}">${emergencyOpen || everydayActive ? "CLAIMS AVAILABLE" : "STANDBY"}</strong></header><div class="ins7-claim-grid"><section><header><span>CONTINUITY CLAIM</span><b>${emergencyOpen ? "EMERGENCY OPEN" : "EMERGENCY REQUIRED"}</b></header>${emergencyOpen && activePlan ? `<form id="insuranceClaimForm"><input type="hidden" name="policy_id" value="${activePlan.id}"/><input type="hidden" name="incident_type" value="server_reset"/><label>Reset or wipe details<textarea name="incident_summary" minlength="20" maxlength="1500" required placeholder="Describe the announced reset and losses."></textarea></label><label class="ins7-authorize"><input type="checkbox" name="confirmed_reset" value="true" required/><span>I confirm an authorized reset or wipe occurred.</span></label><button class="primary" ${continuityClaimOpen ? "disabled" : ""}>${continuityClaimOpen ? "Claim already under review" : "Submit continuity claim"}</button></form>` : `<div class="ins7-claim-closed"><strong>${emergencyOpen ? "An active plan is required." : "State of Emergency not declared."}</strong><p>This form opens only during an authorized continuity event.</p></div>`}</section><section><header><span>EVERYDAY CLAIM</span><b>${everydayActive ? "AVAILABLE" : everydayPending ? "PAYMENT PENDING" : "EXTRA REQUIRED"}</b></header>${activePlan && everydayActive ? `<form id="insuranceEverydayClaimForm"><input type="hidden" name="policy_id" value="${activePlan.id}"/><input type="hidden" name="coverage_source" value="everyday"/><div><label>Incident<select name="incident_type" required><option value="theft">Theft</option><option value="fire">Fire</option><option value="robbery">Robbery</option><option value="car_accident">Car accident</option></select></label><label>Requested amount<input name="requested_amount" type="number" min="0.01" max="${everydayClaimLimit}" step="0.01" required/></label></div><label>Affected item or loss<input name="loss_subject" maxlength="180" required/></label><label>Incident report<textarea name="incident_summary" minlength="20" maxlength="1500" required></textarea></label><label class="ins7-authorize"><input type="checkbox" name="confirmed_loss" value="true" required/><span>I certify this roleplay loss report is accurate.</span></label><button class="primary">Submit Everyday claim</button></form>` : `<div class="ins7-claim-closed"><strong>${everydayPending ? "Bank Bridge is confirming payment." : "Everyday Protection is required."}</strong><p>The extra does not require a house or emergency declaration.</p></div>`}</section></div><section class="ins7-claim-history"><header><span>CLAIM HISTORY</span><strong>${claims.length} RECORD${claims.length === 1 ? "" : "S"}</strong></header>${claims.map(claim => `<article><div><small>${escapeHtml(claim.claim_number)} · ${escapeHtml(humanLabel(claim.incident_type || "server_reset"))}</small><strong>${escapeHtml(claim.property_name || claim.character_name)}</strong><p>${escapeHtml(claim.incident_summary)}</p></div><span>${money(claim.requested_amount)}</span><b class="${escapeHtml(claim.status)}">${escapeHtml(humanLabel(claim.status))}</b></article>`).join("") || `<p>No claims have been filed.</p>`}</section></section>
+      <section class="ins7-extras" id="extras"><header><div><span>OPTIONAL EXTRAS</span><h2>Add only what fits.</h2><p>Extras are separate from the main plan and show their complete one-time price before purchase.</p></div><strong>${enhancedProperties.length + (everydayActive ? 1 : 0) + (stockActive ? 1 : 0)} ACTIVE</strong></header><div class="ins7-extra-feature"><div><small>NO PROPERTY REQUIRED</small><h3>Everyday Protection</h3><p>Unlock manual claims for theft, fire, robbery and car accidents outside a declared State of Emergency.</p><ul><li>Theft</li><li>Fire</li><li>Robbery</li><li>Car accident</li></ul></div><aside><span>ONE-TIME PRICE</span><strong>${money(everydayPremium)}</strong><b class="${everydayActive ? "active" : everydayPending ? "pending" : ""}">${everydayStatus}</b><button type="button" data-insurance-everyday-purchase ${!activePlan || everydayActive || everydayPending || bankBalance < everydayPremium ? "disabled" : ""}>${everydayActive ? "Protection active" : everydayPending ? "Payment pending" : !activePlan ? "Active main plan required" : `Add for ${money(everydayPremium)}`}</button></aside></div><div class="ins7-extra-feature stock"><div><small>RAVENHOOD LOSS ENDORSEMENT</small><h3>Stock Protection</h3><p>Protect up to ${money(stockCoverageLimit)} of documented value forfeited when a Ravenhood company enters Chapter 7 bankruptcy. Coverage must be active before the filing.</p><ul><li>Bankruptcy write-offs</li><li>Login loss notice</li><li>Manual claim review</li><li>No retroactive coverage</li></ul></div><aside><span>ONE-TIME PRICE</span><strong>${money(stockPremium)}</strong><b class="${stockActive ? "active" : stockPending ? "pending" : ""}">${stockStatus}</b><button type="button" data-insurance-stock-purchase ${!activePlan || stockActive || stockPending || bankBalance < stockPremium ? "disabled" : ""}>${stockActive ? "Protection active" : stockPending ? "Payment pending" : !activePlan ? "Active main plan required" : `Add for ${money(stockPremium)}`}</button></aside></div><div class="ins7-property-desk"><header><div><span>OWNED HOUSE UPGRADES</span><h3>${money(propertyTerms.base_value)} included → ${money(propertyTerms.protected_value)} upgraded</h3><p>Pay ${money(propertyTerms.premium)} once per selected house. This changes continuity value only.</p></div><aside><small>PORTFOLIO VALUE</small><strong>${money(portfolioValue)}</strong></aside></header><div>${propertyRows || `<div class="ins7-empty compact"><strong>No owned houses found.</strong><p>You can still buy the main plan and optional protections without a property.</p></div>`}</div></div></section>
+      <section class="ins7-claims" id="claims"><header><div><span>CLAIM CENTER</span><h2>Choose the correct claim.</h2><p>Every claim is reviewed manually. Approved amounts are sent through Bank Bridge by an authorized developer.</p></div><strong class="${emergencyOpen || everydayActive || (stockActive && openStockWriteoffs.length) ? "open" : ""}">${emergencyOpen || everydayActive || (stockActive && openStockWriteoffs.length) ? "CLAIMS AVAILABLE" : "STANDBY"}</strong></header><div class="ins7-claim-grid"><section><header><span>CONTINUITY CLAIM</span><b>${emergencyOpen ? "EMERGENCY OPEN" : "EMERGENCY REQUIRED"}</b></header>${emergencyOpen && activePlan ? `<form id="insuranceClaimForm"><input type="hidden" name="policy_id" value="${activePlan.id}"/><input type="hidden" name="incident_type" value="server_reset"/><label>Reset or wipe details<textarea name="incident_summary" minlength="20" maxlength="1500" required placeholder="Describe the announced reset and losses."></textarea></label><label class="ins7-authorize"><input type="checkbox" name="confirmed_reset" value="true" required/><span>I confirm an authorized reset or wipe occurred.</span></label><button class="primary" ${continuityClaimOpen ? "disabled" : ""}>${continuityClaimOpen ? "Claim already under review" : "Submit continuity claim"}</button></form>` : `<div class="ins7-claim-closed"><strong>${emergencyOpen ? "An active plan is required." : "State of Emergency not declared."}</strong><p>This form opens only during an authorized continuity event.</p></div>`}</section><section><header><span>EVERYDAY CLAIM</span><b>${everydayActive ? "AVAILABLE" : everydayPending ? "PAYMENT PENDING" : "EXTRA REQUIRED"}</b></header>${activePlan && everydayActive ? `<form id="insuranceEverydayClaimForm"><input type="hidden" name="policy_id" value="${activePlan.id}"/><input type="hidden" name="coverage_source" value="everyday"/><div><label>Incident<select name="incident_type" required><option value="theft">Theft</option><option value="fire">Fire</option><option value="robbery">Robbery</option><option value="car_accident">Car accident</option></select></label><label>Requested amount<input name="requested_amount" type="number" min="0.01" max="${everydayClaimLimit}" step="0.01" required/></label></div><label>Affected item or loss<input name="loss_subject" maxlength="180" required/></label><label>Incident report<textarea name="incident_summary" minlength="20" maxlength="1500" required></textarea></label><label class="ins7-authorize"><input type="checkbox" name="confirmed_loss" value="true" required/><span>I certify this roleplay loss report is accurate.</span></label><button class="primary">Submit Everyday claim</button></form>` : `<div class="ins7-claim-closed"><strong>${everydayPending ? "Bank Bridge is confirming payment." : "Everyday Protection is required."}</strong><p>The extra does not require a house or emergency declaration.</p></div>`}</section>${stockClaimMarkup}</div><section class="ins7-claim-history"><header><span>CLAIM HISTORY</span><strong>${claims.length} RECORD${claims.length === 1 ? "" : "S"}</strong></header>${claims.map(claim => `<article><div><small>${escapeHtml(claim.claim_number)} · ${escapeHtml(humanLabel(claim.incident_type || "server_reset"))}</small><strong>${escapeHtml(claim.property_name || claim.character_name)}</strong><p>${escapeHtml(claim.incident_summary)}</p></div><span>${money(claim.requested_amount)}</span><b class="${escapeHtml(claim.status)}">${escapeHtml(humanLabel(claim.status))}</b></article>`).join("") || `<p>No claims have been filed.</p>`}</section></section>
     </main>
+    ${state.insuranceCancelConfirm && coveragePlan ? `<div class="ins7-cancel-backdrop" role="presentation"><section class="ins7-cancel-dialog" role="alertdialog" aria-modal="true" aria-labelledby="insuranceCancelTitle"><span>POLICY DECISION</span><h2 id="insuranceCancelTitle">Cancel this policy?</h2><p>Cancellation takes effect immediately. Your main bank coverage, property coverage, and every attached protection will stop.</p><dl><div><dt>Cancellation penalty</dt><dd>FC$0</dd></div><div><dt>Premium refund</dt><dd>None</dd></div><div><dt>After cancellation</dt><dd>You may purchase a new policy</dd></div></dl><div class="ins7-cancel-warning"><strong>You will be unprotected.</strong><span>Completed premiums are not refunded, and losses after cancellation will not qualify under this policy.</span></div><footer><button type="button" data-insurance-cancel-close>Keep my policy</button><button type="button" class="danger" data-insurance-cancel-confirm="${coveragePlan.id}">Cancel without refund</button></footer></section></div>` : ""}
   </section>`;
 }
 
@@ -3246,12 +3323,19 @@ function bindInsuranceWorkspace() {
   $('[data-insurance-print-certificate]')?.addEventListener('click', () => window.print());
   $$('[data-insurance-tier]').forEach(button => button.addEventListener('click', () => { state.insuranceCoverageTier = button.dataset.insuranceTier || 'preferred'; render(); document.getElementById('plans')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }));
   $$('[data-insurance-term]').forEach(button => button.addEventListener('click', () => { state.insuranceTermMonths = Number(button.dataset.insuranceTerm || 1); render(); document.getElementById('plans')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }));
-  $('[name="include_everyday_preview"]')?.addEventListener('change', event => { const form = $('#insurancePolicyForm'); const characterId = form?.character_id?.value || ''; const notes = form?.notes?.value || ''; state.insuranceIncludeEverydayProtection = event.currentTarget.checked; render(); const rebuilt = $('#insurancePolicyForm'); if (rebuilt?.character_id) rebuilt.character_id.value = characterId; if (rebuilt?.notes) rebuilt.notes.value = notes; document.getElementById('plans')?.scrollIntoView({ block: 'start' }); });
-  $('[data-insurance-everyday-purchase]')?.addEventListener('click', async event => { const policy = (state.cache.insurance?.policies || []).find(item => item.policy_type === 'compensation' && item.status === 'active'); const premium = Number(state.cache.insurance?.everyday_protection_terms?.premium || 45000); if (!policy || !confirm(`Add Everyday Protection for FC$${premium.toLocaleString()}? This covers theft, fire, robbery, and car accidents without requiring a property.`)) return; const button = event.currentTarget; button.disabled = true; try { await api('/api/insurance/everyday-protection', { method: 'POST', body: { policy_id: policy.id } }); toast('Everyday Protection sent to Bank Bridge'); state.cache.insurance = await api('/api/insurance'); render(); document.getElementById('everyday-protection')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (error) { button.disabled = false; toast(error.message); } });
-  $$('[data-insurance-property-protection]').forEach(button => button.addEventListener('click', async () => { const policy = (state.cache.insurance?.policies || []).find(item => item.policy_type === 'compensation' && item.status === 'active'); const property = (state.cache.insurance?.properties || []).find(item => String(item.property_id) === String(button.dataset.insurancePropertyProtection)); const terms = state.cache.insurance?.property_terms || { premium: 50000, protected_value: 400000 }; if (!policy || !property || !confirm(`Spend FC$${Number(terms.premium).toLocaleString()} to raise ${property.name} from FC$150,000 to FC$${Number(terms.protected_value).toLocaleString()} in continuity value?`)) return; button.disabled = true; try { await api('/api/insurance/property-protections', { method: 'POST', body: { policy_id: policy.id, property_id: property.property_id } }); toast('House coverage upgrade sent to Bank Bridge'); state.cache.insurance = await api('/api/insurance'); render(); document.getElementById('property-protection')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (error) { button.disabled = false; toast(error.message); } }));
-  $('#insurancePolicyForm')?.addEventListener('submit', async event => { event.preventDefault(); const form = event.currentTarget; const body = Object.fromEntries(new FormData(form)); body.include_everyday_protection = String(form.elements.include_everyday_protection?.value || state.insuranceIncludeEverydayProtection).toLowerCase() === 'true'; const button = $('button[type="submit"]', form); if (button) button.disabled = true; try { const result = await api('/api/insurance/policies', { method: 'POST', body }); toast(`Certificate ${result.policy_number} sent to Bank Bridge`); state.insuranceIncludeEverydayProtection = false; state.cache.insurance = await api('/api/insurance'); state.insuranceSelectedPolicy = state.cache.insurance.policies?.[0]?.id; render(); } catch (error) { if (button) button.disabled = false; toast(error.message); } });
+  const updateInsuranceExtraPreview = (key, checked) => { const form = $('#insurancePolicyForm'); const characterId = form?.character_id?.value || ''; const notes = form?.notes?.value || ''; state[key] = checked; render(); const rebuilt = $('#insurancePolicyForm'); if (rebuilt?.character_id) rebuilt.character_id.value = characterId; if (rebuilt?.notes) rebuilt.notes.value = notes; document.getElementById('plans')?.scrollIntoView({ block: 'start' }); };
+  $('[name="include_everyday_preview"]')?.addEventListener('change', event => updateInsuranceExtraPreview('insuranceIncludeEverydayProtection', event.currentTarget.checked));
+  $('[name="include_stock_preview"]')?.addEventListener('change', event => updateInsuranceExtraPreview('insuranceIncludeStockProtection', event.currentTarget.checked));
+  $('[data-insurance-everyday-purchase]')?.addEventListener('click', async event => { const policy = (state.cache.insurance?.policies || []).find(item => item.policy_type === 'compensation' && item.status === 'active'); if (!policy) return; const button = event.currentTarget; button.disabled = true; try { await api('/api/insurance/everyday-protection', { method: 'POST', body: { policy_id: policy.id } }); toast('Everyday Protection sent to Bank Bridge'); state.cache.insurance = await api('/api/insurance'); render(); document.getElementById('extras')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (error) { button.disabled = false; toast(error.message); } });
+  $('[data-insurance-stock-purchase]')?.addEventListener('click', async event => { const policy = (state.cache.insurance?.policies || []).find(item => item.policy_type === 'compensation' && item.status === 'active'); if (!policy) return; const button = event.currentTarget; button.disabled = true; try { await api('/api/insurance/protections', { method: 'POST', body: { policy_id: policy.id, include_stock_protection: true } }); toast('Stock Protection sent to Bank Bridge'); state.cache.insurance = await api('/api/insurance'); render(); document.getElementById('extras')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (error) { button.disabled = false; toast(error.message); } });
+  $$('[data-insurance-property-protection]').forEach(button => button.addEventListener('click', async () => { const policy = (state.cache.insurance?.policies || []).find(item => item.policy_type === 'compensation' && item.status === 'active'); const property = (state.cache.insurance?.properties || []).find(item => String(item.property_id) === String(button.dataset.insurancePropertyProtection)); if (!policy || !property) return; button.disabled = true; try { await api('/api/insurance/property-protections', { method: 'POST', body: { policy_id: policy.id, property_id: property.property_id } }); toast('House coverage upgrade sent to Bank Bridge'); state.cache.insurance = await api('/api/insurance'); render(); document.getElementById('extras')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (error) { button.disabled = false; toast(error.message); } }));
+  $('#insurancePolicyForm')?.addEventListener('submit', async event => { event.preventDefault(); const form = event.currentTarget; const body = Object.fromEntries(new FormData(form)); body.include_everyday_protection = String(form.elements.include_everyday_protection?.value || state.insuranceIncludeEverydayProtection).toLowerCase() === 'true'; body.include_stock_protection = String(form.elements.include_stock_protection?.value || state.insuranceIncludeStockProtection).toLowerCase() === 'true'; const button = $('button[type="submit"]', form); if (button) button.disabled = true; try { const result = await api('/api/insurance/policies', { method: 'POST', body }); toast(`Certificate ${result.policy_number} sent to Bank Bridge`); state.insuranceIncludeEverydayProtection = false; state.insuranceIncludeStockProtection = false; state.cache.insurance = await api('/api/insurance'); state.insuranceSelectedPolicy = state.cache.insurance.policies?.[0]?.id; render(); } catch (error) { if (button) button.disabled = false; toast(error.message); } });
   $('#insuranceClaimForm')?.addEventListener('submit', async event => { event.preventDefault(); const form = event.currentTarget; const body = Object.fromEntries(new FormData(form)); body.confirmed_reset = form.confirmed_reset.checked; try { const result = await api('/api/insurance/claims', { method: 'POST', body }); toast(`Claim ${result.claim_number} is pending manual review`); state.cache.insurance = await api('/api/insurance'); render(); } catch (error) { toast(error.message); } });
   $('#insuranceEverydayClaimForm')?.addEventListener('submit', async event => { event.preventDefault(); const form = event.currentTarget; const body = Object.fromEntries(new FormData(form)); body.confirmed_loss = form.confirmed_loss.checked; const button = $('button[type="submit"]', form); if (button) button.disabled = true; try { const result = await api('/api/insurance/claims', { method: 'POST', body }); toast(`Everyday claim ${result.claim_number} is pending manual review`); state.cache.insurance = await api('/api/insurance'); render(); document.getElementById('claims')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (error) { if (button) button.disabled = false; toast(error.message); } });
+  $('#insuranceStockClaimForm')?.addEventListener('submit', async event => { event.preventDefault(); const form = event.currentTarget; const body = Object.fromEntries(new FormData(form)); body.confirmed_loss = form.confirmed_loss.checked; const button = $('button[type="submit"]', form); if (button) button.disabled = true; try { const result = await api('/api/insurance/claims', { method: 'POST', body }); toast(`Stock Protection claim ${result.claim_number} is pending manual review`); state.cache.insurance = await api('/api/insurance'); render(); document.getElementById('claims')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (error) { if (button) button.disabled = false; toast(error.message); } });
+  $('[data-insurance-cancel-open]')?.addEventListener('click', () => { state.insuranceCancelConfirm = true; render(); });
+  $('[data-insurance-cancel-close]')?.addEventListener('click', () => { state.insuranceCancelConfirm = false; render(); });
+  $('[data-insurance-cancel-confirm]')?.addEventListener('click', async event => { const button = event.currentTarget; button.disabled = true; try { const result = await api(`/api/insurance/policies/${button.dataset.insuranceCancelConfirm}/cancel`, { method: 'POST', body: {} }); toast(result.message || 'Policy cancelled'); state.insuranceCancelConfirm = false; state.insuranceSelectedPolicy = null; state.cache.insurance = await api('/api/insurance'); render(); document.getElementById('plans')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (error) { button.disabled = false; toast(error.message); } });
 }
 
 function renderGangWorkspace() {
@@ -5639,7 +5723,25 @@ function renderMarketWorkspaceV12() {
 
 function normalizeMarketPriceHistory(rows) {
   const ordered = (rows || [])
-    .map(row => ({price: Number(row.price || 0), time: Date.parse(row.recorded_at || "")}))
+    .map(row => {
+      const close = Number(row.close ?? row.price ?? 0);
+      const open = Number(row.open ?? close);
+      const high = Number(row.high ?? Math.max(open, close));
+      const low = Number(row.low ?? Math.min(open, close));
+      return {
+        price: close,
+        open,
+        high: Math.max(high, open, close),
+        low: Math.min(low, open, close),
+        volume: Math.max(0, Number(row.volume || 0)),
+        tradeCount: Math.max(0, Number(row.trade_count || 0)),
+        vwap: row.cumulative_vwap == null ? null : Number(row.cumulative_vwap),
+        bucketVwap: row.bucket_vwap == null ? null : Number(row.bucket_vwap),
+        quoteCount: Math.max(1, Number(row.quote_count || 1)),
+        source: String(row.source || "market"),
+        time: Date.parse(row.recorded_at || ""),
+      };
+    })
     .filter(row => row.price > 0 && Number.isFinite(row.time))
     .sort((a, b) => a.time - b.time);
   const deduplicated = [];
@@ -5648,26 +5750,9 @@ function normalizeMarketPriceHistory(rows) {
     if (prior && prior.time === row.time) deduplicated[deduplicated.length - 1] = row;
     else deduplicated.push(row);
   }
-  if (deduplicated.length < 5) return deduplicated;
-  const median = values => {
-    const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
-    if (!sorted.length) return 0;
-    const middle = Math.floor(sorted.length / 2);
-    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
-  };
-  return deduplicated.filter((row, index, history) => {
-    const left = history.slice(Math.max(0, index - 3), index).map(item => item.price);
-    const right = history.slice(index + 1, index + 4).map(item => item.price);
-    if (!left.length || !right.length) return true;
-    const leftMedian = median(left);
-    const rightMedian = median(right);
-    if (!leftMedian || !rightMedian) return true;
-    const surroundingRatio = leftMedian / rightMedian;
-    if (surroundingRatio < .65 || surroundingRatio > 1.55) return true;
-    const surroundingPrice = (leftMedian + rightMedian) / 2;
-    const quoteRatio = row.price / surroundingPrice;
-    return quoteRatio >= .4 && quoteRatio <= 2.5;
-  });
+  // Large moves are valid Ravenhood events. The API now sends OHLC buckets,
+  // so do not smooth or discard a real scheduled spike/crash in the browser.
+  return deduplicated;
 }
 
 function renderMarketWorkspace() {
@@ -5686,61 +5771,141 @@ function renderMarketWorkspace() {
   const rangeMs = {"1D": 864e5, "1W": 6048e5, "1M": 2592e6, "1Y": 31536e6}[range];
   const currentPrice = Number(selected.price || 0);
   const previousPrice = Number(selected.previous_price || currentPrice);
+  const analytics = data.market_analytics?.ticker === selected.ticker && data.market_analytics?.range === range ? data.market_analytics : {};
   const rawHistory = normalizeMarketPriceHistory(data.price_history?.[selected.ticker] || []);
   let history = rawHistory.filter(row => row.time >= now - rangeMs);
   if (history.length < 2) history = rawHistory.slice(-Math.max(2, {"1D": 32, "1W": 72, "1M": 144, "1Y": 360}[range]));
-  if (!history.length) history = [{price: previousPrice, time: now - rangeMs}, {price: currentPrice, time: now}];
-  if (history.length === 1) history.unshift({price: previousPrice, time: history[0].time - 3600000});
-  if (Math.abs(history.at(-1).price - currentPrice) > .00001) history.push({price: currentPrice, time: now});
+  if (!history.length) history = [
+    {price: previousPrice, open: previousPrice, high: previousPrice, low: previousPrice, volume: 0, tradeCount: 0, vwap: null, time: now - rangeMs},
+    {price: currentPrice, open: previousPrice, high: Math.max(previousPrice, currentPrice), low: Math.min(previousPrice, currentPrice), volume: 0, tradeCount: 0, vwap: null, time: now},
+  ];
+  if (history.length === 1) history.unshift({...history[0], price: previousPrice, open: previousPrice, high: previousPrice, low: previousPrice, time: history[0].time - 3600000});
+  if (Math.abs(history.at(-1).price - currentPrice) > .00001 || now - history.at(-1).time > 60000) {
+    const latest = history.at(-1);
+    history.push({
+      price: currentPrice,
+      open: latest.price,
+      high: Math.max(latest.price, currentPrice),
+      low: Math.min(latest.price, currentPrice),
+      volume: 0,
+      tradeCount: 0,
+      vwap: latest.vwap,
+      bucketVwap: null,
+      quoteCount: 1,
+      source: "live_quote",
+      time: now,
+    });
+  }
 
   const prices = history.map(row => row.price);
-  const open = prices[0] || currentPrice;
-  const high = Math.max(...prices, currentPrice);
-  const low = Math.min(...prices, currentPrice);
+  const open = Number(history[0]?.open || prices[0] || currentPrice);
+  const high = Math.max(...history.map(row => row.high), currentPrice);
+  const low = Math.min(...history.map(row => row.low), currentPrice);
   const change = open ? (currentPrice / open - 1) * 100 : 0;
   const returns = prices.slice(1).map((price, index) => prices[index] ? price / prices[index] - 1 : 0);
   const drift = returns.length ? returns.reduce((sum, value) => sum + value, 0) / returns.length : change / 100;
   const variance = returns.length ? returns.reduce((sum, value) => sum + Math.pow(value - drift, 2), 0) / returns.length : 0;
-  // Keep the illustrative outlook from flattening the recorded line when a
-  // historic quote contains an extreme move. The recorded series remains
-  // untouched; only the non-recorded forecast is bounded for chart legibility.
-  const volatility = Math.max(.004, Math.min(.08, Math.sqrt(variance)));
-  const forecast = Array.from({length: 8}, (_, index) => {
-    const progress = (index + 1) / 8;
-    return currentPrice * (1 + Math.max(-.09, Math.min(.09, drift * 5)) * progress + Math.sin(index * 1.17) * volatility * .55);
+  const emaPeriod = range === "1D" || range === "1W" ? 12 : 20;
+  const emaAlpha = 2 / (Math.min(emaPeriod, history.length) + 1);
+  let emaValue = prices[0] || currentPrice;
+  const trendSeries = history.map((row, index) => {
+    emaValue = index ? row.price * emaAlpha + emaValue * (1 - emaAlpha) : row.price;
+    const windowPrices = prices.slice(Math.max(0, index - emaPeriod + 1), index + 1);
+    const windowMean = windowPrices.reduce((sum, value) => sum + value, 0) / Math.max(1, windowPrices.length);
+    const windowDeviation = Math.sqrt(windowPrices.reduce((sum, value) => sum + Math.pow(value - windowMean, 2), 0) / Math.max(1, windowPrices.length));
+    return {ema: emaValue, upper: emaValue + windowDeviation * 2, lower: Math.max(.01, emaValue - windowDeviation * 2)};
   });
-  const chartValues = prices.concat(forecast);
+  const chartValues = history.flatMap(row => [row.low, row.high])
+    .concat(trendSeries.flatMap(row => [row.lower, row.upper]))
+    .concat(history.map(row => Number.isFinite(row.vwap) && row.vwap > 0 ? row.vwap : currentPrice));
   const chartMin = Math.max(.01, Math.min(...chartValues) * .985);
   const chartMax = Math.max(...chartValues) * 1.015;
   const chartSpan = Math.max(.01, chartMax - chartMin);
   const yFor = value => 286 - ((value - chartMin) / chartSpan) * 238;
-  const actualEndX = 925;
+  const actualEndX = 1332;
+  const declaredStart = Date.parse(data.history_range_start || "");
+  const chartStart = Number.isFinite(declaredStart) && data.history_range === range ? declaredStart : now - rangeMs;
+  const chartEnd = Math.max(now, history.at(-1)?.time || now);
+  const xForTime = value => 28 + Math.max(0, Math.min(1, (value - chartStart) / Math.max(1, chartEnd - chartStart))) * (actualEndX - 28);
   const chartSeries = history.map((row, index) => ({
-    x: Number((28 + index / Math.max(1, history.length - 1) * (actualEndX - 28)).toFixed(1)),
+    x: Number(xForTime(row.time).toFixed(1)),
     y: Number(yFor(row.price).toFixed(1)),
     price: row.price,
+    open: row.open,
+    high: row.high,
+    low: row.low,
+    volume: row.volume,
+    tradeCount: row.tradeCount,
+    vwap: row.vwap,
+    bucketVwap: row.bucketVwap,
+    source: row.source,
     time: row.time,
     fromOpen: open ? (row.price / open - 1) * 100 : 0,
   }));
   const actualPoints = chartSeries.map(point => `${point.x},${point.y}`).join(" ");
-  const forecastPoints = [`${actualEndX},${yFor(currentPrice).toFixed(1)}`, ...forecast.map((value, index) => `${(actualEndX + (index + 1) * 51).toFixed(1)},${yFor(value).toFixed(1)}`)].join(" ");
+  const trendPoints = trendSeries.map((point, index) => `${chartSeries[index].x},${yFor(point.ema).toFixed(1)}`).join(" ");
+  const bandPoints = [
+    ...trendSeries.map((point, index) => `${chartSeries[index].x},${yFor(point.upper).toFixed(1)}`),
+    ...trendSeries.map((point, index) => `${chartSeries[index].x},${yFor(point.lower).toFixed(1)}`).reverse(),
+  ].join(" ");
+  const vwapPoints = chartSeries.filter(point => Number.isFinite(point.vwap) && point.vwap > 0).map(point => `${point.x},${yFor(point.vwap).toFixed(1)}`).join(" ");
+  const maxCandles = 96;
+  const candleGroupSize = Math.max(1, Math.ceil(history.length / maxCandles));
+  const candleGroups = [];
+  for (let index = 0; index < history.length; index += candleGroupSize) {
+    const rows = history.slice(index, index + candleGroupSize);
+    candleGroups.push({
+      open: rows[0].open,
+      close: rows.at(-1).price,
+      high: Math.max(...rows.map(row => row.high)),
+      low: Math.min(...rows.map(row => row.low)),
+      time: rows.at(-1).time,
+      volume: rows.reduce((sum, row) => sum + row.volume, 0),
+    });
+  }
+  const candleWidth = Math.max(2.2, Math.min(8, (actualEndX - 28) / Math.max(1, candleGroups.length) * .55));
+  const candleMarkup = candleGroups.map(candle => {
+    const x = xForTime(candle.time);
+    const openY = yFor(candle.open);
+    const closeY = yFor(candle.close);
+    const highY = yFor(candle.high);
+    const lowY = yFor(candle.low);
+    const bodyY = Math.min(openY, closeY);
+    const bodyHeight = Math.max(1.6, Math.abs(closeY - openY));
+    return `<g class="market-v14-candle ${candle.close >= candle.open ? "up" : "down"}"><line x1="${x.toFixed(1)}" y1="${highY.toFixed(1)}" x2="${x.toFixed(1)}" y2="${lowY.toFixed(1)}"/><rect x="${(x - candleWidth / 2).toFixed(1)}" y="${bodyY.toFixed(1)}" width="${candleWidth.toFixed(1)}" height="${bodyHeight.toFixed(1)}" rx=".7"/></g>`;
+  }).join("");
   const chartId = `rh-${String(selected.ticker || "market").replace(/[^a-z0-9]/gi, "")}`;
   const chartSeriesPayload = escapeHtml(JSON.stringify(chartSeries));
   const priceMove = currentPrice - open;
   const rangePosition = high > low ? Math.max(0, Math.min(100, (currentPrice - low) / (high - low) * 100)) : 50;
   const periodSwing = open ? (high - low) / open * 100 : 0;
-  const directionLabel = change > .25 ? "Rising" : change < -.25 ? "Falling" : "Holding steady";
-  const directionCopy = change > .25 ? "Buy-side pressure across this view" : change < -.25 ? "Defensive pressure across this view" : "Trading close to the period open";
-  const momentumPrice = Number(forecast.at(-1) || currentPrice);
-  const momentumChange = currentPrice ? (momentumPrice / currentPrice - 1) * 100 : 0;
+  const trendOpen = Number(trendSeries[0]?.ema || open);
+  const trendNow = Number(trendSeries.at(-1)?.ema || currentPrice);
+  const trendSlope = trendOpen ? (trendNow / trendOpen - 1) * 100 : 0;
+  const directionLabel = trendSlope > .25 && currentPrice >= trendNow ? "Bullish trend" : trendSlope < -.25 && currentPrice <= trendNow ? "Bearish trend" : "Consolidating";
+  const directionCopy = trendSlope > .25 ? "Price is carrying above a rising EMA." : trendSlope < -.25 ? "Price is trading beneath a falling EMA." : "Price and its EMA are moving inside a narrow channel.";
+  const vwapValue = Number(analytics.vwap ?? [...history].reverse().find(row => Number.isFinite(row.vwap) && row.vwap > 0)?.vwap ?? 0);
+  const priceVsVwap = vwapValue > 0 ? (currentPrice / vwapValue - 1) * 100 : null;
+  const tradedVolume = Math.max(0, Number(analytics.traded_volume || 0));
+  const tradeCount = Math.max(0, Number(analytics.trade_count || 0));
+  const buyPressure = Math.max(0, Math.min(100, Number(analytics.buy_pressure_percent ?? 50)));
+  const quoteVolatility = Math.sqrt(Math.max(0, variance)) * 100;
+  const movementRows = history.slice(1).map((row, index) => ({
+    pct: history[index].price ? (row.price / history[index].price - 1) * 100 : 0,
+    point: chartSeries[index + 1],
+  }));
+  const largestSpike = movementRows.reduce((best, item) => item.pct > best.pct ? item : best, {pct: 0, point: null});
+  const largestDrop = movementRows.reduce((best, item) => item.pct < best.pct ? item : best, {pct: 0, point: null});
+  const spikeMarker = largestSpike.point && largestSpike.pct > 0 ? `<g class="market-v14-move-marker spike"><circle cx="${largestSpike.point.x}" cy="${largestSpike.point.y}" r="5"/></g>` : "";
+  const dropMarker = largestDrop.point && largestDrop.pct < 0 ? `<g class="market-v14-move-marker drop"><circle cx="${largestDrop.point.x}" cy="${largestDrop.point.y}" r="5"/></g>` : "";
   const lastRecordedAt = history.at(-1)?.time || now;
   const chartDateOptions = range === "1D"
     ? {month: "short", day: "numeric", hour: "numeric", minute: "2-digit"}
     : {month: "short", day: "numeric", year: "numeric"};
   const chartDate = value => new Date(value).toLocaleString([], chartDateOptions);
   const chartTimeLabels = [
-    chartDate(history[0]?.time || now - rangeMs),
-    chartDate(history[Math.floor((history.length - 1) / 2)]?.time || now),
+    chartDate(chartStart),
+    chartDate(chartStart + (chartEnd - chartStart) / 2),
     chartDate(lastRecordedAt),
   ];
 
@@ -5771,21 +5936,22 @@ function renderMarketWorkspace() {
       <aside class="market-v13-discovery"><header><small>MARKET PULSE</small><h2>Hot right now</h2></header>${movers.slice(0, 7).map((item, index) => `<button type="button" class="${item.ticker === selected.ticker ? "active" : ""}" data-market-ticker="${escapeHtml(item.ticker)}"><i>${String(index + 1).padStart(2, "0")}</i><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}</small></span><strong>${money(item.price)}<em class="${marketChange(item) >= 0 ? "up" : "down"}">${marketChange(item) >= 0 ? "+" : ""}${marketChange(item).toFixed(2)}%</em></strong></button>`).join("")}</aside>
       <section class="market-v13-stage">
         <header class="market-v13-instrument"><div><small>${escapeHtml(selected.sector || "FAIRCROFT MARKET")} / ${escapeHtml(humanLabel(selected.security_type || "stock"))}</small><h1>${escapeHtml(selected.ticker || "--")}<span>${escapeHtml(selected.name || "Select a listing")}</span></h1><p>${escapeHtml(selected.description || `${selected.name || selected.ticker} is actively traded through Ravenhood.`)}</p></div><aside><small>LIVE QUOTE</small><strong>${money(currentPrice)}</strong><span class="${change >= 0 ? "up" : "down"}">${change >= 0 ? "+" : ""}${change.toFixed(2)}% / ${range}</span></aside></header>
-        <section class="market-v13-chart"><header><div><small>VERIFIED PERFORMANCE + MOMENTUM PATH</small><h2>${escapeHtml(selected.ticker || "Market")} live price desk</h2><span data-market-live-clock>Live synchronization armed · hover the recorded line for exact quotes</span></div><nav>${["1D", "1W", "1M", "1Y"].map(item => `<button type="button" class="${range === item ? "active" : ""}" data-market-range="${item}">${item}</button>`).join("")}</nav></header>
+        <section class="market-v13-chart market-v14-chart"><header><div><small>RECORDED OHLC + VWAP + DYNAMIC EMA</small><h2>${escapeHtml(selected.ticker || "Market")} live price desk</h2><span data-market-live-clock>Range synchronized · hover any recorded candle for exact market data</span></div><nav>${["1D", "1W", "1M", "1Y"].map(item => `<button type="button" class="${range === item ? "active" : ""}" data-market-range="${item}">${item}</button>`).join("")}</nav></header>
           <div class="market-v13-canvas ${change >= 0 ? "positive" : "negative"}" data-market-price-chart data-market-points="${chartSeriesPayload}" tabindex="0" aria-label="Interactive ${escapeHtml(selected.ticker || "Market")} price history. Hover or use arrow keys to inspect recorded quotes.">
             <div class="market-v13-gridlines"></div><div class="market-v13-y-axis"><span>${money(chartMax)}</span><span>${money((chartMax + chartMin) / 2)}</span><span>${money(chartMin)}</span></div>
-            <svg viewBox="0 0 1360 320" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="${chartId}-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".34"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs><polygon class="area" points="28,304 ${actualPoints} ${actualEndX},304" fill="url(#${chartId}-area)"/><polyline class="actual" points="${actualPoints}"/><polyline class="forecast" points="${forecastPoints}"/><line class="divider" x1="${actualEndX}" y1="24" x2="${actualEndX}" y2="304"/><circle class="pulse" cx="${actualEndX}" cy="${yFor(currentPrice).toFixed(1)}" r="7"/></svg>
-            <div class="market-v13-hover-guide" aria-hidden="true"></div><div class="market-v13-hover-dot" aria-hidden="true"></div><aside class="market-v13-tooltip" aria-live="polite"><small data-market-tooltip-symbol>${escapeHtml(selected.ticker || "MARKET")} · RECORDED QUOTE</small><strong data-market-tooltip-price>${money(currentPrice)}</strong><time data-market-tooltip-time>${new Date(lastRecordedAt).toLocaleString()}</time><span data-market-tooltip-change>Current verified price</span></aside>
-            <div class="market-v13-chart-labels"><span>${escapeHtml(chartTimeLabels[0])}</span><span>${escapeHtml(chartTimeLabels[1])}</span><span>${escapeHtml(chartTimeLabels[2])}</span><span>Momentum path</span></div>
+            <svg viewBox="0 0 1360 320" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="${chartId}-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".24"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient><linearGradient id="${chartId}-band" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#57dca8" stop-opacity=".16"/><stop offset="1" stop-color="#57dca8" stop-opacity=".025"/></linearGradient></defs><polygon class="trend-band" points="${bandPoints}" fill="url(#${chartId}-band)"/><polygon class="area" points="28,304 ${actualPoints} ${actualEndX},304" fill="url(#${chartId}-area)"/><g class="market-v14-candles">${candleMarkup}</g><polyline class="actual" points="${actualPoints}"/><polyline class="ema-line" points="${trendPoints}"/>${vwapPoints ? `<polyline class="vwap-line" points="${vwapPoints}"/>` : ""}${spikeMarker}${dropMarker}<circle class="pulse" cx="${actualEndX}" cy="${yFor(currentPrice).toFixed(1)}" r="7"/></svg>
+            <div class="market-v14-legend"><span class="price">Recorded close</span><span class="ema">EMA ${emaPeriod}</span><span class="vwap">${vwapValue > 0 ? "Session VWAP" : "VWAP awaiting volume"}</span><span class="band">Volatility band</span></div>
+            <div class="market-v13-hover-guide" aria-hidden="true"></div><div class="market-v13-hover-dot" aria-hidden="true"></div><aside class="market-v13-tooltip" aria-live="polite"><small data-market-tooltip-symbol>${escapeHtml(selected.ticker || "MARKET")} · RECORDED CANDLE</small><strong data-market-tooltip-price>${money(currentPrice)}</strong><time data-market-tooltip-time>${new Date(lastRecordedAt).toLocaleString()}</time><span data-market-tooltip-change>Current verified price</span><em data-market-tooltip-detail>OHLC and volume available on hover</em></aside>
+            <div class="market-v13-chart-labels"><span>${escapeHtml(chartTimeLabels[0])}</span><span>${escapeHtml(chartTimeLabels[1])}</span><span>${escapeHtml(chartTimeLabels[2])}</span></div>
           </div>
-          <footer><span><small>OPEN</small><b>${money(open)}</b></span><span><small>${range} LOW</small><b>${money(low)}</b></span><span><small>${range} HIGH</small><b>${money(high)}</b></span><span><small>YOUR POSITION</small><b>${owned ? `${owned.toLocaleString(undefined, {maximumFractionDigits: 4})} shares` : "Not held"}</b></span></footer>
-          <div class="market-v13-analysis"><article><small>PERIOD DIRECTION</small><strong class="${change >= 0 ? "up" : "down"}">${directionLabel}</strong><span>${priceMove >= 0 ? "+" : ""}${money(priceMove)} · ${change >= 0 ? "+" : ""}${change.toFixed(2)}%</span><p>${directionCopy}</p></article><article class="range"><small>RANGE POSITION</small><strong>${rangePosition.toFixed(0)}th percentile</strong><i><b style="left:${rangePosition.toFixed(1)}%"></b></i><span>${money(low)} low · ${money(high)} high</span></article><article><small>REALIZED SWING</small><strong>${periodSwing.toFixed(2)}%</strong><span>${history.length} verified observation${history.length === 1 ? "" : "s"}</span><p>High-to-low movement in the selected view.</p></article><article><small>MOMENTUM OUTLOOK</small><strong class="${momentumChange >= 0 ? "up" : "down"}">${momentumChange >= 0 ? "Positive" : "Defensive"}</strong><span>${money(momentumPrice)} · ${momentumChange >= 0 ? "+" : ""}${momentumChange.toFixed(2)}%</span><p>Illustrative path, not a recorded quote.</p></article></div>
+          <footer class="market-v14-statbar"><span><small>OPEN</small><b>${money(open)}</b></span><span><small>${range} LOW</small><b>${money(low)}</b></span><span><small>${range} HIGH</small><b>${money(high)}</b></span><span><small>VWAP</small><b>${vwapValue > 0 ? money(vwapValue) : "No trades"}</b></span><span><small>YOUR POSITION</small><b>${owned ? `${owned.toLocaleString(undefined, {maximumFractionDigits: 4})} shares` : "Not held"}</b></span></footer>
+          <div class="market-v13-analysis market-v14-analysis"><article><small>EMA TREND</small><strong class="${trendSlope >= 0 ? "up" : "down"}">${directionLabel}</strong><span>${trendSlope >= 0 ? "+" : ""}${trendSlope.toFixed(2)}% slope</span><p>${directionCopy}</p></article><article><small>PRICE VS VWAP</small><strong class="${priceVsVwap == null ? "" : priceVsVwap >= 0 ? "up" : "down"}">${priceVsVwap == null ? "Awaiting volume" : `${priceVsVwap >= 0 ? "+" : ""}${priceVsVwap.toFixed(2)}%`}</strong><span>${vwapValue > 0 ? money(vwapValue) : "No executed volume in range"}</span><p>Volume-weighted average of executed Ravenhood orders.</p></article><article class="range"><small>RANGE POSITION</small><strong>${rangePosition.toFixed(0)}th percentile</strong><i><b style="left:${rangePosition.toFixed(1)}%"></b></i><span>${money(low)} low · ${money(high)} high</span></article><article class="flow"><small>ORDER FLOW</small><strong>${tradedVolume.toLocaleString(undefined, {maximumFractionDigits: 2})} shares</strong><i><b style="width:${tradedVolume > 0 ? buyPressure.toFixed(1) : "0"}%"></b></i><span>${tradedVolume > 0 ? `${buyPressure.toFixed(0)}% buy pressure · ${tradeCount} trade${tradeCount === 1 ? "" : "s"}` : "No executed flow in this range"}</span></article><article><small>REALIZED MOVEMENT</small><strong>${periodSwing.toFixed(2)}% range</strong><span>Volatility ${quoteVolatility.toFixed(2)}%</span><p>Largest step: <b class="up">+${largestSpike.pct.toFixed(2)}%</b> / <b class="down">${largestDrop.pct.toFixed(2)}%</b></p></article></div>
         </section>
         <section class="market-v13-opportunities"><header><div><small>RAVENHOOD SIGNALS</small><h2>Today's momentum leaders</h2></div><span>Live repricing</span></header><div>${gainers.map(item => `<button type="button" data-market-ticker="${escapeHtml(item.ticker)}"><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}</small></span><strong>${money(item.price)}<em class="${marketChange(item) >= 0 ? "up" : "down"}">${marketChange(item) >= 0 ? "+" : ""}${marketChange(item).toFixed(2)}%</em></strong></button>`).join("")}</div></section>
         <section class="market-v13-portfolio" id="marketPortfolioDesk"><header><div><small>YOUR RAVENHOOD ACCOUNT</small><h2>Portfolio command</h2><p>Every position, current value, and unrealized result in one view.</p></div><strong class="${profit >= 0 ? "up" : "down"}">${profit >= 0 ? "+" : ""}${money(profit)}</strong></header><div>${holdingRows}</div></section>
         <section class="market-v13-board"><header><div><small>FCX LIVE BOARD</small><h2>Explore the exchange</h2></div><span>${securities.length} active listings</span></header><div>${securities.map(item => `<button type="button" class="${item.ticker === selected.ticker ? "active" : ""}" data-market-ticker="${escapeHtml(item.ticker)}"><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}</small></span><em>${escapeHtml(item.sector || "Market")}</em><strong>${money(item.price)}<small class="${marketChange(item) >= 0 ? "up" : "down"}">${marketChange(item) >= 0 ? "+" : ""}${marketChange(item).toFixed(2)}%</small></strong></button>`).join("")}</div></section>
       </section>
-      <aside class="market-v13-ticket"><header><small>ORDER ENTRY</small><h2>${escapeHtml(selected.ticker || "--")}</h2><p>${escapeHtml(selected.name || "")}</p><i class="${data.market_open ? "open" : ""}"></i></header><form data-market-order><input type="hidden" name="ticker" value="${escapeHtml(selected.ticker || "")}"/><label>Action<select name="side"><option value="buy">Buy shares</option><option value="sell">Sell shares</option></select></label><label>Quantity<input name="quantity" type="number" min="0.000001" step="0.000001" placeholder="0.000000" required/></label><dl><div><dt>Market price</dt><dd>${money(currentPrice)}</dd></div><div><dt>Buying power</dt><dd>${money(cash)}</dd></div><div><dt>Shares owned</dt><dd>${owned.toLocaleString(undefined, {maximumFractionDigits: 4})}</dd></div><div><dt>Commission</dt><dd>${Number(data.trade_fee_percent || 0).toFixed(2)}%</dd></div></dl><button class="market-primary" ${data.market_open ? "" : "disabled"}>Review order</button><small>Price, quantity, and commission are confirmed before execution.</small></form><section><small>MARKET DIRECTION</small><b class="${forecast.at(-1) >= currentPrice ? "up" : "down"}">${forecast.at(-1) >= currentPrice ? "Positive" : "Defensive"}</b><p>Calculated from verified quote history for the selected range.</p></section></aside>
+      <aside class="market-v13-ticket"><header><small>ORDER ENTRY</small><h2>${escapeHtml(selected.ticker || "--")}</h2><p>${escapeHtml(selected.name || "")}</p><i class="${data.market_open ? "open" : ""}"></i></header><form data-market-order data-market-price="${currentPrice}" data-market-fee-percent="${Number(data.trade_fee_percent || 0)}"><input type="hidden" name="ticker" value="${escapeHtml(selected.ticker || "")}"/><label>Action<select name="side"><option value="buy">Buy shares</option><option value="sell">Sell shares</option></select></label><label>Quantity<input name="quantity" type="number" min="0.000001" step="0.000001" placeholder="0.000000" required/></label><dl><div><dt>Market price</dt><dd>${money(currentPrice)}</dd></div><div><dt>Buying power</dt><dd>${money(cash)}</dd></div><div><dt>Shares owned</dt><dd>${owned.toLocaleString(undefined, {maximumFractionDigits: 4})}</dd></div><div><dt>Commission</dt><dd>${Number(data.trade_fee_percent || 0).toFixed(2)}%</dd></div></dl><div class="market-order-estimate" data-market-order-estimate><p><span>Stock subtotal</span><strong data-market-order-subtotal>${money(0)}</strong></p><p><span>Commission fee</span><strong data-market-order-fee>${money(0)}</strong></p><p class="total"><span data-market-order-total-label>Total cost</span><strong data-market-order-total>${money(0)}</strong></p></div><button class="market-primary" ${data.market_open ? "" : "disabled"}>Review order</button><small>Live estimate only. The displayed price and commission are confirmed at execution.</small></form><section><small>MARKET DIRECTION</small><b class="${trendSlope >= 0 ? "up" : "down"}">${escapeHtml(directionLabel)}</b><p>EMA ${emaPeriod} and executed-volume VWAP for the selected range.</p></section></aside>
     </section>${renderMarketDialog(data, stockOptions)}
   </main>`;
 }
@@ -5996,6 +6162,7 @@ function bindMarketWorkspace() {
     const tooltipPrice = $("[data-market-tooltip-price]", interactivePriceChart);
     const tooltipTime = $("[data-market-tooltip-time]", interactivePriceChart);
     const tooltipChange = $("[data-market-tooltip-change]", interactivePriceChart);
+    const tooltipDetail = $("[data-market-tooltip-detail]", interactivePriceChart);
     const hideChartPoint = () => interactivePriceChart.classList.remove("is-hovering");
     const showChartPoint = (point, index) => {
       if (!point || !tooltip) return;
@@ -6015,12 +6182,17 @@ function bindMarketWorkspace() {
         tooltipChange.textContent = `${fromOpen >= 0 ? "+" : ""}${fromOpen.toFixed(2)}% from the selected-period open`;
         tooltipChange.className = fromOpen >= 0 ? "up" : "down";
       }
+      if (tooltipDetail) {
+        const volume = Math.max(0, Number(point.volume || 0));
+        const pointVwap = Number(point.vwap || 0);
+        tooltipDetail.textContent = `O ${money(point.open)} · H ${money(point.high)} · L ${money(point.low)} · C ${money(point.price)} · ${volume.toLocaleString(undefined, {maximumFractionDigits: 2})} shares${pointVwap > 0 ? ` · VWAP ${money(pointVwap)}` : ""}`;
+      }
     };
     const pointFromPointer = event => {
       if (!chartPoints.length) return;
       const rect = interactivePriceChart.getBoundingClientRect();
       const chartX = (event.clientX - rect.left) / Math.max(1, rect.width) * 1360;
-      if (chartX < 14 || chartX > 945) { hideChartPoint(); return; }
+      if (chartX < 14 || chartX > 1346) { hideChartPoint(); return; }
       let nearestIndex = 0;
       for (let index = 1; index < chartPoints.length; index += 1) {
         if (Math.abs(Number(chartPoints[index].x) - chartX) < Math.abs(Number(chartPoints[nearestIndex].x) - chartX)) nearestIndex = index;
@@ -6041,6 +6213,30 @@ function bindMarketWorkspace() {
     });
   }
   $("[data-market-recipient-search]")?.addEventListener("submit", async event => { event.preventDefault(); const civ=String(new FormData(event.currentTarget).get("civ")||"").trim(); const result=await api(`/api/wallstreet/recipient?civ=${encodeURIComponent(civ)}`); state.marketTransferRecipient=result.recipient; render(); });
+  const marketOrderForm = $("[data-market-order]");
+  if (marketOrderForm) {
+    const updateMarketOrderEstimate = () => {
+      const price = Math.max(0, Number(marketOrderForm.dataset.marketPrice || 0));
+      const feePercent = Math.max(0, Number(marketOrderForm.dataset.marketFeePercent || 0));
+      const quantity = Math.max(0, Number(marketOrderForm.elements.quantity?.value || 0));
+      const side = String(marketOrderForm.elements.side?.value || "buy").toLowerCase();
+      const subtotal = Math.round(price * quantity * 100) / 100;
+      const fee = Math.round(subtotal * feePercent) / 100;
+      const finalAmount = Math.max(0, Math.round((side === "sell" ? subtotal - fee : subtotal + fee) * 100) / 100);
+      const subtotalNode = $("[data-market-order-subtotal]", marketOrderForm);
+      const feeNode = $("[data-market-order-fee]", marketOrderForm);
+      const totalNode = $("[data-market-order-total]", marketOrderForm);
+      const labelNode = $("[data-market-order-total-label]", marketOrderForm);
+      if (subtotalNode) subtotalNode.textContent = money(subtotal);
+      if (feeNode) feeNode.textContent = money(fee);
+      if (totalNode) totalNode.textContent = money(finalAmount);
+      if (labelNode) labelNode.textContent = side === "sell" ? "Estimated proceeds" : "Total cost";
+      marketOrderForm.querySelector("[data-market-order-estimate]")?.classList.toggle("sell", side === "sell");
+    };
+    marketOrderForm.elements.quantity?.addEventListener("input", updateMarketOrderEstimate);
+    marketOrderForm.elements.side?.addEventListener("change", updateMarketOrderEstimate);
+    updateMarketOrderEstimate();
+  }
   $("[data-market-order]")?.addEventListener("submit", async event => { event.preventDefault(); const form=event.currentTarget,button=form.querySelector('button[type="submit"],button.market-primary'); if(button?.disabled)return; const body=Object.fromEntries(new FormData(form)); if(button)button.disabled=true; try { await api("/api/wallstreet/orders",{method:"POST",body:JSON.stringify(body)}); toast("Order executed"); await loadAppData("wallstreet"); render(); } catch(error) { if(button)button.disabled=false; toast(error.message); } });
   $("[data-market-cash]")?.addEventListener("submit", async event => {
     event.preventDefault();
@@ -6075,13 +6271,17 @@ function bindMarketWorkspace() {
     try {
       const prior = (state.cache.wallstreet?.securities || []).find(item => item.ticker === state.marketTicker);
       const priorPrice = Number(prior?.price || 0);
+      const priorAnalytics = state.cache.wallstreet?.market_analytics || {};
+      const priorSyncToken = `${priorPrice}|${priorAnalytics.last_quote_at || ""}|${priorAnalytics.trade_count || 0}|${priorAnalytics.traded_volume || 0}`;
       const next = await fetchWallstreetData();
       const current = (next.securities || []).find(item => item.ticker === state.marketTicker);
       const currentPrice = Number(current?.price || 0);
+      const nextAnalytics = next.market_analytics || {};
+      const nextSyncToken = `${currentPrice}|${nextAnalytics.last_quote_at || ""}|${nextAnalytics.trade_count || 0}|${nextAnalytics.traded_volume || 0}`;
       state.cache.wallstreet = next;
       const clock = $("[data-market-live-clock]");
       if (clock) clock.textContent = `Synced ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
-      if (Math.abs(currentPrice - priorPrice) > 0.00001) render();
+      if (nextSyncToken !== priorSyncToken) render();
     } catch (_) {
       const clock = $("[data-market-live-clock]");
       if (clock) clock.textContent = "Sync retry pending";
@@ -12830,7 +13030,7 @@ function renderDevMarketSettings(market, users) {
     <section class="dev-card market-code-authority"><div class="dev-card-header"><div><span>RAVENHOOD CASH AUTHORITY</span><h2>Amount-bound stock PINs</h2><p>Enter the exact approved amount, then issue a four-digit Ravenhood PIN. Stock PINs are completely separate from MyFaircroft settlement codes.</p></div><span class="pill red">ISSUE AFTER HANDOFF</span></div><div class="dev-grid-2"><div class="market-pin-issue"><div class="dev-unassigned-pin"><b>UNASSIGNED STOCK PIN</b><small>The exact amount is locked to this PIN. The first eligible resident who redeems it receives or withdraws that amount and is recorded in the audit ledger.</small></div><label>Exact stock amount<input data-market-pin-amount type="number" min="0.01" max="1000000000" step="0.01" placeholder="2000.00" required/></label><label>Expires after<input data-market-pin-expiry type="number" min="5" max="120" value="30"/></label><div class="market-pin-actions"><button class="primary" type="button" data-issue-market-pin="deposit">Receive funds PIN</button><button class="secondary" type="button" data-issue-market-pin="withdrawal">Withdrawal PIN</button></div><small class="market-pin-warning">No authorization phrase is required. Confirm the handoff, enter its exact value, and issue the appropriate stock PIN.</small></div><div>${state.generatedMarketCode ? `<div class="dev-generated-code"><span>${money(state.generatedMarketCode.amount)} · ${escapeHtml(humanLabel(state.generatedMarketCode.transaction_type))}</span><strong>${escapeHtml(state.generatedMarketCode.code)}</strong><small>Stock-only PIN · expires ${new Date(state.generatedMarketCode.expires_at).toLocaleString()}</small></div>` : `<div class="empty">Enter the exact amount and issue a stock PIN</div>`}<div class="dev-code-ledger">${codes.slice(0,30).map(x => `<div><code>••${escapeHtml(x.code_hint)}</code><span>${money(x.amount)} · ${escapeHtml(humanLabel(x.transaction_type))}<small>Issued by ${escapeHtml(x.created_by_name)}${x.used_by_name ? ` · redeemed by ${escapeHtml(x.used_by_name)}` : " · not redeemed"}</small></span><strong class="${!x.used_at && !x.revoked_at && new Date(x.expires_at)>new Date() ? "available" : ""}">${x.used_at ? "Redeemed" : x.revoked_at ? "Revoked" : new Date(x.expires_at)<=new Date() ? "Expired" : "Available"}</strong></div>`).join("") || `<div class="empty">No stock PINs</div>`}</div></div></div></section>
     <div class="dev-grid-2"><section class="dev-card"><div class="dev-card-header"><div><span>ACTIVE AUTOMATION</span><h2>Price programs</h2></div><strong>${programs.filter(x=>x.status==="active").length} ACTIVE</strong></div><div class="dev-detail-list">${programs.map(x => `<div><strong>${escapeHtml(x.ticker || "ALL")} Â· ${escapeHtml(x.event_name)}</strong><small>${Number(x.percent_change)>=0?"+":""}${Number(x.percent_change).toFixed(2)}% over ${Number(x.duration_minutes)} minutes Â· ${escapeHtml(x.status)}</small></div>`).join("") || `<div class="empty">No programs</div>`}</div></section><section class="dev-card"><div class="dev-card-header"><div><span>GEMINI ANALYST</span><h2>Generate market briefing</h2><p>Gemini reads current listings and your market scenario, then recommends optional programs. Nothing is applied automatically.</p></div><span class="pill ${market.ai_enabled ? "green" : ""}">${market.ai_enabled ? "enabled" : "disabled"}</span></div><form id="devMarketAiForm" class="form-grid"><label class="wide">Market scenario or operational inputs<textarea name="context" maxlength="2000" required placeholder="New mining permit, severe storm, major public contract, political uncertaintyâ€¦"></textarea></label><button class="primary wide" ${market.ai_enabled ? "" : "disabled"}>Generate analyst briefing</button></form>${state.marketAiBriefing ? `<pre class="market-ai-briefing">${escapeHtml(state.marketAiBriefing)}</pre>` : ""}</section></div>
     <section class="dev-card market-scratch-code-ledger"><div class="dev-card-header"><div><span>FAIRCROFT INSTANT SCRATCH</span><h2>Generated reward codes</h2><p>Every revealed lottery scratch card is issued as a traceable, single-use Ravenhood cash or stock promotion.</p></div><strong>${scratchPromotions.length} ISSUED</strong></div><div class="dev-promo-ledger"><div class="dev-promo-ledger-head"><span>Reward code</span><span>Prize</span><span>Claim status</span><span>Issued</span></div>${scratchPromotions.map(p=>`<article><span><strong><code>${escapeHtml(p.code_plain || `••••-${p.code_hint}`)}</code></strong><small>${escapeHtml(p.campaign_name)}</small></span><span>${p.reward_type==="cash"?money(p.cash_amount):`${Number(p.share_quantity)} ${escapeHtml(p.ticker||"stock share")}`}</span><span><strong>${Number(p.redemption_count) ? "REDEEMED" : p.active ? "READY" : "INACTIVE"}</strong><small>${Number(p.redemption_count)}/${Number(p.max_redemptions)} claims</small></span><span><strong>${escapeHtml(p.created_by_name || "System issue")}</strong><small>${escapeHtml(String(p.created_at || "").slice(0,19).replace("T"," "))}</small></span></article>`).join("")||`<div class="empty">No scratch reward codes have been generated.</div>`}</div></section>
-    <section class="dev-card market-active-movements"><div class="dev-card-header"><div><span>LIVE PRICE AUTOMATION</span><h2>Active scheduled movements</h2><p>Stop a movement to cancel its remaining schedule and restore every affected security to its pre-event baseline.</p></div><strong>${activeMovements.length} RUNNING</strong></div><div>${activeMovements.map(program=>{const related=activePrograms.filter(item=>item.event_name===program.event_name&&item.created_at===program.created_at);const tickers=related.map(item=>item.ticker).filter(Boolean);const start=new Date(program.starts_at),end=new Date(program.ends_at),progress=Math.max(0,Math.min(100,(Date.now()-start.getTime())/Math.max(1,end.getTime()-start.getTime())*100));return `<article><div class="market-movement-status"><i></i><span>ACTIVE MOVEMENT</span></div><div><strong>${escapeHtml(program.event_name)}</strong><small>${tickers.length>8?`ENTIRE MARKET · ${tickers.length} securities`:escapeHtml(tickers.join(", ")||"Market-wide")}</small></div><div class="market-movement-change ${Number(program.percent_change)>=0?"positive":"negative"}"><strong>${Number(program.percent_change)>=0?"+":""}${Number(program.percent_change).toFixed(2)}%</strong><small>${start.toLocaleString()} → ${end.toLocaleString()}</small></div><div class="market-movement-progress"><i style="width:${progress.toFixed(1)}%"></i></div><button class="danger" type="button" data-market-cancel-program="${program.id}" data-market-program-name="${escapeHtml(program.event_name)}">Stop & restore market</button></article>`}).join("")||`<div class="market-normal-state"><i></i><div><strong>Normal market operation</strong><span>No scheduled price movements are currently changing listed securities.</span></div></div>`}</div></section>
+    <section class="dev-card market-active-movements"><div class="dev-card-header"><div><span>LIVE PRICE AUTOMATION</span><h2>Active scheduled movements</h2><p>Choose whether to hold each security at its current quote or return it to the pre-event baseline.</p></div><strong>${activeMovements.length} RUNNING</strong></div><div>${activeMovements.map(program=>{const related=activePrograms.filter(item=>item.event_name===program.event_name&&item.created_at===program.created_at);const tickers=related.map(item=>item.ticker).filter(Boolean);const start=new Date(program.starts_at),end=new Date(program.ends_at),progress=Math.max(0,Math.min(100,(Date.now()-start.getTime())/Math.max(1,end.getTime()-start.getTime())*100));return `<article><div class="market-movement-status"><i></i><span>ACTIVE MOVEMENT</span></div><div><strong>${escapeHtml(program.event_name)}</strong><small>${tickers.length>8?`ENTIRE MARKET · ${tickers.length} securities`:escapeHtml(tickers.join(", ")||"Market-wide")}</small></div><div class="market-movement-change ${Number(program.percent_change)>=0?"positive":"negative"}"><strong>${Number(program.percent_change)>=0?"+":""}${Number(program.percent_change).toFixed(2)}%</strong><small>${start.toLocaleString()} → ${end.toLocaleString()}</small></div><div class="market-movement-progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="market-movement-actions"><button class="secondary" type="button" data-market-stop-program="${program.id}" data-market-program-name="${escapeHtml(program.event_name)}">Stop · keep current price</button><button class="danger" type="button" data-market-cancel-program="${program.id}" data-market-program-name="${escapeHtml(program.event_name)}">Stop & restore baseline</button></div></article>`}).join("")||`<div class="market-normal-state"><i></i><div><strong>Normal market operation</strong><span>No scheduled price movements are currently changing listed securities.</span></div></div>`}</div></section>
   </div>`;
 }
 
@@ -14012,6 +14212,7 @@ function bindDevWorkspace() {
   $("#devMarketProgramForm [name='percent_change']")?.addEventListener("input", event => { const output=$("[data-market-example]"); if(output) output.textContent=`$1.00 becomes ${money(Math.max(0.01, 1 + Number(event.currentTarget.value || 0)/100))}`; });
   $("#devMarketProgramForm")?.addEventListener("submit", async event => { event.preventDefault(); try { const result=await api("/api/dev-tools/market/programs",{method:"POST",body:Object.fromEntries(new FormData(event.currentTarget))}); toast(`Price program launched Â· $1 becomes $${Number(result.example_one_dollar).toFixed(4)}`); await refreshDevTools(); } catch(error){toast(error.message);} });
   $$("[data-market-preset]").forEach(button => button.addEventListener("click", async () => { if(!confirm(`Launch ${humanLabel(button.dataset.marketPreset)} market event?`)) return; try { await api("/api/dev-tools/market/presets",{method:"POST",body:{preset:button.dataset.marketPreset}}); toast("Market event launched"); await refreshDevTools(); } catch(error){toast(error.message);} }));
+  $$("[data-market-stop-program]").forEach(button=>button.addEventListener("click",async()=>{const name=button.dataset.marketProgramName||"this movement";if(!confirm(`Stop ${name} at its current market price? The remaining scheduled movement will be cancelled and no baseline restoration will occur.`))return;button.disabled=true;try{const result=await api(`/api/dev-tools/market/programs/${button.dataset.marketStopProgram}/stop`,{method:"PATCH",body:"{}"});toast(`Movement stopped · ${result.held} current price(s) preserved`);await refreshDevTools();}catch(error){button.disabled=false;toast(error.message);}}));
   $$("[data-market-cancel-program]").forEach(button=>button.addEventListener("click",async()=>{const name=button.dataset.marketProgramName||"this movement";if(!confirm(`Stop ${name} and restore all affected securities to their pre-movement prices?`))return;button.disabled=true;try{const result=await api(`/api/dev-tools/market/programs/${button.dataset.marketCancelProgram}/cancel`,{method:"PATCH",body:"{}"});toast(`Movement stopped · ${result.restored} price(s) restored`);await refreshDevTools();}catch(error){button.disabled=false;toast(error.message);}}));
   ["#myFaircroftPaymentCodeForm"].forEach((selector) => {
     const form = $(selector);
@@ -16047,7 +16248,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.0-market-assets-at-risk-v41").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.1-market-hold-v46").catch(() => {}));
 }
 
 legalFooterLink?.addEventListener("click", () => {
