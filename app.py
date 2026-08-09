@@ -4194,6 +4194,11 @@ def ensure_migrations(db: Database) -> None:
         )
         """
     )
+    db.execute("ALTER TABLE market_securities ADD COLUMN IF NOT EXISTS lifecycle_status TEXT NOT NULL DEFAULT 'active'")
+    db.execute("ALTER TABLE market_securities ADD COLUMN IF NOT EXISTS bankruptcy_chapter TEXT")
+    db.execute("ALTER TABLE market_securities ADD COLUMN IF NOT EXISTS bankruptcy_reason TEXT")
+    db.execute("ALTER TABLE market_securities ADD COLUMN IF NOT EXISTS bankruptcy_at TEXT")
+    db.execute("ALTER TABLE market_securities ADD COLUMN IF NOT EXISTS closed_by INTEGER")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS market_holdings (
@@ -4225,6 +4230,28 @@ def ensure_migrations(db: Database) -> None:
         )
         """
     )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS market_security_writeoffs (
+            id SERIAL PRIMARY KEY,
+            security_id INTEGER NOT NULL,
+            account_id INTEGER NOT NULL,
+            quantity NUMERIC(18,6) NOT NULL,
+            average_cost NUMERIC(14,4) NOT NULL DEFAULT 0,
+            invested_basis NUMERIC(20,2) NOT NULL DEFAULT 0,
+            final_market_value NUMERIC(20,2) NOT NULL DEFAULT 0,
+            bankruptcy_chapter TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            closed_by INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(security_id, account_id),
+            FOREIGN KEY (security_id) REFERENCES market_securities(id) ON DELETE CASCADE,
+            FOREIGN KEY (account_id) REFERENCES market_accounts(id) ON DELETE CASCADE,
+            FOREIGN KEY (closed_by) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS market_security_writeoffs_security_idx ON market_security_writeoffs(security_id, created_at DESC)")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS market_cash_codes (
@@ -6311,6 +6338,133 @@ def run_lottery_player_pool_tick(db: Database, settings: dict[str, Any] | None =
             (tick_bucket, amount, status["online_players"], status["rate_per_player_minute"], elapsed, status["direction"], current.isoformat()),
         )
     return {**status, "elapsed_seconds": elapsed, "amount": amount}
+
+
+MARKET_COMPANY_PREFIXES = (
+    "Alder", "Beacon", "Cobalt", "Crownline", "Evercrest", "Granite", "Harborlight", "Ironwood",
+    "Juniper", "Keystone", "Northstar", "Orion", "Redwood", "Silverline", "Summit", "Westbridge",
+)
+
+MARKET_COMPANY_INDUSTRIES = (
+    ("Mobility", "Transport", "Regional passenger mobility, fleet support, and transport infrastructure."),
+    ("Digital", "Technology", "Secure civic software, data services, and resident-facing digital infrastructure."),
+    ("Foods", "Consumer", "Food production, distribution, hospitality supply, and consumer staples."),
+    ("Energy", "Energy", "Power generation, fuel logistics, and resilient energy services."),
+    ("Medical", "Healthcare", "Clinical supply, emergency medicine, and community health services."),
+    ("Works", "Industrial", "Industrial fabrication, public works support, and heavy equipment services."),
+    ("Properties", "Real Estate", "Commercial development, property operations, and urban renewal."),
+    ("Aviation", "Aerospace", "Aviation services, advanced systems, and aerospace logistics."),
+    ("Capital", "Finance", "Commercial finance, investment services, and enterprise funding."),
+    ("Communications", "Telecommunications", "Regional communications, network operations, and broadcast infrastructure."),
+    ("Resources", "Materials", "Strategic materials, extraction support, and industrial resource distribution."),
+    ("Security", "Security", "Protective services, secure transport, and critical-site operations."),
+)
+
+
+def market_unique_ticker(db: Database, preferred: str, company_name: str) -> str:
+    clean = re.sub(r"[^A-Z0-9]", "", str(preferred or "").upper())[:8]
+    if len(clean) < 2:
+        words = re.findall(r"[A-Za-z0-9]+", company_name.upper())
+        clean = "".join(word[0] for word in words if word)[:5]
+        if len(clean) < 2:
+            clean = re.sub(r"[^A-Z0-9]", "", company_name.upper())[:5]
+    clean = (clean or "FCX")[:8]
+    candidate = clean
+    suffix = 2
+    while one(db, "SELECT id FROM market_securities WHERE ticker=?", (candidate,)):
+        tail = str(suffix)
+        candidate = f"{clean[:max(1, 8 - len(tail))]}{tail}"
+        suffix += 1
+    return candidate
+
+
+def create_market_security(
+    db: Database,
+    *,
+    name: str,
+    ticker: str,
+    sector: str,
+    description: str,
+    price: float,
+    volatility: float,
+    security_type: str,
+    actor_id: int,
+    source: str,
+) -> dict[str, Any]:
+    clean_name = " ".join(str(name or "").split())[:100]
+    clean_sector = " ".join(str(sector or "General").split())[:60] or "General"
+    clean_description = " ".join(str(description or "").split())[:600]
+    clean_type = str(security_type or "stock").strip().lower()
+    if len(clean_name) < 3:
+        raise ValueError("Company name must contain at least three characters")
+    if clean_type not in {"stock", "volatile"}:
+        raise ValueError("Company type must be stock or volatile")
+    if not math.isfinite(price) or price < 0.01 or price > 1_000_000:
+        raise ValueError("Opening price must be between $0.01 and $1,000,000")
+    if not math.isfinite(volatility) or volatility < 0.1 or volatility > 10:
+        raise ValueError("Volatility must be between 0.1 and 10")
+    clean_ticker = market_unique_ticker(db, ticker, clean_name)
+    timestamp = now_iso()
+    row = db.execute(
+        """INSERT INTO market_securities
+           (ticker,name,security_type,sector,description,price,previous_price,volatility,active,lifecycle_status,updated_at)
+           VALUES (?,?,?,?,?,?,?,?,1,'active',?) RETURNING id""",
+        (clean_ticker, clean_name, clean_type, clean_sector, clean_description, round(price, 4), round(price, 4), round(volatility, 4), timestamp),
+    ).fetchone()
+    security_id = int((row or {}).get("id") or 0)
+    db.execute(
+        "INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)",
+        (security_id, round(price, 4), source[:40], timestamp),
+    )
+    db.execute(
+        "INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('listing_created',?,?,?,?)",
+        (f"New listing: {clean_ticker}", f"{clean_name} entered Ravenhood at ${price:,.2f} in {clean_sector}.", actor_id, timestamp),
+    )
+    return {
+        "id": security_id,
+        "ticker": clean_ticker,
+        "name": clean_name,
+        "sector": clean_sector,
+        "description": clean_description,
+        "price": round(price, 4),
+        "volatility": round(volatility, 4),
+        "security_type": clean_type,
+        "active": 1,
+        "lifecycle_status": "active",
+    }
+
+
+def generated_market_company(db: Database, actor_id: int) -> dict[str, Any]:
+    existing_names = {
+        str(row["name"]).strip().lower()
+        for row in all_rows(db, "SELECT name FROM market_securities")
+    }
+    candidates = [
+        (prefix, industry, sector, description)
+        for prefix in MARKET_COMPANY_PREFIXES
+        for industry, sector, description in MARKET_COMPANY_INDUSTRIES
+        if f"{prefix} {industry}".lower() not in existing_names
+    ]
+    if not candidates:
+        raise ValueError("The automatic company-name pool is exhausted")
+    prefix, industry, sector, description = secrets.choice(candidates)
+    name = f"{prefix} {industry}"
+    ticker = market_unique_ticker(db, f"{prefix[:2]}{industry[:2]}", name)
+    price = round((secrets.randbelow(14_501) + 500) / 100, 2)
+    volatility = round((secrets.randbelow(221) + 50) / 100, 2)
+    security_type = "volatile" if volatility >= 2.35 else "stock"
+    return create_market_security(
+        db,
+        name=name,
+        ticker=ticker,
+        sector=sector,
+        description=description,
+        price=price,
+        volatility=volatility,
+        security_type=security_type,
+        actor_id=actor_id,
+        source="generated_listing",
+    )
 
 
 def market_volatility_cycle(db: Database, amplitude: float, source: str = "autopilot", actor_id: int | None = None) -> dict[str, Any]:
@@ -9193,6 +9347,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_market_code(db, user)
                 elif path == "/api/dev-tools/market/settings" and method == "PATCH":
                     self.api_dev_market_settings(db, user)
+                elif path == "/api/dev-tools/market/securities" and method == "POST":
+                    self.api_dev_market_security_create(db, user)
+                elif path == "/api/dev-tools/market/securities/generate" and method == "POST":
+                    self.api_dev_market_security_generate(db, user)
+                elif path.startswith("/api/dev-tools/market/securities/") and path.endswith("/bankruptcy") and method == "PATCH":
+                    self.api_dev_market_security_bankruptcy(db, user, self.path_int(path, 4))
                 elif path == "/api/dev-tools/market/programs" and method == "POST":
                     self.api_dev_market_program(db, user)
                 elif path.startswith("/api/dev-tools/market/programs/") and path.endswith("/cancel") and method == "PATCH":
@@ -14785,7 +14945,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         payload = self.read_json(); ticker = str(payload.get("ticker") or "").upper().strip(); side = str(payload.get("side") or "").lower()
         try: quantity = round(float(payload.get("quantity") or 0), 6)
         except (TypeError, ValueError): quantity = 0
-        security = one(db, "SELECT * FROM market_securities WHERE ticker=? AND active=1", (ticker,))
+        security = one(db, "SELECT * FROM market_securities WHERE ticker=? AND active=1 FOR UPDATE", (ticker,))
         if not account or not security or side not in ("buy", "sell") or quantity <= 0:
             self.error(400, "Valid account, ticker, side, and quantity are required."); return
         price = float(security["price"]); gross = round(price * quantity, 2); fee = round(gross * settings["market_trade_fee_percent"] / 100, 2)
@@ -14832,7 +14992,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         try: quantity = round(float(payload.get("quantity") or 0), 6)
         except (TypeError, ValueError): quantity = 0
         sender = one(db, "SELECT * FROM market_accounts WHERE user_id=?", (user["id"],)); target_user = one(db, "SELECT * FROM users WHERE civ_number=?", (recipient,))
-        security = one(db, "SELECT * FROM market_securities WHERE ticker=?", (ticker,))
+        security = one(db, "SELECT * FROM market_securities WHERE ticker=? AND active=1 FOR UPDATE", (ticker,))
         if not sender or not target_user or target_user["id"] == user["id"] or not security or quantity <= 0:
             self.error(400, "A confirmed recipient CIV, ticker, and quantity are required."); return
         target = one(db, "SELECT * FROM market_accounts WHERE user_id=?", (target_user["id"],))
@@ -22110,7 +22270,32 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "gemini_interval_minutes": system_settings["market_gemini_interval_minutes"],
                     "gemini_last_tick": system_settings["market_gemini_last_tick"],
                     "gemini_configured": bool(GEMINI_API_KEY),
-                    "securities": [dict(row) for row in all_rows(db, "SELECT * FROM market_securities ORDER BY security_type, ticker")],
+                    "securities": [dict(row) for row in all_rows(db, """SELECT s.*,
+                        COALESCE(position.holder_count,0) AS holder_count,
+                        COALESCE(position.outstanding_shares,0) AS outstanding_shares,
+                        COALESCE(position.invested_basis,0) AS invested_basis
+                        FROM market_securities s
+                        LEFT JOIN (
+                            SELECT security_id,COUNT(*) AS holder_count,SUM(quantity) AS outstanding_shares,
+                                   SUM(quantity*average_cost) AS invested_basis
+                            FROM market_holdings WHERE quantity>0 GROUP BY security_id
+                        ) position ON position.security_id=s.id
+                        ORDER BY CASE WHEN s.active=1 THEN 0 ELSE 1 END,s.security_type,s.ticker""")],
+                    "bankruptcies": [dict(row) for row in all_rows(db, """SELECT s.id,s.ticker,s.name,s.sector,s.bankruptcy_chapter,s.bankruptcy_reason,
+                        s.bankruptcy_at,s.closed_by,closer.name AS closed_by_name,
+                        COALESCE(loss.affected_accounts,0) AS affected_accounts,
+                        COALESCE(loss.forfeited_shares,0) AS forfeited_shares,
+                        COALESCE(loss.invested_basis,0) AS invested_basis,
+                        COALESCE(loss.final_market_value,0) AS final_market_value
+                        FROM market_securities s
+                        LEFT JOIN users closer ON closer.id=s.closed_by
+                        LEFT JOIN (
+                            SELECT security_id,COUNT(*) AS affected_accounts,SUM(quantity) AS forfeited_shares,
+                                   SUM(invested_basis) AS invested_basis,SUM(final_market_value) AS final_market_value
+                            FROM market_security_writeoffs GROUP BY security_id
+                        ) loss ON loss.security_id=s.id
+                        WHERE s.lifecycle_status='bankrupt' OR s.bankruptcy_at IS NOT NULL
+                        ORDER BY s.bankruptcy_at DESC,s.ticker""")],
                     "programs": [dict(row) for row in all_rows(db, "SELECT p.*, s.ticker FROM market_price_programs p LEFT JOIN market_securities s ON s.id=p.security_id ORDER BY p.created_at DESC LIMIT 50")],
                     "events": [dict(row) for row in all_rows(db, "SELECT * FROM market_events ORDER BY created_at DESC LIMIT 50")],
                     "codes": [dict(row) for row in all_rows(db, """SELECT c.id,c.code_hint,c.target_user_id,c.transaction_type,c.amount,c.expires_at,c.used_at,c.revoked_at,c.created_at,
@@ -22824,6 +23009,127 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         })
         self.send_json(200, {"ok": True})
 
+    def api_dev_market_security_create(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        payload = self.read_json()
+        name = " ".join(str(payload.get("name") or "").split())[:100]
+        requested_ticker = re.sub(r"[^A-Z0-9]", "", str(payload.get("ticker") or "").upper())[:8]
+        if one(db, "SELECT id FROM market_securities WHERE LOWER(name)=LOWER(?)", (name,)):
+            self.error(409, "A Ravenhood company with that name already exists."); return
+        if requested_ticker and one(db, "SELECT id FROM market_securities WHERE ticker=?", (requested_ticker,)):
+            self.error(409, f"Ticker {requested_ticker} is already assigned."); return
+        try:
+            price = float(payload.get("price") or 0)
+            volatility = float(payload.get("volatility") or 1)
+        except (TypeError, ValueError):
+            self.error(400, "Opening price and volatility must be valid numbers."); return
+        security = create_market_security(
+            db,
+            name=name,
+            ticker=requested_ticker,
+            sector=str(payload.get("sector") or "General"),
+            description=str(payload.get("description") or "A newly listed Faircroft roleplay company."),
+            price=price,
+            volatility=volatility,
+            security_type=str(payload.get("security_type") or "stock"),
+            actor_id=int(user["id"]),
+            source="developer_listing",
+        )
+        add_admin_audit(db, int(user["id"]), "market.security.created", details=security)
+        self.send_json(201, {"ok": True, "security": security})
+
+    def api_dev_market_security_generate(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        payload = self.read_json()
+        try:
+            count = int(payload.get("count") or 0)
+        except (TypeError, ValueError):
+            count = 0
+        if count not in {3, 5, 10}:
+            self.error(400, "Automatic listing batches must contain 3, 5, or 10 companies."); return
+        created = [generated_market_company(db, int(user["id"])) for _ in range(count)]
+        add_admin_audit(db, int(user["id"]), "market.securities.generated", details={
+            "count": count,
+            "tickers": [security["ticker"] for security in created],
+        })
+        self.send_json(201, {"ok": True, "count": len(created), "securities": created})
+
+    def api_dev_market_security_bankruptcy(self, db: Database, user: DbRow | None, security_id: int | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        security = one(db, "SELECT * FROM market_securities WHERE id=? FOR UPDATE", (security_id,)) if security_id else None
+        if not security:
+            self.error(404, "Ravenhood company not found."); return
+        if not bool(security.get("active")) or str(security.get("lifecycle_status") or "active") == "bankrupt":
+            self.error(409, "That company is already closed or bankrupt."); return
+        payload = self.read_json()
+        confirmation = str(payload.get("confirmation") or "").upper().strip()
+        reason = " ".join(str(payload.get("reason") or "").split())[:1000]
+        if confirmation != str(security["ticker"]).upper():
+            self.error(400, f"Type {security['ticker']} to confirm the bankruptcy filing."); return
+        if len(reason) < 10:
+            self.error(400, "Document a bankruptcy reason using at least ten characters."); return
+        chapter = "Chapter 7"
+        timestamp = now_iso()
+        loss = one(db, """SELECT COUNT(*) AS affected_accounts,COALESCE(SUM(quantity),0) AS forfeited_shares,
+            COALESCE(SUM(quantity*average_cost),0) AS invested_basis,
+            COALESCE(SUM(quantity*?),0) AS final_market_value
+            FROM market_holdings WHERE security_id=? AND quantity>0""", (security["price"], security["id"])) or {}
+        db.execute(
+            """INSERT INTO market_security_writeoffs
+               (security_id,account_id,quantity,average_cost,invested_basis,final_market_value,bankruptcy_chapter,reason,closed_by,created_at)
+               SELECT security_id,account_id,quantity,average_cost,ROUND(quantity*average_cost,2),ROUND(quantity*?,2),?,?,?,?,?
+               FROM market_holdings WHERE security_id=? AND quantity>0
+               ON CONFLICT(security_id,account_id) DO NOTHING""",
+            (security["price"], chapter, reason, user["id"], timestamp, security["id"]),
+        )
+        active_programs = int((one(db, "SELECT COUNT(*) AS count FROM market_price_programs WHERE security_id=? AND status='active'", (security["id"],)) or {}).get("count") or 0)
+        active_promotions = int((one(db, "SELECT COUNT(*) AS count FROM market_promo_codes WHERE security_id=? AND active=1", (security["id"],)) or {}).get("count") or 0)
+        db.execute("UPDATE market_holdings SET quantity=0 WHERE security_id=? AND quantity>0", (security["id"],))
+        db.execute("UPDATE market_price_programs SET status='cancelled' WHERE security_id=? AND status='active'", (security["id"],))
+        db.execute("UPDATE market_promo_codes SET active=0 WHERE security_id=? AND active=1", (security["id"],))
+        db.execute(
+            """UPDATE market_securities SET previous_price=price,price=0,active=0,lifecycle_status='bankrupt',
+               bankruptcy_chapter=?,bankruptcy_reason=?,bankruptcy_at=?,closed_by=?,updated_at=? WHERE id=?""",
+            (chapter, reason, timestamp, user["id"], timestamp, security["id"]),
+        )
+        db.execute(
+            "INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,0,'chapter_7_bankruptcy',?)",
+            (security["id"], timestamp),
+        )
+        detail = (
+            f"{security['name']} ({security['ticker']}) closed under {chapter}. "
+            f"{int(loss.get('affected_accounts') or 0)} account(s) and {float(loss.get('forfeited_shares') or 0):,.6f} share(s) "
+            f"were written down to $0; ${float(loss.get('invested_basis') or 0):,.2f} in recorded cost basis was forfeited."
+        )
+        db.execute(
+            "INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('bankruptcy',?,?,?,?)",
+            (f"{chapter} bankruptcy: {security['ticker']}", detail, user["id"], timestamp),
+        )
+        result = {
+            "security_id": int(security["id"]),
+            "ticker": security["ticker"],
+            "name": security["name"],
+            "chapter": chapter,
+            "affected_accounts": int(loss.get("affected_accounts") or 0),
+            "forfeited_shares": round(float(loss.get("forfeited_shares") or 0), 6),
+            "invested_basis": round(float(loss.get("invested_basis") or 0), 2),
+            "final_market_value": round(float(loss.get("final_market_value") or 0), 2),
+            "cancelled_programs": active_programs,
+            "disabled_promotions": active_promotions,
+            "bankruptcy_at": timestamp,
+        }
+        add_admin_audit(db, int(user["id"]), "market.security.bankruptcy", details={**result, "reason": reason})
+        self.send_json(200, {"ok": True, "bankruptcy": result})
+
     def api_dev_market_settings(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
         if err:
@@ -22874,7 +23180,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         payload = self.read_json(); ticker = str(payload.get("ticker") or "ALL").upper().strip(); name = str(payload.get("event_name") or "Market adjustment").strip()[:100]
         try: percent = max(-500, min(500, float(payload.get("percent_change") or 0))); duration = max(1, min(10080, int(payload.get("duration_minutes") or 60)))
         except (TypeError, ValueError): self.error(400, "Percent and duration are required."); return
-        security = None if ticker == "ALL" else one(db, "SELECT * FROM market_securities WHERE ticker=?", (ticker,))
+        security = None if ticker == "ALL" else one(db, "SELECT * FROM market_securities WHERE ticker=? AND active=1", (ticker,))
         if ticker != "ALL" and not security: self.error(404, "Ticker not found."); return
         start = utcnow(); end = start + dt.timedelta(minutes=duration)
         targets = [security] if security else all_rows(db, "SELECT id,price FROM market_securities WHERE active=1")
@@ -22921,7 +23227,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             event_name, percent, duration, ticker = "Breakout event", 125.0, 5, secrets.choice(choices)["ticker"]
         elif preset in presets: event_name, percent, duration, ticker = presets[preset]
         else: self.error(400, "Unknown market preset."); return
-        security = None if ticker == "ALL" else one(db, "SELECT * FROM market_securities WHERE ticker=?", (ticker,)); start=utcnow(); end=start+dt.timedelta(minutes=duration)
+        security = None if ticker == "ALL" else one(db, "SELECT * FROM market_securities WHERE ticker=? AND active=1", (ticker,)); start=utcnow(); end=start+dt.timedelta(minutes=duration)
         targets = [security] if security else all_rows(db, "SELECT id,price FROM market_securities WHERE active=1")
         for target in targets:
             db.execute("""INSERT INTO market_price_programs (security_id,event_name,percent_change,duration_minutes,start_price,starts_at,ends_at,status,created_by,created_at)
