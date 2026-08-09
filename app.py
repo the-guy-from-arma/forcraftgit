@@ -63,6 +63,9 @@ ANDROID_APK_URL = os.environ.get(
 ).strip()
 ARMA_BRIDGE_API_KEY = os.environ.get("ARMA_BRIDGE_API_KEY", "").strip()
 BANK_BRIDGE_TEST_MODE = os.environ.get("BANK_BRIDGE_TEST_MODE", "0").lower() in ("1", "true", "yes", "on")
+BANK_BRIDGE_CLAIM_BATCH_SIZE = min(25, max(1, int(os.environ.get("BANK_BRIDGE_CLAIM_BATCH_SIZE", "5"))))
+BANK_BRIDGE_PLAYER_ACTIVE_SECONDS = min(900, max(30, int(os.environ.get("BANK_BRIDGE_PLAYER_ACTIVE_SECONDS", "120"))))
+BANK_BRIDGE_CLAIM_STALE_SECONDS = min(3600, max(60, int(os.environ.get("BANK_BRIDGE_CLAIM_STALE_SECONDS", "120"))))
 ARMA_LINK_CODE_TTL_MINUTES = int(os.environ.get("ARMA_LINK_CODE_TTL_MINUTES", "30"))
 SHADOWHAVEN_SFTP_HOST = os.environ.get("SHADOWHAVEN_SFTP_HOST", "").strip()
 SHADOWHAVEN_SFTP_PORT = int(os.environ.get("SHADOWHAVEN_SFTP_PORT", "2022"))
@@ -8673,6 +8676,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_insurance_property_protection_create(db, user)
                 elif path == "/api/insurance/everyday-protection" and method == "POST":
                     self.api_insurance_everyday_protection_create(db, user)
+                elif path == "/api/insurance/protections" and method == "POST":
+                    self.api_insurance_protections_create(db, user)
+                elif re.fullmatch(r"/api/insurance/policies/\d+/cancel", path) and method == "POST":
+                    self.api_insurance_policy_cancel(db, user, self.path_int(path, 3))
                 elif path == "/api/insurance/claims" and method == "POST":
                     self.api_insurance_claim_create(db, user)
                 elif path == "/api/gangs" and method == "GET":
@@ -9009,6 +9016,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_generate_myfaircroft_payment_code(db, user)
                 elif path == "/api/dev-tools/banking/issue-funds" and method == "POST":
                     self.api_dev_issue_bank_funds(db, user)
+                elif path == "/api/dev-tools/banking/commands/bulk-cancel" and method == "POST":
+                    self.api_dev_bulk_cancel_bank_commands(db, user)
                 elif path.startswith("/api/dev-tools/banking/commands/") and path.endswith("/cancel") and method == "POST":
                     self.api_dev_cancel_bank_command(db, user, path.split("/")[5])
                 elif path.startswith("/api/dev-tools/banking/commands/") and path.endswith("/resend") and method == "POST":
@@ -12308,6 +12317,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "player.heartbeat",
                     "player.presence",
                     "player_heartbeat",
+                    # The RP Linking addon emits this lightweight activity
+                    # event repeatedly while a player is connected. Treat it
+                    # as the authoritative no-mod-change Bank Bridge presence
+                    # heartbeat so offline commands are never claimed.
+                    "player.action",
                 }
             )
             departed_presence = bool(
@@ -12321,10 +12335,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 }
             )
             if joined_presence or heartbeat_presence or departed_presence:
-                player_uid = str(event.get("Uid") or event.get("IdentityId") or "").strip()[:160]
+                player_uid = str(self.bridge_value(event, "Uid", "uid", "PlayerUid", "playerUid", "IdentityId", "identityId", "identity_id")).strip()[:160]
                 if player_uid:
-                    server_id = str(event.get("ServerId") or data.get("ServerId") or "default")[:80]
-                    player_name = str(event.get("PlayerName") or "")[:120]
+                    server_id = str(self.bridge_value(event, "ServerId", "serverId", "server_id") or self.bridge_value(data, "ServerId", "serverId", "server_id", default="default"))[:80]
+                    player_name = str(self.bridge_value(event, "PlayerName", "playerName", "player_name"))[:120]
                     if departed_presence:
                         db.execute(
                             """
@@ -12470,18 +12484,59 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.settle_sportsbook_bets(db)
         query = query or {}
         server_id = str(self.headers.get("X-Server-ID") or (query.get("server_id") or [""])[0] or "default").strip()[:80] or "default"
-        rows = all_rows(
+        now = utcnow()
+        presence_cutoff = (now - dt.timedelta(seconds=BANK_BRIDGE_PLAYER_ACTIVE_SECONDS)).isoformat()
+        active_claim_cutoff = (now - dt.timedelta(seconds=BANK_BRIDGE_CLAIM_STALE_SECONDS)).isoformat()
+
+        # Presence is fed by the RP Linking player's recurring player.action
+        # events. Expire old rows locally so an offline player can never keep
+        # cycling commands pending -> claimed -> retry -> pending.
+        db.execute(
+            """
+            UPDATE anticheat_live_sessions
+            SET status='offline'
+            WHERE server_id=? AND status='online' AND last_heartbeat_at < ?
+            """,
+            (server_id, presence_cutoff),
+        )
+        active_claimed_row = one(
             db,
             """
-            SELECT c.*, u.name AS target_name, u.civ_number, l.identity_id AS linked_identity_id
-            FROM bank_bridge_commands c
-            JOIN users u ON u.id = c.target_user_id
-            LEFT JOIN arma_account_links l ON l.user_id = c.target_user_id
-            WHERE c.server_id = ? AND c.status = 'pending'
-            ORDER BY c.created_at, c.id
+            SELECT COUNT(*) AS count FROM bank_bridge_commands
+            WHERE server_id=? AND status='claimed' AND claimed_at >= ?
             """,
-            (server_id,),
-        )
+            (server_id, active_claim_cutoff),
+        ) or {}
+        active_claimed = int(active_claimed_row.get("count") or 0)
+        available_slots = max(0, BANK_BRIDGE_CLAIM_BATCH_SIZE - active_claimed)
+        rows: list[DbRow] = []
+        if available_slots:
+            rows = all_rows(
+                db,
+                """
+                SELECT c.*, u.name AS target_name, u.civ_number, l.identity_id AS linked_identity_id
+                FROM bank_bridge_commands c
+                JOIN users u ON u.id = c.target_user_id
+                LEFT JOIN arma_account_links l ON l.user_id = c.target_user_id
+                WHERE c.server_id = ? AND c.status = 'pending'
+                  AND EXISTS (
+                      SELECT 1 FROM anticheat_live_sessions live
+                      WHERE live.server_id = c.server_id
+                        AND live.status = 'online'
+                        AND live.last_heartbeat_at >= ?
+                        AND live.player_uid IN (c.identity_id, l.identity_id, l.uid)
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM bank_bridge_commands unresolved
+                      WHERE unresolved.server_id=c.server_id
+                        AND unresolved.target_user_id=c.target_user_id
+                        AND unresolved.status='claimed'
+                  )
+                ORDER BY c.created_at, c.id
+                LIMIT ?
+                """,
+                (server_id, presence_cutoff, available_slots),
+            )
         claimed: list[dict[str, Any]] = []
         claimed_at = now_iso()
         for row in rows:
@@ -12501,7 +12556,40 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 item["amount"] = 0
             item["target_identity_id"] = item.get("identity_id") or item.get("linked_identity_id") or ""
             claimed.append(item)
-        self.send_json(200, {"ok": True, "server_id": server_id, "commands": claimed, "count": len(claimed)})
+        queue_state = one(
+            db,
+            """
+            SELECT COUNT(*) FILTER (WHERE c.status='pending') AS pending,
+                   COUNT(*) FILTER (
+                       WHERE c.status='pending' AND EXISTS (
+                           SELECT 1 FROM anticheat_live_sessions live
+                           LEFT JOIN arma_account_links live_link ON live_link.user_id=c.target_user_id
+                           WHERE live.server_id=c.server_id AND live.status='online'
+                             AND live.last_heartbeat_at >= ?
+                             AND live.player_uid IN (c.identity_id, live_link.identity_id, live_link.uid)
+                       )
+                   ) AS ready,
+                   COUNT(*) FILTER (WHERE c.status='claimed' AND c.claimed_at >= ?) AS claimed_active,
+                   COUNT(*) FILTER (WHERE c.status='claimed' AND (c.claimed_at IS NULL OR c.claimed_at < ?)) AS claimed_stale
+            FROM bank_bridge_commands c WHERE c.server_id=?
+            """,
+            (presence_cutoff, active_claim_cutoff, active_claim_cutoff, server_id),
+        ) or {}
+        pending_total = int(queue_state.get("pending") or 0)
+        ready_total = int(queue_state.get("ready") or 0)
+        self.send_json(200, {
+            "ok": True,
+            "server_id": server_id,
+            "commands": claimed,
+            "count": len(claimed),
+            "queue": {
+                "pending": pending_total,
+                "ready": ready_total,
+                "waiting_for_player": max(0, pending_total - ready_total),
+                "claimed_active": int(queue_state.get("claimed_active") or 0),
+                "claimed_stale": int(queue_state.get("claimed_stale") or 0),
+            },
+        })
 
     def api_arma_bank_command_result(self, db: Database, command_id: str) -> None:
         err = self.bridge_error()
@@ -12714,12 +12802,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 db.execute("UPDATE casino_rounds SET status='rejected',settled_at=? WHERE id=?", (now_iso(), casino_round["id"]))
                 add_admin_audit(db, int(casino_round["user_id"]), "casino.debit.failed", int(row["target_user_id"]), {"round_id": casino_round["round_id"], "command_id": command_id, "result": result})
         insurance_policy = one(db, "SELECT id, user_id FROM insurance_policies WHERE bank_command_id=?", (command_id,))
-        insurance_property_protection = one(
+        insurance_property_protections = all_rows(
             db,
             "SELECT id,user_id,property_name FROM insurance_property_protections WHERE bank_command_id=?",
             (command_id,),
         )
-        insurance_everyday_protection = one(
+        insurance_everyday_protections = all_rows(
             db,
             "SELECT id,user_id FROM insurance_everyday_protections WHERE bank_command_id=?",
             (command_id,),
@@ -12737,7 +12825,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             policy_status = "active" if status == "completed" else "payment_failed" if status == "failed" else "pending_payment"
             db.execute("UPDATE insurance_policies SET status=?, payment_status=?, updated_at=? WHERE id=?", (policy_status, "completed" if status == "completed" else "failed" if status == "failed" else "pending", now_iso(), insurance_policy["id"]))
             add_admin_audit(db, int(insurance_policy["user_id"]), "insurance.policy.payment.result", int(row["target_user_id"]), {"command_id": command_id, "policy_id": insurance_policy["id"], "status": status, "result": result})
-        if insurance_property_protection:
+        for insurance_property_protection in insurance_property_protections:
             protection_status = "active" if status == "completed" else "payment_failed" if status == "failed" else "pending_payment"
             payment_status = "completed" if status == "completed" else "failed" if status == "failed" else "pending"
             db.execute(
@@ -12758,7 +12846,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 int(row["target_user_id"]),
                 {"command_id": command_id, "protection_id": insurance_property_protection["id"], "status": status, "result": result},
             )
-        if insurance_everyday_protection:
+        for insurance_everyday_protection in insurance_everyday_protections:
             protection_status = "active" if status == "completed" else "payment_failed" if status == "failed" else "pending_payment"
             payment_status = "completed" if status == "completed" else "failed" if status == "failed" else "pending"
             db.execute(
@@ -13307,6 +13395,197 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         })
         self.send_json(201, {"ok": True, "protection_id": int(created["id"]), "status": "pending_payment", "command_id": command_id})
 
+    def api_insurance_protections_create(self, db: Database, user: DbRow | None) -> None:
+        """Attach one or more optional protections to an existing active plan."""
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        payload = self.read_json()
+        try:
+            policy_id = int(payload.get("policy_id") or 0)
+        except (TypeError, ValueError):
+            policy_id = 0
+        include_everyday = str(payload.get("include_everyday_protection") or "").strip().lower() in {"1", "true", "on", "yes"}
+        raw_property_ids = payload.get("property_ids") or []
+        if isinstance(raw_property_ids, str):
+            raw_property_ids = [item.strip() for item in raw_property_ids.split(",") if item.strip()]
+        if not isinstance(raw_property_ids, list):
+            raw_property_ids = []
+        property_ids = list(dict.fromkeys(str(item).strip() for item in raw_property_ids if str(item).strip()))[:50]
+        policy = one(db, """SELECT * FROM insurance_policies WHERE id=? AND user_id=?
+            AND policy_type='compensation' AND status='active' AND expires_at>? FOR UPDATE""", (policy_id, user["id"], now_iso()))
+        if not policy:
+            self.error(409, "Optional protections require an active continuity plan."); return
+        current = utcnow()
+        everyday_exists = one(db, """SELECT id FROM insurance_everyday_protections
+            WHERE user_id=? AND policy_id=? AND status IN ('active','pending_payment') AND expires_at>? LIMIT 1""",
+            (user["id"], policy_id, current.isoformat()))
+        add_everyday = include_everyday and not everyday_exists
+        owned = {
+            str(item["property_id"]): item
+            for item in self.realty_owned_properties(db, int(user["id"]))
+            if item.get("holding_type") == "owned"
+        }
+        unknown_properties = [property_id for property_id in property_ids if property_id not in owned]
+        if unknown_properties:
+            self.error(403, "One or more selected houses are not owned by this linked account."); return
+        protected_ids = {
+            str(item["property_id"])
+            for item in all_rows(db, """SELECT property_id FROM insurance_property_protections
+                WHERE user_id=? AND status IN ('active','pending_payment') AND expires_at>?""", (user["id"], current.isoformat()))
+        }
+        new_property_ids = [property_id for property_id in property_ids if property_id not in protected_ids]
+        if not add_everyday and not new_property_ids:
+            self.error(409, "Select at least one protection that is not already active or awaiting payment."); return
+        total_premium = round(
+            (INSURANCE_EVERYDAY_PROTECTION_PREMIUM if add_everyday else 0.0)
+            + len(new_property_ids) * INSURANCE_PROPERTY_PROTECTION_PREMIUM,
+            2,
+        )
+        bank = one(db, """SELECT b.balance FROM arma_account_links l JOIN arma_game_bank_balances b
+            ON b.identity_id=l.identity_id WHERE l.user_id=? ORDER BY l.linked_at DESC LIMIT 1""", (user["id"],))
+        pending = one(db, """SELECT COALESCE(SUM(amount),0) AS total FROM bank_bridge_commands
+            WHERE target_user_id=? AND operation='debit_funds' AND status IN ('pending','claimed')""", (user["id"],))
+        available = float(bank["balance"] or 0) - float((pending or {}).get("total") or 0) if bank else None
+        if available is None:
+            self.error(409, "Your linked Arma bank snapshot is not available yet."); return
+        if available + 0.0001 < total_premium:
+            self.error(409, f"Insufficient in-game funds for these protections. Available: ${available:,.2f}."); return
+        protection_names = (["Everyday Protection"] if add_everyday else []) + [str(owned[item].get("name") or item) for item in new_property_ids]
+        command_id = self.queue_insurance_bank_command(
+            db,
+            int(user["id"]),
+            total_premium,
+            "debit_funds",
+            f"Insurance protections {policy['policy_number']}: {', '.join(protection_names)}"[:500],
+        )
+        if not command_id:
+            self.error(409, "Link your Arma account before purchasing optional protection."); return
+        issued_at = current.isoformat()
+        expires_at = parse_iso(policy["expires_at"]).isoformat()
+        everyday_id: int | None = None
+        if add_everyday:
+            created = db.execute(
+                """INSERT INTO insurance_everyday_protections
+                   (policy_id,user_id,character_id,premium_amount,covered_incidents,status,bank_command_id,payment_status,issued_at,expires_at,created_at,updated_at)
+                   VALUES (?,?,?,?,?,'pending_payment',?,'pending',?,?,?,?) RETURNING id""",
+                (policy_id, user["id"], policy["character_id"], INSURANCE_EVERYDAY_PROTECTION_PREMIUM,
+                 json.dumps(list(INSURANCE_EVERYDAY_CLAIM_TYPES), separators=(",", ":")), command_id,
+                 issued_at, expires_at, issued_at, issued_at),
+            ).fetchone()
+            everyday_id = int(created["id"])
+        property_protection_ids: list[int] = []
+        for property_id in new_property_ids:
+            property_record = owned[property_id]
+            property_name = str(property_record.get("name") or property_id)[:180]
+            created = db.execute(
+                """INSERT INTO insurance_property_protections
+                   (policy_id,user_id,character_id,property_id,property_name,base_value,coverage_amount,premium_amount,status,bank_command_id,payment_status,issued_at,expires_at,created_at,updated_at)
+                   VALUES (?,?,?,?,?,?,?,?, 'pending_payment',?,'pending',?,?,?,?) RETURNING id""",
+                (policy_id, user["id"], policy["character_id"], property_id, property_name,
+                 INSURANCE_PROPERTY_BASE_VALUE, INSURANCE_PROPERTY_PROTECTED_VALUE, INSURANCE_PROPERTY_PROTECTION_PREMIUM,
+                 command_id, issued_at, expires_at, issued_at, issued_at),
+            ).fetchone()
+            property_protection_ids.append(int(created["id"]))
+        add_admin_audit(db, int(user["id"]), "insurance.protections.purchased", int(user["id"]), {
+            "policy_id": policy_id,
+            "command_id": command_id,
+            "total_premium": total_premium,
+            "everyday_protection_id": everyday_id,
+            "property_protection_ids": property_protection_ids,
+            "property_ids": new_property_ids,
+        })
+        self.send_json(201, {
+            "ok": True,
+            "status": "pending_payment",
+            "command_id": command_id,
+            "total_premium": total_premium,
+            "everyday_added": bool(add_everyday),
+            "property_count": len(property_protection_ids),
+        })
+
+    def api_insurance_policy_cancel(self, db: Database, user: DbRow | None, policy_id: int) -> None:
+        """Cancel a resident's active or not-yet-delivered policy without a fee."""
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        policy = one(db, """SELECT * FROM insurance_policies
+            WHERE id=? AND user_id=? AND policy_type='compensation' FOR UPDATE""", (policy_id, user["id"]))
+        if not policy:
+            self.error(404, "Insurance policy was not found."); return
+        if policy["status"] not in ("active", "pending_payment"):
+            self.error(409, f"This policy is already {str(policy['status']).replace('_', ' ')}."); return
+        protection_rows = all_rows(db, """SELECT bank_command_id FROM insurance_property_protections
+                WHERE policy_id=? AND status IN ('active','pending_payment')
+            UNION SELECT bank_command_id FROM insurance_everyday_protections
+                WHERE policy_id=? AND status IN ('active','pending_payment')""", (policy_id, policy_id))
+        command_ids = list(dict.fromkeys(
+            str(value).strip()
+            for value in [policy.get("bank_command_id"), *(row.get("bank_command_id") for row in protection_rows)]
+            if value and str(value).strip()
+        ))
+        commands = []
+        for command_id in command_ids:
+            command = one(db, "SELECT command_id,status FROM bank_bridge_commands WHERE command_id=? FOR UPDATE", (command_id,))
+            if command:
+                commands.append(command)
+        if any(command["status"] == "claimed" for command in commands):
+            self.error(409, "Bank Bridge is currently processing a policy payment. Cancel after that command finishes."); return
+        cancelled_at = now_iso()
+        cancelled_commands: list[str] = []
+        for command in commands:
+            if command["status"] != "pending":
+                continue
+            command_result = {
+                "message": "Insurance policy cancelled by the resident before Bank Bridge delivery.",
+                "policy_id": policy_id,
+                "cancelled_at": cancelled_at,
+                "cancellation_fee": 0,
+            }
+            db.execute(
+                """UPDATE bank_bridge_commands SET status='cancelled',completed_at=?,claimed_at=NULL,result_json=?
+                   WHERE command_id=? AND status='pending'""",
+                (cancelled_at, json.dumps(command_result, separators=(",", ":")), command["command_id"]),
+            )
+            cancelled_commands.append(str(command["command_id"]))
+        db.execute(
+            """UPDATE insurance_policies SET status='cancelled',
+               payment_status=CASE WHEN payment_status='pending' THEN 'cancelled' ELSE payment_status END,
+               updated_at=? WHERE id=?""",
+            (cancelled_at, policy_id),
+        )
+        db.execute(
+            """UPDATE insurance_property_protections SET status='cancelled',
+               payment_status=CASE WHEN payment_status='pending' THEN 'cancelled' ELSE payment_status END,
+               updated_at=? WHERE policy_id=? AND status IN ('active','pending_payment')""",
+            (cancelled_at, policy_id),
+        )
+        db.execute(
+            """UPDATE insurance_everyday_protections SET status='cancelled',
+               payment_status=CASE WHEN payment_status='pending' THEN 'cancelled' ELSE payment_status END,
+               updated_at=? WHERE policy_id=? AND status IN ('active','pending_payment')""",
+            (cancelled_at, policy_id),
+        )
+        add_admin_audit(db, int(user["id"]), "insurance.policy.cancelled", int(user["id"]), {
+            "policy_id": policy_id,
+            "policy_number": policy["policy_number"],
+            "cancellation_fee": 0,
+            "cancelled_commands": cancelled_commands,
+        })
+        add_message(
+            db,
+            int(user["id"]),
+            "Insurance policy cancelled",
+            f"Policy {policy['policy_number']} and its optional protections were cancelled with no cancellation fee. No new Bank Bridge debit was created.",
+        )
+        self.send_json(200, {
+            "ok": True,
+            "policy_id": policy_id,
+            "status": "cancelled",
+            "cancellation_fee": 0,
+            "cancelled_commands": cancelled_commands,
+        })
+
     def api_insurance_create(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
         if err:
@@ -13322,6 +13601,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         try: term_months = int(payload.get("term_months") or 1)
         except (TypeError, ValueError): term_months = 1
         include_everyday_protection = str(payload.get("include_everyday_protection") or "").strip().lower() in {"1", "true", "on", "yes"}
+        raw_property_ids = payload.get("property_ids") or []
+        if isinstance(raw_property_ids, str):
+            raw_property_ids = [item.strip() for item in raw_property_ids.split(",") if item.strip()]
+        if not isinstance(raw_property_ids, list):
+            raw_property_ids = []
+        property_ids = list(dict.fromkeys(str(item).strip() for item in raw_property_ids if str(item).strip()))[:50]
         valid_types = {"compensation", "vehicle", "property", "life", "business", "general"}
         configured_tiers = settings["insurance_tiers"]
         tiers = {name: (float(item["coverage_percent"]), float(item["premium"])) for name, item in configured_tiers.items()}
@@ -13335,7 +13620,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         coverage_percent, monthly_premium_rate = tiers[tier]
         policy_premium = round(monthly_premium_rate * term_months, 2)
         everyday_premium = INSURANCE_EVERYDAY_PROTECTION_PREMIUM if include_everyday_protection and policy_type == "compensation" else 0.0
-        total_premium = round(policy_premium + everyday_premium, 2)
+        if policy_type != "compensation" and property_ids:
+            self.error(400, "House coverage upgrades are available only with a continuity plan."); return
+        owned_properties = {
+            str(item["property_id"]): item
+            for item in self.realty_owned_properties(db, int(user["id"]))
+            if item.get("holding_type") == "owned"
+        } if property_ids else {}
+        unknown_properties = [property_id for property_id in property_ids if property_id not in owned_properties]
+        if unknown_properties:
+            self.error(403, "One or more selected houses are not owned by this linked account."); return
+        property_premium = round(len(property_ids) * INSURANCE_PROPERTY_PROTECTION_PREMIUM, 2)
+        total_premium = round(policy_premium + everyday_premium + property_premium, 2)
         bank = one(db, """SELECT b.balance FROM arma_account_links l JOIN arma_game_bank_balances b
             ON b.identity_id=l.identity_id WHERE l.user_id=? ORDER BY l.linked_at DESC LIMIT 1""", (user["id"],))
         pending = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM bank_bridge_commands WHERE target_user_id=? AND operation='debit_funds' AND status IN ('pending','claimed')", (user["id"],))
@@ -13353,6 +13649,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         payment_reason = f"Insurance premium {policy_number} ({term_months}-month locked rate)"
         if everyday_premium:
             payment_reason += " + Everyday Protection"
+        if property_ids:
+            payment_reason += f" + {len(property_ids)} house upgrade{'s' if len(property_ids) != 1 else ''}"
         payment_command = self.queue_insurance_bank_command(db, int(user["id"]), total_premium, "debit_funds", payment_reason)
         if not payment_command:
             self.error(409, "Link your Arma account before purchasing insurance."); return
@@ -13370,8 +13668,32 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 (policy_row["id"], user["id"], character_id, everyday_premium,
                  json.dumps(list(INSURANCE_EVERYDAY_CLAIM_TYPES), separators=(",", ":")), payment_command,
                  issued.isoformat(), expires.isoformat(), issued.isoformat(), issued.isoformat()))
-        add_admin_audit(db, int(user["id"]), "insurance.policy.issued", int(user["id"]), {"policy_number": policy_number, "character_id": character_id, "premium": policy_premium, "everyday_protection_premium": everyday_premium, "total_premium": total_premium, "monthly_premium_rate": monthly_premium_rate, "term_months": term_months, "rate_locked_until": expires.isoformat()})
-        self.send_json(201, {"ok": True, "policy_number": policy_number, "status": "pending_payment", "command_id": payment_command, "premium": policy_premium, "everyday_protection_premium": everyday_premium, "total_premium": total_premium, "monthly_premium_rate": monthly_premium_rate, "term_months": term_months, "rate_locked_until": expires.isoformat()})
+        if policy_row:
+            for property_id in property_ids:
+                property_record = owned_properties[property_id]
+                db.execute("""INSERT INTO insurance_property_protections
+                    (policy_id,user_id,character_id,property_id,property_name,base_value,coverage_amount,premium_amount,status,bank_command_id,payment_status,issued_at,expires_at,created_at,updated_at)
+                    VALUES (?,?,?,?,?,?,?,?, 'pending_payment',?,'pending',?,?,?,?)""",
+                    (policy_row["id"], user["id"], character_id, property_id,
+                     str(property_record.get("name") or property_id)[:180], INSURANCE_PROPERTY_BASE_VALUE,
+                     INSURANCE_PROPERTY_PROTECTED_VALUE, INSURANCE_PROPERTY_PROTECTION_PREMIUM, payment_command,
+                     issued.isoformat(), expires.isoformat(), issued.isoformat(), issued.isoformat()))
+        add_admin_audit(db, int(user["id"]), "insurance.policy.issued", int(user["id"]), {
+            "policy_number": policy_number, "character_id": character_id, "premium": policy_premium,
+            "everyday_protection_premium": everyday_premium, "property_protection_premium": property_premium,
+            "property_ids": property_ids, "total_premium": total_premium,
+            "monthly_premium_rate": monthly_premium_rate, "term_months": term_months,
+            "rate_locked_until": expires.isoformat(),
+        })
+        self.send_json(201, {
+            "ok": True, "policy_number": policy_number, "status": "pending_payment",
+            "command_id": payment_command, "premium": policy_premium,
+            "everyday_protection_premium": everyday_premium,
+            "property_protection_premium": property_premium,
+            "property_count": len(property_ids), "total_premium": total_premium,
+            "monthly_premium_rate": monthly_premium_rate, "term_months": term_months,
+            "rate_locked_until": expires.isoformat(),
+        })
 
     def api_insurance_claim_create(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -19668,6 +19990,173 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             },
         )
 
+    def _release_cancelled_bank_command_dependencies(
+        self,
+        db: Database,
+        command_id: str,
+        cancelled_at: str,
+        result: dict[str, Any],
+    ) -> list[str]:
+        """Release the product reservation attached to a cancelled bridge command."""
+        released_services: list[str] = []
+        market_purchase = one(db, "SELECT id,transaction_type FROM market_cash_transactions WHERE command_id=? AND status='pending'", (command_id,))
+        sportsbook_purchase = one(db, "SELECT id FROM sportsbook_bets WHERE wallet_command_id=? AND status='awaiting_debit'", (command_id,))
+        lottery_purchase = one(db, "SELECT id FROM lottery_entries WHERE bank_command_id=? AND status IN ('awaiting_debit','pending')", (command_id,))
+        quick_draw_purchase = one(db, "SELECT id FROM lottery_quick_draw_entries WHERE bank_command_id=? AND status IN ('awaiting_debit','pending')", (command_id,))
+        scratch_purchase = one(db, "SELECT id,promo_id FROM lottery_scratch_cards WHERE bank_command_id=? AND status IN ('awaiting_debit','pending')", (command_id,))
+        lottery_payout_chunk = one(db, "SELECT * FROM lottery_payout_commands WHERE command_id=?", (command_id,))
+        casino_purchase = one(db, "SELECT id FROM casino_rounds WHERE bank_command_id=? AND status='awaiting_debit'", (command_id,))
+        insurance_purchase = one(db, "SELECT id FROM insurance_policies WHERE bank_command_id=? AND status='pending_payment'", (command_id,))
+        property_protection_purchase = one(db, "SELECT id FROM insurance_property_protections WHERE bank_command_id=? AND status='pending_payment'", (command_id,))
+        everyday_protection_purchase = one(db, "SELECT id FROM insurance_everyday_protections WHERE bank_command_id=? AND status='pending_payment'", (command_id,))
+        if market_purchase:
+            released_services.append(f"Ravenhood {market_purchase['transaction_type']}")
+        if sportsbook_purchase:
+            released_services.append("sportsbook ticket")
+        if lottery_purchase:
+            released_services.append("lottery ticket")
+        if quick_draw_purchase:
+            released_services.append("Quick Draw ticket")
+        if scratch_purchase:
+            released_services.append("scratch-card purchase")
+        if casino_purchase:
+            released_services.append("casino wager")
+        if insurance_purchase:
+            released_services.append("insurance policy purchase")
+        if property_protection_purchase:
+            released_services.append("property-protection purchase")
+        if everyday_protection_purchase:
+            released_services.append("Everyday Protection purchase")
+        result_json = json.dumps(result, separators=(",", ":"))
+        db.execute("UPDATE market_cash_transactions SET status='cancelled' WHERE command_id=? AND status='pending'", (command_id,))
+        db.execute("UPDATE sportsbook_bets SET status='rejected',result_json=? WHERE wallet_command_id=? AND status='awaiting_debit'", (result_json, command_id))
+        db.execute("UPDATE sportsbook_bets SET status='payout_cancelled',result_json=? WHERE payout_command_id=? AND status IN ('won','won_pending_payout')", (result_json, command_id))
+        db.execute("UPDATE lottery_entries SET status='rejected' WHERE bank_command_id=? AND status IN ('awaiting_debit','pending')", (command_id,))
+        db.execute("UPDATE lottery_quick_draw_entries SET status='rejected' WHERE bank_command_id=? AND status IN ('awaiting_debit','pending')", (command_id,))
+        db.execute("""UPDATE lottery_scratch_cards
+                      SET status='rejected',surface_state='cancelled',surface_revealed_at=COALESCE(surface_revealed_at,?)
+                      WHERE bank_command_id=? AND status IN ('awaiting_debit','pending')""", (cancelled_at, command_id))
+        if scratch_purchase and scratch_purchase.get("promo_id"):
+            db.execute("UPDATE market_promo_codes SET active=0 WHERE id=?", (scratch_purchase["promo_id"],))
+        if lottery_payout_chunk:
+            db.execute("UPDATE lottery_payout_commands SET status='cancelled',completed_at=? WHERE command_id=?", (cancelled_at, command_id))
+        else:
+            db.execute("UPDATE lottery_entries SET status='payout_cancelled' WHERE payout_command_id=?", (command_id,))
+            db.execute("UPDATE lottery_quick_draw_entries SET status='payout_cancelled' WHERE payout_command_id=?", (command_id,))
+            db.execute("UPDATE lottery_scratch_cards SET status='payout_cancelled' WHERE payout_command_id=?", (command_id,))
+        db.execute("UPDATE casino_rounds SET status='cancelled',settled_at=? WHERE bank_command_id=? AND status='awaiting_debit'", (cancelled_at, command_id))
+        db.execute("UPDATE casino_rounds SET status='payout_failed',settled_at=? WHERE payout_command_id=? AND status='won_pending_payout'", (cancelled_at, command_id))
+        db.execute("UPDATE insurance_policies SET status='payment_cancelled',payment_status='cancelled',updated_at=? WHERE bank_command_id=? AND status='pending_payment'", (cancelled_at, command_id))
+        db.execute("UPDATE insurance_property_protections SET status='payment_cancelled',payment_status='cancelled',updated_at=? WHERE bank_command_id=? AND status='pending_payment'", (cancelled_at, command_id))
+        db.execute("UPDATE insurance_everyday_protections SET status='payment_cancelled',payment_status='cancelled',updated_at=? WHERE bank_command_id=? AND status='pending_payment'", (cancelled_at, command_id))
+        payout_chunk = one(db, "SELECT claim_id FROM insurance_claim_payout_commands WHERE command_id=?", (command_id,))
+        if payout_chunk:
+            note = f"Payout command {command_id} was cancelled in Banking Settings: {result.get('reason') or 'queue recovery'}"
+            db.execute("UPDATE insurance_claim_payout_commands SET status='failed',completed_at=? WHERE command_id=?", (cancelled_at, command_id))
+            db.execute(
+                """UPDATE insurance_claims SET review_notes=CASE WHEN review_notes='' THEN ? ELSE review_notes || ' ' || ? END,updated_at=? WHERE id=?""",
+                (note, note, cancelled_at, payout_chunk["claim_id"]),
+            )
+        legacy_claim = one(db, "SELECT id FROM insurance_claims WHERE payout_command_id=?", (command_id,))
+        if legacy_claim and not payout_chunk:
+            note = f"Payout command {command_id} was cancelled in Banking Settings: {result.get('reason') or 'queue recovery'}"
+            db.execute(
+                """UPDATE insurance_claims SET review_notes=CASE WHEN review_notes='' THEN ? ELSE review_notes || ' ' || ? END,updated_at=? WHERE id=?""",
+                (note, note, cancelled_at, legacy_claim["id"]),
+            )
+        return released_services
+
+    def api_dev_bulk_cancel_bank_commands(self, db: Database, user: DbRow | None) -> None:
+        """Cancel the queued backlog plus claimed commands whose delivery lease is visibly stuck."""
+        err = admin_tools_member_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        payload = self.read_json()
+        reason = str(payload.get("reason") or "Bank Bridge queue jam recovery from Command Ledger").strip()[:500]
+        if len(reason) < 5:
+            self.error(400, "Document why the Bank Bridge queue is being recovered")
+            return
+        try:
+            stale_minutes = min(60, max(1, int(payload.get("stale_minutes") or 2)))
+        except (TypeError, ValueError):
+            stale_minutes = 2
+        stale_before = (utcnow() - dt.timedelta(minutes=stale_minutes)).isoformat()
+        commands = all_rows(
+            db,
+            """SELECT c.*,target.name AS target_name,target.civ_number
+               FROM bank_bridge_commands c JOIN users target ON target.id=c.target_user_id
+               WHERE c.operation IN ('issue_funds','debit_funds')
+                 AND (c.status='pending' OR (c.status='claimed' AND COALESCE(c.claimed_at,c.created_at)<=?))
+               ORDER BY c.created_at,c.id FOR UPDATE OF c""",
+            (stale_before,),
+        )
+        if not commands:
+            self.send_json(200, {"ok": True, "cancelled_commands": 0, "pending_cancelled": 0, "stale_claimed_cancelled": 0, "cancelled_amount": 0.0})
+            return
+        cancelled_at = now_iso()
+        pending_count = 0
+        claimed_count = 0
+        cancelled_amount = 0.0
+        affected_users: dict[int, dict[str, Any]] = {}
+        for command in commands:
+            previous_status = str(command["status"])
+            result = {
+                "message": "Bank Bridge command cancelled during bulk queue recovery.",
+                "reason": reason,
+                "cancelled_by": int(user["id"]),
+                "cancelled_at": cancelled_at,
+                "previous_status": previous_status,
+                "stale_claim_minutes": stale_minutes if previous_status == "claimed" else 0,
+            }
+            updated = one(
+                db,
+                """UPDATE bank_bridge_commands SET status='cancelled',completed_at=?,claimed_at=NULL,result_json=?
+                   WHERE command_id=? AND status=? RETURNING command_id""",
+                (cancelled_at, json.dumps(result, separators=(",", ":")), command["command_id"], previous_status),
+            )
+            if not updated:
+                continue
+            released = self._release_cancelled_bank_command_dependencies(db, str(command["command_id"]), cancelled_at, result)
+            if previous_status == "claimed":
+                claimed_count += 1
+            else:
+                pending_count += 1
+            amount = float(command.get("amount") or 0)
+            cancelled_amount += amount
+            target_user_id = int(command["target_user_id"])
+            summary = affected_users.setdefault(target_user_id, {"name": command.get("target_name") or "Resident", "count": 0, "amount": 0.0, "services": set()})
+            summary["count"] += 1
+            summary["amount"] += amount
+            summary["services"].update(released)
+        for target_user_id, summary in affected_users.items():
+            services = sorted(summary["services"])
+            service_notice = f" Associated {', '.join(services)} reservations were released." if services else ""
+            add_message(
+                db,
+                target_user_id,
+                "Bank Bridge queue recovered",
+                f"{summary['count']} queued bank command(s) totaling {summary['amount']:,.0f} credits were cancelled by an authorized operator.{service_notice}",
+                int(user["id"]),
+            )
+        add_admin_audit(db, int(user["id"]), "bank_bridge.queue.bulk_cancelled", None, {
+            "reason": reason,
+            "pending_cancelled": pending_count,
+            "stale_claimed_cancelled": claimed_count,
+            "stale_minutes": stale_minutes,
+            "cancelled_amount": round(cancelled_amount, 2),
+            "affected_users": len(affected_users),
+        })
+        self.send_json(200, {
+            "ok": True,
+            "cancelled_commands": pending_count + claimed_count,
+            "pending_cancelled": pending_count,
+            "stale_claimed_cancelled": claimed_count,
+            "cancelled_amount": round(cancelled_amount, 2),
+            "affected_users": len(affected_users),
+        })
+
     def api_dev_cancel_bank_command(self, db: Database, user: DbRow | None, command_id: str) -> None:
         """Cancel an unclaimed bridge command and release any linked reservation."""
         err = admin_tools_member_required(user)
@@ -20011,7 +20500,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             except ValueError:
                 page = 1
             status_filter = str((query.get("status") or ["all"])[0]).strip().lower()
-            if status_filter not in ("all", "pending", "completed", "failed", "cancelled"):
+            if status_filter not in ("all", "pending", "claimed", "completed", "failed", "cancelled"):
                 status_filter = "all"
             page_size = 100
             command_counts = one(
@@ -20019,11 +20508,36 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 """
                 SELECT COUNT(*) AS total,
                        COUNT(*) FILTER (WHERE status='pending') AS pending,
+                       COUNT(*) FILTER (WHERE status='claimed') AS claimed,
                        COUNT(*) FILTER (WHERE status='completed') AS completed,
                        COUNT(*) FILTER (WHERE status='failed') AS failed,
                        COUNT(*) FILTER (WHERE status='cancelled') AS cancelled
                 FROM bank_bridge_commands
                 """,
+            ) or {}
+            presence_cutoff = (utcnow() - dt.timedelta(seconds=BANK_BRIDGE_PLAYER_ACTIVE_SECONDS)).isoformat()
+            claim_cutoff = (utcnow() - dt.timedelta(seconds=BANK_BRIDGE_CLAIM_STALE_SECONDS)).isoformat()
+            queue_presence = one(
+                db,
+                """
+                SELECT COUNT(*) FILTER (
+                           WHERE c.status='pending' AND EXISTS (
+                               SELECT 1 FROM anticheat_live_sessions live
+                               LEFT JOIN arma_account_links live_link ON live_link.user_id=c.target_user_id
+                               WHERE live.server_id=c.server_id AND live.status='online'
+                                 AND live.last_heartbeat_at >= ?
+                                 AND live.player_uid IN (c.identity_id, live_link.identity_id, live_link.uid)
+                           )
+                       ) AS ready,
+                       COUNT(*) FILTER (
+                           WHERE c.status='claimed' AND c.claimed_at >= ?
+                       ) AS claimed_active,
+                       COUNT(*) FILTER (
+                           WHERE c.status='claimed' AND (c.claimed_at IS NULL OR c.claimed_at < ?)
+                       ) AS claimed_stale
+                FROM bank_bridge_commands c
+                """,
+                (presence_cutoff, claim_cutoff, claim_cutoff),
             ) or {}
             command_query = """
                 SELECT c.*,target.name AS target_name,target.civ_number,requester.name AS requested_by_name
@@ -20086,6 +20600,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "pin_required": False,
                 "commands": [dict(row) for row in commands],
                 "pending": int(command_counts.get("pending") or 0),
+                "claimed": int(command_counts.get("claimed") or 0),
+                "ready": int(queue_presence.get("ready") or 0),
+                "waiting_for_player": max(0, int(command_counts.get("pending") or 0) - int(queue_presence.get("ready") or 0)),
+                "claimed_active": int(queue_presence.get("claimed_active") or 0),
+                "claimed_stale": int(queue_presence.get("claimed_stale") or 0),
                 "completed": int(command_counts.get("completed") or 0),
                 "failed": int(command_counts.get("failed") or 0),
                 "cancelled": int(command_counts.get("cancelled") or 0),
