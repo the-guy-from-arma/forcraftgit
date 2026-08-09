@@ -63,6 +63,10 @@ const state = {
   marketPromoError: "",
   marketTheme: localStorage.getItem("rp.market.theme") || "dark",
   marketRange: "1D",
+  bankActivityPage: 1,
+  bankActivityStatus: "all",
+  bankActivityDirection: "all",
+  bankActivityService: "all",
   generatedAdmin2faCode: null,
   fineSettlementCode: null,
   taxSettlementCode: null,
@@ -6085,6 +6089,85 @@ function bindMarketWorkspace() {
   }, 12000);
 }
 
+const bankActivityServiceLabels = {
+  lottery: "Faircroft Lottery",
+  casino: "The Reserve Casino",
+  sportsbook: "Prediction Exchange",
+  insurance: "Faircroft Insurance",
+  ravenhood: "Ravenhood Markets",
+  administration: "Faircroft Administration",
+  other: "Faircroft Services",
+};
+
+function bankActivityStatusLabel(status) {
+  return ({ pending: "Pending", claimed: "Processing", completed: "Completed", failed: "Failed", cancelled: "Cancelled" })[String(status || "").toLowerCase()] || "Pending";
+}
+
+function bankActivityServiceLabel(service) {
+  return bankActivityServiceLabels[String(service || "other").toLowerCase()] || bankActivityServiceLabels.other;
+}
+
+function bankActivityUrl(page = 1) {
+  return `/api/bank/activity?${new URLSearchParams({
+    page: String(Math.max(1, Number(page || 1))),
+    status: String(state.bankActivityStatus || "all"),
+    direction: String(state.bankActivityDirection || "all"),
+    service: String(state.bankActivityService || "all"),
+  }).toString()}`;
+}
+
+function renderBankActivityLedger(activity, identitySuffix) {
+  const items = Array.isArray(activity?.items) ? activity.items : [];
+  const summary = activity?.summary || {};
+  const filters = activity?.filters || {};
+  const page = Math.max(1, Number(activity?.page || 1));
+  const pages = Math.max(1, Number(activity?.pages || 1));
+  state.bankActivityPage = page;
+  state.bankActivityStatus = String(filters.status || state.bankActivityStatus || "all");
+  state.bankActivityDirection = String(filters.direction || state.bankActivityDirection || "all");
+  state.bankActivityService = String(filters.service || state.bankActivityService || "all");
+  const serviceOptions = [["all", "All Faircroft apps"], ...Object.entries(bankActivityServiceLabels)];
+  const statusOptions = [["all", "Every status"], ["pending", "Pending"], ["processing", "Processing"], ["completed", "Completed"], ["failed", "Failed"], ["cancelled", "Cancelled"]];
+  const rows = items.map((transaction) => {
+    const direction = transaction.direction === "credit" ? "credit" : "debit";
+    const status = ["pending", "claimed", "completed", "failed", "cancelled"].includes(String(transaction.status)) ? String(transaction.status) : "pending";
+    const created = transaction.created_at ? new Date(transaction.created_at) : null;
+    const completed = transaction.completed_at ? new Date(transaction.completed_at) : null;
+    const amount = Number(transaction.amount || 0);
+    const amountLabel = `${direction === "credit" ? "+" : "−"}${money(Math.abs(amount))}`;
+    const reference = String(transaction.command_id || "");
+    return `<details class="bank-v4-transaction is-${direction} is-${status}">
+      <summary>
+        <time><strong>${created && !Number.isNaN(created.getTime()) ? escapeHtml(created.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })) : "Pending"}</strong><small>${created && !Number.isNaN(created.getTime()) ? escapeHtml(created.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })) : "Awaiting timestamp"}</small></time>
+        <i aria-hidden="true">${direction === "credit" ? "↓" : "↑"}</i>
+        <span><strong>${escapeHtml(transaction.description || "Faircroft app transaction")}</strong><small>${escapeHtml(bankActivityServiceLabel(transaction.service))} · •••• ${identitySuffix}</small></span>
+        <em>${escapeHtml(bankActivityStatusLabel(status))}</em>
+        <b class="${direction}">${amountLabel}</b>
+      </summary>
+      <div class="bank-v4-transaction-detail">
+        <span><small>Transaction reference</small><strong>${escapeHtml(reference || "Reference pending")}</strong></span>
+        <span><small>Entry type</small><strong>${direction === "credit" ? "Deposit / credit" : "Withdrawal / purchase"}</strong></span>
+        <span><small>Processing network</small><strong>Faircroft Bank Bridge</strong></span>
+        <span><small>${completed && !Number.isNaN(completed.getTime()) ? "Settled" : "Current status"}</small><strong>${completed && !Number.isNaN(completed.getTime()) ? escapeHtml(completed.toLocaleString()) : escapeHtml(bankActivityStatusLabel(status))}</strong></span>
+        ${transaction.failure_reason ? `<p><strong>Failure notice</strong>${escapeHtml(transaction.failure_reason)}</p>` : ""}
+      </div>
+    </details>`;
+  }).join("");
+  return `<section class="bank-v4-activity bank-v4-ledger" id="bankActivity">
+    <header><div><p>ACCOUNT ACTIVITY</p><h2>Faircroft transaction ledger</h2><span>${Number(summary.total || 0).toLocaleString()} recorded in-app transactions</span></div><button type="button" data-refresh-bank>Refresh ledger</button></header>
+    <div class="bank-v4-ledger-metrics"><span><small>Awaiting settlement</small><strong>${Number(summary.pending || 0) + Number(summary.processing || 0)}</strong></span><span><small>Completed credits</small><strong>${money(summary.completed_credits || 0)}</strong></span><span><small>Completed debits</small><strong>${money(summary.completed_debits || 0)}</strong></span></div>
+    <aside class="bank-v4-scope-notice"><i>i</i><p><strong>About this activity</strong>${escapeHtml(activity?.scope_notice || "Only transactions processed through Faircroft applications and the Bank Bridge appear here.")}</p></aside>
+    <div class="bank-v4-ledger-controls">
+      <nav aria-label="Transaction direction">${[["all", "All activity"], ["debit", "Money out"], ["credit", "Money in"]].map(([value, label]) => `<button type="button" class="${state.bankActivityDirection === value ? "active" : ""}" data-bank-activity-direction="${value}">${label}</button>`).join("")}</nav>
+      <label><span>Service</span><select data-bank-activity-service>${serviceOptions.map(([value, label]) => `<option value="${value}" ${state.bankActivityService === value ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select></label>
+      <label><span>Status</span><select data-bank-activity-status>${statusOptions.map(([value, label]) => `<option value="${value}" ${state.bankActivityStatus === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+    </div>
+    <div class="bank-v4-ledger-head"><span>Date</span><span>Transaction</span><span>Status</span><span>Amount</span></div>
+    <div class="bank-v4-transaction-list">${rows || `<div class="bank-v4-ledger-empty"><i>≡</i><strong>No matching in-app transactions</strong><span>Change the filters or return after your next Faircroft app transaction.</span></div>`}</div>
+    <footer class="bank-v4-ledger-footer"><span>Showing page ${page} of ${pages} · ${Number(activity?.total || 0).toLocaleString()} matching records</span><nav><button type="button" data-bank-activity-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>Previous</button><button type="button" data-bank-activity-page="${page + 1}" ${page >= pages ? "disabled" : ""}>Next</button></nav></footer>
+  </section>`;
+}
+
 function renderBankOnlineV2(data, credit, userName, identitySuffix, creditScore, creditProgress, creditRating, refreshedAt, syncLabel) {
   const availableBalance = data.balance_synced ? money(data.balance) : "Awaiting sync";
   const scoreValue = Number(credit.score || 0);
@@ -6120,7 +6203,7 @@ function renderBankOnlineV2(data, credit, userName, identitySuffix, creditScore,
           </aside>
         </section>
         <section class="bank-v4-lower">
-          <section class="bank-v4-activity" id="bankActivity"><header><div><p>RECENT ACTIVITY</p><h2>Latest account event</h2></div><button type="button" data-refresh-bank>Refresh</button></header><div class="bank-v4-activity-row"><time>${data.balance_synced_at ? escapeHtml(new Date(data.balance_synced_at).toLocaleDateString()) : "Pending"}</time><i>&#8635;</i><div><strong>Authoritative balance synchronized</strong><small>Shadow Haven financial network &middot; &bull;&bull;&bull;&bull; ${identitySuffix}</small></div><span>Balance update</span><b>${availableBalance}</b></div><footer>Only verified game-bank records appear in your Faircroft activity.</footer></section>
+          ${renderBankActivityLedger(data.activity || {}, identitySuffix)}
           <aside class="bank-v4-credit-summary" id="bankCredit"><header><p>FAIRCROFT CREDIT INDEX</p><span>${credit.synced ? "Current" : "Pending"}</span></header><div><strong>${creditScore}</strong><span><b>${creditRating}</b><small>${credit.synced && pointsToNext ? `${pointsToNext} points to your next credit tier` : credit.synced ? "Highest tracked tier reached" : "Waiting for reputation sync"}</small></span></div><div class="bank-v4-credit-track"><i style="width:${creditProgress}%"></i></div><footer><span>300</span><span>850</span></footer><button type="button" data-bank-section="bankCredit">Review credit profile &rsaquo;</button></aside>
         </section>
         <section class="bank-v4-credit-detail"><div><p>FINANCIAL WELLNESS</p><h2>Make your standing easier to understand.</h2><span>${credit.synced ? "Your credit profile is calculated from synchronized financial reputation and verified Faircroft records." : "Your credit profile will activate after the next verified reputation snapshot."}</span></div><dl><div><dt>Liquidity</dt><dd>${data.balance_synced ? "Available" : "Unverified"}</dd></div><div><dt>Account security</dt><dd>${data.identity_id ? "Identity confirmed" : "Action required"}</dd></div><div><dt>Credit trajectory</dt><dd>${creditRating}</dd></div></dl></section>
@@ -6277,6 +6360,13 @@ function renderBankWorkspace() {
     </main>`; */
 }
 
+async function loadBankActivityPage(page = 1) {
+  const activity = await api(bankActivityUrl(page));
+  state.cache.bank = { ...(state.cache.bank || {}), activity };
+  render();
+  requestAnimationFrame(() => document.getElementById("bankActivity")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+}
+
 function bindBankWorkspace() {
   $$('[data-bank-section]').forEach((button) => button.addEventListener("click", () => {
     const target = document.getElementById(button.dataset.bankSection || "");
@@ -6289,8 +6379,32 @@ function bindBankWorkspace() {
   });
   $$('[data-refresh-bank]').forEach((button) => button.addEventListener("click", async () => {
     button.disabled = true;
-    await loadAppData("bank");
-    render();
+    try {
+      await loadAppData("bank");
+      if (state.bankActivityPage > 1 || state.bankActivityStatus !== "all" || state.bankActivityDirection !== "all" || state.bankActivityService !== "all") {
+        state.cache.bank.activity = await api(bankActivityUrl(state.bankActivityPage));
+      }
+      render();
+    } catch (error) {
+      toast(error.message);
+      button.disabled = false;
+    }
+  }));
+  $$('[data-bank-activity-direction]').forEach((button) => button.addEventListener("click", async () => {
+    state.bankActivityDirection = String(button.dataset.bankActivityDirection || "all");
+    try { await loadBankActivityPage(1); } catch (error) { toast(error.message); }
+  }));
+  $("[data-bank-activity-service]")?.addEventListener("change", async (event) => {
+    state.bankActivityService = String(event.currentTarget.value || "all");
+    try { await loadBankActivityPage(1); } catch (error) { toast(error.message); }
+  });
+  $("[data-bank-activity-status]")?.addEventListener("change", async (event) => {
+    state.bankActivityStatus = String(event.currentTarget.value || "all");
+    try { await loadBankActivityPage(1); } catch (error) { toast(error.message); }
+  });
+  $$('[data-bank-activity-page]').forEach((button) => button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    try { await loadBankActivityPage(Number(button.dataset.bankActivityPage || 1)); } catch (error) { toast(error.message); }
   }));
 }
 
@@ -12835,7 +12949,7 @@ function renderDevBankingSettings(banking, users) {
   const linkedDirectory = economy.linked_directory || [];
   const topUnlinked = economy.top_unlinked_accounts || [];
   return `<div class="stack dev-ops-view dev-banking-settings-view">
-    <div class="dev-view-intro"><div><span>CONTROLLED GAME ECONOMY</span><h2>Banking settings</h2><p>Testing-only fund issuance for linked in-game accounts. The Bank Bridge receives no more than five commands on each poll.</p></div><strong>${Number(banking.pending || 0).toLocaleString()} PENDING · ${Number(banking.claimed || 0).toLocaleString()} CLAIMED</strong></div>
+    <div class="dev-view-intro"><div><span>CONTROLLED GAME ECONOMY</span><h2>Banking settings</h2><p>Testing-only fund issuance for linked in-game accounts. Residents may hold up to five unresolved transactions across Faircroft services; the bridge keeps its original immediate delivery flow.</p></div><strong>${Number(banking.pending || 0).toLocaleString()} PENDING · ${Number(banking.claimed || 0).toLocaleString()} CLAIMED</strong></div>
     <section class="dev-card dev-bank-intelligence"><div class="dev-card-header"><div><span>AUTHORITATIVE GAME BANK MIRROR</span><h2>In-game balances</h2><p>Read-only totals imported from ${escapeHtml(economy.source || "FCRPMUSSALO/Banks")}.</p></div><span class="pill green">${escapeHtml(economy.last_synced_at ? "SYNCED" : "AWAITING SYNC")}</span></div>
       <div class="dev-banking-metrics"><article><small>Currency in circulation</small><strong>${money(economy.currency_in_circulation || 0)}</strong></article><article><small>Game bank accounts</small><strong>${Number(economy.bank_accounts || 0).toLocaleString()}</strong></article><article><small>Linked accounts</small><strong>${Number(economy.linked_accounts || 0).toLocaleString()}</strong></article><article><small>Largest balance</small><strong>${money(economy.largest_balance || 0)}</strong></article></div>
       <div class="dev-bank-ledger-grid"><div><header><strong>Linked account balances</strong><span>${linkedDirectory.length} indexed</span></header>${linkedDirectory.slice(0, 50).map((account) => `<div class="dev-bank-ledger-row"><span><b>${escapeHtml(account.account_name || account.player_name || "Linked account")}</b><small>CIV ${escapeHtml(account.civ_number || "pending")} / ${escapeHtml(account.identity_id || "")}</small></span><strong>${money(account.balance || 0)}</strong></div>`).join("") || `<div class="empty">No linked in-game balances have synced yet.</div>`}</div><div><header><strong>Unlinked high balances</strong><span>identity review</span></header>${topUnlinked.slice(0, 10).map((account) => `<div class="dev-bank-ledger-row"><span><b>Unlinked Bohemia identity</b><small>${escapeHtml(account.identity_id || "")}</small></span><strong>${money(account.balance || 0)}</strong></div>`).join("") || `<div class="empty">No unlinked bank records found.</div>`}</div></div>
@@ -12855,7 +12969,7 @@ function renderDevBankingSettings(banking, users) {
       </section>
       <section class="dev-card dev-record-panel"><div class="dev-card-header"><div><span>BRIDGE STATUS</span><h2>Command ledger</h2></div><strong>${Number(history.total || 0).toLocaleString()} ${escapeHtml(statusLabels[statusFilter] || "All")}</strong></div>
         <div class="dev-banking-summary" role="group" aria-label="Filter command ledger by status">${["all", "pending", "claimed", "completed", "failed", "cancelled"].map((status) => `<button type="button" class="${statusFilter === status ? "active" : ""} ${status === "failed" ? "danger" : ""}" data-dev-bank-status="${status}" aria-pressed="${statusFilter === status}"><b>${commandCounts[status].toLocaleString()}</b> ${statusLabels[status]}</button>`).join("")}</div>
-        <div class="dev-bank-bulk-recovery"><div><strong>Queue recovery</strong><span>The original Bank Bridge flow is active with a hard five-command poll limit. Recovery cancels pending commands and claimed commands stalled for at least two minutes.</span></div><button class="danger" type="button" data-dev-bank-bulk-cancel ${commandCounts.pending + commandCounts.claimed < 1 ? "disabled" : ""}>Cancel queued + stuck</button></div>
+        <div class="dev-bank-bulk-recovery"><div><strong>Queue recovery</strong><span>The original Bank Bridge delivery flow is active. The five-transaction limit is enforced per resident before a new purchase, wager, deposit, or withdrawal is created.</span></div><button class="danger" type="button" data-dev-bank-bulk-cancel ${commandCounts.pending + commandCounts.claimed < 1 ? "disabled" : ""}>Cancel queued + stuck</button></div>
         <div class="dev-record-list">${commands.map((command) => {
           const failure = command.failure_reason || command.result?.message || command.result?.error || "";
           const direction = command.operation === "issue_funds" ? "deposit" : "withdrawal";

@@ -63,7 +63,7 @@ ANDROID_APK_URL = os.environ.get(
 ).strip()
 ARMA_BRIDGE_API_KEY = os.environ.get("ARMA_BRIDGE_API_KEY", "").strip()
 BANK_BRIDGE_TEST_MODE = os.environ.get("BANK_BRIDGE_TEST_MODE", "0").lower() in ("1", "true", "yes", "on")
-BANK_BRIDGE_CLAIM_BATCH_SIZE = min(5, max(1, int(os.environ.get("BANK_BRIDGE_CLAIM_BATCH_SIZE", "5"))))
+BANK_BRIDGE_USER_PENDING_LIMIT = 5
 ARMA_LINK_CODE_TTL_MINUTES = int(os.environ.get("ARMA_LINK_CODE_TTL_MINUTES", "30"))
 SHADOWHAVEN_SFTP_HOST = os.environ.get("SHADOWHAVEN_SFTP_HOST", "").strip()
 SHADOWHAVEN_SFTP_PORT = int(os.environ.get("SHADOWHAVEN_SFTP_PORT", "2022"))
@@ -5260,6 +5260,7 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS account_warnings_user_idx ON account_internal_warnings (user_id, created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS admin_audit_logs_created_idx ON admin_audit_logs (created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS bank_bridge_commands_created_idx ON bank_bridge_commands (created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS bank_bridge_commands_user_activity_idx ON bank_bridge_commands (target_user_id, created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS user_characters_active_user_idx ON user_characters (user_id, is_active, updated_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS panic_alerts_department_idx ON panic_alerts (department)")
     db.execute("CREATE INDEX IF NOT EXISTS panic_alerts_status_idx ON panic_alerts (status, priority, created_at)")
@@ -5654,6 +5655,169 @@ def lottery_saved_numbers(raw: Any) -> list[int]:
         return []
 
 
+def bank_bridge_user_queue_state(db: Database, user_id: int, lock: bool = False) -> dict[str, int | bool]:
+    """Return the resident-facing unresolved command gate.
+
+    The five-command cap prevents one account from flooding the shared bridge.
+    It does not throttle the bridge poll or delay commands for other residents.
+    """
+    if lock:
+        one(db, "SELECT id FROM users WHERE id=? FOR UPDATE", (user_id,))
+    row = one(
+        db,
+        """
+        SELECT COUNT(*) AS count FROM bank_bridge_commands
+        WHERE target_user_id=? AND status IN ('pending','claimed')
+        """,
+        (user_id,),
+    ) or {}
+    count = int(row.get("count") or 0)
+    return {
+        "count": count,
+        "limit": BANK_BRIDGE_USER_PENDING_LIMIT,
+        "remaining": max(0, BANK_BRIDGE_USER_PENDING_LIMIT - count),
+        "locked": count >= BANK_BRIDGE_USER_PENDING_LIMIT,
+    }
+
+
+def bank_bridge_user_queue_message(queue_state: dict[str, int | bool]) -> str:
+    return (
+        f"You already have {int(queue_state['count'])} of {int(queue_state['limit'])} "
+        "unresolved Bank Bridge transactions. Wait for at least one transaction to complete, fail, or be cancelled before sending another."
+    )
+
+
+def bank_activity_payload(
+    db: Database,
+    user_id: int,
+    query: dict[str, list[str]] | None = None,
+) -> dict[str, Any]:
+    """Return a resident-scoped ledger of Faircroft app Bank Bridge activity."""
+    query = query or {}
+    try:
+        page = max(1, int((query.get("page") or ["1"])[0] or 1))
+    except (TypeError, ValueError):
+        page = 1
+    page_size = 12
+    requested_status = str((query.get("status") or ["all"])[0] or "all").strip().lower()
+    requested_direction = str((query.get("direction") or ["all"])[0] or "all").strip().lower()
+    requested_service = str((query.get("service") or ["all"])[0] or "all").strip().lower()
+    allowed_statuses = {"all", "pending", "processing", "completed", "failed", "cancelled"}
+    allowed_directions = {"all", "credit", "debit"}
+    allowed_services = {"all", "lottery", "casino", "sportsbook", "insurance", "ravenhood", "administration", "other"}
+    status_filter = requested_status if requested_status in allowed_statuses else "all"
+    direction_filter = requested_direction if requested_direction in allowed_directions else "all"
+    service_filter = requested_service if requested_service in allowed_services else "all"
+    service_case = """
+        CASE
+          WHEN command_id LIKE 'fc-lottery-%' OR LOWER(reason) LIKE 'lottery %' THEN 'lottery'
+          WHEN command_id LIKE 'fc-casino-%' OR LOWER(reason) LIKE 'casino %' THEN 'casino'
+          WHEN command_id LIKE 'fc-sports-%' OR LOWER(reason) LIKE 'sportsbook %' THEN 'sportsbook'
+          WHEN command_id LIKE 'fc-insurance-%' OR LOWER(reason) LIKE 'insurance %' THEN 'insurance'
+          WHEN command_id LIKE 'fc-market-%' OR LOWER(reason) LIKE 'ravenhood %' THEN 'ravenhood'
+          WHEN command_id LIKE 'fc-bank-%' THEN 'administration'
+          ELSE 'other'
+        END
+    """
+    clauses: list[str] = []
+    params: list[Any] = [user_id]
+    if status_filter == "processing":
+        clauses.append("status='claimed'")
+    elif status_filter != "all":
+        clauses.append("status=?")
+        params.append(status_filter)
+    if direction_filter == "credit":
+        clauses.append("operation='issue_funds'")
+    elif direction_filter == "debit":
+        clauses.append("operation='debit_funds'")
+    if service_filter != "all":
+        clauses.append("service=?")
+        params.append(service_filter)
+    where_sql = " AND ".join(clauses) if clauses else "1=1"
+    activity_cte = f"""
+        WITH activity AS (
+          SELECT command_id, operation, amount, currency, reason, status,
+                 created_at, claimed_at, completed_at,
+                 {service_case} AS service
+          FROM bank_bridge_commands
+          WHERE target_user_id=?
+        )
+    """
+    count_row = one(db, activity_cte + f"SELECT COUNT(*) AS count FROM activity WHERE {where_sql}", tuple(params)) or {}
+    total = int(count_row.get("count") or 0)
+    pages = max(1, int(math.ceil(total / page_size)))
+    page = min(page, pages)
+    row_params = list(params) + [page_size, (page - 1) * page_size]
+    rows = all_rows(
+        db,
+        activity_cte + f"""
+          SELECT * FROM activity
+          WHERE {where_sql}
+          ORDER BY created_at DESC, command_id DESC
+          LIMIT ? OFFSET ?
+        """,
+        tuple(row_params),
+    )
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        failure_reason = (
+            "This transaction was not completed by the Bank Bridge. No completed debit or credit was recorded."
+            if str(row.get("status") or "") == "failed"
+            else ""
+        )
+        items.append({
+            "command_id": row.get("command_id"),
+            "direction": "credit" if row.get("operation") == "issue_funds" else "debit",
+            "amount": round(float(row.get("amount") or 0), 2),
+            "currency": row.get("currency") or "bank",
+            "description": row.get("reason") or "Faircroft app transaction",
+            "service": row.get("service") or "other",
+            "status": row.get("status") or "pending",
+            "created_at": row.get("created_at"),
+            "processing_at": row.get("claimed_at"),
+            "completed_at": row.get("completed_at"),
+            "failure_reason": failure_reason,
+        })
+    summary = one(
+        db,
+        """
+        SELECT COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE status='pending') AS pending,
+               COUNT(*) FILTER (WHERE status='claimed') AS processing,
+               COUNT(*) FILTER (WHERE status='completed') AS completed,
+               COUNT(*) FILTER (WHERE status='failed') AS failed,
+               COUNT(*) FILTER (WHERE status='cancelled') AS cancelled,
+               COALESCE(SUM(amount) FILTER (WHERE operation='issue_funds' AND status='completed'),0) AS completed_credits,
+               COALESCE(SUM(amount) FILTER (WHERE operation='debit_funds' AND status='completed'),0) AS completed_debits
+        FROM bank_bridge_commands WHERE target_user_id=?
+        """,
+        (user_id,),
+    ) or {}
+    return {
+        "items": items,
+        "page": page,
+        "page_size": page_size,
+        "pages": pages,
+        "total": total,
+        "filters": {"status": status_filter, "direction": direction_filter, "service": service_filter},
+        "summary": {
+            "total": int(summary.get("total") or 0),
+            "pending": int(summary.get("pending") or 0),
+            "processing": int(summary.get("processing") or 0),
+            "completed": int(summary.get("completed") or 0),
+            "failed": int(summary.get("failed") or 0),
+            "cancelled": int(summary.get("cancelled") or 0),
+            "completed_credits": round(float(summary.get("completed_credits") or 0), 2),
+            "completed_debits": round(float(summary.get("completed_debits") or 0), 2),
+        },
+        "scope_notice": (
+            "Activity includes transactions processed through Faircroft applications and the Bank Bridge only. "
+            "Direct in-game purchases, arsenal transactions, ATM transfers, player-to-player transfers, cash activity, "
+            "and other Arma Reforger transactions are not displayed."
+        ),
+    }
+
+
 def lottery_wallet_charge(db: Database, user_id: int, settings: dict[str, Any], amount: float, transaction_type: str, detail: str) -> float:
     wallet = lottery_wallet_snapshot(db, user_id, settings, True)
     amount = round(max(0.0, float(amount)), 2)
@@ -5682,6 +5846,9 @@ def lottery_game_snapshot(db: Database, user_id: int) -> dict[str, Any]:
     return {"balance": round(balance, 2) if balance is not None else None, "reserved": round(reserved, 2), "available": round(max(0, balance - reserved), 2) if balance is not None else None, "synced_at": snapshot.get("synced_at") if snapshot else None}
 
 def queue_lottery_bank_debit(db: Database, user: DbRow, amount: float, detail: str) -> str:
+    queue_state = bank_bridge_user_queue_state(db, int(user["id"]), lock=True)
+    if bool(queue_state["locked"]):
+        raise ValueError(bank_bridge_user_queue_message(queue_state))
     link = one(db, "SELECT identity_id FROM arma_account_links WHERE user_id=? AND identity_id IS NOT NULL AND identity_id<>''", (user["id"],))
     if not link:
         raise ValueError("Link your Arma account before purchasing a lottery ticket.")
@@ -8630,7 +8797,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                             self.error(403, f"Anti-cheat profile lock: {anticheat_lock['reason']}")
                             return
                     else:
-                        timeout_allowed = path in ("/api/health", "/api/profile", "/api/bank", "/api/presence", "/api/legal/current", "/api/legal/accept")
+                        timeout_allowed = path in ("/api/health", "/api/profile", "/api/bank", "/api/bank/activity", "/api/presence", "/api/legal/current", "/api/legal/accept")
                         if block and not timeout_allowed:
                             self.error(403, f"Account {block['sanction_type']}: {block['reason']}")
                             return
@@ -8766,6 +8933,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_apply_job(db, user, self.path_int(path, 2))
                 elif path == "/api/bank" and method == "GET":
                     self.api_bank(db, user)
+                elif path == "/api/bank/activity" and method == "GET":
+                    self.api_bank_activity(db, user, query)
                 elif path == "/api/wallstreet" and method == "GET":
                     self.api_wallstreet(db, user, query)
                 elif path == "/api/wallstreet/account" and method == "POST":
@@ -12486,9 +12655,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             LEFT JOIN arma_account_links l ON l.user_id = c.target_user_id
             WHERE c.server_id = ? AND c.status = 'pending'
             ORDER BY c.created_at, c.id
-            LIMIT ?
             """,
-            (server_id, BANK_BRIDGE_CLAIM_BATCH_SIZE),
+            (server_id,),
         )
         claimed: list[dict[str, Any]] = []
         claimed_at = now_iso()
@@ -13207,6 +13375,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         err = verified_required(user)
         if err:
             self.error(403 if user else 401, err); return
+        bridge_queue = bank_bridge_user_queue_state(db, int(user["id"]), lock=True)
+        if bool(bridge_queue["locked"]):
+            self.send_json(429, {
+                "error": bank_bridge_user_queue_message(bridge_queue),
+                "code": "bank_bridge_user_limit",
+                "queue": bridge_queue,
+            }, {"Retry-After": "5"})
+            return
         payload = self.read_json()
         try:
             policy_id = int(payload.get("policy_id") or 0)
@@ -13266,6 +13442,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         err = verified_required(user)
         if err:
             self.error(403 if user else 401, err); return
+        bridge_queue = bank_bridge_user_queue_state(db, int(user["id"]), lock=True)
+        if bool(bridge_queue["locked"]):
+            self.send_json(429, {
+                "error": bank_bridge_user_queue_message(bridge_queue),
+                "code": "bank_bridge_user_limit",
+                "queue": bridge_queue,
+            }, {"Retry-After": "5"})
+            return
         payload = self.read_json()
         try:
             policy_id = int(payload.get("policy_id") or 0)
@@ -13320,6 +13504,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         err = verified_required(user)
         if err:
             self.error(403 if user else 401, err); return
+        bridge_queue = bank_bridge_user_queue_state(db, int(user["id"]), lock=True)
+        if bool(bridge_queue["locked"]):
+            self.send_json(429, {
+                "error": bank_bridge_user_queue_message(bridge_queue),
+                "code": "bank_bridge_user_limit",
+                "queue": bridge_queue,
+            }, {"Retry-After": "5"})
+            return
         payload = self.read_json()
         try:
             policy_id = int(payload.get("policy_id") or 0)
@@ -13510,6 +13702,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         err = verified_required(user)
         if err:
             self.error(403 if user else 401, err); return
+        bridge_queue = bank_bridge_user_queue_state(db, int(user["id"]), lock=True)
+        if bool(bridge_queue["locked"]):
+            self.send_json(429, {
+                "error": bank_bridge_user_queue_message(bridge_queue),
+                "code": "bank_bridge_user_limit",
+                "queue": bridge_queue,
+            }, {"Retry-After": "5"})
+            return
         payload = self.read_json()
         settings = get_system_settings(db)
         try: character_id = int(payload.get("character_id") or 0)
@@ -13862,6 +14062,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         # Serialize wagers per account so simultaneous taps cannot spend the
         # same read-only game-bank snapshot before the first debit is reserved.
         one(db, "SELECT id FROM users WHERE id=? FOR UPDATE", (user["id"],))
+        bridge_queue = bank_bridge_user_queue_state(db, int(user["id"]), lock=False)
+        if bool(bridge_queue["locked"]):
+            self.send_json(429, {
+                "error": bank_bridge_user_queue_message(bridge_queue),
+                "code": "bank_bridge_user_limit",
+                "queue": bridge_queue,
+            }, {"Retry-After": "5"})
+            return
         restriction = casino_active_restriction(db, int(user["id"]))
         if restriction:
             restriction_label = {
@@ -13885,21 +14093,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         settings = get_system_settings(db)
         if not settings["casino_enabled"]:
             self.error(409, "Faircroft Casino is currently closed")
-            return
-        round_gate = casino_active_round_queue(db, int(user["id"]))
-        if round_gate["locked"]:
-            queued_count = int(round_gate["count"])
-            queue_limit = int(round_gate["limit"])
-            self.send_json(
-                429,
-                {
-                    "error": f"You already have {queued_count} of {queue_limit} casino rounds settling through Bank Bridge. Wait for at least one round to settle before placing another wager.",
-                    "code": "casino_settlement_pending",
-                    "retry_after_seconds": 5,
-                    "round_gate": round_gate,
-                },
-                {"Retry-After": "5"},
-            )
             return
         payload = self.read_json()
         game_key = str(payload.get("game_key") or "").strip().lower()[:30]
@@ -14048,6 +14241,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         if not SPORTS_BETTING_ENABLED:
             self.error(409, "Sportsbook is not enabled yet")
+            return
+        bridge_queue = bank_bridge_user_queue_state(db, int(user["id"]), lock=True)
+        if bool(bridge_queue["locked"]):
+            self.send_json(429, {
+                "error": bank_bridge_user_queue_message(bridge_queue),
+                "code": "bank_bridge_user_limit",
+                "queue": bridge_queue,
+            }, {"Retry-After": "5"})
             return
         payload = self.read_json()
         try:
@@ -14532,6 +14733,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         err = verified_required(user)
         if err:
             self.error(403 if user else 401, err); return
+        bridge_queue = bank_bridge_user_queue_state(db, int(user["id"]), lock=True)
+        if bool(bridge_queue["locked"]):
+            self.send_json(429, {
+                "error": bank_bridge_user_queue_message(bridge_queue),
+                "code": "bank_bridge_user_limit",
+                "queue": bridge_queue,
+            }, {"Retry-After": "5"})
+            return
         account = one(db, "SELECT * FROM market_accounts WHERE user_id = ? FOR UPDATE", (user["id"],))
         if not account:
             self.error(409, "Create your Ravenhood account first."); return
@@ -14980,8 +15189,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "source": "MedicalHud/reputation.json",
             },
             "can_manage_treasury": False,
+            "activity": bank_activity_payload(db, int(user["id"])),
         }
         self.send_json(200, payload)
+
+    def api_bank_activity(self, db: Database, user: DbRow | None, query: dict[str, list[str]]) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        self.send_json(200, bank_activity_payload(db, int(user["id"]), query))
 
     def api_collect_bank(self, db: Database, user: DbRow | None) -> None:
         self.error(410, "Passive income collection has been removed from this server.")
