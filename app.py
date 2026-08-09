@@ -63,9 +63,7 @@ ANDROID_APK_URL = os.environ.get(
 ).strip()
 ARMA_BRIDGE_API_KEY = os.environ.get("ARMA_BRIDGE_API_KEY", "").strip()
 BANK_BRIDGE_TEST_MODE = os.environ.get("BANK_BRIDGE_TEST_MODE", "0").lower() in ("1", "true", "yes", "on")
-BANK_BRIDGE_CLAIM_BATCH_SIZE = min(25, max(1, int(os.environ.get("BANK_BRIDGE_CLAIM_BATCH_SIZE", "5"))))
-BANK_BRIDGE_PLAYER_ACTIVE_SECONDS = min(900, max(30, int(os.environ.get("BANK_BRIDGE_PLAYER_ACTIVE_SECONDS", "120"))))
-BANK_BRIDGE_CLAIM_STALE_SECONDS = min(3600, max(60, int(os.environ.get("BANK_BRIDGE_CLAIM_STALE_SECONDS", "120"))))
+BANK_BRIDGE_CLAIM_BATCH_SIZE = min(5, max(1, int(os.environ.get("BANK_BRIDGE_CLAIM_BATCH_SIZE", "5"))))
 ARMA_LINK_CODE_TTL_MINUTES = int(os.environ.get("ARMA_LINK_CODE_TTL_MINUTES", "30"))
 SHADOWHAVEN_SFTP_HOST = os.environ.get("SHADOWHAVEN_SFTP_HOST", "").strip()
 SHADOWHAVEN_SFTP_PORT = int(os.environ.get("SHADOWHAVEN_SFTP_PORT", "2022"))
@@ -12317,11 +12315,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "player.heartbeat",
                     "player.presence",
                     "player_heartbeat",
-                    # The RP Linking addon emits this lightweight activity
-                    # event repeatedly while a player is connected. Treat it
-                    # as the authoritative no-mod-change Bank Bridge presence
-                    # heartbeat so offline commands are never claimed.
-                    "player.action",
                 }
             )
             departed_presence = bool(
@@ -12335,10 +12328,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 }
             )
             if joined_presence or heartbeat_presence or departed_presence:
-                player_uid = str(self.bridge_value(event, "Uid", "uid", "PlayerUid", "playerUid", "IdentityId", "identityId", "identity_id")).strip()[:160]
+                player_uid = str(event.get("Uid") or event.get("IdentityId") or "").strip()[:160]
                 if player_uid:
-                    server_id = str(self.bridge_value(event, "ServerId", "serverId", "server_id") or self.bridge_value(data, "ServerId", "serverId", "server_id", default="default"))[:80]
-                    player_name = str(self.bridge_value(event, "PlayerName", "playerName", "player_name"))[:120]
+                    server_id = str(event.get("ServerId") or data.get("ServerId") or "default")[:80]
+                    player_name = str(event.get("PlayerName") or "")[:120]
                     if departed_presence:
                         db.execute(
                             """
@@ -12484,59 +12477,19 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.settle_sportsbook_bets(db)
         query = query or {}
         server_id = str(self.headers.get("X-Server-ID") or (query.get("server_id") or [""])[0] or "default").strip()[:80] or "default"
-        now = utcnow()
-        presence_cutoff = (now - dt.timedelta(seconds=BANK_BRIDGE_PLAYER_ACTIVE_SECONDS)).isoformat()
-        active_claim_cutoff = (now - dt.timedelta(seconds=BANK_BRIDGE_CLAIM_STALE_SECONDS)).isoformat()
-
-        # Presence is fed by the RP Linking player's recurring player.action
-        # events. Expire old rows locally so an offline player can never keep
-        # cycling commands pending -> claimed -> retry -> pending.
-        db.execute(
-            """
-            UPDATE anticheat_live_sessions
-            SET status='offline'
-            WHERE server_id=? AND status='online' AND last_heartbeat_at < ?
-            """,
-            (server_id, presence_cutoff),
-        )
-        active_claimed_row = one(
+        rows = all_rows(
             db,
             """
-            SELECT COUNT(*) AS count FROM bank_bridge_commands
-            WHERE server_id=? AND status='claimed' AND claimed_at >= ?
+            SELECT c.*, u.name AS target_name, u.civ_number, l.identity_id AS linked_identity_id
+            FROM bank_bridge_commands c
+            JOIN users u ON u.id = c.target_user_id
+            LEFT JOIN arma_account_links l ON l.user_id = c.target_user_id
+            WHERE c.server_id = ? AND c.status = 'pending'
+            ORDER BY c.created_at, c.id
+            LIMIT ?
             """,
-            (server_id, active_claim_cutoff),
-        ) or {}
-        active_claimed = int(active_claimed_row.get("count") or 0)
-        available_slots = max(0, BANK_BRIDGE_CLAIM_BATCH_SIZE - active_claimed)
-        rows: list[DbRow] = []
-        if available_slots:
-            rows = all_rows(
-                db,
-                """
-                SELECT c.*, u.name AS target_name, u.civ_number, l.identity_id AS linked_identity_id
-                FROM bank_bridge_commands c
-                JOIN users u ON u.id = c.target_user_id
-                LEFT JOIN arma_account_links l ON l.user_id = c.target_user_id
-                WHERE c.server_id = ? AND c.status = 'pending'
-                  AND EXISTS (
-                      SELECT 1 FROM anticheat_live_sessions live
-                      WHERE live.server_id = c.server_id
-                        AND live.status = 'online'
-                        AND live.last_heartbeat_at >= ?
-                        AND live.player_uid IN (c.identity_id, l.identity_id, l.uid)
-                  )
-                  AND NOT EXISTS (
-                      SELECT 1 FROM bank_bridge_commands unresolved
-                      WHERE unresolved.server_id=c.server_id
-                        AND unresolved.target_user_id=c.target_user_id
-                        AND unresolved.status='claimed'
-                  )
-                ORDER BY c.created_at, c.id
-                LIMIT ?
-                """,
-                (server_id, presence_cutoff, available_slots),
-            )
+            (server_id, BANK_BRIDGE_CLAIM_BATCH_SIZE),
+        )
         claimed: list[dict[str, Any]] = []
         claimed_at = now_iso()
         for row in rows:
@@ -12556,40 +12509,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 item["amount"] = 0
             item["target_identity_id"] = item.get("identity_id") or item.get("linked_identity_id") or ""
             claimed.append(item)
-        queue_state = one(
-            db,
-            """
-            SELECT COUNT(*) FILTER (WHERE c.status='pending') AS pending,
-                   COUNT(*) FILTER (
-                       WHERE c.status='pending' AND EXISTS (
-                           SELECT 1 FROM anticheat_live_sessions live
-                           LEFT JOIN arma_account_links live_link ON live_link.user_id=c.target_user_id
-                           WHERE live.server_id=c.server_id AND live.status='online'
-                             AND live.last_heartbeat_at >= ?
-                             AND live.player_uid IN (c.identity_id, live_link.identity_id, live_link.uid)
-                       )
-                   ) AS ready,
-                   COUNT(*) FILTER (WHERE c.status='claimed' AND c.claimed_at >= ?) AS claimed_active,
-                   COUNT(*) FILTER (WHERE c.status='claimed' AND (c.claimed_at IS NULL OR c.claimed_at < ?)) AS claimed_stale
-            FROM bank_bridge_commands c WHERE c.server_id=?
-            """,
-            (presence_cutoff, active_claim_cutoff, active_claim_cutoff, server_id),
-        ) or {}
-        pending_total = int(queue_state.get("pending") or 0)
-        ready_total = int(queue_state.get("ready") or 0)
-        self.send_json(200, {
-            "ok": True,
-            "server_id": server_id,
-            "commands": claimed,
-            "count": len(claimed),
-            "queue": {
-                "pending": pending_total,
-                "ready": ready_total,
-                "waiting_for_player": max(0, pending_total - ready_total),
-                "claimed_active": int(queue_state.get("claimed_active") or 0),
-                "claimed_stale": int(queue_state.get("claimed_stale") or 0),
-            },
-        })
+        self.send_json(200, {"ok": True, "server_id": server_id, "commands": claimed, "count": len(claimed)})
 
     def api_arma_bank_command_result(self, db: Database, command_id: str) -> None:
         err = self.bridge_error()
@@ -20515,30 +20435,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 FROM bank_bridge_commands
                 """,
             ) or {}
-            presence_cutoff = (utcnow() - dt.timedelta(seconds=BANK_BRIDGE_PLAYER_ACTIVE_SECONDS)).isoformat()
-            claim_cutoff = (utcnow() - dt.timedelta(seconds=BANK_BRIDGE_CLAIM_STALE_SECONDS)).isoformat()
-            queue_presence = one(
-                db,
-                """
-                SELECT COUNT(*) FILTER (
-                           WHERE c.status='pending' AND EXISTS (
-                               SELECT 1 FROM anticheat_live_sessions live
-                               LEFT JOIN arma_account_links live_link ON live_link.user_id=c.target_user_id
-                               WHERE live.server_id=c.server_id AND live.status='online'
-                                 AND live.last_heartbeat_at >= ?
-                                 AND live.player_uid IN (c.identity_id, live_link.identity_id, live_link.uid)
-                           )
-                       ) AS ready,
-                       COUNT(*) FILTER (
-                           WHERE c.status='claimed' AND c.claimed_at >= ?
-                       ) AS claimed_active,
-                       COUNT(*) FILTER (
-                           WHERE c.status='claimed' AND (c.claimed_at IS NULL OR c.claimed_at < ?)
-                       ) AS claimed_stale
-                FROM bank_bridge_commands c
-                """,
-                (presence_cutoff, claim_cutoff, claim_cutoff),
-            ) or {}
             command_query = """
                 SELECT c.*,target.name AS target_name,target.civ_number,requester.name AS requested_by_name
                 FROM bank_bridge_commands c JOIN users target ON target.id=c.target_user_id
@@ -20601,10 +20497,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "commands": [dict(row) for row in commands],
                 "pending": int(command_counts.get("pending") or 0),
                 "claimed": int(command_counts.get("claimed") or 0),
-                "ready": int(queue_presence.get("ready") or 0),
-                "waiting_for_player": max(0, int(command_counts.get("pending") or 0) - int(queue_presence.get("ready") or 0)),
-                "claimed_active": int(queue_presence.get("claimed_active") or 0),
-                "claimed_stale": int(queue_presence.get("claimed_stale") or 0),
                 "completed": int(command_counts.get("completed") or 0),
                 "failed": int(command_counts.get("failed") or 0),
                 "cancelled": int(command_counts.get("cancelled") or 0),

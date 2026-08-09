@@ -12829,13 +12829,13 @@ function renderDevBankingSettings(banking, users) {
     failed: Number(banking.failed || 0),
     cancelled: Number(banking.cancelled || 0),
   };
-  const statusLabels = { all: "All", pending: "Queued", claimed: "In bridge", completed: "Completed", failed: "Failed", cancelled: "Cancelled" };
+  const statusLabels = { all: "All", pending: "Pending", claimed: "Claimed", completed: "Completed", failed: "Failed", cancelled: "Cancelled" };
   const linkedUsers = users.filter((account) => account.arma_linked);
   const economy = banking.economy || {};
   const linkedDirectory = economy.linked_directory || [];
   const topUnlinked = economy.top_unlinked_accounts || [];
   return `<div class="stack dev-ops-view dev-banking-settings-view">
-    <div class="dev-view-intro"><div><span>CONTROLLED GAME ECONOMY</span><h2>Banking settings</h2><p>Testing-only fund issuance for linked in-game accounts. Offline residents remain safely queued until their RP Linking activity confirms they are in-game.</p></div><strong>${Number(banking.ready || 0).toLocaleString()} READY · ${Number(banking.waiting_for_player || 0).toLocaleString()} WAITING FOR PLAYER</strong></div>
+    <div class="dev-view-intro"><div><span>CONTROLLED GAME ECONOMY</span><h2>Banking settings</h2><p>Testing-only fund issuance for linked in-game accounts. The Bank Bridge receives no more than five commands on each poll.</p></div><strong>${Number(banking.pending || 0).toLocaleString()} PENDING · ${Number(banking.claimed || 0).toLocaleString()} CLAIMED</strong></div>
     <section class="dev-card dev-bank-intelligence"><div class="dev-card-header"><div><span>AUTHORITATIVE GAME BANK MIRROR</span><h2>In-game balances</h2><p>Read-only totals imported from ${escapeHtml(economy.source || "FCRPMUSSALO/Banks")}.</p></div><span class="pill green">${escapeHtml(economy.last_synced_at ? "SYNCED" : "AWAITING SYNC")}</span></div>
       <div class="dev-banking-metrics"><article><small>Currency in circulation</small><strong>${money(economy.currency_in_circulation || 0)}</strong></article><article><small>Game bank accounts</small><strong>${Number(economy.bank_accounts || 0).toLocaleString()}</strong></article><article><small>Linked accounts</small><strong>${Number(economy.linked_accounts || 0).toLocaleString()}</strong></article><article><small>Largest balance</small><strong>${money(economy.largest_balance || 0)}</strong></article></div>
       <div class="dev-bank-ledger-grid"><div><header><strong>Linked account balances</strong><span>${linkedDirectory.length} indexed</span></header>${linkedDirectory.slice(0, 50).map((account) => `<div class="dev-bank-ledger-row"><span><b>${escapeHtml(account.account_name || account.player_name || "Linked account")}</b><small>CIV ${escapeHtml(account.civ_number || "pending")} / ${escapeHtml(account.identity_id || "")}</small></span><strong>${money(account.balance || 0)}</strong></div>`).join("") || `<div class="empty">No linked in-game balances have synced yet.</div>`}</div><div><header><strong>Unlinked high balances</strong><span>identity review</span></header>${topUnlinked.slice(0, 10).map((account) => `<div class="dev-bank-ledger-row"><span><b>Unlinked Bohemia identity</b><small>${escapeHtml(account.identity_id || "")}</small></span><strong>${money(account.balance || 0)}</strong></div>`).join("") || `<div class="empty">No unlinked bank records found.</div>`}</div></div>
@@ -12855,7 +12855,7 @@ function renderDevBankingSettings(banking, users) {
       </section>
       <section class="dev-card dev-record-panel"><div class="dev-card-header"><div><span>BRIDGE STATUS</span><h2>Command ledger</h2></div><strong>${Number(history.total || 0).toLocaleString()} ${escapeHtml(statusLabels[statusFilter] || "All")}</strong></div>
         <div class="dev-banking-summary" role="group" aria-label="Filter command ledger by status">${["all", "pending", "claimed", "completed", "failed", "cancelled"].map((status) => `<button type="button" class="${statusFilter === status ? "active" : ""} ${status === "failed" ? "danger" : ""}" data-dev-bank-status="${status}" aria-pressed="${statusFilter === status}"><b>${commandCounts[status].toLocaleString()}</b> ${statusLabels[status]}</button>`).join("")}</div>
-        <div class="dev-bank-bulk-recovery"><div><strong>Queue status</strong><span>${Number(banking.ready || 0).toLocaleString()} ready for online players · ${Number(banking.waiting_for_player || 0).toLocaleString()} waiting for players to join · ${Number(banking.claimed_active || 0).toLocaleString()} actively processing · ${Number(banking.claimed_stale || 0).toLocaleString()} stalled. Recovery cancels queued commands and claimed commands stalled for at least two minutes.</span></div><button class="danger" type="button" data-dev-bank-bulk-cancel ${commandCounts.pending + commandCounts.claimed < 1 ? "disabled" : ""}>Cancel queued + stuck</button></div>
+        <div class="dev-bank-bulk-recovery"><div><strong>Queue recovery</strong><span>The original Bank Bridge flow is active with a hard five-command poll limit. Recovery cancels pending commands and claimed commands stalled for at least two minutes.</span></div><button class="danger" type="button" data-dev-bank-bulk-cancel ${commandCounts.pending + commandCounts.claimed < 1 ? "disabled" : ""}>Cancel queued + stuck</button></div>
         <div class="dev-record-list">${commands.map((command) => {
           const failure = command.failure_reason || command.result?.message || command.result?.error || "";
           const direction = command.operation === "issue_funds" ? "deposit" : "withdrawal";
@@ -14228,7 +14228,7 @@ function bindDevWorkspace() {
   }));
   $$(`[data-dev-bank-status]`).forEach((button) => button.addEventListener("click", async () => {
     const status = String(button.dataset.devBankStatus || "all").toLowerCase();
-    if (!["all", "pending", "completed", "failed", "cancelled"].includes(status)) return;
+    if (!["all", "pending", "claimed", "completed", "failed", "cancelled"].includes(status)) return;
     state.devBankCommandStatus = status;
     state.devBankCommandPage = 1;
     await refreshDevTools({ force: true });

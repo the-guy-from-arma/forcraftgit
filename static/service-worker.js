@@ -1,10 +1,10 @@
-const CACHE = "faircroft-rp-v030-bank-queue-presence-v34";
+const CACHE = "faircroft-rp-v030-bank-bridge-restore-v36";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.3.0-bank-queue-recovery-v34",
-  "/static/insurance-v7.css?v=0.3.0-bank-queue-recovery-v34",
+  "/static/styles.css?v=0.3.0-bank-queue-recovery-v36",
+  "/static/insurance-v7.css?v=0.3.0-bank-queue-recovery-v36",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.3.0-bank-queue-recovery-v34",
+  "/static/app.js?v=0.3.0-bank-queue-recovery-v36",
   "/static/thunderlink-eula-v1.0.txt",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
