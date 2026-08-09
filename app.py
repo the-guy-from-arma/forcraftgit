@@ -22281,6 +22281,24 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                             FROM market_holdings WHERE quantity>0 GROUP BY security_id
                         ) position ON position.security_id=s.id
                         ORDER BY CASE WHEN s.active=1 THEN 0 ELSE 1 END,s.security_type,s.ticker""")],
+                    "shareholders": [dict(row) for row in all_rows(db, """SELECT s.id AS security_id,s.ticker,s.name AS company_name,
+                        a.id AS account_id,u.id AS user_id,u.name AS shareholder_name,u.civ_number,
+                        h.quantity,h.average_cost,ROUND(h.quantity*h.average_cost,2) AS invested_basis,
+                        ROUND(h.quantity*s.price,2) AS current_value
+                        FROM market_holdings h
+                        JOIN market_securities s ON s.id=h.security_id
+                        JOIN market_accounts a ON a.id=h.account_id
+                        JOIN users u ON u.id=a.user_id
+                        WHERE h.quantity>0 AND s.active=1
+                        ORDER BY s.ticker,(h.quantity*s.price) DESC,u.name""")],
+                    "bankruptcy_shareholders": [dict(row) for row in all_rows(db, """SELECT w.security_id,s.ticker,
+                        u.id AS user_id,u.name AS shareholder_name,u.civ_number,w.quantity,w.average_cost,
+                        w.invested_basis,w.final_market_value,w.bankruptcy_chapter,w.created_at
+                        FROM market_security_writeoffs w
+                        JOIN market_securities s ON s.id=w.security_id
+                        JOIN market_accounts a ON a.id=w.account_id
+                        JOIN users u ON u.id=a.user_id
+                        ORDER BY w.created_at DESC,s.ticker,w.final_market_value DESC,u.name""")],
                     "bankruptcies": [dict(row) for row in all_rows(db, """SELECT s.id,s.ticker,s.name,s.sector,s.bankruptcy_chapter,s.bankruptcy_reason,
                         s.bankruptcy_at,s.closed_by,closer.name AS closed_by_name,
                         COALESCE(loss.affected_accounts,0) AS affected_accounts,
@@ -23086,7 +23104,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute(
             """INSERT INTO market_security_writeoffs
                (security_id,account_id,quantity,average_cost,invested_basis,final_market_value,bankruptcy_chapter,reason,closed_by,created_at)
-               SELECT security_id,account_id,quantity,average_cost,ROUND(quantity*average_cost,2),ROUND(quantity*?,2),?,?,?,?,?
+               SELECT security_id,account_id,quantity,average_cost,ROUND(quantity*average_cost,2),ROUND(quantity*?,2),?,?,?,?
                FROM market_holdings WHERE security_id=? AND quantity>0
                ON CONFLICT(security_id,account_id) DO NOTHING""",
             (security["price"], chapter, reason, user["id"], timestamp, security["id"]),
