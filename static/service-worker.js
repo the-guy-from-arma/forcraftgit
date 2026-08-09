@@ -1,10 +1,10 @@
-const CACHE = "faircroft-rp-v030-market-shareholder-ledger-v40";
+const CACHE = "faircroft-rp-v030-market-assets-at-risk-v41";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.3.0-market-shareholder-ledger-v40",
-  "/static/insurance-v7.css?v=0.3.0-market-shareholder-ledger-v40",
+  "/static/styles.css?v=0.3.0-market-assets-at-risk-v41",
+  "/static/insurance-v7.css?v=0.3.0-market-assets-at-risk-v41",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.3.0-market-shareholder-ledger-v40",
+  "/static/app.js?v=0.3.0-market-assets-at-risk-v41",
   "/static/thunderlink-eula-v1.0.txt",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",

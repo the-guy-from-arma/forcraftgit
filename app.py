@@ -21432,7 +21432,50 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "gemini_interval_minutes": settings["market_gemini_interval_minutes"],
                 "gemini_last_tick": settings["market_gemini_last_tick"],
                 "gemini_configured": bool(GEMINI_API_KEY),
-                "securities": [dict(row) for row in all_rows(db, "SELECT * FROM market_securities ORDER BY security_type,ticker")],
+                "securities": [dict(row) for row in all_rows(db, """SELECT s.*,
+                    COALESCE(position.holder_count,0) AS holder_count,
+                    COALESCE(position.outstanding_shares,0) AS outstanding_shares,
+                    COALESCE(position.invested_basis,0) AS invested_basis
+                    FROM market_securities s
+                    LEFT JOIN (
+                        SELECT security_id,COUNT(*) AS holder_count,SUM(quantity) AS outstanding_shares,
+                               SUM(quantity*average_cost) AS invested_basis
+                        FROM market_holdings WHERE quantity>0 GROUP BY security_id
+                    ) position ON position.security_id=s.id
+                    ORDER BY CASE WHEN s.active=1 THEN 0 ELSE 1 END,s.security_type,s.ticker""")],
+                "shareholders": [dict(row) for row in all_rows(db, """SELECT s.id AS security_id,s.ticker,s.name AS company_name,
+                    a.id AS account_id,u.id AS user_id,u.name AS shareholder_name,u.civ_number,
+                    h.quantity,h.average_cost,ROUND(h.quantity*h.average_cost,2) AS invested_basis,
+                    ROUND(h.quantity*s.price,2) AS current_value
+                    FROM market_holdings h
+                    JOIN market_securities s ON s.id=h.security_id
+                    JOIN market_accounts a ON a.id=h.account_id
+                    JOIN users u ON u.id=a.user_id
+                    WHERE h.quantity>0 AND s.active=1
+                    ORDER BY s.ticker,(h.quantity*s.price) DESC,u.name""")],
+                "bankruptcy_shareholders": [dict(row) for row in all_rows(db, """SELECT w.security_id,s.ticker,
+                    u.id AS user_id,u.name AS shareholder_name,u.civ_number,w.quantity,w.average_cost,
+                    w.invested_basis,w.final_market_value,w.bankruptcy_chapter,w.created_at
+                    FROM market_security_writeoffs w
+                    JOIN market_securities s ON s.id=w.security_id
+                    JOIN market_accounts a ON a.id=w.account_id
+                    JOIN users u ON u.id=a.user_id
+                    ORDER BY w.created_at DESC,s.ticker,w.final_market_value DESC,u.name""")],
+                "bankruptcies": [dict(row) for row in all_rows(db, """SELECT s.id,s.ticker,s.name,s.sector,s.bankruptcy_chapter,s.bankruptcy_reason,
+                    s.bankruptcy_at,s.closed_by,closer.name AS closed_by_name,
+                    COALESCE(loss.affected_accounts,0) AS affected_accounts,
+                    COALESCE(loss.forfeited_shares,0) AS forfeited_shares,
+                    COALESCE(loss.invested_basis,0) AS invested_basis,
+                    COALESCE(loss.final_market_value,0) AS final_market_value
+                    FROM market_securities s
+                    LEFT JOIN users closer ON closer.id=s.closed_by
+                    LEFT JOIN (
+                        SELECT security_id,COUNT(*) AS affected_accounts,SUM(quantity) AS forfeited_shares,
+                               SUM(invested_basis) AS invested_basis,SUM(final_market_value) AS final_market_value
+                        FROM market_security_writeoffs GROUP BY security_id
+                    ) loss ON loss.security_id=s.id
+                    WHERE s.lifecycle_status='bankrupt' OR s.bankruptcy_at IS NOT NULL
+                    ORDER BY s.bankruptcy_at DESC,s.ticker""")],
                 "programs": [dict(row) for row in all_rows(db, "SELECT p.*,s.ticker FROM market_price_programs p LEFT JOIN market_securities s ON s.id=p.security_id ORDER BY p.created_at DESC LIMIT 50")],
                 "events": [dict(row) for row in all_rows(db, "SELECT * FROM market_events ORDER BY created_at DESC LIMIT 50")],
                 "codes": [dict(row) for row in all_rows(
