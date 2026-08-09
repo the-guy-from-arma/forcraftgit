@@ -14189,7 +14189,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             settled += 1
         return settled
 
-    def market_payload(self, db: Database, user: DbRow, history_ticker: str = "") -> dict[str, Any]:
+    def market_payload(self, db: Database, user: DbRow, history_ticker: str = "", history_range: str = "1D") -> dict[str, Any]:
         settings = get_system_settings(db)
         account = one(db, "SELECT * FROM market_accounts WHERE user_id = ?", (user["id"],))
         securities = all_rows(db, "SELECT * FROM market_securities WHERE active = 1 ORDER BY security_type, ticker")
@@ -14201,15 +14201,40 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         pending_withdrawal_amount = 0.0
         available_withdrawal_amount = 0.0
         requested_ticker = str(history_ticker or "").upper().strip()[:12]
+        requested_range = str(history_range or "1D").upper().strip()
+        if requested_range not in {"1D", "1W", "1M", "1Y"}:
+            requested_range = "1D"
+        history_days = {"1D": 1, "1W": 7, "1M": 30, "1Y": 365}[requested_range]
+        history_buckets = {"1D": 288, "1W": 336, "1M": 480, "1Y": 720}[requested_range]
+        history_start = (utcnow() - dt.timedelta(days=history_days)).isoformat()
         history_security = next((row for row in securities if str(row["ticker"]).upper() == requested_ticker), securities[0] if securities else None)
         selected_ticker = str(history_security["ticker"]) if history_security else ""
         price_history: dict[str, list[dict[str, Any]]] = {selected_ticker: []} if selected_ticker else {}
         if history_security:
-            history_rows = all_rows(db, """SELECT price,source,recorded_at FROM market_price_history
-                WHERE security_id=? ORDER BY id DESC LIMIT 600""", (history_security["id"],))
+            # Return the whole requested period without sending every five-minute
+            # quote to the browser. NTILE preserves observations across the full
+            # range instead of taking only the newest rows (which made every
+            # chart button look like the one-day chart).
+            history_rows = all_rows(db, """WITH ranged AS (
+                    SELECT id,price,source,recorded_at,
+                        NTILE(?) OVER (ORDER BY recorded_at ASC,id ASC) AS history_bucket
+                    FROM market_price_history
+                    WHERE security_id=? AND recorded_at>=?
+                ), sampled AS (
+                    SELECT id,price,source,recorded_at,
+                        ROW_NUMBER() OVER (PARTITION BY history_bucket ORDER BY recorded_at DESC,id DESC) AS bucket_row
+                    FROM ranged
+                )
+                SELECT price,source,recorded_at FROM sampled
+                WHERE bucket_row=1 ORDER BY recorded_at ASC,id ASC""",
+                (history_buckets, history_security["id"], history_start),
+            )
+            if len(history_rows) < 2:
+                history_rows = list(reversed(all_rows(db, """SELECT price,source,recorded_at FROM market_price_history
+                    WHERE security_id=? ORDER BY recorded_at DESC,id DESC LIMIT 2""", (history_security["id"],))))
             price_history[selected_ticker] = [
                 {"price": float(row["price"] or 0), "source": row["source"], "recorded_at": row["recorded_at"]}
-                for row in reversed(history_rows)
+                for row in history_rows
             ]
         if account:
             holdings = all_rows(db, """SELECT h.*, s.ticker, s.name, s.price, s.previous_price, s.security_type
@@ -14238,6 +14263,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "promo_redemptions": [dict(x) for x in promo_redemptions],
                 "price_history": price_history,
                 "history_ticker": selected_ticker,
+                "history_range": requested_range,
+                "history_range_start": history_start,
                 "pending_withdrawal_amount": pending_withdrawal_amount,
                 "available_withdrawal_amount": available_withdrawal_amount,
                 "portfolio_value": round(portfolio_value, 2), "market_open": settings["market_open"],
@@ -14248,7 +14275,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err); return
         history_ticker = str((query.get("ticker") or [""])[0])
-        self.send_json(200, self.market_payload(db, user, history_ticker))
+        history_range = str((query.get("range") or ["1D"])[0])
+        self.send_json(200, self.market_payload(db, user, history_ticker, history_range))
 
     def api_wallstreet_create_account(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
@@ -17310,17 +17338,24 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             ORDER BY u.name
             """
         )
+        character_rows = all_rows(
+            db,
+            """SELECT id,user_id,character_name,is_active
+               FROM user_characters
+               WHERE status='active'
+               ORDER BY user_id,is_active DESC,created_at""",
+        )
+        characters_by_user: dict[int, list[dict[str, Any]]] = {}
+        for character in character_rows:
+            characters_by_user.setdefault(int(character["user_id"]), []).append({
+                "id": int(character["id"]),
+                "character_name": character["character_name"],
+                "is_active": character["is_active"],
+            })
         civilians = []
         for row in civilian_rows:
             item = dict(row)
-            item["characters"] = [
-                dict(character)
-                for character in all_rows(
-                    db,
-                    "SELECT id, character_name, is_active FROM user_characters WHERE user_id = ? AND status = 'active' ORDER BY is_active DESC, created_at",
-                    (row["id"],),
-                )
-            ]
+            item["characters"] = characters_by_user.get(int(row["id"]), [])
             civilians.append(item)
         self.send_json(
             200,

@@ -2643,7 +2643,10 @@ function scheduleDevToolsRefresh() {
 
 function wallstreetDataPath() {
   const ticker = String(state.marketTicker || "").trim().toUpperCase();
-  return ticker ? `/api/wallstreet?ticker=${encodeURIComponent(ticker)}` : "/api/wallstreet";
+  const range = ["1D", "1W", "1M", "1Y"].includes(state.marketRange) ? state.marketRange : "1D";
+  const params = new URLSearchParams({range});
+  if (ticker) params.set("ticker", ticker);
+  return `/api/wallstreet?${params.toString()}`;
 }
 
 async function fetchWallstreetData() {
@@ -5694,7 +5697,10 @@ function renderMarketWorkspace() {
   const returns = prices.slice(1).map((price, index) => prices[index] ? price / prices[index] - 1 : 0);
   const drift = returns.length ? returns.reduce((sum, value) => sum + value, 0) / returns.length : change / 100;
   const variance = returns.length ? returns.reduce((sum, value) => sum + Math.pow(value - drift, 2), 0) / returns.length : 0;
-  const volatility = Math.max(.004, Math.sqrt(variance));
+  // Keep the illustrative outlook from flattening the recorded line when a
+  // historic quote contains an extreme move. The recorded series remains
+  // untouched; only the non-recorded forecast is bounded for chart legibility.
+  const volatility = Math.max(.004, Math.min(.08, Math.sqrt(variance)));
   const forecast = Array.from({length: 8}, (_, index) => {
     const progress = (index + 1) / 8;
     return currentPrice * (1 + Math.max(-.09, Math.min(.09, drift * 5)) * progress + Math.sin(index * 1.17) * volatility * .55);
@@ -5724,6 +5730,15 @@ function renderMarketWorkspace() {
   const momentumPrice = Number(forecast.at(-1) || currentPrice);
   const momentumChange = currentPrice ? (momentumPrice / currentPrice - 1) * 100 : 0;
   const lastRecordedAt = history.at(-1)?.time || now;
+  const chartDateOptions = range === "1D"
+    ? {month: "short", day: "numeric", hour: "numeric", minute: "2-digit"}
+    : {month: "short", day: "numeric", year: "numeric"};
+  const chartDate = value => new Date(value).toLocaleString([], chartDateOptions);
+  const chartTimeLabels = [
+    chartDate(history[0]?.time || now - rangeMs),
+    chartDate(history[Math.floor((history.length - 1) / 2)]?.time || now),
+    chartDate(lastRecordedAt),
+  ];
 
   const invested = Number(data.portfolio_value || 0);
   const cash = Number(account.cash_balance || 0);
@@ -5757,7 +5772,7 @@ function renderMarketWorkspace() {
             <div class="market-v13-gridlines"></div><div class="market-v13-y-axis"><span>${money(chartMax)}</span><span>${money((chartMax + chartMin) / 2)}</span><span>${money(chartMin)}</span></div>
             <svg viewBox="0 0 1360 320" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="${chartId}-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".34"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs><polygon class="area" points="28,304 ${actualPoints} ${actualEndX},304" fill="url(#${chartId}-area)"/><polyline class="actual" points="${actualPoints}"/><polyline class="forecast" points="${forecastPoints}"/><line class="divider" x1="${actualEndX}" y1="24" x2="${actualEndX}" y2="304"/><circle class="pulse" cx="${actualEndX}" cy="${yFor(currentPrice).toFixed(1)}" r="7"/></svg>
             <div class="market-v13-hover-guide" aria-hidden="true"></div><div class="market-v13-hover-dot" aria-hidden="true"></div><aside class="market-v13-tooltip" aria-live="polite"><small data-market-tooltip-symbol>${escapeHtml(selected.ticker || "MARKET")} · RECORDED QUOTE</small><strong data-market-tooltip-price>${money(currentPrice)}</strong><time data-market-tooltip-time>${new Date(lastRecordedAt).toLocaleString()}</time><span data-market-tooltip-change>Current verified price</span></aside>
-            <div class="market-v13-chart-labels"><span>${range === "1D" ? "Open" : "Period start"}</span><span>Recorded market</span><span>Now</span><span>Momentum path</span></div>
+            <div class="market-v13-chart-labels"><span>${escapeHtml(chartTimeLabels[0])}</span><span>${escapeHtml(chartTimeLabels[1])}</span><span>${escapeHtml(chartTimeLabels[2])}</span><span>Momentum path</span></div>
           </div>
           <footer><span><small>OPEN</small><b>${money(open)}</b></span><span><small>${range} LOW</small><b>${money(low)}</b></span><span><small>${range} HIGH</small><b>${money(high)}</b></span><span><small>YOUR POSITION</small><b>${owned ? `${owned.toLocaleString(undefined, {maximumFractionDigits: 4})} shares` : "Not held"}</b></span></footer>
           <div class="market-v13-analysis"><article><small>PERIOD DIRECTION</small><strong class="${change >= 0 ? "up" : "down"}">${directionLabel}</strong><span>${priceMove >= 0 ? "+" : ""}${money(priceMove)} · ${change >= 0 ? "+" : ""}${change.toFixed(2)}%</span><p>${directionCopy}</p></article><article class="range"><small>RANGE POSITION</small><strong>${rangePosition.toFixed(0)}th percentile</strong><i><b style="left:${rangePosition.toFixed(1)}%"></b></i><span>${money(low)} low · ${money(high)} high</span></article><article><small>REALIZED SWING</small><strong>${periodSwing.toFixed(2)}%</strong><span>${history.length} verified observation${history.length === 1 ? "" : "s"}</span><p>High-to-low movement in the selected view.</p></article><article><small>MOMENTUM OUTLOOK</small><strong class="${momentumChange >= 0 ? "up" : "down"}">${momentumChange >= 0 ? "Positive" : "Defensive"}</strong><span>${money(momentumPrice)} · ${momentumChange >= 0 ? "+" : ""}${momentumChange.toFixed(2)}%</span><p>Illustrative path, not a recorded quote.</p></article></div>
@@ -5908,7 +5923,23 @@ function bindMarketWorkspace() {
         }
         return;
       }
-      if (control.matches("[data-market-range]")) { state.marketRange = control.dataset.marketRange; render(); return; }
+      if (control.matches("[data-market-range]")) {
+        const requestedRange = String(control.dataset.marketRange || "1D").toUpperCase();
+        if (!["1D", "1W", "1M", "1Y"].includes(requestedRange)) return;
+        state.marketRange = requestedRange;
+        render();
+        if (state.cache.wallstreet?.history_range === requestedRange) return;
+        try {
+          const next = await fetchWallstreetData();
+          if (state.marketRange === requestedRange) {
+            state.cache.wallstreet = next;
+            render();
+          }
+        } catch (error) {
+          toast(error.message);
+        }
+        return;
+      }
       if (control.matches("[data-market-dialog]")) { state.marketDialog = control.dataset.marketDialog; state.marketTransferRecipient = null; state.marketPromoSuccess = null; state.marketPromoError = ""; render(); return; }
       if (control.matches("[data-market-overview]")) { state.marketDialog = null; render(); requestAnimationFrame(() => ($(".market-v7-focus") || $(".market-terminal"))?.scrollIntoView({behavior:"smooth",block:"start"})); return; }
       if (control.matches("[data-market-portfolio]")) { state.marketDialog = null; render(); requestAnimationFrame(() => ($("#marketPortfolioDesk") || $(".market-v7-account"))?.scrollIntoView({behavior:"smooth",block:"center"})); return; }
@@ -10525,9 +10556,19 @@ function renderBookingSystem() {
           <button type="button" data-mdt-tab="cad-reports"><strong>After-Call Report</strong><span>File incident narrative</span></button>
         </div>
         <div class="grid-2">
-          <label>Arrestee<select name="civ_id" required data-booking-subject>
+          <label>Arrestee<select name="civ_id" required data-booking-subject data-issue-subject>
             <option value="">Select civilian record</option>
             ${civilians.map((person) => `<option value="${person.id}"${selectedAttr(person.id, draft.civ_id || state.mdtSelectedCiv)}>${escapeHtml(person.name)} - CIV ${escapeHtml(person.civ_number || "pending")} - ${escapeHtml(person.license_status || "No license")}</option>`).join("")}
+          </select></label>
+          <label>Character identity<select name="character_id" required data-issue-character>
+            <option value="">Select civilian first</option>
+            ${civilians.flatMap((person) => (person.characters || []).map((character) => {
+              const selectedCiv = Number(person.id) === Number(draft.civ_id || state.mdtSelectedCiv);
+              const selectedCharacter = draft.character_id
+                ? String(character.id) === String(draft.character_id)
+                : Boolean(character.is_active);
+              return `<option value="${character.id}" data-civ="${person.id}" data-active="${character.is_active ? "true" : "false"}" ${selectedCiv && selectedCharacter ? "selected" : ""}>${escapeHtml(character.character_name)}</option>`;
+            })).join("")}
           </select></label>
           <fieldset class="booking-charge-picker">
             <legend>Criminal charges <span data-booking-charge-count>${selectedChargeIds.length}</span> selected</legend>
@@ -11771,24 +11812,47 @@ function bindMdt() {
       toast(error.message);
     }
   });
-  $("#bookingForm")?.addEventListener("submit", async (event) => {
+  const bookingForm = $("#bookingForm");
+  bookingForm?.querySelector("[data-issue-subject]")?.addEventListener("change", () => syncIssueCharacter(bookingForm));
+  syncIssueCharacter(bookingForm);
+  bookingForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const form = event.currentTarget;
+    const submit = form.querySelector('button[type="submit"]');
+    const originalLabel = submit?.textContent || "Create booking packet";
     try {
-      const formData = new FormData(event.currentTarget);
+      const formData = new FormData(form);
       const payload = Object.fromEntries(formData.entries());
       payload.charge_ids = formData.getAll("charge_ids");
       if (!payload.charge_ids.length) {
         toast("Select at least one criminal charge");
         return;
       }
-      const result = await api("/api/mdt/bookings", { method: "POST", body: payload });
-      toast(`Booking ${result.booking_number} filed with ${result.charge_count} charge(s)`);
+      if (!payload.character_id) {
+        toast("Select the character identity being booked");
+        return;
+      }
+      if (submit) {
+        submit.disabled = true;
+        submit.textContent = "Filing booking packet…";
+      }
+      const result = await api("/api/mdt/bookings", { method: "POST", body: payload, timeoutMs: 20000 });
       state.mdtSelectedChargeId = "";
       state.mdtSelectedCiv = "";
       state.mdtBookingDraft = null;
-      await loadAppData("mdt");
+      try {
+        const bookings = await api("/api/mdt/bookings", { timeoutMs: 12000 });
+        state.cache.mdt = { ...(state.cache.mdt || {}), bookings };
+      } catch (refreshError) {
+        console.warn("Booking filed; queue refresh deferred", refreshError);
+      }
       render();
+      toast(`Booking ${result.booking_number} filed with ${result.charge_count} charge(s)`);
     } catch (error) {
+      if (submit) {
+        submit.disabled = false;
+        submit.textContent = originalLabel;
+      }
       toast(error.message);
     }
   });
@@ -11929,6 +11993,7 @@ function bindMdt() {
         state.mdtSelectedChargeId = payload.charge_id;
         state.mdtBookingDraft = {
           civ_id: payload.civ_id,
+          character_id: payload.character_id,
           charge_id: payload.charge_id,
           charge_ids: [payload.charge_id],
           arrest_location: payload.location,
