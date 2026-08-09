@@ -175,6 +175,8 @@ NAME_CHANGE_WINDOW_DAYS = 3
 TREASURY_STIMULUS_AMOUNT = 75000.00
 TREASURY_MAX_REQUEST_AMOUNT = 10_000_000.00
 INSURANCE_BANK_COMMAND_MAX_AMOUNT = 10_000_000
+LOTTERY_BANK_COMMAND_MAX_AMOUNT = 10_000_000
+RAVENHOOD_BANK_COMMAND_MAX_AMOUNT = 10_000_000
 INSURANCE_PROPERTY_BASE_VALUE = 150_000.00
 INSURANCE_PROPERTY_PROTECTED_VALUE = 400_000.00
 INSURANCE_PROPERTY_PROTECTION_PREMIUM = 50_000.00
@@ -4544,6 +4546,28 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE lottery_quick_draw_entries ADD COLUMN IF NOT EXISTS ticket_cost NUMERIC(12,2) NOT NULL DEFAULT 0")
     db.execute("ALTER TABLE lottery_quick_draw_entries ADD COLUMN IF NOT EXISTS bank_command_id TEXT")
     db.execute("ALTER TABLE lottery_quick_draw_entries ADD COLUMN IF NOT EXISTS payout_command_id TEXT")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS lottery_payout_commands (
+            id SERIAL PRIMARY KEY,
+            payout_group_id TEXT NOT NULL,
+            ticket_type TEXT NOT NULL,
+            ticket_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            command_id TEXT NOT NULL UNIQUE,
+            chunk_number INTEGER NOT NULL,
+            chunk_count INTEGER NOT NULL,
+            amount NUMERIC(18,2) NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL,
+            completed_at TEXT,
+            UNIQUE (payout_group_id, chunk_number),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS lottery_payout_ticket_idx ON lottery_payout_commands (ticket_type, ticket_id, status)")
+    db.execute("CREATE INDEX IF NOT EXISTS lottery_payout_group_idx ON lottery_payout_commands (payout_group_id, status)")
     # One-time cleanup for pre-number lottery records. Keep the rows for
     # audit/history, but make them ineligible for draws and payouts.
     db.execute("""UPDATE lottery_entries
@@ -5669,13 +5693,68 @@ def queue_lottery_bank_debit(db: Database, user: DbRow, amount: float, detail: s
     db.execute("INSERT INTO bank_bridge_commands (command_id,idempotency_key,server_id,operation,target_user_id,identity_id,amount,currency,reason,status,requested_by,created_at) VALUES (?,?,?,?,?,?,?,'bank',?,'pending',?,?)", (command_id, f"lottery-debit-{secrets.token_urlsafe(18)}", "default", "debit_funds", user["id"], str(link["identity_id"]), amount, detail, user["id"], now_iso()))
     return command_id
 
-def queue_lottery_bank_payout(db: Database, user_id: int, amount: float, detail: str) -> str | None:
+def lottery_payout_chunks(amount: float) -> list[float]:
+    """Return exact bridge-safe lottery payout chunks in whole cents."""
+    total_cents = int(round(float(amount or 0) * 100))
+    if total_cents <= 0:
+        return []
+    maximum_cents = LOTTERY_BANK_COMMAND_MAX_AMOUNT * 100
+    chunks: list[float] = []
+    while total_cents > 0:
+        chunk_cents = min(total_cents, maximum_cents)
+        chunks.append(chunk_cents / 100)
+        total_cents -= chunk_cents
+    return chunks
+
+
+def queue_lottery_bank_payout(
+    db: Database,
+    user_id: int,
+    amount: float,
+    detail: str,
+    ticket_type: str,
+    ticket_id: int,
+) -> dict[str, Any] | None:
     link = one(db, "SELECT identity_id FROM arma_account_links WHERE user_id=? AND identity_id IS NOT NULL AND identity_id<>''", (user_id,))
-    if not link or amount <= 0:
+    chunks = lottery_payout_chunks(amount)
+    if not link or not chunks:
         return None
-    command_id = f"fc-lottery-payout-{secrets.token_urlsafe(18)}"
-    db.execute("INSERT INTO bank_bridge_commands (command_id,idempotency_key,server_id,operation,target_user_id,identity_id,amount,currency,reason,status,requested_by,created_at) VALUES (?,?,?,?,?,?,?,'bank',?,'pending',?,?)", (command_id, f"lottery-payout-{secrets.token_urlsafe(18)}", "default", "issue_funds", user_id, str(link["identity_id"]), round(amount, 2), detail, user_id, now_iso()))
-    return command_id
+    payout_group_id = f"fc-lottery-group-{secrets.token_urlsafe(16)}"
+    chunk_count = len(chunks)
+    created_at = now_iso()
+    command_ids: list[str] = []
+    for chunk_number, chunk_amount in enumerate(chunks, start=1):
+        command_id = f"fc-lottery-payout-{secrets.token_urlsafe(18)}"
+        chunk_detail = detail if chunk_count == 1 else f"{detail} ({chunk_number}/{chunk_count})"
+        db.execute(
+            "INSERT INTO bank_bridge_commands (command_id,idempotency_key,server_id,operation,target_user_id,identity_id,amount,currency,reason,status,requested_by,created_at) VALUES (?,?,?,?,?,?,?,'bank',?,'pending',?,?)",
+            (
+                command_id,
+                f"{payout_group_id}-{chunk_number}",
+                "default",
+                "issue_funds",
+                user_id,
+                str(link["identity_id"]),
+                chunk_amount,
+                chunk_detail,
+                user_id,
+                created_at,
+            ),
+        )
+        db.execute(
+            """INSERT INTO lottery_payout_commands
+               (payout_group_id,ticket_type,ticket_id,user_id,command_id,chunk_number,chunk_count,amount,status,created_at)
+               VALUES (?,?,?,?,?,?,?,?,'pending',?)""",
+            (payout_group_id, ticket_type, ticket_id, user_id, command_id, chunk_number, chunk_count, chunk_amount, created_at),
+        )
+        command_ids.append(command_id)
+    return {
+        "payout_group_id": payout_group_id,
+        "primary_command_id": command_ids[0],
+        "command_ids": command_ids,
+        "chunk_count": chunk_count,
+        "amount": round(sum(chunks), 2),
+    }
 
 
 def casino_game_settings_payload(db: Database) -> list[dict[str, Any]]:
@@ -6256,10 +6335,11 @@ def run_due_quick_draws(db: Database, settings: dict[str, Any] | None = None) ->
         )
         if winner:
             prize = float(settings["lottery_quick_draw_prize"] or 5)
-            payout_command = queue_lottery_bank_payout(db, int(winner["user_id"]), prize, f"Lottery Quick Draw payout FCQ-{int(winner['id']):07d}")
-            if payout_command:
-                db.execute("UPDATE lottery_quick_draw_entries SET payout_command_id=? WHERE id=?", (payout_command, winner["id"]))
-            add_message(db, winner["user_id"], "Faircroft Quick Draw Winner", f"Your numbers matched {', '.join(map(str, winning_numbers))}. ${prize:,.2f} payout queued to your linked Arma bank.")
+            payout_batch = queue_lottery_bank_payout(db, int(winner["user_id"]), prize, f"Lottery Quick Draw payout FCQ-{int(winner['id']):07d}", "quick_draw", int(winner["id"]))
+            if payout_batch:
+                db.execute("UPDATE lottery_quick_draw_entries SET payout_command_id=? WHERE id=?", (payout_batch["primary_command_id"], winner["id"]))
+            command_note = f" in {payout_batch['chunk_count']} Bank Bridge commands" if payout_batch and payout_batch["chunk_count"] > 1 else ""
+            add_message(db, winner["user_id"], "Faircroft Quick Draw Winner", f"Your numbers matched {', '.join(map(str, winning_numbers))}. ${prize:,.2f} payout queued{command_note} to your linked Arma bank.")
     ensure_quick_draw(db, settings)
 
 
@@ -6282,10 +6362,11 @@ def run_due_lottery_draws(db: Database) -> None:
         rollover = round(max(0.0, float(funding["available"]) - payout), 2)
         db.execute("""UPDATE lottery_draws SET status='completed',winning_numbers=?,source_fines=?,source_market_fees=?,prize_pool=?,payout_amount=?,rollover_amount=?,winning_entry_id=?,winner_user_id=?,completed_at=? WHERE id=? AND status='scheduled'""", (json.dumps(winning_numbers), funding["fines"], funding["market_fees"], funding["available"], payout, rollover, winner["id"] if winner else None, winner["user_id"] if winner else None, now_iso(), draw["id"]))
         if winner:
-            payout_command = queue_lottery_bank_payout(db, int(winner["user_id"]), payout, f"Lottery weekly payout FCW-{int(winner['id']):07d}")
-            if payout_command:
-                db.execute("UPDATE lottery_entries SET payout_command_id=? WHERE id=?", (payout_command, winner["id"]))
-            add_message(db, winner["user_id"], "Faircroft Lottery Winner", f"Your CIV entry was selected in the Faircroft Lottery. ${payout:,.2f} payout queued to your linked Arma bank.")
+            payout_batch = queue_lottery_bank_payout(db, int(winner["user_id"]), payout, f"Lottery weekly payout FCW-{int(winner['id']):07d}", "weekly", int(winner["id"]))
+            if payout_batch:
+                db.execute("UPDATE lottery_entries SET payout_command_id=? WHERE id=?", (payout_batch["primary_command_id"], winner["id"]))
+            command_note = f" in {payout_batch['chunk_count']} Bank Bridge commands" if payout_batch and payout_batch["chunk_count"] > 1 else ""
+            add_message(db, winner["user_id"], "Faircroft Lottery Winner", f"Your CIV entry was selected in the Faircroft Lottery. ${payout:,.2f} payout queued{command_note} to your linked Arma bank.")
             surprise_prizes = all_rows(db, "SELECT * FROM lottery_special_prizes WHERE status='active' ORDER BY id")
             if surprise_prizes:
                 db.execute("UPDATE lottery_special_prizes SET status='awarded',draw_id=?,winner_user_id=?,awarded_at=? WHERE status='active'", (draw["id"], winner["user_id"], now_iso()))
@@ -12534,7 +12615,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 add_admin_audit(db, int(market_tx["processed_by"]), "market.cash.failed", int(row["target_user_id"]), {"command_id": command_id, "transaction_type": market_tx["transaction_type"], "amount": float(market_tx["amount"] or 0), "result": result})
         lottery_entry = one(db, "SELECT id, user_id FROM lottery_entries WHERE bank_command_id=?", (command_id,))
         lottery_quick_entry = one(db, "SELECT id, user_id FROM lottery_quick_draw_entries WHERE bank_command_id=?", (command_id,))
-        lottery_payout = one(db, "SELECT id, user_id FROM lottery_entries WHERE payout_command_id=?", (command_id,)) or one(db, "SELECT id, user_id FROM lottery_quick_draw_entries WHERE payout_command_id=?", (command_id,))
+        lottery_payout_chunk = one(db, "SELECT * FROM lottery_payout_commands WHERE command_id=?", (command_id,))
+        # A payout_command_id without a payout-group row is a legacy single
+        # command created before bridge-safe lottery chunks were introduced.
+        lottery_payout = None if lottery_payout_chunk else one(db, "SELECT id, user_id FROM lottery_entries WHERE payout_command_id=?", (command_id,)) or one(db, "SELECT id, user_id FROM lottery_quick_draw_entries WHERE payout_command_id=?", (command_id,))
         lottery_ticket = lottery_entry or lottery_quick_entry
         if lottery_ticket:
             table = "lottery_entries" if lottery_entry else "lottery_quick_draw_entries"
@@ -12543,14 +12627,64 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             add_admin_audit(db, int(lottery_ticket["user_id"]), "lottery.ticket.command.result", int(row["target_user_id"]), {"command_id": command_id, "status": status, "ticket_id": lottery_ticket["id"], "result": result})
         if lottery_payout:
             add_admin_audit(db, int(lottery_payout["user_id"]), "lottery.payout.command.result", int(row["target_user_id"]), {"command_id": command_id, "status": status, "ticket_id": lottery_payout["id"], "result": result})
+        if lottery_payout_chunk:
+            chunk_status = "pending" if status == "retry" else status
+            db.execute(
+                "UPDATE lottery_payout_commands SET status=?,completed_at=? WHERE command_id=?",
+                (chunk_status, now_iso() if chunk_status in ("completed", "failed") else None, command_id),
+            )
+            progress = one(
+                db,
+                """SELECT COUNT(*) AS total,
+                          COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END),0) AS completed,
+                          COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),0) AS failed,
+                          COALESCE(SUM(CASE WHEN status='cancelled' THEN 1 ELSE 0 END),0) AS cancelled,
+                          COALESCE(SUM(CASE WHEN status='completed' THEN amount ELSE 0 END),0) AS delivered,
+                          COALESCE(SUM(amount),0) AS payout_total
+                   FROM lottery_payout_commands WHERE payout_group_id=?""",
+                (lottery_payout_chunk["payout_group_id"],),
+            ) or {}
+            total_chunks = int(progress.get("total") or 0)
+            completed_chunks = int(progress.get("completed") or 0)
+            failed_chunks = int(progress.get("failed") or 0)
+            cancelled_chunks = int(progress.get("cancelled") or 0)
+            if total_chunks > 0 and completed_chunks == total_chunks:
+                add_message(
+                    db,
+                    int(lottery_payout_chunk["user_id"]),
+                    "Lottery payout delivered",
+                    f"All {total_chunks} Bank Bridge command{'s' if total_chunks != 1 else ''} completed. ${float(progress.get('payout_total') or 0):,.2f} was delivered to your linked in-game bank.",
+                )
+            add_admin_audit(
+                db,
+                int(row["requested_by"]),
+                "lottery.payout.chunk_result",
+                int(row["target_user_id"]),
+                {
+                    "payout_group_id": lottery_payout_chunk["payout_group_id"],
+                    "ticket_type": lottery_payout_chunk["ticket_type"],
+                    "ticket_id": int(lottery_payout_chunk["ticket_id"]),
+                    "command_id": command_id,
+                    "chunk_number": int(lottery_payout_chunk["chunk_number"]),
+                    "chunk_count": int(lottery_payout_chunk["chunk_count"]),
+                    "amount": float(lottery_payout_chunk["amount"] or 0),
+                    "status": status,
+                    "completed_chunks": completed_chunks,
+                    "failed_chunks": failed_chunks,
+                    "cancelled_chunks": cancelled_chunks,
+                    "delivered": float(progress.get("delivered") or 0),
+                    "result": result,
+                },
+            )
         scratch = one(db, "SELECT id, user_id, cash_amount, promo_id FROM lottery_scratch_cards WHERE bank_command_id=?", (command_id,))
         if scratch:
             if status == "completed":
-                payout_command = None
+                payout_batch = None
                 if float(scratch["cash_amount"] or 0) > 0:
-                    payout_command = queue_lottery_bank_payout(db, int(scratch["user_id"]), float(scratch["cash_amount"]), f"Lottery scratch payout FCS-{int(scratch['id']):07d}")
+                    payout_batch = queue_lottery_bank_payout(db, int(scratch["user_id"]), float(scratch["cash_amount"]), f"Lottery scratch payout FCS-{int(scratch['id']):07d}", "scratch", int(scratch["id"]))
+                payout_command = payout_batch["primary_command_id"] if payout_batch else None
                 db.execute("UPDATE lottery_scratch_cards SET status='revealed', revealed_at=?, payout_command_id=? WHERE id=?", (now_iso(), payout_command, scratch["id"]))
-                add_admin_audit(db, int(scratch["user_id"]), "lottery.scratch.payout.queued" if payout_command else "lottery.scratch.stock.code.released", int(row["target_user_id"]), {"command_id": payout_command or command_id, "ticket_id": scratch["id"], "amount": float(scratch["cash_amount"] or 0), "promo_id": scratch["promo_id"]})
+                add_admin_audit(db, int(scratch["user_id"]), "lottery.scratch.payout.queued" if payout_batch else "lottery.scratch.stock.code.released", int(row["target_user_id"]), {"command_id": payout_command or command_id, "command_ids": payout_batch["command_ids"] if payout_batch else [], "payout_group_id": payout_batch["payout_group_id"] if payout_batch else "", "chunk_count": payout_batch["chunk_count"] if payout_batch else 0, "ticket_id": scratch["id"], "amount": float(scratch["cash_amount"] or 0), "promo_id": scratch["promo_id"]})
             elif status == "failed":
                 db.execute("UPDATE lottery_scratch_cards SET status='rejected' WHERE id=?", (scratch["id"],))
                 if scratch["promo_id"]:
@@ -14136,8 +14270,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         except (TypeError, ValueError): raw_amount = 0
         if not math.isfinite(raw_amount): raw_amount = 0
         amount = round(raw_amount, 2)
-        if tx_type not in ("deposit", "withdrawal") or amount <= 0 or amount > 1_000_000_000:
+        if tx_type not in ("deposit", "withdrawal") or amount <= 0:
             self.error(400, "Choose a valid deposit or withdrawal amount."); return
+        if amount > RAVENHOOD_BANK_COMMAND_MAX_AMOUNT:
+            self.error(400, f"Ravenhood deposits and withdrawals are limited to ${RAVENHOOD_BANK_COMMAND_MAX_AMOUNT:,.0f} per request."); return
         if tx_type == "withdrawal" and not raw_amount.is_integer():
             self.error(400, "Ravenhood withdrawals must be entered in whole dollar amounts with no cents."); return
         link = one(db, "SELECT identity_id FROM arma_account_links WHERE user_id=? AND identity_id IS NOT NULL AND identity_id<>''", (user["id"],))
@@ -19533,6 +19669,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         lottery_purchase = one(db, "SELECT id FROM lottery_entries WHERE bank_command_id=? AND status IN ('awaiting_debit','pending')", (command_id,))
         quick_draw_purchase = one(db, "SELECT id FROM lottery_quick_draw_entries WHERE bank_command_id=? AND status IN ('awaiting_debit','pending')", (command_id,))
         scratch_purchase = one(db, "SELECT id,promo_id FROM lottery_scratch_cards WHERE bank_command_id=? AND status IN ('awaiting_debit','pending')", (command_id,))
+        lottery_payout_chunk = one(db, "SELECT * FROM lottery_payout_commands WHERE command_id=?", (command_id,))
         casino_purchase = one(db, "SELECT id FROM casino_rounds WHERE bank_command_id=? AND status='awaiting_debit'", (command_id,))
         insurance_purchase = one(db, "SELECT id FROM insurance_policies WHERE bank_command_id=? AND status='pending_payment'", (command_id,))
         property_protection_purchase = one(db, "SELECT id FROM insurance_property_protections WHERE bank_command_id=? AND status='pending_payment'", (command_id,))
@@ -19575,15 +19712,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         db.execute("UPDATE sportsbook_bets SET status='rejected',result_json=? WHERE wallet_command_id=? AND status='awaiting_debit'", (json.dumps(result, separators=(",", ":")), command_id))
         db.execute("UPDATE sportsbook_bets SET status='payout_cancelled',result_json=? WHERE payout_command_id=? AND status IN ('won','won_pending_payout')", (json.dumps(result, separators=(",", ":")), command_id))
         db.execute("UPDATE lottery_entries SET status='rejected' WHERE bank_command_id=? AND status IN ('awaiting_debit','pending')", (command_id,))
-        db.execute("UPDATE lottery_entries SET status='payout_cancelled' WHERE payout_command_id=?", (command_id,))
         db.execute("UPDATE lottery_quick_draw_entries SET status='rejected' WHERE bank_command_id=? AND status IN ('awaiting_debit','pending')", (command_id,))
-        db.execute("UPDATE lottery_quick_draw_entries SET status='payout_cancelled' WHERE payout_command_id=?", (command_id,))
         db.execute("""UPDATE lottery_scratch_cards
                       SET status='rejected',surface_state='cancelled',surface_revealed_at=COALESCE(surface_revealed_at,?)
                       WHERE bank_command_id=? AND status IN ('awaiting_debit','pending')""", (cancelled_at, command_id))
         if scratch_purchase and scratch_purchase.get("promo_id"):
             db.execute("UPDATE market_promo_codes SET active=0 WHERE id=?", (scratch_purchase["promo_id"],))
-        db.execute("UPDATE lottery_scratch_cards SET status='payout_cancelled' WHERE payout_command_id=?", (command_id,))
+        if lottery_payout_chunk:
+            db.execute("UPDATE lottery_payout_commands SET status='cancelled',completed_at=? WHERE command_id=?", (cancelled_at, command_id))
+        else:
+            db.execute("UPDATE lottery_entries SET status='payout_cancelled' WHERE payout_command_id=?", (command_id,))
+            db.execute("UPDATE lottery_quick_draw_entries SET status='payout_cancelled' WHERE payout_command_id=?", (command_id,))
+            db.execute("UPDATE lottery_scratch_cards SET status='payout_cancelled' WHERE payout_command_id=?", (command_id,))
         db.execute("UPDATE casino_rounds SET status='cancelled',settled_at=? WHERE bank_command_id=? AND status='awaiting_debit'", (cancelled_at, command_id))
         db.execute("UPDATE casino_rounds SET status='payout_failed',settled_at=? WHERE payout_command_id=? AND status='won_pending_payout'", (cancelled_at, command_id))
         db.execute("UPDATE insurance_policies SET status='payment_cancelled',payment_status='cancelled',updated_at=? WHERE bank_command_id=? AND status='pending_payment'", (cancelled_at, command_id))
@@ -22069,7 +22209,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err); return
         payload = self.read_json(); ticker = str(payload.get("ticker") or "ALL").upper().strip(); name = str(payload.get("event_name") or "Market adjustment").strip()[:100]
-        try: percent = max(-95, min(500, float(payload.get("percent_change") or 0))); duration = max(1, min(10080, int(payload.get("duration_minutes") or 60)))
+        try: percent = max(-500, min(500, float(payload.get("percent_change") or 0))); duration = max(1, min(10080, int(payload.get("duration_minutes") or 60)))
         except (TypeError, ValueError): self.error(400, "Percent and duration are required."); return
         security = None if ticker == "ALL" else one(db, "SELECT * FROM market_securities WHERE ticker=?", (ticker,))
         if ticker != "ALL" and not security: self.error(404, "Ticker not found."); return
@@ -22079,7 +22219,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             db.execute("""INSERT INTO market_price_programs (security_id, event_name, percent_change, duration_minutes, start_price, starts_at, ends_at, status, created_by, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""", (target["id"], name, percent, duration, float(target["price"]), start.isoformat(), end.isoformat(), user["id"], start.isoformat()))
         db.execute("INSERT INTO market_events (event_type, title, detail, created_by, created_at) VALUES ('program', ?, ?, ?, ?)", (name, f"{ticker}: {percent:+.2f}% over {duration} minutes", user["id"], start.isoformat()))
-        self.send_json(201, {"ok": True, "example_one_dollar": round(1 * (1 + percent / 100), 4), "ends_at": end.isoformat()})
+        self.send_json(201, {"ok": True, "example_one_dollar": max(0.01, round(1 * (1 + percent / 100), 4)), "ends_at": end.isoformat()})
 
     def api_dev_market_program_cancel(self, db: Database, user: DbRow | None, program_id: int | None) -> None:
         err = developer_required(user)
@@ -22562,8 +22702,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             resolution = "reconciled"
             if ticket_type == "scratch":
                 cash_amount = float(ticket.get("cash_amount") or 0)
+                payout_batch = None
                 if cash_amount > 0 and not ticket.get("payout_command_id"):
-                    payout_command = queue_lottery_bank_payout(db, int(ticket["user_id"]), cash_amount, f"Lottery scratch payout FCS-{ticket_id:07d}") or ""
+                    payout_batch = queue_lottery_bank_payout(db, int(ticket["user_id"]), cash_amount, f"Lottery scratch payout FCS-{ticket_id:07d}", "scratch", ticket_id)
+                    payout_command = payout_batch["primary_command_id"] if payout_batch else ""
                 db.execute(
                     "UPDATE lottery_scratch_cards SET status='revealed',revealed_at=COALESCE(revealed_at,?),payout_command_id=COALESCE(payout_command_id,?) WHERE id=?",
                     (resolved_at, payout_command or None, ticket_id),

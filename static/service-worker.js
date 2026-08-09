@@ -1,10 +1,10 @@
-const CACHE = "faircroft-rp-v030-market-performance-v28";
+const CACHE = "faircroft-rp-v030-ravenhood-movement-v30";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.3.0-market-performance-v28",
-  "/static/insurance-v7.css?v=0.3.0-market-performance-v28",
+  "/static/styles.css?v=0.3.0-ravenhood-movement-v30",
+  "/static/insurance-v7.css?v=0.3.0-ravenhood-movement-v30",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.3.0-market-performance-v28",
+  "/static/app.js?v=0.3.0-ravenhood-movement-v30",
   "/static/thunderlink-eula-v1.0.txt",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
