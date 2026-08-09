@@ -668,6 +668,8 @@ def sync_shadowhaven_bank_once() -> int:
                 (identity, today_key(), balance, synced_at),
             )
             accepted += 1
+        if not insurance_emergency_is_open(db):
+            refresh_active_insurance_balances(db, synced_at)
     return accepted
 
 
@@ -2224,6 +2226,7 @@ SYSTEM_SETTING_DEFAULTS = {
     "lottery_player_pool_rate_per_minute": "100.00",
     "lottery_player_pool_last_tick": "",
     "insurance_state_of_emergency": "0",
+    "insurance_emergency_declared_at": "",
     "insurance_tiers": "{\"essential\":{\"coverage_percent\":50,\"premium\":3500},\"preferred\":{\"coverage_percent\":70,\"premium\":4250},\"premier\":{\"coverage_percent\":90,\"premium\":5000}}",
     "sportsbook_last_sync_at": "",
     "casino_enabled": "1",
@@ -5607,6 +5610,7 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "lottery_player_pool_rate_per_minute": max(0.0, min(1000000.0, float(raw.get("lottery_player_pool_rate_per_minute") or 100))),
         "lottery_player_pool_last_tick": str(raw.get("lottery_player_pool_last_tick") or "")[:80],
         "insurance_state_of_emergency": str(raw.get("insurance_state_of_emergency") or "0") in ("1", "true", "True", "yes", "on"),
+        "insurance_emergency_declared_at": str(raw.get("insurance_emergency_declared_at") or "")[:80],
         "insurance_tiers": insurance_tiers,
         "sportsbook_last_sync_at": str(raw.get("sportsbook_last_sync_at") or "")[:80],
         "casino_enabled": str(raw.get("casino_enabled") or "1") in ("1", "true", "True", "yes", "on"),
@@ -5637,6 +5641,56 @@ def set_system_setting(db: Database, key: str, value: str) -> None:
         """,
         (key, value, now_iso()),
     )
+
+
+def insurance_emergency_is_open(db: Database) -> bool:
+    row = one(db, "SELECT setting_value FROM system_settings WHERE setting_key='insurance_state_of_emergency' FOR SHARE")
+    return str((row or {}).get("setting_value") or "0").lower() in ("1", "true", "yes", "on")
+
+
+def refresh_active_insurance_balances(db: Database, tracked_at: str | None = None) -> int:
+    """Copy each resident's latest authoritative game-bank balance into active continuity policies."""
+    tracked_at = tracked_at or now_iso()
+    cursor = db.execute(
+        """
+        UPDATE insurance_policies AS policy
+        SET protected_bank_balance = latest.balance,
+            coverage_amount = ROUND(latest.balance * policy.coverage_percent / 100.0, 2),
+            updated_at = ?
+        FROM (
+            SELECT DISTINCT ON (link.user_id)
+                link.user_id,
+                balance.balance
+            FROM arma_account_links AS link
+            JOIN arma_game_bank_balances AS balance ON balance.identity_id = link.identity_id
+            ORDER BY link.user_id, link.linked_at DESC
+        ) AS latest
+        WHERE policy.user_id = latest.user_id
+          AND policy.policy_type = 'compensation'
+          AND policy.status = 'active'
+          AND policy.expires_at > ?
+          AND (
+              policy.protected_bank_balance IS DISTINCT FROM latest.balance
+              OR policy.coverage_amount IS DISTINCT FROM ROUND(latest.balance * policy.coverage_percent / 100.0, 2)
+          )
+        RETURNING policy.id
+        """,
+        (tracked_at, tracked_at),
+    )
+    return len(cursor.fetchall())
+
+
+def initialize_insurance_balance_tracking() -> None:
+    """Reconcile existing policies after deployment without recapturing an established emergency lock."""
+    with conn() as db:
+        settings = get_system_settings(db)
+        if settings["insurance_state_of_emergency"]:
+            if not settings["insurance_emergency_declared_at"]:
+                declared_at = now_iso()
+                refresh_active_insurance_balances(db, declared_at)
+                set_system_setting(db, "insurance_emergency_declared_at", declared_at)
+        else:
+            refresh_active_insurance_balances(db, now_iso())
 
 
 def lottery_funding_snapshot(db: Database, settings: dict[str, Any] | None = None) -> dict[str, float]:
@@ -12879,6 +12933,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             if one(db, "SELECT id FROM arma_account_links WHERE identity_id = ?", (identity,)):
                 linked += 1
             accepted += 1
+        if not insurance_emergency_is_open(db):
+            refresh_active_insurance_balances(db, synced_at)
         self.send_json(200, {"ok": True, "accepted": accepted, "matched_linked_accounts": linked, "synced_at": synced_at})
 
     def api_arma_bank_commands(self, db: Database, query: dict[str, list[str]] | None = None) -> None:
@@ -13577,6 +13633,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         stock_protections = all_rows(db, """SELECT sp.*,p.status AS policy_status,p.policy_number
             FROM insurance_stock_protections sp JOIN insurance_policies p ON p.id=sp.policy_id
             WHERE sp.user_id=? ORDER BY sp.created_at DESC""", (user["id"],))
+        bank = one(db, """SELECT b.balance,b.synced_at FROM arma_account_links l
+            JOIN arma_game_bank_balances b ON b.identity_id=l.identity_id
+            WHERE l.user_id=? ORDER BY l.linked_at DESC LIMIT 1""", (user["id"],))
         owned_properties = [item for item in self.realty_owned_properties(db, int(user["id"])) if item.get("holding_type") == "owned"]
         current_time = utcnow()
         active_protection_values = {
@@ -13593,11 +13652,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 enhanced_count = len(enhanced_values)
                 base_count = max(0, len(owned_properties) - enhanced_count)
                 property_value = base_count * INSURANCE_PROPERTY_BASE_VALUE + sum(enhanced_values)
-                item["bank_coverage_amount"] = float(item.get("coverage_amount") or 0)
+                stored_balance = max(0.0, float(item.get("protected_bank_balance") or 0))
+                live_balance = max(0.0, float(bank["balance"] or 0)) if bank else stored_balance
+                policy_is_current = item["status"] == "active" and parse_iso(item.get("expires_at")) > current_time
+                balance_is_locked = bool(policy_is_current and settings["insurance_state_of_emergency"])
+                insured_balance = live_balance if policy_is_current and not balance_is_locked else stored_balance
+                coverage_percent = float(item.get("coverage_percent") or 0)
+                item["protected_bank_balance"] = insured_balance
+                item["bank_coverage_amount"] = round(insured_balance * coverage_percent / 100.0, 2)
                 item["property_coverage_amount"] = property_value
                 item["coverage_amount"] = round(item["bank_coverage_amount"] + property_value, 2)
                 item["protected_property_count"] = len(owned_properties)
                 item["enhanced_property_count"] = enhanced_count
+                item["coverage_balance_status"] = "emergency_locked" if balance_is_locked else "live" if policy_is_current else "historical"
+                item["emergency_locked_at"] = settings["insurance_emergency_declared_at"] if balance_is_locked else None
             policies.append(item)
         property_payload: list[dict[str, Any]] = []
         for prop in owned_properties:
@@ -13642,12 +13710,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             writeoff["coverage_limit"] = float(eligible_protection.get("coverage_amount") or INSURANCE_STOCK_PROTECTION_LIMIT) if eligible_protection else 0.0
             writeoff["claim"] = claims_by_writeoff.get(claim_key)
             stock_writeoffs.append(writeoff)
-        bank = one(db, """SELECT b.balance,b.synced_at FROM arma_account_links l
-            JOIN arma_game_bank_balances b ON b.identity_id=l.identity_id
-            WHERE l.user_id=? ORDER BY l.linked_at DESC LIMIT 1""", (user["id"],))
         self.send_json(200, {"policies": policies, "claims": [dict(row) for row in claims],
             "bank": dict(bank) if bank else {"balance": 0, "synced_at": None},
             "state_of_emergency": settings["insurance_state_of_emergency"],
+            "emergency_declared_at": settings["insurance_emergency_declared_at"],
             "properties": property_payload,
             "property_protections": [dict(row) for row in protections],
             "everyday_protections": [dict(row) for row in everyday_protections],
@@ -14051,6 +14117,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         except (TypeError, ValueError): character_id = 0
         character = one(db, "SELECT * FROM user_characters WHERE id=? AND user_id=? AND status='active'", (character_id, user["id"]))
         policy_type = str(payload.get("policy_type") or "").strip().lower()
+        if policy_type == "compensation" and settings["insurance_state_of_emergency"]:
+            self.error(409, "New continuity coverage cannot be purchased after a State of Emergency has been declared."); return
         tier = str(payload.get("coverage_tier") or "standard").strip().lower()
         subject = str(payload.get("subject_label") or "").strip()[:120]
         try: term_months = int(payload.get("term_months") or 1)
@@ -14182,11 +14250,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         coverage_source = str(payload.get("coverage_source") or "continuity").strip().lower()
         property_id: str | None = None
         property_name = ""
-        protected_balance = max(current_balance, float(policy.get("protected_bank_balance") or 0))
+        protected_balance = current_balance
         coverage_percent = float(policy.get("coverage_percent") or {"essential":50,"standard":70,"preferred":70,"premier":90}.get(policy["coverage_tier"], 0))
         if incident_type == "server_reset":
             if not settings["insurance_state_of_emergency"]:
                 self.error(409, "Continuity claims require a declared State of Emergency."); return
+            protected_balance = max(0.0, float(policy.get("protected_bank_balance") or 0))
             if len(summary) < 20 or not bool(payload.get("confirmed_reset")):
                 self.error(400, "Confirm the reset or wipe and provide at least 20 characters of claim details."); return
             if one(db, "SELECT id FROM insurance_claims WHERE policy_id=? AND incident_type='server_reset' AND status IN ('pending','approved')", (policy_id,)):
@@ -15014,7 +15083,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             settled += 1
         return settled
 
-    def market_payload(self, db: Database, user: DbRow, history_ticker: str = "", history_range: str = "1D") -> dict[str, Any]:
+    def market_payload(self, db: Database, user: DbRow, history_ticker: str = "", history_range: str = "LIVE") -> dict[str, Any]:
         settings = get_system_settings(db)
         account = one(db, "SELECT * FROM market_accounts WHERE user_id = ?", (user["id"],))
         securities = all_rows(db, "SELECT * FROM market_securities WHERE active = 1 ORDER BY security_type, ticker")
@@ -15026,12 +15095,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         pending_withdrawal_amount = 0.0
         available_withdrawal_amount = 0.0
         requested_ticker = str(history_ticker or "").upper().strip()[:12]
-        requested_range = str(history_range or "1D").upper().strip()
-        if requested_range not in {"1D", "1W", "1M", "1Y"}:
-            requested_range = "1D"
-        history_days = {"1D": 1, "1W": 7, "1M": 30, "1Y": 365}[requested_range]
-        history_buckets = {"1D": 192, "1W": 224, "1M": 320, "1Y": 480}[requested_range]
-        history_start = (utcnow() - dt.timedelta(days=history_days)).isoformat()
+        requested_range = str(history_range or "LIVE").upper().strip()
+        if requested_range not in {"LIVE", "15M", "1H", "1D", "1W", "1M", "1Y"}:
+            requested_range = "LIVE"
+        history_seconds = {"LIVE": 300, "15M": 900, "1H": 3600, "1D": 86400, "1W": 604800, "1M": 2592000, "1Y": 31536000}[requested_range]
+        history_buckets = {"LIVE": 120, "15M": 180, "1H": 180, "1D": 288, "1W": 224, "1M": 320, "1Y": 480}[requested_range]
+        history_start = (utcnow() - dt.timedelta(seconds=history_seconds)).isoformat()
         history_end = utcnow().isoformat()
         history_security = next((row for row in securities if str(row["ticker"]).upper() == requested_ticker), securities[0] if securities else None)
         selected_ticker = str(history_security["ticker"]) if history_security else ""
@@ -15211,7 +15280,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err); return
         history_ticker = str((query.get("ticker") or [""])[0])
-        history_range = str((query.get("range") or ["1D"])[0])
+        history_range = str((query.get("range") or ["LIVE"])[0])
         self.send_json(200, self.market_payload(db, user, history_ticker, history_range))
 
     def api_wallstreet_create_account(self, db: Database, user: DbRow | None) -> None:
@@ -15281,7 +15350,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         security = one(db, "SELECT * FROM market_securities WHERE ticker=? AND active=1 FOR UPDATE", (ticker,))
         if not account or not security or side not in ("buy", "sell") or quantity <= 0:
             self.error(400, "Valid account, ticker, side, and quantity are required."); return
-        price = float(security["price"]); gross = round(price * quantity, 2); fee = round(gross * settings["market_trade_fee_percent"] / 100, 2)
+        price = float(security["price"]); raw_gross = price * quantity
+        if raw_gross < 0.01:
+            minimum_quantity = max(0.000001, math.ceil((0.01 / max(price, 0.000001)) * 1_000_000) / 1_000_000)
+            self.error(400, f"Fractional orders must be worth at least $0.01. Enter at least {minimum_quantity:.6f} shares at the current price."); return
+        gross = round(raw_gross, 2); fee = round(gross * settings["market_trade_fee_percent"] / 100, 2)
         holding = one(db, "SELECT * FROM market_holdings WHERE account_id=? AND security_id=?", (account["id"], security["id"]))
         cash = float(account["cash_balance"] or 0)
         if side == "buy":
@@ -21498,6 +21571,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "settings": {
                     "review_mode": "manual",
                     "state_of_emergency": settings["insurance_state_of_emergency"],
+                    "emergency_declared_at": settings["insurance_emergency_declared_at"],
                     "tiers": settings["insurance_tiers"],
                 },
                 "stats": {key: float(value or 0) if key in {"exposure", "paid_total"} else int(value or 0) for key, value in claim_stats.items()},
@@ -22551,7 +22625,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 },
                 "insurance_claims": {
                     "claims": [dict(row) for row in insurance_claims],
-                    "settings": {"review_mode": "manual", "state_of_emergency": system_settings["insurance_state_of_emergency"], "tiers": system_settings["insurance_tiers"]},
+                    "settings": {"review_mode": "manual", "state_of_emergency": system_settings["insurance_state_of_emergency"], "emergency_declared_at": system_settings["insurance_emergency_declared_at"], "tiers": system_settings["insurance_tiers"]},
                     "stats": {key: float(value or 0) if key in {"exposure","paid_total"} else int(value or 0)
                               for key, value in insurance_claim_stats.items()},
                 },
@@ -22991,6 +23065,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403 if user else 401, err); return
         payload = self.read_json()
         state_of_emergency = str(payload.get("state_of_emergency") or "0").lower() in ("1", "true", "yes", "on")
+        one(db, "SELECT setting_value FROM system_settings WHERE setting_key='insurance_state_of_emergency' FOR UPDATE")
+        existing = get_system_settings(db)
+        was_emergency = bool(existing["insurance_state_of_emergency"])
+        existing_declared_at = str(existing.get("insurance_emergency_declared_at") or "")
         tiers = {}
         for name, fallback in (("essential", (50, 3500)), ("preferred", (70, 4250)), ("premier", (90, 5000))):
             try: coverage = float(payload.get(f"{name}_coverage_percent") or fallback[0])
@@ -23000,10 +23078,26 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             if not (1 <= coverage <= 100 and 0.01 <= premium <= 1_000_000_000):
                 self.error(400, "Coverage must be 1–100% and premiums must be positive."); return
             tiers[name] = {"coverage_percent": round(coverage, 2), "premium": round(premium, 2)}
+        changed_policy_count = 0
+        if state_of_emergency and (not was_emergency or not existing_declared_at):
+            declared_at = now_iso()
+            changed_policy_count = refresh_active_insurance_balances(db, declared_at)
+        elif state_of_emergency:
+            declared_at = existing_declared_at
+        else:
+            declared_at = ""
         set_system_setting(db, "insurance_state_of_emergency", "1" if state_of_emergency else "0")
+        set_system_setting(db, "insurance_emergency_declared_at", declared_at)
+        if was_emergency and not state_of_emergency:
+            changed_policy_count = refresh_active_insurance_balances(db, now_iso())
         set_system_setting(db, "insurance_tiers", json.dumps(tiers, separators=(",", ":"), sort_keys=True))
-        add_admin_audit(db, int(user["id"]), "insurance.settings.updated", details={"review_mode": "manual", "state_of_emergency": state_of_emergency, "tiers": tiers})
-        self.send_json(200, {"ok": True, "review_mode": "manual", "state_of_emergency": state_of_emergency, "tiers": tiers})
+        add_admin_audit(db, int(user["id"]), "insurance.settings.updated", details={
+            "review_mode": "manual", "previous_state_of_emergency": was_emergency,
+            "state_of_emergency": state_of_emergency, "emergency_declared_at": declared_at,
+            "updated_policy_count": changed_policy_count, "tiers": tiers,
+        })
+        self.send_json(200, {"ok": True, "review_mode": "manual", "state_of_emergency": state_of_emergency,
+            "emergency_declared_at": declared_at, "updated_policy_count": changed_policy_count, "tiers": tiers})
 
     def api_dev_insurance_claim(self, db: Database, user: DbRow | None, claim_id: int) -> None:
         err = developer_required(user)
@@ -26663,6 +26757,10 @@ def main() -> None:
             time.sleep(min(2 * attempt, 15))
     if not schema_ready:
         raise RuntimeError("Database remained unavailable after startup retries")
+    try:
+        initialize_insurance_balance_tracking()
+    except Exception as exc:
+        print(f"Insurance balance tracking initialization failed: {type(exc).__name__}: {exc}")
     threading.Thread(target=shadowhaven_bank_sync_worker, name="shadowhaven-bank-sync", daemon=True).start()
     threading.Thread(
         target=shadowhaven_reputation_sync_worker,

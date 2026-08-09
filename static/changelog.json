@@ -15,24 +15,30 @@
         "Added casino-only account restrictions, bulk pending-command recovery controls, command resend actions, and clearer Bank Bridge status filtering for authorized staff.",
         "Added configurable Lottery ticket pricing, Quick Pick purchases, rollover jackpots, expanded purchase allowances, pending-ticket controls, and split payouts for awards above the per-command bridge limit.",
         "Added Faircroft Continuity plan terms, optional everyday-loss protection, enhanced owned-property protection, stock-loss protection, manual claims, policy cancellation, and official resident insurance certificates.",
+        "Added audited emergency coverage locks that freeze each active continuity policy at its latest synchronized in-game bank balance when a State of Emergency is declared.",
         "Added mandatory EULA, Terms of Use, Acceptable Use, and Privacy acceptance tracking for new and existing accounts with a Developer Tools compliance ledger."
       ],
       "changed": [
+        "Changed Ravenhood chart navigation to Live, 15-minute, 1-hour, and 1-day recorded windows with independently filterable close, EMA, VWAP, and volatility-band series.",
         "Rebuilt the Ravenhood live price desk around continuous recorded market movement so authentic scheduled spikes, crashes, and recoveries remain visible at every supported range.",
         "Expanded the Ravenhood order ticket with live share-cost, commission, and total-order estimates before execution and whole-dollar withdrawal enforcement.",
         "Modernized the Faircroft Casino floor, game navigation, result animations, wager history, and operational controls while keeping internal return and house-performance metrics restricted to staff.",
         "Modernized Lottery, Insurance, Statistics, Sportsbook, Banking Settings, and Developer Tools layouts for clearer navigation, mobile behavior, and faster read-only loading.",
         "Changed Insurance claims to authorized manual review and approval, including multi-command payouts when approved compensation exceeds the Bank Bridge command limit.",
+        "Changed Continuity coverage to follow authoritative game-bank synchronization throughout the policy term, then resume live tracking after an emergency closes.",
         "Changed RP OS command protections to limit user-originated outstanding purchases without throttling valid Bank Bridge delivery after the player becomes available."
       ],
       "fixed": [
+        "Fixed Ravenhood fractional-share order previews rounding stock subtotal, commission, and total cost or proceeds to zero before display.",
         "Fixed Ravenhood history flattening or hiding genuine price spikes and drops during long-range sampling.",
         "Fixed market charts displaying disconnected vertical price bars, synthetic low-price points, and range buttons that did not retain the selected recorded period.",
+        "Fixed the Ravenhood Market Direction signal becoming oversized or obscured by persistent footer controls in full-screen layouts.",
         "Fixed excessive read-only Developer Tools requests competing for PostgreSQL connection slots during background market, SFTP, and presence synchronization.",
         "Fixed Lottery Scratch navigation bypassing purchase limits, stale pending tickets leaving accounts locked, and cash prizes displaying stock-code redemption instructions.",
         "Fixed command-ledger status counters and pending-command controls not opening their matching Completed, Failed, Cancelled, or Pending records.",
         "Fixed cancelled or failed commerce commands leaving the originating insurance, casino, lottery, or market purchase permanently reserved.",
-        "Fixed Insurance add-on confirmation prompts appearing beneath the workspace and blocking residents from modifying existing policies."
+        "Fixed Insurance add-on confirmation prompts appearing beneath the workspace and blocking residents from modifying existing policies.",
+        "Fixed Continuity policies remaining limited to the bank balance recorded when the resident originally purchased the plan."
       ],
       "removed": [
         "Removed decorative browser-generated market forecasts that could disagree with recorded Ravenhood prices.",
