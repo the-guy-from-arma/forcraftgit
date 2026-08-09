@@ -5710,12 +5710,12 @@ def bank_activity_payload(
     service_filter = requested_service if requested_service in allowed_services else "all"
     service_case = """
         CASE
-          WHEN command_id LIKE 'fc-lottery-%' OR LOWER(reason) LIKE 'lottery %' THEN 'lottery'
-          WHEN command_id LIKE 'fc-casino-%' OR LOWER(reason) LIKE 'casino %' THEN 'casino'
-          WHEN command_id LIKE 'fc-sports-%' OR LOWER(reason) LIKE 'sportsbook %' THEN 'sportsbook'
-          WHEN command_id LIKE 'fc-insurance-%' OR LOWER(reason) LIKE 'insurance %' THEN 'insurance'
-          WHEN command_id LIKE 'fc-market-%' OR LOWER(reason) LIKE 'ravenhood %' THEN 'ravenhood'
-          WHEN command_id LIKE 'fc-bank-%' THEN 'administration'
+          WHEN command_id LIKE 'fc-lottery-%%' OR LOWER(reason) LIKE 'lottery %%' THEN 'lottery'
+          WHEN command_id LIKE 'fc-casino-%%' OR LOWER(reason) LIKE 'casino %%' THEN 'casino'
+          WHEN command_id LIKE 'fc-sports-%%' OR LOWER(reason) LIKE 'sportsbook %%' THEN 'sportsbook'
+          WHEN command_id LIKE 'fc-insurance-%%' OR LOWER(reason) LIKE 'insurance %%' THEN 'insurance'
+          WHEN command_id LIKE 'fc-market-%%' OR LOWER(reason) LIKE 'ravenhood %%' THEN 'ravenhood'
+          WHEN command_id LIKE 'fc-bank-%%' THEN 'administration'
           ELSE 'other'
         END
     """
