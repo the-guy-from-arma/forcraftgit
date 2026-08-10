@@ -46,6 +46,14 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 DATABASE_MAX_CONNECTIONS = max(2, int(os.environ.get("DATABASE_MAX_CONNECTIONS", "5")))
 DATABASE_CONNECT_TIMEOUT_SECONDS = max(3, int(os.environ.get("DATABASE_CONNECT_TIMEOUT_SECONDS", "10")))
 DATABASE_CONNECTION_SEMAPHORE = threading.BoundedSemaphore(DATABASE_MAX_CONNECTIONS)
+BACKGROUND_DATABASE_MAX_CONNECTIONS = max(
+    1,
+    min(
+        int(os.environ.get("BACKGROUND_DATABASE_MAX_CONNECTIONS", "1")),
+        max(1, DATABASE_MAX_CONNECTIONS - 1),
+    ),
+)
+BACKGROUND_DATABASE_SEMAPHORE = threading.BoundedSemaphore(BACKGROUND_DATABASE_MAX_CONNECTIONS)
 SHADOWHAVEN_SFTP_SESSION_SEMAPHORE = threading.BoundedSemaphore(1)
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-before-production")
 COOKIE_NAME = "rp_session"
@@ -195,6 +203,11 @@ CASINO_MAX_QUEUED_ROUNDS = 5
 LOTTERY_MAX_OPEN_TICKETS = 50
 CASINO_WAGER_REQUEST_TIMES: dict[str, float] = {}
 CASINO_WAGER_REQUEST_LOCK = threading.Lock()
+SESSION_AUTO_VERIFY_INTERVAL_SECONDS = 60
+SESSION_VEHICLE_SYNC_INTERVAL_SECONDS = 300
+SESSION_MAINTENANCE_LOCK = threading.Lock()
+SESSION_AUTO_VERIFY_LAST_CHECK = 0.0
+SESSION_VEHICLE_SYNC_LAST_CHECKS: dict[int, float] = {}
 
 
 def now_iso() -> str:
@@ -481,6 +494,41 @@ def conn() -> Database:
     return Database()
 
 
+class BackgroundDatabase:
+    """Serialize worker database work so interactive requests retain capacity."""
+
+    def __init__(self) -> None:
+        self.database: Database | None = None
+        self._background_slot_acquired = False
+
+    def __enter__(self) -> Database:
+        self._background_slot_acquired = BACKGROUND_DATABASE_SEMAPHORE.acquire(
+            timeout=DATABASE_CONNECT_TIMEOUT_SECONDS
+        )
+        if not self._background_slot_acquired:
+            raise RuntimeError("Background database lane is busy; this worker cycle was deferred")
+        try:
+            self.database = Database()
+            return self.database.__enter__()
+        except Exception:
+            BACKGROUND_DATABASE_SEMAPHORE.release()
+            self._background_slot_acquired = False
+            raise
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        try:
+            if self.database is not None:
+                self.database.__exit__(exc_type, exc, tb)
+        finally:
+            if self._background_slot_acquired:
+                BACKGROUND_DATABASE_SEMAPHORE.release()
+                self._background_slot_acquired = False
+
+
+def background_conn() -> BackgroundDatabase:
+    return BackgroundDatabase()
+
+
 def one(db: Database, sql: str, params: tuple[Any, ...] = ()) -> DbRow | None:
     return db.execute(sql, params).fetchone()
 
@@ -626,7 +674,7 @@ def sync_shadowhaven_bank_once() -> int:
         raise RuntimeError("BankManagerComponent contained no balances")
     synced_at = now_iso()
     accepted = 0
-    with conn() as db:
+    with background_conn() as db:
         for identity_id, raw_balance in balances.items():
             identity = str(identity_id or "").strip()[:160]
             if not identity:
@@ -725,7 +773,7 @@ def sync_shadowhaven_reputation_once() -> int:
         transport.close()
     records, source_version = extract_shadowhaven_reputation_data(payload)
     synced_at = now_iso()
-    with conn() as db:
+    with background_conn() as db:
         db.execute("DELETE FROM arma_game_reputation")
         for player_key, reputation in records:
             db.execute(
@@ -904,7 +952,7 @@ def sync_shadowhaven_camera_events_once() -> int:
         transport.close()
     records = extract_shadowhaven_camera_events(payload)
     synced_at = now_iso()
-    with conn() as db:
+    with background_conn() as db:
         for record in records:
             db.execute(
                 """
@@ -1007,7 +1055,7 @@ def sync_shadowhaven_anticheat_once() -> tuple[int, int]:
     accepted_groups = 0
     active_json_locked_uids: set[str] = set()
     current_json_uids: set[str] = set()
-    with conn() as db:
+    with background_conn() as db:
         db.execute("DELETE FROM anticheat_events WHERE source_file = ?", (SHADOWHAVEN_ANTICHEAT_DATABASE_FILE[:255],))
         for player in players:
             if not isinstance(player, dict):
@@ -1266,7 +1314,7 @@ def summarize_persistence_record(category: str, record_id: str, payload: Any) ->
 def upsert_persistence_record_batch(records: list[tuple[Any, ...]]) -> None:
     if not records:
         return
-    with conn() as db:
+    with background_conn() as db:
         for record in records:
             db.execute(
                 """
@@ -1363,7 +1411,7 @@ def sync_shadowhaven_persistence_once() -> tuple[int, dict[str, int]]:
         transport.close()
 
     upsert_persistence_record_batch(records)
-    with conn() as db:
+    with background_conn() as db:
         # A complete scan is an authoritative snapshot. Prune files that are no
         # longer present so records from a retired server cannot survive forever.
         if scan_complete:
@@ -1517,7 +1565,7 @@ def sync_shadowhaven_properties_once() -> int:
     if not read_sources:
         raise RuntimeError("No TBS Property Mod files could be read: " + "; ".join(read_errors[:6]))
     synced_at = now_iso()
-    with conn() as db:
+    with background_conn() as db:
         for source_path in read_sources:
             db.execute("DELETE FROM game_property_records WHERE source_file = ?", (source_path[:255],))
         for source_path, record in records_by_source:
@@ -4427,6 +4475,7 @@ def ensure_migrations(db: Database) -> None:
         """
     )
     db.execute("CREATE INDEX IF NOT EXISTS idx_market_price_history_security_time ON market_price_history(security_id, recorded_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_market_price_history_lookup ON market_price_history(security_id, recorded_at DESC, id DESC)")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS market_index_funds (
@@ -5414,12 +5463,14 @@ def ensure_migrations(db: Database) -> None:
     )
     db.execute("CREATE INDEX IF NOT EXISTS arma_link_codes_code_idx ON arma_link_codes (code)")
     db.execute("CREATE INDEX IF NOT EXISTS arma_link_codes_status_idx ON arma_link_codes (status)")
+    db.execute("CREATE INDEX IF NOT EXISTS arma_account_links_uid_idx ON arma_account_links (uid)")
     db.execute("CREATE INDEX IF NOT EXISTS arma_activity_logs_user_idx ON arma_activity_logs (user_id)")
     db.execute("CREATE INDEX IF NOT EXISTS anticheat_events_player_idx ON anticheat_events (player_uid, event_time DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS anticheat_alt_members_uid_idx ON anticheat_alt_members (uid)")
     db.execute("CREATE INDEX IF NOT EXISTS anticheat_live_sessions_heartbeat_idx ON anticheat_live_sessions (last_heartbeat_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS anticheat_profile_locks_uid_idx ON anticheat_profile_locks (player_uid, grey_screened_at DESC)")
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS anticheat_profile_locks_active_uid_idx ON anticheat_profile_locks (player_uid) WHERE cleared_at IS NULL")
+    db.execute("CREATE INDEX IF NOT EXISTS anticheat_profile_locks_active_user_idx ON anticheat_profile_locks (linked_user_id, grey_screened_at DESC) WHERE cleared_at IS NULL")
     db.execute("CREATE INDEX IF NOT EXISTS game_persistence_category_idx ON game_persistence_records (category, synced_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS game_persistence_record_idx ON game_persistence_records (record_id)")
     db.execute("CREATE INDEX IF NOT EXISTS arma_game_reputation_player_key_idx ON arma_game_reputation (LOWER(player_key))")
@@ -5427,6 +5478,9 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS account_sanctions_active_user_idx ON account_sanctions (user_id, sanction_type, starts_at, expires_at) WHERE revoked_at IS NULL")
     db.execute("CREATE INDEX IF NOT EXISTS account_warnings_user_idx ON account_internal_warnings (user_id, created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS admin_audit_logs_created_idx ON admin_audit_logs (created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS messages_unread_recipient_idx ON messages (recipient_id, created_at DESC) WHERE read_at IS NULL")
+    db.execute("CREATE INDEX IF NOT EXISTS dmv_vehicles_user_source_idx ON dmv_vehicles (user_id, source, source_record_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS market_writeoffs_account_notice_idx ON market_security_writeoffs (account_id, notice_acknowledged_at, created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS bank_bridge_commands_created_idx ON bank_bridge_commands (created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS bank_bridge_commands_user_activity_idx ON bank_bridge_commands (target_user_id, created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS user_characters_active_user_idx ON user_characters (user_id, is_active, updated_at DESC)")
@@ -7170,7 +7224,7 @@ def apply_market_price_programs(db: Database) -> int:
 def market_automation_worker() -> None:
     while True:
         try:
-            with conn() as db:
+            with background_conn() as db:
                 apply_market_price_programs(db)
                 settings = get_system_settings(db)
                 current = utcnow()
@@ -7306,7 +7360,7 @@ def run_due_lottery_draws(db: Database) -> None:
 def lottery_worker() -> None:
     while True:
         try:
-            with conn() as db:
+            with background_conn() as db:
                 settings = get_system_settings(db)
                 run_lottery_player_pool_tick(db, settings)
                 run_due_lottery_draws(db)
@@ -7356,8 +7410,8 @@ def auto_license_stats(db: Database, settings: dict[str, Any] | None = None) -> 
     }
 
 
-def apply_auto_verification(db: Database) -> int:
-    settings = get_system_settings(db)
+def apply_auto_verification(db: Database, settings: dict[str, Any] | None = None) -> int:
+    settings = settings or get_system_settings(db)
     if not settings["autopilot_verify_enabled"]:
         return 0
     cutoff = (utcnow() - dt.timedelta(minutes=int(settings["autopilot_verify_minutes"]))).isoformat()
@@ -7391,6 +7445,33 @@ def apply_auto_verification(db: Database) -> int:
             f"System autopilot verified your civilian profile after {settings['autopilot_verify_minutes']} minutes.",
         )
     return len(rows)
+
+
+def apply_auto_verification_for_session(db: Database, settings: dict[str, Any]) -> int:
+    """Run global verification maintenance at most once per process each minute."""
+    global SESSION_AUTO_VERIFY_LAST_CHECK
+    current = time.monotonic()
+    with SESSION_MAINTENANCE_LOCK:
+        if current - SESSION_AUTO_VERIFY_LAST_CHECK < SESSION_AUTO_VERIFY_INTERVAL_SECONDS:
+            return 0
+        SESSION_AUTO_VERIFY_LAST_CHECK = current
+    return apply_auto_verification(db, settings)
+
+
+def sync_linked_vehicles_for_session(db: Database, user_id: int) -> list[dict[str, Any]]:
+    """Avoid repeating persistence-to-DMV reconciliation every 15-second refresh."""
+    current = time.monotonic()
+    with SESSION_MAINTENANCE_LOCK:
+        previous = SESSION_VEHICLE_SYNC_LAST_CHECKS.get(user_id, 0.0)
+        if current - previous < SESSION_VEHICLE_SYNC_INTERVAL_SECONDS:
+            return []
+        SESSION_VEHICLE_SYNC_LAST_CHECKS[user_id] = current
+        if len(SESSION_VEHICLE_SYNC_LAST_CHECKS) > 2000:
+            cutoff = current - SESSION_VEHICLE_SYNC_INTERVAL_SECONDS * 2
+            stale = [key for key, checked_at in SESSION_VEHICLE_SYNC_LAST_CHECKS.items() if checked_at < cutoff]
+            for key in stale:
+                SESSION_VEHICLE_SYNC_LAST_CHECKS.pop(key, None)
+    return sync_linked_vehicles_to_dmv(db, user_id)
 
 
 def apply_auto_license_approval(db: Database) -> int:
@@ -8972,7 +9053,7 @@ def fnn_generation_worker() -> None:
         return
     while True:
         try:
-            with conn() as db:
+            with background_conn() as db:
                 settings = get_system_settings(db)
             if not settings["fnn_autopilot_enabled"]:
                 time.sleep(30)
@@ -8991,7 +9072,7 @@ def fnn_generation_worker() -> None:
             cycle_key = f"{local_now.date().isoformat()}:{due_name}" if due_name else ""
             if cycle_key and cycle_key != settings["fnn_autopilot_last_cycle"]:
                 result = generate_fnn_daily_edition(force=True)
-                with conn() as db:
+                with background_conn() as db:
                     set_system_setting(db, "fnn_autopilot_last_cycle", cycle_key)
                 print(f"FNN autopilot {due_name} cycle status: {result['status']}")
         except Exception as exc:
@@ -9511,6 +9592,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def route_api(self, path: str, query: dict[str, list[str]]) -> None:
+        request_started_at = time.perf_counter()
         method = self.command
         if path == "/api/casino/rounds" and method == "POST":
             retry_after = self.casino_wager_retry_after()
@@ -10120,6 +10202,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             if os.environ.get("DEBUG_ERRORS") == "1":
                 raise
             self.error(500, f"Server error: {exc}")
+        finally:
+            elapsed_ms = (time.perf_counter() - request_started_at) * 1000
+            if elapsed_ms >= 2000:
+                print(f"Slow API request: {method} {path} completed in {elapsed_ms:.0f} ms")
 
     def path_int(self, path: str, index: int) -> int:
         parts = [part for part in path.split("/") if part]
@@ -10259,11 +10345,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if not user:
             self.send_json(200, {"user": None, "apps": []})
             return
-        apply_auto_verification(db)
-        apply_auto_license_approval(db)
         settings = get_system_settings(db)
+        apply_auto_verification_for_session(db, settings)
+        apply_auto_license_approval(db)
         user = one(db, "SELECT * FROM users WHERE id = ?", (user["id"],)) or user
-        sync_linked_vehicles_to_dmv(db, int(user["id"]))
+        sync_linked_vehicles_for_session(db, int(user["id"]))
         block = active_account_block(db, int(user["id"]))
         admin_restriction = active_admin_account_restriction(db, int(user["id"]))
         if block and block["sanction_type"] == "ban":
@@ -27387,7 +27473,7 @@ def sportsbook_sync_worker() -> None:
     while True:
         try:
             if SPORTS_BETTING_ENABLED and SPORTS_DATA_PROVIDER == "kalshi" and KALSHI_MARKET_DATA_ENABLED:
-                with conn() as db:
+                with background_conn() as db:
                     settings = get_system_settings(db)
                     current = utcnow()
                     last_sync = parse_iso(settings["sportsbook_last_sync_at"]) if settings["sportsbook_last_sync_at"] else None
@@ -27411,7 +27497,7 @@ def casino_balance_worker() -> None:
     time.sleep(60)
     while True:
         try:
-            with conn() as db:
+            with background_conn() as db:
                 settings = get_system_settings(db)
                 if settings["casino_autopilot_enabled"]:
                     current = utcnow()

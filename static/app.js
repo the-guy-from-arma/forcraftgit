@@ -6,7 +6,7 @@ const legalPortal = $("#legalPortal");
 const legalFooterLink = $("#legalFooterLink");
 const OS_VERSION = "0.3.1";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
-const SESSION_REFRESH_MS = 15000;
+const SESSION_REFRESH_MS = 30000;
 const pendingMutations = new Map();
 let activeActionConfirm = false;
 let deferredPwaInstallPrompt = null;
@@ -16465,7 +16465,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.1-fcx-cap-v60").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.1-performance-v61").catch(() => {}));
 }
 
 legalFooterLink?.addEventListener("click", () => {
