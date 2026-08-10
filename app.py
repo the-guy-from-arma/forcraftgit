@@ -4475,7 +4475,6 @@ def ensure_migrations(db: Database) -> None:
         """
     )
     db.execute("CREATE INDEX IF NOT EXISTS idx_market_price_history_security_time ON market_price_history(security_id, recorded_at)")
-    db.execute("CREATE INDEX IF NOT EXISTS idx_market_price_history_lookup ON market_price_history(security_id, recorded_at DESC, id DESC)")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS market_index_funds (
