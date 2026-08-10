@@ -25356,8 +25356,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         confirmation = str(payload.get("confirmation") or "").strip().upper()
         if account_id <= 0 or amount <= 0:
             self.error(400, "The seizure amount must be greater than zero."); return
-        if amount > 1_000_000_000:
-            self.error(400, "A single FEC seizure cannot exceed $1,000,000,000."); return
+        if amount > 50_000_000_000:
+            self.error(400, "A single FEC seizure cannot exceed $50,000,000,000."); return
         if len(case_reference) < 3:
             self.error(400, "Enter the FEC case or investigation reference."); return
         if len(reason) < 10:
