@@ -2723,7 +2723,7 @@ function scheduleDevToolsRefresh() {
 
 function wallstreetDataPath() {
   const ticker = String(state.marketTicker || "").trim().toUpperCase();
-  const range = ["LIVE", "15M", "1H", "1D"].includes(state.marketRange) ? state.marketRange : "LIVE";
+  const range = ["LIVE", "15M", "1H", "1D", "1W", "1M", "1Y"].includes(state.marketRange) ? state.marketRange : "LIVE";
   const params = new URLSearchParams({range});
   if (ticker) params.set("ticker", ticker);
   return `/api/wallstreet?${params.toString()}`;
@@ -3205,6 +3205,9 @@ function renderInsuranceWorkspace() {
   const propertyTerms = data.property_terms || { base_value: 150000, protected_value: 400000, premium: 50000 };
   const everydayTerms = data.everyday_protection_terms || { premium: 45000, claim_types: ["theft", "fire", "robbery", "car_accident"] };
   const everydayProtections = data.everyday_protections || [];
+  const stockTerms = data.stock_protection_terms || { premium: 20000, coverage_limit: 500000 };
+  const stockProtections = data.stock_protections || [];
+  const stockWriteoffs = data.stock_writeoffs || [];
   const tiers = data.tiers || [];
   const activePolicies = policies.filter(policy => policy.status === "active");
   const activePlan = activePolicies[0] || null;
@@ -5803,6 +5806,25 @@ function normalizeMarketPriceHistory(rows) {
   return deduplicated;
 }
 
+function connectMarketCandles(rows) {
+  return (rows || []).map((row, index, list) => {
+    if (!index) return {...row};
+    const priorClose = Number(list[index - 1]?.price || row.open || row.price);
+    const recordedOpen = Number(row.open || row.price);
+    // A bucket containing one quote has no native body. Its interval still
+    // began at the preceding recorded close, so connect those two verified
+    // prices and retain any real high/low supplied by the API.
+    const open = Number(row.quoteCount || 1) <= 1 ? priorClose : recordedOpen;
+    const close = Number(row.price);
+    return {
+      ...row,
+      open,
+      high: Math.max(Number(row.high), open, close),
+      low: Math.min(Number(row.low), open, close),
+    };
+  });
+}
+
 function renderMarketWorkspace() {
   const data = state.cache.wallstreet;
   if (!data) return `<main class="market-workspace market-v13"><div class="market-v13-loading"><i></i><strong>Opening Ravenhood</strong><span>Connecting to the Faircroft Exchange</span></div></main>`;
@@ -5813,23 +5835,23 @@ function renderMarketWorkspace() {
   const holdings = data.holdings || [];
   const selected = securities.find(item => item.ticker === state.marketTicker) || securities[0] || {};
   state.marketTicker = selected.ticker || "";
-  const range = ["LIVE", "15M", "1H", "1D"].includes(state.marketRange) ? state.marketRange : "LIVE";
+  const range = ["LIVE", "15M", "1H", "1D", "1W", "1M", "1Y"].includes(state.marketRange) ? state.marketRange : "LIVE";
   state.marketRange = range;
   const seriesVisibility = state.marketSeriesVisibility || {price: true, ema: true, vwap: true, band: true};
   const hiddenSeriesClasses = Object.entries(seriesVisibility).filter(([, visible]) => !visible).map(([key]) => `hide-${key}`).join(" ");
   const now = Date.now();
-  const rangeMs = {"LIVE": 3e5, "15M": 9e5, "1H": 36e5, "1D": 864e5}[range];
+  const rangeMs = {"LIVE": 3e5, "15M": 9e5, "1H": 36e5, "1D": 864e5, "1W": 6048e5, "1M": 2592e6, "1Y": 31536e6}[range];
   const currentPrice = Number(selected.price || 0);
   const previousPrice = Number(selected.previous_price || currentPrice);
   const analytics = data.market_analytics?.ticker === selected.ticker && data.market_analytics?.range === range ? data.market_analytics : {};
   const rawHistory = normalizeMarketPriceHistory(data.price_history?.[selected.ticker] || []);
   let history = rawHistory.filter(row => row.time >= now - rangeMs);
-  if (history.length < 2) history = rawHistory.slice(-Math.max(2, {"LIVE": 12, "15M": 30, "1H": 72, "1D": 288}[range]));
+  if (history.length < 2) history = rawHistory.slice(-Math.max(2, {"LIVE": 12, "15M": 30, "1H": 48, "1D": 144, "1W": 168, "1M": 240, "1Y": 360}[range]));
   if (!history.length) history = [
     {price: previousPrice, open: previousPrice, high: previousPrice, low: previousPrice, volume: 0, tradeCount: 0, vwap: null, time: now - rangeMs},
     {price: currentPrice, open: previousPrice, high: Math.max(previousPrice, currentPrice), low: Math.min(previousPrice, currentPrice), volume: 0, tradeCount: 0, vwap: null, time: now},
   ];
-  if (history.length === 1) history.unshift({...history[0], price: previousPrice, open: previousPrice, high: previousPrice, low: previousPrice, time: history[0].time - 3600000});
+  if (history.length === 1) history.unshift({...history[0], price: previousPrice, open: previousPrice, high: previousPrice, low: previousPrice, time: history[0].time - Math.min(60000, rangeMs / 3)});
   if (Math.abs(history.at(-1).price - currentPrice) > .00001 || now - history.at(-1).time > 60000) {
     const latest = history.at(-1);
     history.push({
@@ -5846,6 +5868,7 @@ function renderMarketWorkspace() {
       time: now,
     });
   }
+  history = connectMarketCandles(history);
 
   const prices = history.map(row => row.price);
   const open = Number(history[0]?.open || prices[0] || currentPrice);
@@ -5855,7 +5878,7 @@ function renderMarketWorkspace() {
   const returns = prices.slice(1).map((price, index) => prices[index] ? price / prices[index] - 1 : 0);
   const drift = returns.length ? returns.reduce((sum, value) => sum + value, 0) / returns.length : change / 100;
   const variance = returns.length ? returns.reduce((sum, value) => sum + Math.pow(value - drift, 2), 0) / returns.length : 0;
-  const emaPeriod = range === "LIVE" || range === "15M" ? 8 : 12;
+  const emaPeriod = range === "LIVE" || range === "15M" ? 8 : range === "1M" || range === "1Y" ? 20 : 12;
   const emaAlpha = 2 / (Math.min(emaPeriod, history.length) + 1);
   let emaValue = prices[0] || currentPrice;
   const trendSeries = history.map((row, index) => {
@@ -5874,7 +5897,10 @@ function renderMarketWorkspace() {
   const yFor = value => 286 - ((value - chartMin) / chartSpan) * 238;
   const actualEndX = 1332;
   const declaredStart = Date.parse(data.history_range_start || "");
-  const chartStart = Number.isFinite(declaredStart) && data.history_range === range ? declaredStart : now - rangeMs;
+  const requestedChartStart = Number.isFinite(declaredStart) && data.history_range === range ? declaredStart : now - rangeMs;
+  // If a sparse short window is extended with the latest recorded quotes,
+  // include those timestamps instead of stacking every candle against x=0.
+  const chartStart = Math.min(requestedChartStart, history[0]?.time || requestedChartStart);
   const chartEnd = Math.max(now, history.at(-1)?.time || now);
   const xForTime = value => 28 + Math.max(0, Math.min(1, (value - chartStart) / Math.max(1, chartEnd - chartStart))) * (actualEndX - 28);
   const chartSeries = history.map((row, index) => ({
@@ -5905,7 +5931,7 @@ function renderMarketWorkspace() {
     ...trendSeries.map((point, index) => `${chartSeries[index].x},${yFor(point.lower).toFixed(1)}`).reverse(),
   ].join(" ");
   const vwapPoints = chartSeries.filter(point => Number.isFinite(point.vwap) && point.vwap > 0).map(point => `${point.x},${yFor(point.vwap).toFixed(1)}`).join(" ");
-  const maxCandles = 96;
+  const maxCandles = {"LIVE": 24, "15M": 30, "1H": 48, "1D": 72, "1W": 84, "1M": 96, "1Y": 96}[range] || 72;
   const candleGroupSize = Math.max(1, Math.ceil(history.length / maxCandles));
   const candleGroups = [];
   for (let index = 0; index < history.length; index += candleGroupSize) {
@@ -5927,8 +5953,10 @@ function renderMarketWorkspace() {
     const highY = yFor(candle.high);
     const lowY = yFor(candle.low);
     const bodyY = Math.min(openY, closeY);
-    const bodyHeight = Math.max(1.6, Math.abs(closeY - openY));
-    return `<g class="market-v14-candle ${candle.close >= candle.open ? "up" : "down"}"><line x1="${x.toFixed(1)}" y1="${highY.toFixed(1)}" x2="${x.toFixed(1)}" y2="${lowY.toFixed(1)}"/><rect x="${(x - candleWidth / 2).toFixed(1)}" y="${bodyY.toFixed(1)}" width="${candleWidth.toFixed(1)}" height="${bodyHeight.toFixed(1)}" rx=".7"/></g>`;
+    const bodyHeight = Math.max(2.2, Math.abs(closeY - openY));
+    const tolerance = Math.max(.000001, Math.max(Math.abs(candle.open), Math.abs(candle.close)) * .000001);
+    const direction = Math.abs(candle.close - candle.open) <= tolerance ? "neutral" : candle.close > candle.open ? "up" : "down";
+    return `<g class="market-v14-candle ${direction}"><line class="wick" x1="${x.toFixed(1)}" y1="${highY.toFixed(1)}" x2="${x.toFixed(1)}" y2="${lowY.toFixed(1)}"/><rect class="body" x="${(x - candleWidth / 2).toFixed(1)}" y="${bodyY.toFixed(1)}" width="${candleWidth.toFixed(1)}" height="${bodyHeight.toFixed(1)}" rx=".7"/></g>`;
   }).join("");
   const chartId = `rh-${String(selected.ticker || "market").replace(/[^a-z0-9]/gi, "")}`;
   const chartSeriesPayload = escapeHtml(JSON.stringify(chartSeries));
@@ -5957,7 +5985,11 @@ function renderMarketWorkspace() {
   const lastRecordedAt = history.at(-1)?.time || now;
   const chartDateOptions = range === "LIVE"
     ? {hour: "numeric", minute: "2-digit", second: "2-digit"}
-    : {month: "short", day: "numeric", hour: "numeric", minute: "2-digit"};
+    : range === "1Y"
+      ? {month: "short", day: "numeric", year: "numeric"}
+      : range === "1W" || range === "1M"
+        ? {month: "short", day: "numeric"}
+        : {month: "short", day: "numeric", hour: "numeric", minute: "2-digit"};
   const chartDate = value => new Date(value).toLocaleString([], chartDateOptions);
   const chartTimeLabels = [
     chartDate(chartStart),
@@ -5992,11 +6024,11 @@ function renderMarketWorkspace() {
       <aside class="market-v13-discovery"><header><small>MARKET PULSE</small><h2>Hot right now</h2></header>${movers.slice(0, 7).map((item, index) => `<button type="button" class="${item.ticker === selected.ticker ? "active" : ""}" data-market-ticker="${escapeHtml(item.ticker)}"><i>${String(index + 1).padStart(2, "0")}</i><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}</small></span><strong>${money(item.price)}<em class="${marketChange(item) >= 0 ? "up" : "down"}">${marketChange(item) >= 0 ? "+" : ""}${marketChange(item).toFixed(2)}%</em></strong></button>`).join("")}</aside>
       <section class="market-v13-stage">
         <header class="market-v13-instrument"><div><small>${escapeHtml(selected.sector || "FAIRCROFT MARKET")} / ${escapeHtml(humanLabel(selected.security_type || "stock"))}</small><h1>${escapeHtml(selected.ticker || "--")}<span>${escapeHtml(selected.name || "Select a listing")}</span></h1><p>${escapeHtml(selected.description || `${selected.name || selected.ticker} is actively traded through Ravenhood.`)}</p></div><aside><small>LIVE QUOTE</small><strong>${money(currentPrice)}</strong><span class="${change >= 0 ? "up" : "down"}">${change >= 0 ? "+" : ""}${change.toFixed(2)}% / ${range}</span></aside></header>
-        <section class="market-v13-chart market-v14-chart"><header><div><small>RECORDED OHLC + VWAP + DYNAMIC EMA</small><h2>${escapeHtml(selected.ticker || "Market")} live price desk</h2><span data-market-live-clock>${range === "LIVE" ? "Live view auto-syncs every 12 seconds" : "Range synchronized"} · hover any visible series for exact data</span></div><nav>${["LIVE", "15M", "1H", "1D"].map(item => `<button type="button" class="${range === item ? "active" : ""}" data-market-range="${item}">${item === "15M" ? "15 min" : item === "1H" ? "1 hour" : item === "1D" ? "1 day" : "Live"}</button>`).join("")}</nav></header>
+        <section class="market-v13-chart market-v14-chart"><header><div><small>RECORDED OHLC + VWAP + DYNAMIC EMA</small><h2>${escapeHtml(selected.ticker || "Market")} live price desk</h2><span data-market-live-clock>${range === "LIVE" ? "Live view auto-syncs every 12 seconds" : "Range synchronized"} · hover any visible series for exact data</span></div><nav>${[["LIVE", "Live"], ["15M", "15 min"], ["1H", "1 hour"], ["1D", "1 day"], ["1W", "1 week"], ["1M", "1 month"], ["1Y", "1 year"]].map(([item, label]) => `<button type="button" class="${range === item ? "active" : ""}" data-market-range="${item}">${label}</button>`).join("")}</nav></header>
           <div class="market-v13-canvas ${change >= 0 ? "positive" : "negative"} ${hiddenSeriesClasses}" data-market-price-chart data-market-points="${chartSeriesPayload}" data-market-ema-period="${emaPeriod}" tabindex="0" aria-label="Interactive ${escapeHtml(selected.ticker || "Market")} price history. Toggle chart series, then hover or use arrow keys to inspect their recorded values.">
             <div class="market-v13-gridlines"></div><div class="market-v13-y-axis"><span>${money(chartMax)}</span><span>${money((chartMax + chartMin) / 2)}</span><span>${money(chartMin)}</span></div>
             <svg viewBox="0 0 1360 320" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="${chartId}-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".24"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient><linearGradient id="${chartId}-band" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#57dca8" stop-opacity=".16"/><stop offset="1" stop-color="#57dca8" stop-opacity=".025"/></linearGradient></defs><polygon class="trend-band" points="${bandPoints}" fill="url(#${chartId}-band)"/><g class="market-series-price"><polygon class="area" points="28,304 ${actualPoints} ${actualEndX},304" fill="url(#${chartId}-area)"/><g class="market-v14-candles">${candleMarkup}</g><polyline class="actual" points="${actualPoints}"/>${spikeMarker}${dropMarker}<circle class="pulse" cx="${actualEndX}" cy="${yFor(currentPrice).toFixed(1)}" r="7"/></g><polyline class="ema-line" points="${trendPoints}"/>${vwapPoints ? `<polyline class="vwap-line" points="${vwapPoints}"/>` : ""}</svg>
-            <div class="market-v14-legend" aria-label="Chart series visibility">${[["price", "Recorded close"], ["ema", `EMA ${emaPeriod}`], ["vwap", vwapValue > 0 ? "Session VWAP" : "VWAP awaiting volume"], ["band", "Volatility band"]].map(([key, label]) => `<button type="button" class="${key} ${seriesVisibility[key] ? "active" : ""}" data-market-series="${key}" aria-pressed="${seriesVisibility[key] ? "true" : "false"}" title="${seriesVisibility[key] ? "Hide" : "Show"} ${escapeHtml(label)}"><i></i>${escapeHtml(label)}</button>`).join("")}</div>
+            <div class="market-v14-legend" aria-label="Chart series visibility">${[["price", "OHLC candles"], ["ema", `EMA ${emaPeriod}`], ["vwap", vwapValue > 0 ? "Session VWAP" : "VWAP awaiting volume"], ["band", "Volatility band"]].map(([key, label]) => `<button type="button" class="${key} ${seriesVisibility[key] ? "active" : ""}" data-market-series="${key}" aria-pressed="${seriesVisibility[key] ? "true" : "false"}" title="${seriesVisibility[key] ? "Hide" : "Show"} ${escapeHtml(label)}"><i></i>${escapeHtml(label)}</button>`).join("")}<span class="market-v14-direction-key" title="Candle direction"><i class="up"></i>Up<i class="down"></i>Down<i class="neutral"></i>Flat</span></div>
             <div class="market-v13-hover-guide" aria-hidden="true"></div><div class="market-v13-hover-dot" aria-hidden="true"></div><aside class="market-v13-tooltip" aria-live="polite"><small data-market-tooltip-symbol>${escapeHtml(selected.ticker || "MARKET")} · RECORDED CANDLE</small><strong data-market-tooltip-price>${money(currentPrice)}</strong><time data-market-tooltip-time>${new Date(lastRecordedAt).toLocaleString()}</time><span data-market-tooltip-change>Current verified price</span><em data-market-tooltip-detail>OHLC and volume available on hover</em></aside>
             <div class="market-v13-chart-labels"><span>${escapeHtml(chartTimeLabels[0])}</span><span>${escapeHtml(chartTimeLabels[1])}</span><span>${escapeHtml(chartTimeLabels[2])}</span></div>
           </div>
@@ -6151,7 +6183,7 @@ function bindMarketWorkspace() {
       }
       if (control.matches("[data-market-range]")) {
         const requestedRange = String(control.dataset.marketRange || "LIVE").toUpperCase();
-        if (!["LIVE", "15M", "1H", "1D"].includes(requestedRange)) return;
+        if (!["LIVE", "15M", "1H", "1D", "1W", "1M", "1Y"].includes(requestedRange)) return;
         state.marketRange = requestedRange;
         render();
         if (state.cache.wallstreet?.history_range === requestedRange) return;
@@ -6246,8 +6278,6 @@ function bindMarketWorkspace() {
       interactivePriceChart.style.setProperty("--market-hover-y", `${y}px`);
       interactivePriceChart.dataset.marketHoverIndex = String(index);
       interactivePriceChart.classList.add("is-hovering");
-      tooltip.classList.toggle("tip-left", x > rect.width * .68);
-      tooltip.classList.toggle("tip-below", y < 105);
       const seriesValue = focusedSeries === "ema" ? Number(point.ema || 0) : focusedSeries === "vwap" ? Number(point.vwap || 0) : focusedSeries === "band" ? (Number(point.upper || 0) + Number(point.lower || 0)) / 2 : Number(point.price || 0);
       if (tooltipSymbol) tooltipSymbol.textContent = focusedSeries === "ema" ? `EMA ${emaPeriod}` : focusedSeries === "vwap" ? "SESSION VWAP" : focusedSeries === "band" ? "VOLATILITY BAND" : "RECORDED CLOSE";
       if (tooltipPrice) tooltipPrice.textContent = focusedSeries === "band" ? `${money(point.lower)} – ${money(point.upper)}` : seriesValue > 0 ? money(seriesValue) : "Awaiting data";
@@ -6270,6 +6300,9 @@ function bindMarketWorkspace() {
         else if (activeSeries.length === 1 && focusedSeries === "band") tooltipDetail.textContent = `Lower ${money(point.lower)} · upper ${money(point.upper)} · EMA center ${money(point.ema)}`;
         else tooltipDetail.textContent = `O ${money(point.open)} · H ${money(point.high)} · L ${money(point.low)} · C ${money(point.price)} · EMA ${money(point.ema)}${pointVwap > 0 ? ` · VWAP ${money(pointVwap)}` : ""} · Band ${money(point.lower)}–${money(point.upper)} · ${volume.toLocaleString(undefined, {maximumFractionDigits: 2})} shares`;
       }
+      tooltip.classList.toggle("tip-left", x > rect.width * .68);
+      const tooltipClearance = Math.max(145, tooltip.offsetHeight + 26);
+      tooltip.classList.toggle("tip-below", y < tooltipClearance);
     };
     const pointFromPointer = event => {
       if (!chartPoints.length) return;
@@ -13104,13 +13137,17 @@ function renderDevMarketSettings(market, users) {
   const scratchPromotions = promotions.filter(p => String(p.campaign_name || "").startsWith("Faircroft Instant Scratch"));
   const activePrograms=programs.filter(program=>program.status==="active");
   const activeMovements=[...new Map(activePrograms.map(program=>[`${program.event_name}|${program.created_at}`,program])).values()];
+  const sessionMode = ["open", "closed"].includes(String(market.manual_override || "")) ? String(market.manual_override) : "schedule";
+  const sessionReason = ({scheduled_open:"Core session",pre_market:"Pre-market",after_hours:"After hours",weekend:"Weekend closure",manual_open:"Force opened",manual_closed:"Force closed"})[market.session_reason] || "Scheduled session";
+  const marketLocalTime = market.local_time ? new Date(market.local_time).toLocaleString(undefined, {weekday:"short", month:"short", day:"numeric", hour:"numeric", minute:"2-digit", timeZone:"America/New_York", timeZoneName:"short"}) : "New York time unavailable";
+  const nextTransition = market.next_transition_at ? new Date(market.next_transition_at).toLocaleString(undefined, {weekday:"short", month:"short", day:"numeric", hour:"numeric", minute:"2-digit", timeZone:"America/New_York", timeZoneName:"short"}) : "Return to schedule to resume automatic transitions";
   const tickerOptions = [`<option value="ALL">Entire market</option>`, ...activeListings.map(x => `<option value="${escapeHtml(x.ticker)}">${escapeHtml(x.ticker)} Â· ${escapeHtml(x.name)}</option>`)].join("");
   return `<div class="stack dev-market-view">
     <section class="dev-card market-automation-control"><div class="dev-card-header"><div><span>VOLATILITY ENGINE</span><h2>Continuous market automation</h2><p>Creates short, mixed price movement across active listings. Gemini can independently read the exchange and apply constrained, audited adjustments on its own cycle.</p></div><strong class="${market.autopilot_enabled ? "green" : "amber"}">${market.autopilot_enabled ? "RUNNING" : "PAUSED"}</strong></div><form id="devMarketAutomationForm" class="form-grid"><label class="dev-certify wide"><input name="autopilot_enabled" type="checkbox" ${market.autopilot_enabled ? "checked" : ""}/> Run recurring volatile market cycles</label><label>Cycle interval<input name="autopilot_interval_minutes" type="number" min="1" max="60" value="${Number(market.autopilot_interval_minutes || 5)}"/><small>Minutes between movement cycles.</small></label><label>Maximum volatility<input name="volatility_percent" type="number" min="0.1" max="15" step="0.1" value="${Number(market.volatility_percent || 3.5)}"/><small>Controls the bounded size of gains and losses.</small></label><label class="dev-certify wide"><input name="gemini_autopilot_enabled" type="checkbox" ${market.gemini_autopilot_enabled ? "checked" : ""} ${market.gemini_configured ? "" : "disabled"}/> Allow Gemini to read the exchange and apply automatic adjustments</label><label>Gemini interval<input name="gemini_interval_minutes" type="number" min="15" max="1440" value="${Number(market.gemini_interval_minutes || 60)}"/><small>Minutes between AI market reviews.</small></label><div class="market-automation-status"><span>LAST VOLATILITY CYCLE<b>${market.autopilot_last_tick ? new Date(market.autopilot_last_tick).toLocaleString() : "Not run"}</b></span><span>LAST GEMINI REVIEW<b>${market.gemini_last_tick ? new Date(market.gemini_last_tick).toLocaleString() : "Not run"}</b></span></div><button class="secondary" type="button" data-market-volatility-cycle>Run volatility cycle now</button><button class="primary">Save automation</button></form></section>
     <div class="dev-view-intro"><div><span>RAVENHOOD EXCHANGE CONTROL</span><h2>Market operations</h2><p>Control the Faircroft market, authorize in-game cash handoffs, and stage exchange price events.</p></div><strong class="${market.market_open ? "green" : "red"}">${market.market_open ? "MARKET OPEN" : "MARKET CLOSED"}</strong></div>
     <section class="market-dev-terminal"><header><span></span><b>RAVENHOOD / MARKET CONTROL LOG</b><em>LIVE EXCHANGE</em></header><div>${(market.events || []).slice(0,8).map(x => `<p><time>${escapeHtml(String(x.created_at || "").slice(11,19))}</time><strong>${escapeHtml(x.title)}</strong><span>${escapeHtml(x.detail)}</span></p>`).join("") || `<p><time>--:--:--</time><strong>Exchange ready</strong><span>No market events have been staged.</span></p>`}</div></section>
     <div class="dev-grid-2">
-      <section class="dev-card"><div class="dev-card-header"><div><span>EXCHANGE POLICY</span><h2>Market and fee controls</h2></div><strong>${money(market.holding_balance || 0)} HELD</strong></div><form id="devMarketSettingsForm" class="form-grid"><label class="dev-certify wide"><input name="market_open" type="checkbox" ${market.market_open ? "checked" : ""}/> Market open for resident trading</label><label>Trade fee %<input name="trade_fee_percent" type="number" min="0" max="10" step="0.01" value="${Number(market.trade_fee_percent || 0)}"/></label><label>Transfer fee %<input name="transfer_fee_percent" type="number" min="0" max="25" step="0.01" value="${Number(market.transfer_fee_percent || 0)}"/></label><label class="dev-certify wide"><input name="ai_enabled" type="checkbox" ${market.ai_enabled ? "checked" : ""}/> Allow Gemini market briefing support</label><button class="primary wide">Save exchange policy</button></form><p class="muted small">Collected trade and transfer fees are displayed above and remain outside the active RP economy.</p></section>
+      <section class="dev-card market-session-control"><div class="dev-card-header"><div><span>TRADING SESSION</span><h2>Exchange clock</h2><p>Ravenhood follows New York core hours, with weekend trading retained for the RP community by default.</p></div><strong class="${market.market_open ? "green" : "red"}">${market.market_open ? "TRADING" : "CLOSED"}</strong></div><div class="market-session-readout"><div><small>SESSION STATE</small><strong>${escapeHtml(sessionReason)}</strong><span>${escapeHtml(marketLocalTime)}</span></div><div><small>AUTOMATIC WINDOW</small><strong>${escapeHtml(market.schedule_open_time || "09:30")} &ndash; ${escapeHtml(market.schedule_close_time || "16:00")}</strong><span>${market.weekends_enabled ? "Every day" : "Monday&ndash;Friday"} &middot; America/New_York</span></div><div><small>NEXT SCHEDULED CHANGE</small><strong>${sessionMode === "schedule" ? (market.market_open ? "Market closes" : "Market opens") : "Manual control active"}</strong><span>${escapeHtml(nextTransition)}</span></div></div><div class="market-session-actions" role="group" aria-label="Market session control"><button type="button" data-market-session-override="open" class="${sessionMode === "open" ? "active open" : ""}" aria-pressed="${sessionMode === "open"}"><b>Force open</b><span>Allow resident orders now</span></button><button type="button" data-market-session-override="closed" class="${sessionMode === "closed" ? "active closed" : ""}" aria-pressed="${sessionMode === "closed"}"><b>Force closed</b><span>Block new resident orders</span></button><button type="button" data-market-session-override="schedule" class="${sessionMode === "schedule" ? "active schedule" : ""}" aria-pressed="${sessionMode === "schedule"}"><b>Use schedule</b><span>Resume automatic hours</span></button></div><form id="devMarketSettingsForm" class="form-grid market-session-form"><label>Daily open<input name="schedule_open_time" type="time" value="${escapeHtml(market.schedule_open_time || "09:30")}" required/><small>New York local time.</small></label><label>Daily close<input name="schedule_close_time" type="time" value="${escapeHtml(market.schedule_close_time || "16:00")}" required/><small>New York local time.</small></label><label>Trade fee %<input name="trade_fee_percent" type="number" min="0" max="10" step="0.01" value="${Number(market.trade_fee_percent || 0)}"/></label><label>Transfer fee %<input name="transfer_fee_percent" type="number" min="0" max="25" step="0.01" value="${Number(market.transfer_fee_percent || 0)}"/></label><label class="dev-certify wide"><input name="weekends_enabled" type="checkbox" ${market.weekends_enabled ? "checked" : ""}/> Keep the same trading hours on Saturday and Sunday</label><label class="dev-certify wide"><input name="ai_enabled" type="checkbox" ${market.ai_enabled ? "checked" : ""}/> Allow Gemini market briefing support</label><button class="primary wide">Save schedule and exchange policy</button></form><p class="muted small">Manual controls stay in effect until Use schedule is selected. Collected fees remain outside the active RP economy.</p></section>
       <section class="dev-card"><div class="dev-card-header"><div><span>PRICE PROGRAM</span><h2>Schedule movement</h2></div><strong>1.00 EXAMPLE</strong></div><form id="devMarketProgramForm" class="form-grid"><label>Security<select name="ticker">${tickerOptions}</select></label><label>RP event<input name="event_name" maxlength="100" required placeholder="Port expansion announcement"/></label><label>Percentage change<input name="percent_change" type="number" min="-500" max="500" step="0.01" required/><small data-market-example>$1.00 becomes $1.00</small></label><label>Duration in minutes<input name="duration_minutes" type="number" min="1" max="10080" value="60" required/></label><button class="primary wide">Launch price program</button></form><div class="market-presets"><button data-market-preset="market_crash">Market crash</button><button data-market-preset="flash_crash">Flash crash</button><button data-market-preset="market_rally">Broad rally</button><button data-market-preset="random_skyrocket">Random skyrocket</button></div></section>
     </div>
     <section class="dev-card market-listing-foundry">
@@ -14267,7 +14304,21 @@ function bindDevWorkspace() {
   $$('[data-dev-gang-action]').forEach(button=>button.addEventListener('click',async()=>{const action=button.dataset.devGangAction;if(action==='delete'&&!confirm('Delete this gang and remove every character from its roster?'))return;try{await api(`/api/dev-tools/gangs/${button.dataset.gangId}`,{method:'PATCH',body:{action}});toast('Gang record updated');await refreshDevTools();}catch(error){toast(error.message);}}));
   $$('[data-dev-gang-limit]').forEach(button=>button.addEventListener('click',async()=>{const limit=prompt('New maximum roster size',button.dataset.currentLimit||'20');if(!limit)return;try{await api(`/api/dev-tools/gangs/${button.dataset.devGangLimit}`,{method:'PATCH',body:{action:'limit',member_limit:limit}});toast('Roster limit updated');await refreshDevTools();}catch(error){toast(error.message);}}));
   $$('[data-dev-gang-member]').forEach(button=>button.addEventListener('click',async()=>{const current=button.dataset.status;const action=prompt('Member action: lock, unlock, or remove',current==='locked'?'unlock':'lock');if(!action)return;try{await api(`/api/dev-tools/gangs/members/${button.dataset.devGangMember}`,{method:'PATCH',body:{action}});toast('Gang member status updated');await refreshDevTools();}catch(error){toast(error.message);}}));
-  $("#devMarketSettingsForm")?.addEventListener("submit", async event => { event.preventDefault(); const form=event.currentTarget; try { await api("/api/dev-tools/market/settings", {method:"PATCH",body:{market_open:form.market_open.checked,ai_enabled:form.ai_enabled.checked,trade_fee_percent:form.trade_fee_percent.value,transfer_fee_percent:form.transfer_fee_percent.value}}); toast("Ravenhood policy saved"); await refreshDevTools(); } catch(error){toast(error.message);} });
+  $("#devMarketSettingsForm")?.addEventListener("submit", async event => { event.preventDefault(); const form=event.currentTarget; try { await api("/api/dev-tools/market/settings", {method:"PATCH",body:{schedule_open_time:form.schedule_open_time.value,schedule_close_time:form.schedule_close_time.value,weekends_enabled:form.weekends_enabled.checked,ai_enabled:form.ai_enabled.checked,trade_fee_percent:form.trade_fee_percent.value,transfer_fee_percent:form.transfer_fee_percent.value}}); toast("Ravenhood schedule and policy saved"); await refreshDevTools(); } catch(error){toast(error.message);} });
+  $$('[data-market-session-override]').forEach(button => button.addEventListener('click', async () => {
+    const mode = button.dataset.marketSessionOverride;
+    const promptText = mode === 'open' ? 'Force Ravenhood open now? Resident buy and sell orders will be allowed until scheduled mode is restored.' : mode === 'closed' ? 'Force Ravenhood closed now? New resident orders will be blocked until scheduled mode is restored.' : '';
+    if (promptText && !confirm(promptText)) return;
+    button.disabled = true;
+    try {
+      await api('/api/dev-tools/market/settings', {method:'PATCH', body:{manual_override:mode}});
+      toast(mode === 'schedule' ? 'Ravenhood returned to its automatic schedule' : `Ravenhood force ${mode}`);
+      await refreshDevTools();
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message);
+    }
+  }));
   $("#devMarketCompanyForm")?.addEventListener("submit", async event => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -16355,7 +16406,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.1-market-chart-controls-v50").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.1-market-candles-v54").catch(() => {}));
 }
 
 legalFooterLink?.addEventListener("click", () => {

@@ -2189,6 +2189,11 @@ SYSTEM_SETTING_DEFAULTS = {
     "admin_tools_access": "{}",
     "ice_restrict_local_data": "1",
     "market_open": "1",
+    "market_schedule_open_time": "09:30",
+    "market_schedule_close_time": "16:00",
+    "market_schedule_timezone": "America/New_York",
+    "market_weekends_enabled": "1",
+    "market_manual_override": "schedule",
     "market_transfer_fee_percent": "1.50",
     "market_trade_fee_percent": "0.25",
     "market_holding_balance": "0.00",
@@ -5429,6 +5434,82 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS cid_internal_affairs_notes_ia_idx ON cid_internal_affairs_notes (ia_id, created_at)")
 
 
+def normalize_market_clock(value: Any, fallback: str) -> str:
+    candidate = str(value or fallback).strip()
+    try:
+        parsed = dt.datetime.strptime(candidate, "%H:%M")
+    except (TypeError, ValueError):
+        parsed = dt.datetime.strptime(fallback, "%H:%M")
+    return parsed.strftime("%H:%M")
+
+
+def market_session_state(raw: dict[str, Any], current_utc: dt.datetime | None = None) -> dict[str, Any]:
+    timezone_name = str(raw.get("market_schedule_timezone") or "America/New_York").strip()[:80]
+    try:
+        market_zone = ZoneInfo(timezone_name)
+    except (KeyError, ValueError):
+        timezone_name = "America/New_York"
+        market_zone = ZoneInfo(timezone_name)
+    current = current_utc or utcnow()
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=dt.timezone.utc)
+    local_now = current.astimezone(market_zone)
+    open_text = normalize_market_clock(raw.get("market_schedule_open_time"), "09:30")
+    close_text = normalize_market_clock(raw.get("market_schedule_close_time"), "16:00")
+    open_clock = dt.datetime.strptime(open_text, "%H:%M").time()
+    close_clock = dt.datetime.strptime(close_text, "%H:%M").time()
+    override = str(raw.get("market_manual_override") or "schedule").strip().lower()
+    if override not in ("schedule", "open", "closed"):
+        override = "schedule"
+    is_weekday = local_now.weekday() < 5
+    weekends_enabled = str(raw.get("market_weekends_enabled") or "1") in ("1", "true", "True", "yes", "on")
+    is_trading_day = is_weekday or weekends_enabled
+    scheduled_open = is_trading_day and open_clock <= local_now.time().replace(tzinfo=None) < close_clock
+    if override == "open":
+        effective_open = True
+        reason = "manual_open"
+    elif override == "closed":
+        effective_open = False
+        reason = "manual_closed"
+    elif not is_trading_day:
+        effective_open = False
+        reason = "weekend"
+    elif local_now.time().replace(tzinfo=None) < open_clock:
+        effective_open = False
+        reason = "pre_market"
+    elif local_now.time().replace(tzinfo=None) >= close_clock:
+        effective_open = False
+        reason = "after_hours"
+    else:
+        effective_open = True
+        reason = "scheduled_open"
+
+    next_transition: dt.datetime | None = None
+    if override == "schedule":
+        if scheduled_open:
+            next_transition = dt.datetime.combine(local_now.date(), close_clock, tzinfo=market_zone)
+        elif is_trading_day and local_now.time().replace(tzinfo=None) < open_clock:
+            next_transition = dt.datetime.combine(local_now.date(), open_clock, tzinfo=market_zone)
+        else:
+            next_date = local_now.date() + dt.timedelta(days=1)
+            while not weekends_enabled and next_date.weekday() >= 5:
+                next_date += dt.timedelta(days=1)
+            next_transition = dt.datetime.combine(next_date, open_clock, tzinfo=market_zone)
+    return {
+        "effective_open": effective_open,
+        "scheduled_open": scheduled_open,
+        "manual_override": override,
+        "open_time": open_text,
+        "close_time": close_text,
+        "timezone": timezone_name,
+        "weekends_enabled": weekends_enabled,
+        "weekends_closed": not weekends_enabled,
+        "reason": reason,
+        "local_time": local_now.isoformat(),
+        "next_transition_at": next_transition.isoformat() if next_transition else "",
+    }
+
+
 def get_system_settings(db: Database) -> dict[str, Any]:
     rows = all_rows(db, "SELECT setting_key, setting_value FROM system_settings")
     raw = {row["setting_key"]: row["setting_value"] for row in rows}
@@ -5537,6 +5618,7 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         scratch_prizes = []
     if not scratch_prizes:
         scratch_prizes = [25.0, 50.0, 75.0, 100.0, 150.0, 250.0, 500.0]
+    market_session = market_session_state(raw)
     return {
         "autopilot_verify_enabled": str(raw.get("autopilot_verify_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "autopilot_verify_minutes": minutes,
@@ -5572,7 +5654,17 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "fnn_autopilot_timezone": str(raw.get("fnn_autopilot_timezone") or "America/New_York")[:80],
         "fnn_autopilot_last_cycle": str(raw.get("fnn_autopilot_last_cycle") or "")[:80],
         "ice_restrict_local_data": str(raw.get("ice_restrict_local_data") or "1") in ("1", "true", "True", "yes", "on"),
-        "market_open": str(raw.get("market_open") or "1") in ("1", "true", "True", "yes", "on"),
+        "market_open": market_session["effective_open"],
+        "market_scheduled_open": market_session["scheduled_open"],
+        "market_manual_override": market_session["manual_override"],
+        "market_schedule_open_time": market_session["open_time"],
+        "market_schedule_close_time": market_session["close_time"],
+        "market_schedule_timezone": market_session["timezone"],
+        "market_weekends_enabled": market_session["weekends_enabled"],
+        "market_weekends_closed": market_session["weekends_closed"],
+        "market_session_reason": market_session["reason"],
+        "market_local_time": market_session["local_time"],
+        "market_next_transition_at": market_session["next_transition_at"],
         "market_transfer_fee_percent": max(0.0, min(25.0, float(raw.get("market_transfer_fee_percent") or 1.5))),
         "market_trade_fee_percent": max(0.0, min(10.0, float(raw.get("market_trade_fee_percent") or 0.25))),
         "market_holding_balance": max(0.0, float(raw.get("market_holding_balance") or 0)),
@@ -15099,7 +15191,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if requested_range not in {"LIVE", "15M", "1H", "1D", "1W", "1M", "1Y"}:
             requested_range = "LIVE"
         history_seconds = {"LIVE": 300, "15M": 900, "1H": 3600, "1D": 86400, "1W": 604800, "1M": 2592000, "1Y": 31536000}[requested_range]
-        history_buckets = {"LIVE": 120, "15M": 180, "1H": 180, "1D": 288, "1W": 224, "1M": 320, "1Y": 480}[requested_range]
+        # Keep short windows dense enough to feel live without splitting nearly
+        # every quote into a one-point bucket. A one-point bucket has no candle
+        # body, which made Live and 15-minute OHLC views look like stray marks.
+        history_buckets = {"LIVE": 20, "15M": 30, "1H": 48, "1D": 144, "1W": 168, "1M": 240, "1Y": 360}[requested_range]
         history_start = (utcnow() - dt.timedelta(seconds=history_seconds)).isoformat()
         history_end = utcnow().isoformat()
         history_security = next((row for row in securities if str(row["ticker"]).upper() == requested_ticker), securities[0] if securities else None)
@@ -21835,6 +21930,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if section == "market-settings":
             payload["market_settings"] = {
                 "market_open": settings["market_open"],
+                "scheduled_open": settings["market_scheduled_open"],
+                "manual_override": settings["market_manual_override"],
+                "schedule_open_time": settings["market_schedule_open_time"],
+                "schedule_close_time": settings["market_schedule_close_time"],
+                "schedule_timezone": settings["market_schedule_timezone"],
+                "weekends_enabled": settings["market_weekends_enabled"],
+                "weekends_closed": settings["market_weekends_closed"],
+                "session_reason": settings["market_session_reason"],
+                "local_time": settings["market_local_time"],
+                "next_transition_at": settings["market_next_transition_at"],
                 "transfer_fee_percent": settings["market_transfer_fee_percent"],
                 "trade_fee_percent": settings["market_trade_fee_percent"],
                 "holding_balance": settings["market_holding_balance"],
@@ -22716,6 +22821,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 },
                 "market_settings": {
                     "market_open": system_settings["market_open"],
+                    "scheduled_open": system_settings["market_scheduled_open"],
+                    "manual_override": system_settings["market_manual_override"],
+                    "schedule_open_time": system_settings["market_schedule_open_time"],
+                    "schedule_close_time": system_settings["market_schedule_close_time"],
+                    "schedule_timezone": system_settings["market_schedule_timezone"],
+                    "weekends_enabled": system_settings["market_weekends_enabled"],
+                    "weekends_closed": system_settings["market_weekends_closed"],
+                    "session_reason": system_settings["market_session_reason"],
+                    "local_time": system_settings["market_local_time"],
+                    "next_transition_at": system_settings["market_next_transition_at"],
                     "transfer_fee_percent": system_settings["market_transfer_fee_percent"],
                     "trade_fee_percent": system_settings["market_trade_fee_percent"],
                     "holding_balance": system_settings["market_holding_balance"],
@@ -23643,12 +23758,45 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err); return
         payload = self.read_json()
+        current_settings = get_system_settings(db)
         try:
-            transfer_fee = max(0, min(25, float(payload.get("transfer_fee_percent") or 0)))
-            trade_fee = max(0, min(10, float(payload.get("trade_fee_percent") or 0)))
+            transfer_fee = max(0, min(25, float(payload.get("transfer_fee_percent", current_settings["market_transfer_fee_percent"]))))
+            trade_fee = max(0, min(10, float(payload.get("trade_fee_percent", current_settings["market_trade_fee_percent"]))))
         except (TypeError, ValueError): self.error(400, "Fees must be numeric."); return
-        if "market_open" in payload:
-            set_system_setting(db, "market_open", "1" if bool(payload.get("market_open")) else "0")
+        manual_override = str(payload.get("manual_override") or "").strip().lower()
+        if not manual_override and "market_open" in payload:
+            requested_open = str(payload.get("market_open") or "").strip().lower() in ("1", "true", "yes", "on")
+            manual_override = "open" if requested_open else "closed"
+        if manual_override:
+            if manual_override not in ("schedule", "open", "closed"):
+                self.error(400, "Market session mode must be schedule, open, or closed."); return
+            set_system_setting(db, "market_manual_override", manual_override)
+            if manual_override in ("open", "closed"):
+                set_system_setting(db, "market_open", "1" if manual_override == "open" else "0")
+        open_time = str(payload.get("schedule_open_time") or "").strip()
+        close_time = str(payload.get("schedule_close_time") or "").strip()
+        if open_time or close_time:
+            open_time = open_time or current_settings["market_schedule_open_time"]
+            close_time = close_time or current_settings["market_schedule_close_time"]
+            try:
+                parsed_open = dt.datetime.strptime(open_time, "%H:%M")
+                parsed_close = dt.datetime.strptime(close_time, "%H:%M")
+                if parsed_open.strftime("%H:%M") != open_time or parsed_close.strftime("%H:%M") != close_time:
+                    raise ValueError
+            except ValueError:
+                self.error(400, "Market times must use the 24-hour HH:MM format."); return
+            open_time = parsed_open.strftime("%H:%M")
+            close_time = parsed_close.strftime("%H:%M")
+            open_clock = parsed_open.time()
+            close_clock = parsed_close.time()
+            if close_clock <= open_clock:
+                self.error(400, "Market close time must be later than its open time."); return
+            set_system_setting(db, "market_schedule_open_time", open_time)
+            set_system_setting(db, "market_schedule_close_time", close_time)
+            set_system_setting(db, "market_schedule_timezone", "America/New_York")
+        if "weekends_enabled" in payload:
+            weekends_enabled = str(payload.get("weekends_enabled") or "").strip().lower() in ("1", "true", "yes", "on")
+            set_system_setting(db, "market_weekends_enabled", "1" if weekends_enabled else "0")
         if "transfer_fee_percent" in payload:
             set_system_setting(db, "market_transfer_fee_percent", str(transfer_fee))
         if "trade_fee_percent" in payload:
@@ -23668,8 +23816,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if "gemini_autopilot_enabled" in payload:
             set_system_setting(db, "market_gemini_autopilot_enabled", "1" if bool(payload.get("gemini_autopilot_enabled")) else "0")
             set_system_setting(db, "market_gemini_interval_minutes", str(gemini_interval))
-        add_admin_audit(db, int(user["id"]), "market.settings.updated", details={"market_open": bool(payload.get("market_open")), "transfer_fee": transfer_fee, "trade_fee": trade_fee})
-        self.send_json(200, {"ok": True})
+        updated_settings = get_system_settings(db)
+        add_admin_audit(db, int(user["id"]), "market.settings.updated", details={"market_open": updated_settings["market_open"], "manual_override": updated_settings["market_manual_override"], "schedule_open_time": updated_settings["market_schedule_open_time"], "schedule_close_time": updated_settings["market_schedule_close_time"], "schedule_timezone": updated_settings["market_schedule_timezone"], "weekends_enabled": updated_settings["market_weekends_enabled"], "transfer_fee": transfer_fee, "trade_fee": trade_fee})
+        self.send_json(200, {"ok": True, "market_session": {"market_open": updated_settings["market_open"], "manual_override": updated_settings["market_manual_override"], "session_reason": updated_settings["market_session_reason"], "local_time": updated_settings["market_local_time"], "next_transition_at": updated_settings["market_next_transition_at"]}})
 
     def api_dev_market_volatility_cycle(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)

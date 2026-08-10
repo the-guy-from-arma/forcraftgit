@@ -6,6 +6,7 @@
       "version": "0.3.1",
       "title": "RP OS 0.3.1 · Markets, Protection and Platform Control",
       "added": [
+        "Added an automatic Ravenhood trading session using configurable New York open and close times, weekend trading by default, an optional weekend closure toggle, and audited Force Open, Force Closed, and Return to Schedule controls.",
         "Added true executed-order VWAP analytics to Ravenhood, including traded volume, trade count, buy and sell flow, and buy-pressure reporting for each selected market range.",
         "Added recorded OHLC market candles, dynamic EMA trend guidance, volatility bands, synchronized spike and drop markers, and exact hover details for price, time, volume, and VWAP.",
         "Added persistent 1-day, 1-week, 1-month, and 1-year Ravenhood views that use recorded quote timestamps instead of rebuilding artificial history in the browser.",
@@ -19,7 +20,7 @@
         "Added mandatory EULA, Terms of Use, Acceptable Use, and Privacy acceptance tracking for new and existing accounts with a Developer Tools compliance ledger."
       ],
       "changed": [
-        "Changed Ravenhood chart navigation to Live, 15-minute, 1-hour, and 1-day recorded windows with independently filterable close, EMA, VWAP, and volatility-band series.",
+        "Changed Ravenhood chart navigation to Live, 15-minute, 1-hour, 1-day, 1-week, 1-month, and 1-year recorded windows with independently filterable close, EMA, VWAP, and volatility-band series.",
         "Rebuilt the Ravenhood live price desk around continuous recorded market movement so authentic scheduled spikes, crashes, and recoveries remain visible at every supported range.",
         "Expanded the Ravenhood order ticket with live share-cost, commission, and total-order estimates before execution and whole-dollar withdrawal enforcement.",
         "Modernized the Faircroft Casino floor, game navigation, result animations, wager history, and operational controls while keeping internal return and house-performance metrics restricted to staff.",
@@ -29,6 +30,10 @@
         "Changed RP OS command protections to limit user-originated outstanding purchases without throttling valid Bank Bridge delivery after the player becomes available."
       ],
       "fixed": [
+        "Fixed Live and 15-minute Ravenhood OHLC candles collapsing into isolated vertical marks by connecting verified bucket opens to the preceding recorded close and preserving true high/low wicks.",
+        "Fixed ambiguous red short-range candles by using a labeled emerald-up, gold-down, and neutral-silver direction system across every market range.",
+        "Fixed the Faircroft Insurance icon failing to open after the latest policy-certificate and Stock Protection upgrade.",
+        "Fixed Ravenhood chart hover prices being clipped when inspecting a quote near the top edge of the graph.",
         "Fixed Ravenhood fractional-share order previews rounding stock subtotal, commission, and total cost or proceeds to zero before display.",
         "Fixed Ravenhood history flattening or hiding genuine price spikes and drops during long-range sampling.",
         "Fixed market charts displaying disconnected vertical price bars, synthetic low-price points, and range buttons that did not retain the selected recorded period.",
