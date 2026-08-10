@@ -6,6 +6,7 @@
       "version": "0.3.1",
       "title": "RP OS 0.3.1 · Markets, Protection and Platform Control",
       "added": [
+        "Added automated Ravenhood order flow so Gemini, volatility cycles, and index NAV movements contribute bounded trades, volume, VWAP, buy pressure, and sell pressure without changing resident cash or holdings.",
         "Added two resident-tradable Ravenhood index funds: the Faircroft Stability Index (FCXS) and Faircroft Volatility Index (FCXV), both using the existing order ticket, buying power, portfolio, and transaction history.",
         "Added automatic index classification and capped constituent weighting based on recorded volatility, quote depth, market capitalization, liquidity, and verified shareholder activity without resetting existing securities or holdings.",
         "Added an Index Operations desk in Developer Tools with live composition, fund capitalization, company market capitalization, manual rebalancing, and per-company inclusion controls.",

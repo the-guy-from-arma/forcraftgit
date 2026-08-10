@@ -4285,6 +4285,25 @@ def ensure_migrations(db: Database) -> None:
     )
     db.execute(
         """
+        CREATE TABLE IF NOT EXISTS market_system_trades (
+            id SERIAL PRIMARY KEY,
+            security_id INTEGER NOT NULL,
+            buy_volume NUMERIC(20,6) NOT NULL DEFAULT 0,
+            sell_volume NUMERIC(20,6) NOT NULL DEFAULT 0,
+            buy_trade_count INTEGER NOT NULL DEFAULT 0,
+            sell_trade_count INTEGER NOT NULL DEFAULT 0,
+            reference_price NUMERIC(14,4) NOT NULL,
+            price_change_percent NUMERIC(10,4) NOT NULL DEFAULT 0,
+            source TEXT NOT NULL,
+            rationale TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (security_id) REFERENCES market_securities(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS market_system_trades_security_time_idx ON market_system_trades(security_id, created_at DESC)")
+    db.execute(
+        """
         CREATE TABLE IF NOT EXISTS market_security_writeoffs (
             id SERIAL PRIMARY KEY,
             security_id INTEGER NOT NULL,
@@ -6772,8 +6791,13 @@ def market_index_candidate_metrics(db: Database) -> list[dict[str, Any]]:
             FROM market_holdings WHERE quantity>0 GROUP BY security_id
         ) position ON position.security_id=s.id
         LEFT JOIN (
-            SELECT security_id,SUM(quantity) AS traded_volume,COUNT(*) AS trade_count
-            FROM market_orders WHERE created_at>=? GROUP BY security_id
+            SELECT security_id,SUM(volume) AS traded_volume,SUM(trade_count) AS trade_count
+            FROM (
+                SELECT security_id,quantity AS volume,1 AS trade_count,created_at FROM market_orders
+                UNION ALL
+                SELECT security_id,buy_volume+sell_volume AS volume,
+                       buy_trade_count+sell_trade_count AS trade_count,created_at FROM market_system_trades
+            ) combined_flow WHERE created_at>=? GROUP BY security_id
         ) flow ON flow.security_id=s.id
         WHERE s.active=1 AND COALESCE(s.lifecycle_status,'active')='active' AND COALESCE(s.index_eligible,1)=1
           AND s.security_type IN ('stock','volatile') ORDER BY s.ticker""",
@@ -6892,6 +6916,10 @@ def update_market_index_prices(db: Database, force_history: bool = False) -> int
         old_nav = float(fund["price"] or 0)
         if abs(new_nav - old_nav) >= 0.0001:
             db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?", (new_nav, timestamp, fund["security_id"]))
+            record_market_system_trades(
+                db, int(fund["security_id"]), old_nav, new_nav, "index_nav",
+                f"Weighted constituent trading moved {fund['ticker']} NAV.",
+            )
             updated += 1
         last_history = one(db, "SELECT price,recorded_at FROM market_price_history WHERE security_id=? ORDER BY id DESC LIMIT 1", (fund["security_id"],))
         last_time = parse_iso(last_history["recorded_at"]) if last_history and last_history.get("recorded_at") else None
@@ -6934,6 +6962,58 @@ def market_index_payload(db: Database) -> list[dict[str, Any]]:
     return funds
 
 
+def record_market_system_trades(
+    db: Database,
+    security_id: int,
+    old_price: float,
+    new_price: float,
+    source: str,
+    rationale: str = "",
+) -> dict[str, Any] | None:
+    """Translate an automated quote move into bounded exchange order flow.
+
+    These are market-level trades used for volume, VWAP, and pressure analytics.
+    They never belong to a resident account and never change cash or holdings.
+    """
+    if old_price <= 0 or new_price <= 0:
+        return None
+    percent = (new_price / old_price - 1) * 100
+    if abs(percent) < 0.0001:
+        return None
+    security = one(db, "SELECT issued_shares,volatility FROM market_securities WHERE id=?", (security_id,)) or {}
+    available_float = max(10_000.0, float(security.get("issued_shares") or 1_000_000))
+    volatility = max(0.25, min(8.0, float(security.get("volatility") or 1)))
+    jitter = 0.82 + secrets.randbelow(3701) / 10_000
+    turnover = min(0.04, 0.0015 + abs(percent) * 0.0022 * min(2.2, volatility))
+    total_volume = max(10.0, round(available_float * turnover * jitter, 6))
+    pressure_shift = min(44.0, 7.0 + abs(percent) * 5.2)
+    pressure_noise = (secrets.randbelow(501) - 250) / 100
+    buy_pressure = max(5.0, min(95.0, 50.0 + (pressure_shift if percent > 0 else -pressure_shift) + pressure_noise))
+    buy_volume = round(total_volume * buy_pressure / 100, 6)
+    sell_volume = round(max(0.0, total_volume - buy_volume), 6)
+    trade_count = max(2, min(60, int(round(3 + abs(percent) * 2.4 + math.log10(1 + total_volume) * 1.8))))
+    buy_trade_count = max(1, min(trade_count - 1, int(round(trade_count * buy_pressure / 100))))
+    sell_trade_count = max(1, trade_count - buy_trade_count)
+    timestamp = now_iso()
+    db.execute(
+        """INSERT INTO market_system_trades
+           (security_id,buy_volume,sell_volume,buy_trade_count,sell_trade_count,reference_price,
+            price_change_percent,source,rationale,created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        (
+            security_id, buy_volume, sell_volume, buy_trade_count, sell_trade_count,
+            round(new_price, 4), round(percent, 4), str(source or "automation")[:40],
+            str(rationale or "Automated Ravenhood market activity")[:300], timestamp,
+        ),
+    )
+    return {
+        "buy_volume": buy_volume,
+        "sell_volume": sell_volume,
+        "buy_pressure_percent": round(buy_pressure, 2),
+        "trade_count": trade_count,
+    }
+
+
 def market_volatility_cycle(db: Database, amplitude: float, source: str = "autopilot", actor_id: int | None = None) -> dict[str, Any]:
     securities = all_rows(db, """SELECT id,ticker,price,volatility,security_type FROM market_securities s
         WHERE active=1 AND security_type<>'fund'
@@ -6952,6 +7032,10 @@ def market_volatility_cycle(db: Database, amplitude: float, source: str = "autop
         new_price = max(0.01, round(old_price * (1 + percent / 100.0), 4))
         db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?", (new_price, now_iso(), security["id"]))
         db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], new_price, source[:40], now_iso()))
+        record_market_system_trades(
+            db, int(security["id"]), old_price, new_price, source,
+            f"Automated volatility cycle moved the quote {percent:+.2f}%.",
+        )
         changes.append(percent)
     average = sum(changes) / len(changes)
     db.execute(
@@ -6999,7 +7083,9 @@ def market_gemini_adjustment_cycle(db: Database) -> dict[str, Any]:
         new_price = max(0.01, round(old_price * (1 + percent / 100.0), 4))
         db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?", (new_price, now_iso(), security["id"]))
         db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], new_price, "gemini", now_iso()))
-        applied.append({"ticker": ticker, "percent_change": round(percent, 2), "rationale": str(item.get("rationale") or "Market conditions")[:240]})
+        rationale = str(item.get("rationale") or "Market conditions")[:240]
+        flow = record_market_system_trades(db, int(security["id"]), old_price, new_price, "gemini", rationale)
+        applied.append({"ticker": ticker, "percent_change": round(percent, 2), "rationale": rationale, "order_flow": flow})
     detail = "; ".join(f"{item['ticker']} {item['percent_change']:+.2f}% — {item['rationale']}" for item in applied)
     db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('ai_adjustment','Gemini market adjustment',?,NULL,?)", (detail or "No eligible adjustments returned.", now_iso()))
     return {"updated": len(applied), "adjustments": applied}
@@ -11303,7 +11389,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                WHERE s.active = 1""",
         )
         market_cash_row = one(db, "SELECT COALESCE(SUM(cash_balance), 0) AS cash_value, COUNT(*) AS accounts FROM market_accounts WHERE LOWER(status) = 'active'")
-        market_order_row = one(db, "SELECT COUNT(*) AS trades, COALESCE(SUM(gross_amount), 0) AS volume, COALESCE(SUM(fee_amount), 0) AS fees FROM market_orders")
+        market_order_row = one(db, """SELECT COALESCE(SUM(trades),0) AS trades,
+                COALESCE(SUM(volume),0) AS volume,COALESCE(SUM(fees),0) AS fees FROM (
+                SELECT 1 AS trades,gross_amount AS volume,fee_amount AS fees FROM market_orders
+                UNION ALL
+                SELECT buy_trade_count+sell_trade_count AS trades,
+                       (buy_volume+sell_volume)*reference_price AS volume,0 AS fees FROM market_system_trades
+            ) combined_market_trades""")
         market_held_value = round(float((market_held_row or {}).get("held_value") or 0), 2)
         market_cash_value = round(float((market_cash_row or {}).get("cash_value") or 0), 2)
         market_accounts = int((market_cash_row or {}).get("accounts") or 0)
@@ -15514,6 +15606,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "buy_volume": 0.0,
             "sell_volume": 0.0,
             "buy_pressure_percent": 50.0,
+            "sell_pressure_percent": 50.0,
             "quote_count": 0,
             "last_quote_at": None,
         }
@@ -15557,25 +15650,36 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     for index, row in enumerate(fallback_rows)
                 ]
 
-            volume_rows = all_rows(db, """WITH ranged AS (
-                    SELECT side,quantity,unit_price,created_at,
+            volume_rows = all_rows(db, """WITH activity AS (
+                    SELECT side,quantity,unit_price,1 AS trade_count,created_at
+                    FROM market_orders WHERE security_id=? AND created_at>=?
+                    UNION ALL
+                    SELECT 'buy' AS side,buy_volume AS quantity,reference_price AS unit_price,
+                           buy_trade_count AS trade_count,created_at
+                    FROM market_system_trades WHERE security_id=? AND created_at>=? AND buy_volume>0
+                    UNION ALL
+                    SELECT 'sell' AS side,sell_volume AS quantity,reference_price AS unit_price,
+                           sell_trade_count AS trade_count,created_at
+                    FROM market_system_trades WHERE security_id=? AND created_at>=? AND sell_volume>0
+                ), ranged AS (
+                    SELECT side,quantity,unit_price,trade_count,created_at,
                         LEAST(?, GREATEST(1, WIDTH_BUCKET(
                             EXTRACT(EPOCH FROM created_at::timestamptz),
                             EXTRACT(EPOCH FROM ?::timestamptz),
                             EXTRACT(EPOCH FROM ?::timestamptz), ?
                         )))::integer AS history_bucket
-                    FROM market_orders
-                    WHERE security_id=? AND created_at>=?
+                    FROM activity
                 )
                 SELECT history_bucket,
                     COALESCE(SUM(quantity),0) AS volume,
                     COALESCE(SUM(CASE WHEN side='buy' THEN quantity ELSE 0 END),0) AS buy_volume,
                     COALESCE(SUM(CASE WHEN side='sell' THEN quantity ELSE 0 END),0) AS sell_volume,
                     CASE WHEN SUM(quantity)>0 THEN SUM(unit_price*quantity)/SUM(quantity) ELSE NULL END AS vwap,
-                    COUNT(*) AS trade_count
+                    COALESCE(SUM(trade_count),0) AS trade_count
                 FROM ranged GROUP BY history_bucket ORDER BY history_bucket ASC""",
-                (history_buckets, history_start, history_end, history_buckets,
-                 history_security["id"], history_start),
+                (history_security["id"], history_start, history_security["id"], history_start,
+                 history_security["id"], history_start, history_buckets, history_start,
+                 history_end, history_buckets),
             )
             price_buckets = [int(row["history_bucket"]) for row in history_rows]
             volume_by_bucket: dict[int, dict[str, float | int]] = {}
@@ -15637,6 +15741,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "buy_volume": round(total_buy_volume, 6),
                 "sell_volume": round(total_sell_volume, 6),
                 "buy_pressure_percent": round(total_buy_volume / total_volume * 100, 2) if total_volume > 0 else 50.0,
+                "sell_pressure_percent": round(total_sell_volume / total_volume * 100, 2) if total_volume > 0 else 50.0,
                 "quote_count": sum(int(row.get("quote_count") or 0) for row in selected_history),
                 "last_quote_at": selected_history[-1]["recorded_at"] if selected_history else None,
             }
