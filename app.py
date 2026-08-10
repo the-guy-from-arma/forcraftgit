@@ -10499,8 +10499,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_market_security_bankruptcy(db, user, self.path_int(path, 4))
                 elif path.startswith("/api/dev-tools/market/securities/") and path.endswith("/index-eligibility") and method == "PATCH":
                     self.api_dev_market_security_index_eligibility(db, user, self.path_int(path, 4))
-                elif path == "/api/dev-tools/market/securities/margin" and method == "PATCH":
-                    self.api_dev_market_security_margin_bulk(db, user)
                 elif path.startswith("/api/dev-tools/market/securities/") and path.endswith("/margin") and method == "PATCH":
                     self.api_dev_market_security_margin(db, user, self.path_int(path, 4))
                 elif path == "/api/dev-tools/market/indexes/rebalance" and method == "POST":
@@ -16785,7 +16783,41 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             settings["market_trade_fee_percent"], settings["market_margin_maintenance_percent"] / 100.0)
 
         if not settings["market_open"]:
-            self.error(409, "Leveraged long and short positions are unavailable while Ravenhood is closed."); return
+            stock_requests = one(db, "SELECT COUNT(*) AS total FROM market_order_requests WHERE account_id=? AND status IN ('queued','processing')", (account["id"],))
+            margin_requests = one(db, "SELECT COUNT(*) AS total FROM market_margin_order_requests WHERE account_id=? AND status IN ('queued','processing')", (account["id"],))
+            queued_total = int((stock_requests or {}).get("total") or 0) + int((margin_requests or {}).get("total") or 0)
+            if queued_total >= RAVENHOOD_MAX_QUEUED_ORDERS:
+                self.error(429, f"You may hold up to {RAVENHOOD_MAX_QUEUED_ORDERS} upcoming Ravenhood orders."); return
+            open_positions = one(db, "SELECT COUNT(*) AS total FROM market_margin_positions WHERE account_id=? AND status='open'", (account["id"],))
+            active_margin_total = int((open_positions or {}).get("total") or 0) + int((margin_requests or {}).get("total") or 0)
+            if active_margin_total >= int(settings["market_margin_max_open_positions"]):
+                self.error(409, f"This account may have no more than {settings['market_margin_max_open_positions']} open or upcoming leveraged positions."); return
+            open_exposure = one(db, "SELECT COALESCE(SUM(entry_notional),0) AS total FROM market_margin_positions WHERE account_id=? AND status='open'", (account["id"],))
+            queued_exposure = one(db, "SELECT COALESCE(SUM(estimated_notional),0) AS total FROM market_margin_order_requests WHERE account_id=? AND status IN ('queued','processing')", (account["id"],))
+            next_exposure = float((open_exposure or {}).get("total") or 0) + float((queued_exposure or {}).get("total") or 0) + float(quote["notional"])
+            if next_exposure > float(settings["market_margin_max_account_notional"]) + 0.0001:
+                self.error(409, f"This order would exceed the account leverage exposure limit of ${settings['market_margin_max_account_notional']:,.2f}."); return
+            pending_withdrawals = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM market_cash_transactions WHERE account_id=? AND transaction_type='withdrawal' AND status='pending'", (account["id"],))
+            equity_reservations = one(db, "SELECT COALESCE(SUM(CASE WHEN side='buy' THEN estimated_gross+estimated_fee ELSE 0 END),0) AS total FROM market_order_requests WHERE account_id=? AND status IN ('queued','processing')", (account["id"],))
+            margin_reservations = one(db, "SELECT COALESCE(SUM(collateral+estimated_fee),0) AS total FROM market_margin_order_requests WHERE account_id=? AND status IN ('queued','processing')", (account["id"],))
+            available = float(account.get("cash_balance") or 0) - float((pending_withdrawals or {}).get("total") or 0) - float((equity_reservations or {}).get("total") or 0) - float((margin_reservations or {}).get("total") or 0)
+            required = collateral + float(quote["open_fee"])
+            if available + 0.0001 < required:
+                self.error(409, f"Insufficient unreserved buying power. This queued position requires ${required:,.2f}."); return
+            queued_at = now_iso()
+            request = one(db, """INSERT INTO market_margin_order_requests
+                (account_id,security_id,direction,leverage,collateral,submitted_price,estimated_notional,estimated_fee,
+                 estimated_liquidation_price,status,execute_after,queued_at)
+                VALUES (?,?,?,?,?,?,?,?,?,'queued',?,?) RETURNING id""",
+                (account["id"], security["id"], direction, leverage, collateral, security["price"], quote["notional"],
+                 quote["open_fee"], quote["liquidation_price"], settings["market_next_transition_at"] or None, queued_at))
+            add_admin_audit(db, int(user["id"]), "market.margin.queued", int(user["id"]), {
+                "request_id": int(request["id"]), "ticker": ticker, "direction": direction,
+                "leverage": leverage, "collateral": collateral, "estimated_notional": quote["notional"],
+            })
+            self.send_json(202, {"ok": True, "status": "queued", "request_id": int(request["id"]),
+                "ticker": ticker, "direction": direction, "leverage": leverage, "collateral": collateral, **quote})
+            return
 
         result = execute_ravenhood_margin_open(db, int(account["id"]), int(security["id"]), direction, collateral, leverage, settings)
         if not result["ok"]:
@@ -25240,31 +25272,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         })
         self.send_json(200, {"ok": True, "security_id": int(security["id"]), "ticker": security["ticker"],
             "margin_enabled": enabled, "margin_max_leverage": max_leverage})
-
-    def api_dev_market_security_margin_bulk(self, db: Database, user: DbRow | None) -> None:
-        err = developer_required(user)
-        if err:
-            self.error(403 if user else 401, err); return
-        assert user is not None
-        payload = self.read_json()
-        try:
-            max_leverage = float(payload.get("max_leverage") or 5)
-        except (TypeError, ValueError):
-            self.error(400, "Universal leverage must be a whole 5x step from 5x through 80x."); return
-        if (not math.isfinite(max_leverage) or max_leverage < 5 or max_leverage > 80
-                or not max_leverage.is_integer() or int(max_leverage) % 5 != 0):
-            self.error(400, "Universal leverage must be a whole 5x step from 5x through 80x."); return
-        updated_at = now_iso()
-        result = db.execute("""UPDATE market_securities
-            SET margin_max_leverage=?,updated_at=?
-            WHERE active=1 AND lifecycle_status<>'bankrupt'
-            RETURNING id""", (max_leverage, updated_at))
-        updated_count = len(result.fetchall())
-        add_admin_audit(db, int(user["id"]), "market.security.margin_policy.bulk", details={
-            "max_leverage": max_leverage, "updated_securities": updated_count,
-        })
-        self.send_json(200, {"ok": True, "margin_max_leverage": max_leverage,
-            "updated_securities": updated_count})
 
     def api_dev_market_indexes_rebalance(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
