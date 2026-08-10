@@ -7612,10 +7612,20 @@ def close_ravenhood_margin_position(
 
 
 def process_queued_ravenhood_margin_orders(db: Database, settings: dict[str, Any]) -> int:
-    if not settings["market_open"] or not settings["market_margin_enabled"]:
+    if not settings["market_margin_enabled"]:
         return 0
-    queued = all_rows(db, """SELECT * FROM market_margin_order_requests WHERE status='queued'
-        ORDER BY queued_at,id LIMIT 25 FOR UPDATE SKIP LOCKED""")
+    core_open = bool(settings["market_open"])
+    fcxv_open = bool(settings.get("market_fcxv_24h_enabled"))
+    if not core_open and not fcxv_open:
+        return 0
+    if core_open:
+        queued = all_rows(db, """SELECT * FROM market_margin_order_requests WHERE status='queued'
+            ORDER BY queued_at,id LIMIT 25 FOR UPDATE SKIP LOCKED""")
+    else:
+        queued = all_rows(db, """SELECT r.* FROM market_margin_order_requests r
+            JOIN market_securities s ON s.id=r.security_id
+            WHERE r.status='queued' AND s.ticker='FCXV'
+            ORDER BY r.queued_at,r.id LIMIT 25 FOR UPDATE OF r SKIP LOCKED""")
     processed = 0
     for request in queued:
         db.execute("UPDATE market_margin_order_requests SET status='processing',failure_reason='' WHERE id=? AND status='queued'", (request["id"],))
@@ -7718,11 +7728,10 @@ def market_automation_worker() -> None:
                 settings = get_system_settings(db)
                 current = utcnow()
                 clear_legacy_ravenhood_price_freeze(db, settings)
-                # Ordinary FCXV orders may execute continuously when its
-                # dedicated policy is enabled. Margin remains core-hours only.
+                # FCXV ordinary and leveraged orders may execute continuously
+                # when its dedicated policy is enabled.
                 process_queued_ravenhood_orders(db, settings)
-                if settings["market_open"]:
-                    process_queued_ravenhood_margin_orders(db, settings)
+                process_queued_ravenhood_margin_orders(db, settings)
                 apply_market_price_programs(db)
                 if settings["market_autopilot_enabled"]:
                     last = parse_iso(settings["market_autopilot_last_tick"]) if settings["market_autopilot_last_tick"] else None
@@ -16844,7 +16853,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         quote = ravenhood_margin_quote(direction, security["price"], collateral, leverage,
             settings["market_trade_fee_percent"], settings["market_margin_maintenance_percent"] / 100.0)
 
-        if not settings["market_open"]:
+        if not ravenhood_security_session_open(
+            settings["market_open"], ticker, settings["market_fcxv_24h_enabled"]
+        ):
             stock_requests = one(db, "SELECT COUNT(*) AS total FROM market_order_requests WHERE account_id=? AND status IN ('queued','processing')", (account["id"],))
             margin_requests = one(db, "SELECT COUNT(*) AS total FROM market_margin_order_requests WHERE account_id=? AND status IN ('queued','processing')", (account["id"],))
             queued_total = int((stock_requests or {}).get("total") or 0) + int((margin_requests or {}).get("total") or 0)
@@ -16893,7 +16904,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403 if user else 401, err); return
         assert user is not None
         settings = get_system_settings(db)
-        if not settings["market_open"]:
+        position_security = one(db, """SELECT s.ticker FROM market_margin_positions p
+            JOIN market_securities s ON s.id=p.security_id
+            WHERE p.id=? AND p.status='open'""", (position_id,))
+        if not position_security:
+            self.error(404, "Open leveraged position was not found."); return
+        if not ravenhood_security_session_open(
+            settings["market_open"], position_security["ticker"], settings["market_fcxv_24h_enabled"]
+        ):
             self.error(409, "Resident margin closes are held while Ravenhood is closed. Automatic liquidation protection remains active."); return
         account = one(db, "SELECT id FROM market_accounts WHERE user_id=?", (user["id"],))
         if not account:

@@ -12,6 +12,11 @@ class RavenhoodSecuritySessionTests(unittest.TestCase):
         self.assertTrue(ravenhood_security_session_open(False, "fcxv", True))
         self.assertFalse(ravenhood_security_session_open(False, "FCXV", False))
 
+    def test_fcxv_margin_uses_the_same_continuous_session_rule(self):
+        long_or_short_ticker = "FCXV"
+        self.assertTrue(ravenhood_security_session_open(False, long_or_short_ticker, True))
+        self.assertFalse(ravenhood_security_session_open(False, long_or_short_ticker, False))
+
     def test_other_securities_remain_closed_after_hours(self):
         self.assertFalse(ravenhood_security_session_open(False, "FCXS", True))
         self.assertFalse(ravenhood_security_session_open(False, "FNN", True))

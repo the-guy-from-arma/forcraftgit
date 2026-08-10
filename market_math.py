@@ -7,10 +7,10 @@ from typing import Any
 def ravenhood_security_session_open(
     market_open: bool, ticker: str, fcxv_24h_enabled: bool
 ) -> bool:
-    """Return whether an ordinary share order may execute right now.
+    """Return whether a Ravenhood security may trade right now.
 
-    FCXV is the only continuous-session security.  Margin orders deliberately
-    do not use this helper and remain subject to the core exchange session.
+    FCXV is the only continuous-session security. The same policy applies to
+    ordinary shares and leveraged long/short positions.
     """
     return bool(market_open) or (
         bool(fcxv_24h_enabled) and str(ticker or "").strip().upper() == "FCXV"
