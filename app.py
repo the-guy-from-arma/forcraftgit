@@ -6935,26 +6935,24 @@ def update_market_index_prices(db: Database, force_history: bool = False) -> int
 def market_index_payload(db: Database) -> list[dict[str, Any]]:
     funds = [dict(row) for row in all_rows(db, """SELECT f.*,s.ticker,s.name,s.price,s.previous_price,s.description,
             COALESCE(position.holder_count,0) AS holder_count,
-            COALESCE(position.units_outstanding,0) AS units_outstanding,
-            COALESCE(system_position.generated_buy_shares,0) AS gemini_buy_shares,
-            COALESCE(system_position.generated_sell_shares,0) AS gemini_sell_shares
+            COALESCE(position.units_outstanding,0) AS units_outstanding
         FROM market_index_funds f JOIN market_securities s ON s.id=f.security_id
         LEFT JOIN (SELECT security_id,COUNT(*) AS holder_count,SUM(quantity) AS units_outstanding
                    FROM market_holdings WHERE quantity>0 GROUP BY security_id) position ON position.security_id=s.id
-        LEFT JOIN (
-            SELECT security_id,SUM(buy_volume) AS generated_buy_shares,SUM(sell_volume) AS generated_sell_shares
-            FROM market_system_trades
-            WHERE security_id IN (SELECT security_id FROM market_index_funds WHERE enabled=1)
-            GROUP BY security_id
-        ) system_position ON system_position.security_id=s.id
         WHERE f.enabled=1 AND s.active=1 ORDER BY f.risk_profile""")]
     if not funds:
         return []
     members = all_rows(db, """SELECT m.*,f.fund_key,s.ticker,s.name,s.sector,s.price,s.previous_price,s.issued_shares,
-            COALESCE(position.holder_count,0) AS holder_count
+            COALESCE(position.holder_count,0) AS holder_count,
+            COALESCE(gemini_flow.generated_buy_shares,0) AS gemini_buy_shares,
+            COALESCE(gemini_flow.generated_sell_shares,0) AS gemini_sell_shares
         FROM market_index_members m JOIN market_index_funds f ON f.id=m.fund_id
         JOIN market_securities s ON s.id=m.security_id
         LEFT JOIN (SELECT security_id,COUNT(*) AS holder_count FROM market_holdings WHERE quantity>0 GROUP BY security_id) position ON position.security_id=s.id
+        LEFT JOIN (
+            SELECT security_id,SUM(buy_volume) AS generated_buy_shares,SUM(sell_volume) AS generated_sell_shares
+            FROM market_system_trades WHERE LOWER(source)='gemini' GROUP BY security_id
+        ) gemini_flow ON gemini_flow.security_id=s.id
         ORDER BY f.id,m.rank""")
     grouped: dict[int, list[dict[str, Any]]] = {}
     for raw in members:
@@ -6968,18 +6966,33 @@ def market_index_payload(db: Database) -> list[dict[str, Any]]:
         price = float(fund.get("price") or 0)
         previous = float(fund.get("previous_price") or price)
         resident_units = max(0.0, float(fund.get("units_outstanding") or 0))
-        gemini_buy_shares = max(0.0, float(fund.get("gemini_buy_shares") or 0))
-        gemini_sell_shares = max(0.0, float(fund.get("gemini_sell_shares") or 0))
-        gemini_shares = max(0.0, gemini_buy_shares - gemini_sell_shares)
+        constituents = grouped.get(int(fund["id"]), [])
+        gemini_capitalization = 0.0
+        gemini_activity_constituents = 0
+        gemini_position_constituents = 0
+        for constituent in constituents:
+            buy_shares = max(0.0, float(constituent.get("gemini_buy_shares") or 0))
+            sell_shares = max(0.0, float(constituent.get("gemini_sell_shares") or 0))
+            if buy_shares > 0 or sell_shares > 0:
+                gemini_activity_constituents += 1
+            net_shares = max(0.0, buy_shares - sell_shares)
+            constituent["gemini_net_shares"] = round(net_shares, 6)
+            if net_shares <= 0:
+                continue
+            gemini_position_constituents += 1
+            gemini_capitalization += net_shares * max(0.0, float(constituent.get("price") or 0))
+        gemini_shares = gemini_capitalization / price if price > 0 else 0.0
         total_capitalized_units = resident_units + gemini_shares
         fund["change_percent"] = round((price / previous - 1) * 100, 2) if previous else 0.0
         fund["resident_units"] = round(resident_units, 6)
         fund["gemini_shares"] = round(gemini_shares, 6)
+        fund["gemini_activity_constituents"] = gemini_activity_constituents
+        fund["gemini_position_constituents"] = gemini_position_constituents
         fund["total_capitalized_units"] = round(total_capitalized_units, 6)
         fund["resident_capitalization"] = round(price * resident_units, 2)
-        fund["gemini_capitalization"] = round(price * gemini_shares, 2)
+        fund["gemini_capitalization"] = round(gemini_capitalization, 2)
         fund["market_cap"] = round(price * total_capitalized_units, 2)
-        fund["constituents"] = grouped.get(int(fund["id"]), [])
+        fund["constituents"] = constituents
     return funds
 
 
