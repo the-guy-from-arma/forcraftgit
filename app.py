@@ -11818,6 +11818,130 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         casino_wagered_30d = round(float(casino_stats.get("wagered_30d") or 0), 2)
         casino_payouts_30d = round(float(casino_stats.get("payouts_30d") or 0), 2)
 
+        # Public protection and fee aggregates. These deliberately stay at the
+        # statewide level: no policy number, claimant, account, or balance is
+        # returned by the Statistics endpoint.
+        current_iso = now_iso()
+        insurance_aggregate = one(
+            db,
+            """WITH bounds AS (SELECT ? AS current_at, ? AS month_start),
+               policy AS (
+                   SELECT COUNT(*) FILTER (WHERE status='active' AND expires_at>current_at) AS active_policies,
+                          COUNT(DISTINCT CASE WHEN status='active' AND expires_at>current_at THEN user_id END) AS insured_residents,
+                          COALESCE(SUM(CASE WHEN status='active' AND expires_at>current_at THEN coverage_amount ELSE 0 END),0) AS active_coverage,
+                          COALESCE(SUM(CASE WHEN payment_status='completed' THEN premium_amount ELSE 0 END),0) AS premiums_collected,
+                          COALESCE(SUM(CASE WHEN payment_status='completed' AND created_at>=month_start THEN premium_amount ELSE 0 END),0) AS premiums_30d,
+                          COUNT(*) FILTER (WHERE term_months=3 AND status='active' AND expires_at>current_at) AS three_month_policies,
+                          COUNT(*) FILTER (WHERE term_months=6 AND status='active' AND expires_at>current_at) AS six_month_policies
+                   FROM insurance_policies CROSS JOIN bounds
+               ), property AS (
+                   SELECT COUNT(*) FILTER (WHERE status='active' AND expires_at>current_at) AS property_active,
+                          COALESCE(SUM(CASE WHEN status='active' AND expires_at>current_at THEN coverage_amount ELSE 0 END),0) AS property_coverage,
+                          COALESCE(SUM(CASE WHEN payment_status='completed' THEN premium_amount ELSE 0 END),0) AS property_premiums,
+                          COALESCE(SUM(CASE WHEN payment_status='completed' AND created_at>=month_start THEN premium_amount ELSE 0 END),0) AS property_premiums_30d
+                   FROM insurance_property_protections CROSS JOIN bounds
+               ), everyday AS (
+                   SELECT COUNT(*) FILTER (WHERE status='active' AND expires_at>current_at) AS everyday_active,
+                          COALESCE(SUM(CASE WHEN payment_status='completed' THEN premium_amount ELSE 0 END),0) AS everyday_premiums,
+                          COALESCE(SUM(CASE WHEN payment_status='completed' AND created_at>=month_start THEN premium_amount ELSE 0 END),0) AS everyday_premiums_30d
+                   FROM insurance_everyday_protections CROSS JOIN bounds
+               ), stock AS (
+                   SELECT COUNT(*) FILTER (WHERE status='active' AND expires_at>current_at) AS stock_active,
+                          COALESCE(SUM(CASE WHEN status='active' AND expires_at>current_at THEN coverage_amount ELSE 0 END),0) AS stock_coverage,
+                          COALESCE(SUM(CASE WHEN payment_status='completed' THEN premium_amount ELSE 0 END),0) AS stock_premiums,
+                          COALESCE(SUM(CASE WHEN payment_status='completed' AND created_at>=month_start THEN premium_amount ELSE 0 END),0) AS stock_premiums_30d
+                   FROM insurance_stock_protections CROSS JOIN bounds
+               ) SELECT * FROM policy CROSS JOIN property CROSS JOIN everyday CROSS JOIN stock""",
+            (current_iso, thirty_days_ago),
+        ) or {}
+        insurance_policy_stats = insurance_aggregate
+        insurance_property_stats = {
+            "active": insurance_aggregate.get("property_active"), "coverage": insurance_aggregate.get("property_coverage"),
+            "premiums": insurance_aggregate.get("property_premiums"), "premiums_30d": insurance_aggregate.get("property_premiums_30d"),
+        }
+        insurance_everyday_stats = {
+            "active": insurance_aggregate.get("everyday_active"), "premiums": insurance_aggregate.get("everyday_premiums"),
+            "premiums_30d": insurance_aggregate.get("everyday_premiums_30d"),
+        }
+        insurance_stock_stats = {
+            "active": insurance_aggregate.get("stock_active"), "coverage": insurance_aggregate.get("stock_coverage"),
+            "premiums": insurance_aggregate.get("stock_premiums"), "premiums_30d": insurance_aggregate.get("stock_premiums_30d"),
+        }
+        insurance_claim_stats = one(
+            db,
+            """SELECT COUNT(*) AS claims,
+                      COUNT(*) FILTER (WHERE status='pending') AS pending,
+                      COUNT(*) FILTER (WHERE status='approved') AS approved,
+                      COUNT(*) FILTER (WHERE status='paid') AS paid,
+                      COUNT(*) FILTER (WHERE status IN ('denied','rejected')) AS denied,
+                      COALESCE(SUM(requested_amount),0) AS requested,
+                      COALESCE(SUM(CASE WHEN status='paid' THEN requested_amount ELSE 0 END),0) AS paid_value,
+                      COALESCE(SUM(CASE WHEN status='paid' AND created_at>=? THEN requested_amount ELSE 0 END),0) AS paid_value_30d,
+                      COALESCE(SUM(CASE WHEN created_at>=? THEN requested_amount ELSE 0 END),0) AS requested_30d
+               FROM insurance_claims""",
+            (thirty_days_ago, thirty_days_ago),
+        ) or {}
+        insurance_delivered_row = one(
+            db,
+            """SELECT COALESCE(SUM(CASE WHEN status='completed' THEN amount ELSE 0 END),0) AS delivered,
+                      COALESCE(SUM(CASE WHEN status='completed' AND completed_at>=? THEN amount ELSE 0 END),0) AS delivered_30d
+               FROM insurance_claim_payout_commands""",
+            (thirty_days_ago,),
+        ) or {}
+        insurance_setting_rows = all_rows(
+            db,
+            """SELECT setting_key,setting_value FROM system_settings
+               WHERE setting_key IN ('insurance_state_of_emergency','insurance_emergency_declared_at','market_holding_balance')""",
+        )
+        public_settings = {str(row.get("setting_key") or ""): str(row.get("setting_value") or "") for row in insurance_setting_rows}
+
+        base_premiums = round(float(insurance_policy_stats.get("premiums_collected") or 0), 2)
+        property_premiums = round(float(insurance_property_stats.get("premiums") or 0), 2)
+        everyday_premiums = round(float(insurance_everyday_stats.get("premiums") or 0), 2)
+        stock_premiums = round(float(insurance_stock_stats.get("premiums") or 0), 2)
+        insurance_premiums = round(base_premiums + property_premiums + everyday_premiums + stock_premiums, 2)
+        insurance_premiums_30d = round(
+            float(insurance_policy_stats.get("premiums_30d") or 0)
+            + float(insurance_property_stats.get("premiums_30d") or 0)
+            + float(insurance_everyday_stats.get("premiums_30d") or 0)
+            + float(insurance_stock_stats.get("premiums_30d") or 0),
+            2,
+        )
+        insurance_coverage = round(
+            float(insurance_policy_stats.get("active_coverage") or 0)
+            + float(insurance_property_stats.get("coverage") or 0)
+            + float(insurance_stock_stats.get("coverage") or 0),
+            2,
+        )
+        insurance_claims = int(insurance_claim_stats.get("claims") or 0)
+        insurance_pending = int(insurance_claim_stats.get("pending") or 0)
+        insurance_approved = int(insurance_claim_stats.get("approved") or 0)
+        insurance_paid = int(insurance_claim_stats.get("paid") or 0)
+        insurance_denied = int(insurance_claim_stats.get("denied") or 0)
+        insurance_reviewed = insurance_approved + insurance_paid + insurance_denied
+        insurance_delivered = round(max(
+            float(insurance_delivered_row.get("delivered") or 0),
+            float(insurance_claim_stats.get("paid_value") or 0),
+        ), 2)
+        insurance_delivered_30d = round(max(
+            float(insurance_delivered_row.get("delivered_30d") or 0),
+            float(insurance_claim_stats.get("paid_value_30d") or 0),
+        ), 2)
+
+        market_public_fee_row = one(
+            db,
+            """SELECT
+                  (SELECT COALESCE(SUM(fee_amount),0) FROM market_transfers) AS transfer_fees,
+                  (SELECT COALESCE(SUM(fee_amount),0) FROM market_orders WHERE created_at>=?) AS trade_fees_30d,
+                  (SELECT COALESCE(SUM(fee_amount),0) FROM market_transfers WHERE created_at>=?) AS transfer_fees_30d""",
+            (thirty_days_ago, thirty_days_ago),
+        ) or {}
+        transfer_fees = round(float(market_public_fee_row.get("transfer_fees") or 0), 2)
+        trade_fees_30d = round(float(market_public_fee_row.get("trade_fees_30d") or 0), 2)
+        transfer_fees_30d = round(float(market_public_fee_row.get("transfer_fees_30d") or 0), 2)
+        total_market_fees = round(market_fees + transfer_fees, 2)
+        market_fee_treasury = round(float(public_settings.get("market_holding_balance") or total_market_fees), 2)
+
         # The FC Dollar reference is an RP purchasing-power index, not a real
         # currency peg or promise of redemption. It responds to the same
         # authoritative statewide aggregates published by this endpoint.
@@ -11880,6 +12004,45 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "gainers": gainers, "decliners": decliners, "unchanged": unchanged,
                 "index_value": round(index_current, 2), "index_change": market_index_change,
                 "movers": market_movers[:8],
+            },
+            "fees": {
+                "collected": total_market_fees,
+                "trade_fees": market_fees,
+                "transfer_fees": transfer_fees,
+                "collected_30d": round(trade_fees_30d + transfer_fees_30d, 2),
+                "treasury_balance": market_fee_treasury,
+                "effective_rate": round(total_market_fees / max(1.0, market_volume) * 100.0, 3),
+            },
+            "insurance": {
+                "active_policies": int(insurance_policy_stats.get("active_policies") or 0),
+                "insured_residents": int(insurance_policy_stats.get("insured_residents") or 0),
+                "insured_rate": percent(int(insurance_policy_stats.get("insured_residents") or 0), verified),
+                "active_coverage": insurance_coverage,
+                "premiums_collected": insurance_premiums,
+                "premiums_30d": insurance_premiums_30d,
+                "base_premiums": base_premiums,
+                "property_premiums": property_premiums,
+                "everyday_premiums": everyday_premiums,
+                "stock_premiums": stock_premiums,
+                "property_protections": int(insurance_property_stats.get("active") or 0),
+                "everyday_protections": int(insurance_everyday_stats.get("active") or 0),
+                "stock_protections": int(insurance_stock_stats.get("active") or 0),
+                "three_month_policies": int(insurance_policy_stats.get("three_month_policies") or 0),
+                "six_month_policies": int(insurance_policy_stats.get("six_month_policies") or 0),
+                "claims": insurance_claims,
+                "pending_claims": insurance_pending,
+                "approved_claims": insurance_approved,
+                "paid_claims": insurance_paid,
+                "denied_claims": insurance_denied,
+                "claims_requested": round(float(insurance_claim_stats.get("requested") or 0), 2),
+                "claims_requested_30d": round(float(insurance_claim_stats.get("requested_30d") or 0), 2),
+                "claims_paid": insurance_delivered,
+                "claims_paid_30d": insurance_delivered_30d,
+                "resolution_rate": percent(insurance_reviewed, insurance_claims),
+                "approval_rate": percent(insurance_approved + insurance_paid, insurance_reviewed),
+                "payout_ratio": round(insurance_delivered / max(1.0, insurance_premiums) * 100.0, 1),
+                "emergency_active": public_settings.get("insurance_state_of_emergency", "0").lower() in ("1", "true", "yes", "on"),
+                "emergency_declared_at": public_settings.get("insurance_emergency_declared_at") or None,
             },
             "lottery": {
                 "current_jackpot": lottery_pool,

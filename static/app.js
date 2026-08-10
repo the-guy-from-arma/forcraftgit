@@ -2050,12 +2050,14 @@ function renderStatsWorkspace() {
   const commerce = data.commerce || {};
   const lottery = data.lottery || {};
   const casino = data.casino || {};
+  const fees = data.fees || {};
+  const insurance = data.insurance || {};
   const currency = economy.currency || {};
-  const validTabs = ["overview", "safety", "economy", "community", "activity", "gaming"];
+  const validTabs = ["overview", "safety", "economy", "protection", "community", "activity", "gaming"];
   const tab = validTabs.includes(state.statsTab) ? state.statsTab : "overview";
   const nav = [
     ["overview", "Overview"], ["safety", "Safety & courts"], ["economy", "Economy"],
-    ["community", "Infrastructure"], ["activity", "Server life"], ["gaming", "Gaming & lottery"],
+    ["protection", "Insurance & fees"], ["community", "Infrastructure"], ["activity", "Server life"], ["gaming", "Gaming & lottery"],
   ];
   const syncedAt = data.generated_at ? new Date(data.generated_at) : null;
   const gameNames = { neon_vault: "Neon Vault", faircroft_dice: "Faircroft Dice", civic_coin: "Civic Coin", midnight_keno: "Midnight Keno", blacksite: "Blacksite" };
@@ -2108,6 +2110,17 @@ function renderStatsWorkspace() {
         ["Lottery participation", Number(lottery.players || 0) / Math.max(1, Number(population.registered || 0)) * 100, "Residents represented in main drawings"],
       ],
     },
+    protection: {
+      label: "Protection network",
+      score: (clampPercent(insurance.insured_rate) + clampPercent(insurance.resolution_rate) + clampPercent(insurance.approval_rate) + (100 - clampPercent(insurance.payout_ratio))) / 4,
+      summary: "A statewide view of active insurance reach, claim decisions, approvals, and protection-pool capacity.",
+      metrics: [
+        ["Resident coverage", insurance.insured_rate, "Verified residents holding active insurance"],
+        ["Claims resolved", insurance.resolution_rate, "Claims with a completed review decision"],
+        ["Approval rate", insurance.approval_rate, "Approved or paid claims among reviewed claims"],
+        ["Pool capacity", 100 - clampPercent(insurance.payout_ratio), "Collected premiums remaining relative to delivered claims"],
+      ],
+    },
   };
   const activeLens = lensData[state.statsLens] ? state.statsLens : "coverage";
   const renderLensPanel = (key, lens) => `<section class="stats4-lens-panel ${activeLens === key ? "active" : ""}" data-stats-lens-panel="${key}" ${activeLens === key ? "" : "hidden"}>
@@ -2131,6 +2144,12 @@ function renderStatsWorkspace() {
       ${kpi("Verified residents", Number(population.verified || 0).toLocaleString(), `${statsPercent(population.link_rate)} linked to Arma`, "", population.verified, "number")}
       ${kpi("Game-bank circulation", statsFullMoney(economy.circulation), `${Number(economy.funded_accounts || 0).toLocaleString()} synchronized accounts`, "gold", economy.circulation, "money", 2)}
       ${kpi("FC Dollar / U.S. Dollar", `$${Number(currency.usd_reference_rate || 0).toFixed(4)} USD`, `FC$1 reference · ${currency.status || "awaiting index"}`, "green", currency.usd_reference_rate, "usd", 4)}
+    </div>
+    <div class="stats5-public-ledger" aria-label="Public financial aggregates">
+      <article><small>FEES COLLECTED</small><strong>${statsAnimatedValue(fees.collected, statsFullMoney(fees.collected), "money", 2)}</strong><span>${statsFullMoney(fees.collected_30d)} in the last 30 days</span></article>
+      <article><small>INSURANCE PREMIUMS</small><strong>${statsAnimatedValue(insurance.premiums_collected, statsFullMoney(insurance.premiums_collected), "money", 2)}</strong><span>${Number(insurance.active_policies || 0).toLocaleString()} active policies</span></article>
+      <article><small>ACTIVE PROTECTION</small><strong>${statsAnimatedValue(insurance.active_coverage, statsFullMoney(insurance.active_coverage), "money", 2)}</strong><span>${statsPercent(insurance.insured_rate)} resident coverage</span></article>
+      <article><small>CLAIMS DELIVERED</small><strong>${statsAnimatedValue(insurance.claims_paid, statsFullMoney(insurance.claims_paid), "money", 2)}</strong><span>${statsPercent(insurance.resolution_rate)} resolution rate</span></article>
     </div>
     <section class="stats4-pulse-studio">
       <header><div><small>INTERACTIVE STATE PULSE</small><h3>Move through the live signal.</h3><p>Select a lens to compare the systems behind the headline figures.</p></div><nav aria-label="State signal lens">${Object.entries(lensData).map(([key, lens]) => `<button type="button" class="${activeLens === key ? "active" : ""}" data-stats-lens="${key}" aria-selected="${activeLens === key ? "true" : "false"}">${escapeHtml(lens.label)}</button>`).join("")}</nav></header>
@@ -2163,9 +2182,45 @@ function renderStatsWorkspace() {
       </div>
       <footer>${escapeHtml(currency.disclaimer || "Internal RP purchasing-power reference only; FC Dollars are not redeemable for real-world currency.")}</footer>
     </section>
-    <div class="stats3-kpis">${kpi("Average bank position", statsFullMoney(economy.average_balance), `${Number(economy.funded_accounts || 0)} funded accounts`, "", economy.average_balance, "money", 2)}${kpi("Median bank position", statsFullMoney(economy.median_balance), `${statsPercent(economy.funded_rate)} funding coverage`, "", economy.median_balance, "money", 2)}${kpi("Securities held", statsFullMoney(markets.held_value), `${Number(markets.trades || 0)} executions`, "green", markets.held_value, "money", 2)}${kpi("Trade volume", statsFullMoney(markets.volume), `${statsFullMoney(markets.fees)} fees`, "gold", markets.volume, "money", 2)}</div>
+    <div class="stats3-kpis">${kpi("Average bank position", statsFullMoney(economy.average_balance), `${Number(economy.funded_accounts || 0)} funded accounts`, "", economy.average_balance, "money", 2)}${kpi("Median bank position", statsFullMoney(economy.median_balance), `${statsPercent(economy.funded_rate)} funding coverage`, "", economy.median_balance, "money", 2)}${kpi("Securities held", statsFullMoney(markets.held_value), `${Number(markets.trades || 0)} executions`, "green", markets.held_value, "money", 2)}${kpi("Trade volume", statsFullMoney(markets.volume), `${statsFullMoney(fees.collected)} collected fees`, "gold", markets.volume, "money", 2)}</div>
     <div class="stats3-data-columns"><section><header><small>HOUSEHOLD ECONOMY</small><h3>Balance distribution</h3></header>${statsDistribution(economy.distribution || [])}</section><section><header><small>STATE BALANCE SHEET</small><h3>Public position</h3></header>${line("Modeled state assets", statsFullMoney(economy.total_state_assets))}${line("Resident market assets", statsFullMoney(economy.resident_market_assets))}${line("Housing assessed base", statsFullMoney(economy.housing_assessed_base))}${line("Public obligations", statsFullMoney(economy.public_obligations))}${line("Net position", statsFullMoney(economy.state_net_position))}</section></div>
     <section class="stats3-market-table"><header><small>FCX MARKET</small><h3>Largest current movements</h3></header><div>${(markets.movers || []).map(item => `<article><span><b>${escapeHtml(item.ticker || "")}</b><small>${escapeHtml(item.name || "")}</small></span><strong>${statsFullMoney(item.price)}</strong><em class="${Number(item.change || 0) >= 0 ? "up" : "down"}">${Number(item.change || 0) >= 0 ? "+" : ""}${Number(item.change || 0).toFixed(2)}%</em></article>`).join("") || `<p class="empty">Market quotes are awaiting synchronization.</p>`}</div></section>
+  </section>`;
+
+  const protectionView = `<section class="stats3-section stats5-protection">
+    <header class="stats3-section-head"><div><small>INSURANCE & PUBLIC RECEIPTS</small><h2>Protection, claims, and collected fees.</h2><p>A statewide financial-health view using anonymous totals only. No policyholders, claimants, account balances, or policy numbers are published.</p></div><strong class="stats3-head-number">${statsAnimatedValue(insurance.active_coverage, statsFullMoney(insurance.active_coverage), "money", 2)}<small>active insured value</small></strong></header>
+    <div class="stats3-kpis">
+      ${kpi("Active policies", Number(insurance.active_policies || 0).toLocaleString(), `${statsPercent(insurance.insured_rate)} of verified residents`, "live", insurance.active_policies, "number")}
+      ${kpi("Premiums collected", statsFullMoney(insurance.premiums_collected), `${statsFullMoney(insurance.premiums_30d)} over 30 days`, "gold", insurance.premiums_collected, "money", 2)}
+      ${kpi("Claims delivered", statsFullMoney(insurance.claims_paid), `${Number(insurance.paid_claims || 0)} paid claims`, "green", insurance.claims_paid, "money", 2)}
+      ${kpi("Market fees", statsFullMoney(fees.collected), `${Number(fees.effective_rate || 0).toFixed(3)}% effective fee yield`, "", fees.collected, "money", 2)}
+    </div>
+    <section class="stats5-protection-command">
+      <div class="stats5-coverage-orbit" style="--coverage:${clampPercent(insurance.insured_rate)}">
+        <span><small>RESIDENT COVERAGE</small><strong>${statsAnimatedValue(insurance.insured_rate, statsPercent(insurance.insured_rate), "percent", 1)}</strong><em>${Number(insurance.insured_residents || 0).toLocaleString()} insured residents</em></span>
+        <i></i><i></i>
+      </div>
+      <div class="stats5-health-board"><header><small>PROTECTION NETWORK</small><h3>Coverage health</h3><span class="${insurance.emergency_active ? "emergency" : "standby"}"><i></i>${insurance.emergency_active ? "STATE OF EMERGENCY ACTIVE" : "CLAIMS NETWORK STANDBY"}</span></header>
+        ${meter("Resident coverage", insurance.insured_rate, "Verified residents holding active coverage")}
+        ${meter("Claims resolved", insurance.resolution_rate, "Claims with a completed review decision")}
+        ${meter("Approval rate", insurance.approval_rate, "Approved or paid claims among reviewed claims")}
+        ${meter("Premium payout ratio", Math.min(100, Number(insurance.payout_ratio || 0)), "Delivered claim value compared with collected premiums")}
+      </div>
+      <aside class="stats5-fee-desk"><header><small>COLLECTED FEE DESK</small><h3>${statsFullMoney(fees.collected)}</h3><span>recorded market fees</span></header>
+        ${line("Trade execution fees", statsFullMoney(fees.trade_fees))}
+        ${line("Share transfer fees", statsFullMoney(fees.transfer_fees))}
+        ${line("Last 30 days", statsFullMoney(fees.collected_30d))}
+        ${line("Fee treasury", statsFullMoney(fees.treasury_balance))}
+        ${line("Effective yield", `${Number(fees.effective_rate || 0).toFixed(3)}%`, "fees as a share of market volume")}
+      </aside>
+    </section>
+    <section class="stats5-claims-flow"><header><div><small>CLAIMS PIPELINE</small><h3>From filing to delivery</h3></div><strong>${Number(insurance.claims || 0).toLocaleString()}<span>total claims</span></strong></header><div>
+      ${[["Filed", insurance.claims], ["Pending review", insurance.pending_claims], ["Approved", insurance.approved_claims], ["Paid", insurance.paid_claims], ["Denied", insurance.denied_claims]].map(([label, value], index) => `<article style="--stage:${index}"><small>0${index + 1}</small><strong>${Number(value || 0).toLocaleString()}</strong><span>${escapeHtml(label)}</span><i><b style="--fill:${Math.max(3, Number(value || 0) / Math.max(1, Number(insurance.claims || 0)) * 100)}%"></b></i></article>`).join("")}
+    </div></section>
+    <div class="stats5-protection-ledgers">
+      <section><header><small>PREMIUM COMPOSITION</small><h3>Protection receipts</h3></header>${line("Core policy premiums", statsFullMoney(insurance.base_premiums))}${line("Property protection", statsFullMoney(insurance.property_premiums), `${Number(insurance.property_protections || 0)} active protections`)}${line("Everyday protection", statsFullMoney(insurance.everyday_premiums), `${Number(insurance.everyday_protections || 0)} active protections`)}${line("Stock protection", statsFullMoney(insurance.stock_premiums), `${Number(insurance.stock_protections || 0)} active protections`)}</section>
+      <section><header><small>POLICY DURABILITY</small><h3>Terms & extensions</h3></header>${line("Three-month rate locks", Number(insurance.three_month_policies || 0).toLocaleString())}${line("Six-month rate locks", Number(insurance.six_month_policies || 0).toLocaleString())}${line("Claim value requested", statsFullMoney(insurance.claims_requested))}${line("Requested in 30 days", statsFullMoney(insurance.claims_requested_30d))}</section>
+    </div>
   </section>`;
 
   const communityView = `<section class="stats3-section">
@@ -2208,11 +2263,12 @@ function renderStatsWorkspace() {
     </div>
   </section>`;
 
-  const views = { overview, safety: safetyView, economy: economyView, community: communityView, activity: activityView, gaming: gamingView };
+  const views = { overview, safety: safetyView, economy: economyView, protection: protectionView, community: communityView, activity: activityView, gaming: gamingView };
+  const liveIndicators = [["FC/USD", `$${Number(currency.usd_reference_rate || 0).toFixed(4)}`], ["FCX", `${Number(markets.index_change || 0) >= 0 ? "+" : ""}${Number(markets.index_change || 0).toFixed(2)}%`], ["Insured", statsPercent(insurance.insured_rate)], ["Fees collected", statsFullMoney(fees.collected)], ["Court clearance", statsPercent(courts.completion_rate)], ["Housing", statsPercent(housing.occupancy_rate)], ["Casino volume", statsFullMoney(casino.wagered)], ["Lottery jackpot", statsFullMoney(lottery.current_jackpot)]];
   return `<main class="stats-workspace stats-workspace-v3">
     <header class="stats3-topbar"><button class="stats3-brand" type="button" data-close-stats><span>FC</span><div><small>STATE OF FAIRCROFT</small><strong>Public Data Bureau</strong></div></button><div class="stats3-top-actions"><span><i></i> LIVE DATA</span><button type="button" data-refresh-stats>Sync now</button><button type="button" data-close-stats>Exit</button></div></header>
     <section class="stats3-hero"><div><small>FAIRCROFT OPEN DATA</small><h1>Faircroft,<br><em>in motion.</em></h1><p>Explore the live statewide signal. Every figure is an anonymous aggregate synchronized from Faircroft systems.</p></div><aside><span><i></i>${Number(population.online || 0).toLocaleString()} online now</span><strong>${statsAnimatedValue(population.registered, Number(population.registered || 0).toLocaleString(), "number")}</strong><small>registered resident profiles</small><time>${syncedAt ? syncedAt.toLocaleString() : "Awaiting first sync"}</time></aside></section>
-    <div class="stats4-live-rail" aria-label="Live statewide indicators"><div>${[["FC/USD", `$${Number(currency.usd_reference_rate || 0).toFixed(4)}`], ["FCX", `${Number(markets.index_change || 0) >= 0 ? "+" : ""}${Number(markets.index_change || 0).toFixed(2)}%`], ["Court clearance", statsPercent(courts.completion_rate)], ["Housing", statsPercent(housing.occupancy_rate)], ["Casino volume", statsFullMoney(casino.wagered)], ["Lottery jackpot", statsFullMoney(lottery.current_jackpot)]].map(([label, value]) => `<span><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong></span>`).join("")}${[["FC/USD", `$${Number(currency.usd_reference_rate || 0).toFixed(4)}`], ["FCX", `${Number(markets.index_change || 0) >= 0 ? "+" : ""}${Number(markets.index_change || 0).toFixed(2)}%`], ["Court clearance", statsPercent(courts.completion_rate)], ["Housing", statsPercent(housing.occupancy_rate)], ["Casino volume", statsFullMoney(casino.wagered)], ["Lottery jackpot", statsFullMoney(lottery.current_jackpot)]].map(([label, value]) => `<span aria-hidden="true"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong></span>`).join("")}</div></div>
+    <div class="stats4-live-rail" aria-label="Live statewide indicators"><div>${liveIndicators.map(([label, value]) => `<span><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong></span>`).join("")}${liveIndicators.map(([label, value]) => `<span aria-hidden="true"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong></span>`).join("")}</div></div>
     <nav class="stats3-nav" aria-label="Statistics sections">${nav.map(([key, label]) => `<button type="button" class="${tab === key ? "active" : ""}" data-stats-tab="${key}">${escapeHtml(label)}</button>`).join("")}</nav>
     <div class="stats3-view">${views[tab]}</div>
     <footer class="stats3-footer"><span>FC / PUBLIC AGGREGATES</span><p>${escapeHtml(data.privacy || "Aggregate public statistics only.")}</p><button type="button" data-refresh-stats>Refresh data</button></footer>
@@ -16543,7 +16599,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.1-index-programs-v61").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.1-public-stats-v62").catch(() => {}));
 }
 
 legalFooterLink?.addEventListener("click", () => {
