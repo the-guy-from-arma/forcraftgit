@@ -6935,10 +6935,18 @@ def update_market_index_prices(db: Database, force_history: bool = False) -> int
 def market_index_payload(db: Database) -> list[dict[str, Any]]:
     funds = [dict(row) for row in all_rows(db, """SELECT f.*,s.ticker,s.name,s.price,s.previous_price,s.description,
             COALESCE(position.holder_count,0) AS holder_count,
-            COALESCE(position.units_outstanding,0) AS units_outstanding
+            COALESCE(position.units_outstanding,0) AS units_outstanding,
+            COALESCE(system_position.generated_buy_shares,0) AS gemini_buy_shares,
+            COALESCE(system_position.generated_sell_shares,0) AS gemini_sell_shares
         FROM market_index_funds f JOIN market_securities s ON s.id=f.security_id
         LEFT JOIN (SELECT security_id,COUNT(*) AS holder_count,SUM(quantity) AS units_outstanding
                    FROM market_holdings WHERE quantity>0 GROUP BY security_id) position ON position.security_id=s.id
+        LEFT JOIN (
+            SELECT security_id,SUM(buy_volume) AS generated_buy_shares,SUM(sell_volume) AS generated_sell_shares
+            FROM market_system_trades
+            WHERE security_id IN (SELECT security_id FROM market_index_funds WHERE enabled=1)
+            GROUP BY security_id
+        ) system_position ON system_position.security_id=s.id
         WHERE f.enabled=1 AND s.active=1 ORDER BY f.risk_profile""")]
     if not funds:
         return []
@@ -6959,8 +6967,18 @@ def market_index_payload(db: Database) -> list[dict[str, Any]]:
     for fund in funds:
         price = float(fund.get("price") or 0)
         previous = float(fund.get("previous_price") or price)
+        resident_units = max(0.0, float(fund.get("units_outstanding") or 0))
+        gemini_buy_shares = max(0.0, float(fund.get("gemini_buy_shares") or 0))
+        gemini_sell_shares = max(0.0, float(fund.get("gemini_sell_shares") or 0))
+        gemini_shares = max(0.0, gemini_buy_shares - gemini_sell_shares)
+        total_capitalized_units = resident_units + gemini_shares
         fund["change_percent"] = round((price / previous - 1) * 100, 2) if previous else 0.0
-        fund["market_cap"] = round(price * float(fund.get("units_outstanding") or 0), 2)
+        fund["resident_units"] = round(resident_units, 6)
+        fund["gemini_shares"] = round(gemini_shares, 6)
+        fund["total_capitalized_units"] = round(total_capitalized_units, 6)
+        fund["resident_capitalization"] = round(price * resident_units, 2)
+        fund["gemini_capitalization"] = round(price * gemini_shares, 2)
+        fund["market_cap"] = round(price * total_capitalized_units, 2)
         fund["constituents"] = grouped.get(int(fund["id"]), [])
     return funds
 
@@ -15589,20 +15607,47 @@ class RoleplayHandler(BaseHTTPRequestHandler):
     def market_payload(self, db: Database, user: DbRow, history_ticker: str = "", history_range: str = "LIVE") -> dict[str, Any]:
         settings = get_system_settings(db)
         account = one(db, "SELECT * FROM market_accounts WHERE user_id = ?", (user["id"],))
+        day_cutoff = (utcnow() - dt.timedelta(hours=24)).isoformat()
         securities = all_rows(db, """SELECT s.*,
                 COALESCE(position.holder_count,0) AS holder_count,
                 COALESCE(position.outstanding_shares,0) AS outstanding_shares,
                 COALESCE(position.invested_basis,0) AS invested_basis,
                 CASE WHEN s.security_type='fund'
                     THEN s.price*COALESCE(position.outstanding_shares,0)
-                    ELSE s.price*COALESCE(s.issued_shares,0) END AS market_cap
+                    ELSE s.price*COALESCE(s.issued_shares,0) END AS market_cap,
+                COALESCE(day_reference.price, earliest_reference.price, s.previous_price, s.price) AS price_24h_ago
             FROM market_securities s
             LEFT JOIN (
                 SELECT security_id,COUNT(*) AS holder_count,SUM(quantity) AS outstanding_shares,
                        SUM(quantity*average_cost) AS invested_basis
                 FROM market_holdings WHERE quantity>0 GROUP BY security_id
             ) position ON position.security_id=s.id
-            WHERE s.active=1 ORDER BY CASE WHEN s.security_type='fund' THEN 0 ELSE 1 END,s.security_type,s.ticker""")
+            LEFT JOIN LATERAL (
+                SELECT h.price FROM market_price_history h
+                WHERE h.security_id=s.id AND h.recorded_at<=?
+                ORDER BY h.recorded_at DESC,h.id DESC LIMIT 1
+            ) day_reference ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT h.price FROM market_price_history h
+                WHERE h.security_id=s.id
+                ORDER BY h.recorded_at ASC,h.id ASC LIMIT 1
+            ) earliest_reference ON TRUE
+            WHERE s.active=1 ORDER BY CASE WHEN s.security_type='fund' THEN 0 ELSE 1 END,s.security_type,s.ticker""", (day_cutoff,))
+        securities = [dict(row) for row in securities]
+        ranked_stocks = sorted(
+            (row for row in securities if str(row.get("security_type") or "") != "fund"),
+            key=lambda row: (-float(row.get("market_cap") or 0), str(row.get("ticker") or "")),
+        )
+        market_cap_ranks = {int(row["id"]): rank for rank, row in enumerate(ranked_stocks, start=1)}
+        for security in securities:
+            current_price = float(security.get("price") or 0)
+            price_24h_ago = float(security.get("price_24h_ago") or current_price)
+            security["change_24h_percent"] = round(
+                ((current_price / price_24h_ago) - 1) * 100 if price_24h_ago > 0 else 0,
+                4,
+            )
+            security["market_cap_rank"] = market_cap_ranks.get(int(security["id"]))
+            security["market_cap_rank_count"] = len(ranked_stocks)
         holdings: list[DbRow] = []
         orders: list[DbRow] = []
         cash_log: list[DbRow] = []
@@ -15795,6 +15840,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 WHERE r.account_id=? ORDER BY r.redeemed_at DESC LIMIT 20""", (account["id"],))
         portfolio_value = sum(float(row["quantity"]) * float(row["price"]) for row in holdings)
         index_funds = market_index_payload(db)
+        index_funds_by_security = {int(fund["security_id"]): fund for fund in index_funds}
+        for security in securities:
+            fund = index_funds_by_security.get(int(security["id"]))
+            if not fund:
+                continue
+            security["resident_units"] = fund["resident_units"]
+            security["gemini_shares"] = fund["gemini_shares"]
+            security["total_capitalized_units"] = fund["total_capitalized_units"]
+            security["gemini_capitalization"] = fund["gemini_capitalization"]
+            security["market_cap"] = fund["market_cap"]
         exchange_market_cap = sum(float(row.get("market_cap") or 0) for row in securities if str(row.get("security_type") or "") != "fund")
         return {"account": dict(account) if account else None, "securities": [dict(x) for x in securities], "holdings": [dict(x) for x in holdings],
                 "orders": [dict(x) for x in orders], "cash_transactions": [dict(x) for x in cash_log], "transfers": [dict(x) for x in transfers],
