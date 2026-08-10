@@ -30,6 +30,7 @@ import psycopg
 import paramiko
 from psycopg.rows import dict_row
 
+from insurance_rules import insurance_claim_filing_error
 from market_math import (
     market_cap_weighted_allocations,
     market_gemini_exposure_shares,
@@ -15557,6 +15558,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         current_balance = max(0.0, float(bank["balance"] or 0)) if bank else 0.0
         incident_type = str(payload.get("incident_type") or "server_reset").strip().lower()
         coverage_source = str(payload.get("coverage_source") or "continuity").strip().lower()
+        filing_error = insurance_claim_filing_error(
+            bool(settings["insurance_state_of_emergency"]), incident_type
+        )
+        if filing_error:
+            self.error(409, filing_error); return
         property_id: str | None = None
         property_name = ""
         protected_balance = current_balance
