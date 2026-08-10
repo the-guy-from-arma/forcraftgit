@@ -1,10 +1,11 @@
-const CACHE = "faircroft-rp-v031-lottery-forfeitures-v65";
+const CACHE = "faircroft-rp-v031-ravenhood-mobile-v66";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.3.1-lottery-forfeitures-v65",
+  "/static/styles.css?v=0.3.1-ravenhood-mobile-v66",
+  "/static/ravenhood-mobile.css?v=0.3.1-ravenhood-mobile-v66",
   "/static/insurance-v7.css?v=0.3.1-index-flow-v58",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.3.1-lottery-forfeitures-v65",
+  "/static/app.js?v=0.3.1-ravenhood-mobile-v66",
   "/static/thunderlink-eula-v1.0.txt",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
