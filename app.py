@@ -7150,6 +7150,25 @@ def apply_market_price_programs(db: Database) -> int:
             new_price = max(0.01, start_price * (1 + float(program["percent_change"]) * progress / 100.0))
             rounded_price = round(new_price, 4)
             db.execute("UPDATE market_securities SET previous_price = price, price = ?, updated_at = ? WHERE id = ?", (rounded_price, current.isoformat(), security["id"]))
+            flow_source = f"scheduled:{program['id']}"
+            last_flow = one(
+                db,
+                """SELECT reference_price,created_at FROM market_system_trades
+                   WHERE security_id=? AND source=? ORDER BY id DESC LIMIT 1""",
+                (security["id"], flow_source),
+            )
+            last_flow_time = parse_iso(last_flow["created_at"]) if last_flow and last_flow.get("created_at") else None
+            flow_due = not last_flow_time or (current - last_flow_time).total_seconds() >= 60 or progress >= 1
+            if flow_due:
+                flow_start_price = float(last_flow.get("reference_price") or start_price) if last_flow else start_price
+                record_market_system_trades(
+                    db,
+                    int(security["id"]),
+                    flow_start_price,
+                    rounded_price,
+                    flow_source,
+                    f"Scheduled movement '{program['event_name']}' generated exchange order flow.",
+                )
             last_history = one(db, "SELECT price,recorded_at FROM market_price_history WHERE security_id=? ORDER BY id DESC LIMIT 1", (security["id"],))
             last_time = parse_iso(last_history["recorded_at"]) if last_history and last_history.get("recorded_at") else None
             if not last_history or abs(float(last_history["price"]) - rounded_price) >= 0.0001 or not last_time or (current - last_time).total_seconds() >= 300:
@@ -24409,10 +24428,19 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             if item.get("security_id"):
                 security = one(db, "SELECT price FROM market_securities WHERE id=?", (item["security_id"],))
                 if security:
+                    prior_price = max(0.01, float(security["price"] or 0.01))
                     restored_price = max(0.01, float(item["start_price"] or security["price"]))
                     restored_at = now_iso()
                     db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?", (restored_price, restored_at, item["security_id"]))
                     db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (item["security_id"], restored_price, "program_cancelled", restored_at))
+                    record_market_system_trades(
+                        db,
+                        int(item["security_id"]),
+                        prior_price,
+                        restored_price,
+                        f"scheduled_cancel:{item['id']}",
+                        f"Scheduled movement '{item['event_name']}' was stopped and restored to baseline.",
+                    )
                     restored += 1
             db.execute("UPDATE market_price_programs SET status='cancelled' WHERE id=?", (item["id"],))
         db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('program_cancelled',?,?,?,?)", (f"Stopped: {program['event_name']}", f"Restored {restored} security price(s) to their pre-movement baseline.", user["id"], now_iso()))
