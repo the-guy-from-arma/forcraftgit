@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from market_math import ravenhood_margin_metrics, ravenhood_margin_quote
 
@@ -28,6 +29,12 @@ class RavenhoodMarginMathTests(unittest.TestCase):
         metrics = ravenhood_margin_metrics("short", 100, 116.5, 50, 1_000, 5, 1, 0.20)
         self.assertEqual(metrics["unrealized_pnl"], -825)
         self.assertTrue(metrics["liquidatable"])
+
+    def test_margin_action_routes_read_numeric_id_segment(self):
+        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        self.assertIn("api_wallstreet_margin_close(db, user, self.path_int(path, 4))", source)
+        self.assertIn("api_wallstreet_margin_cancel(db, user, self.path_int(path, 4))", source)
+        self.assertNotIn("api_wallstreet_margin_close(db, user, self.path_int(path, 5))", source)
 
 
 if __name__ == "__main__":

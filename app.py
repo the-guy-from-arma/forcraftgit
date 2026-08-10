@@ -10325,9 +10325,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 elif path == "/api/wallstreet/margin/positions" and method == "POST":
                     self.api_wallstreet_margin_open(db, user)
                 elif path.startswith("/api/wallstreet/margin/positions/") and path.endswith("/close") and method == "POST":
-                    self.api_wallstreet_margin_close(db, user, self.path_int(path, 5))
+                    self.api_wallstreet_margin_close(db, user, self.path_int(path, 4))
                 elif path.startswith("/api/wallstreet/margin/orders/") and path.endswith("/cancel") and method == "POST":
-                    self.api_wallstreet_margin_cancel(db, user, self.path_int(path, 5))
+                    self.api_wallstreet_margin_cancel(db, user, self.path_int(path, 4))
                 elif path == "/api/wallstreet/recipient" and method == "GET":
                     self.api_wallstreet_recipient(db, user, query)
                 elif path == "/api/wallstreet/transfers" and method == "POST":
