@@ -4,6 +4,19 @@ from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from typing import Any
 
 
+def ravenhood_security_session_open(
+    market_open: bool, ticker: str, fcxv_24h_enabled: bool
+) -> bool:
+    """Return whether an ordinary share order may execute right now.
+
+    FCXV is the only continuous-session security.  Margin orders deliberately
+    do not use this helper and remain subject to the core exchange session.
+    """
+    return bool(market_open) or (
+        bool(fcxv_24h_enabled) and str(ticker or "").strip().upper() == "FCXV"
+    )
+
+
 def market_cap_weighted_allocations(
     capitalizations: list[tuple[int, Any]], total_amount: Any
 ) -> list[dict[str, float | int]]:
