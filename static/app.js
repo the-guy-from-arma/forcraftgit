@@ -5888,14 +5888,29 @@ function renderMarketWorkspace() {
     const windowDeviation = Math.sqrt(windowPrices.reduce((sum, value) => sum + Math.pow(value - windowMean, 2), 0) / Math.max(1, windowPrices.length));
     return {ema: emaValue, upper: emaValue + windowDeviation * 2, lower: Math.max(.01, emaValue - windowDeviation * 2)};
   });
+  // Keep the outlook deterministic and visually separate from recorded prices.
+  // The projection blends recent drift with executed-order pressure and eases
+  // toward its destination; it never writes a quote back to the market.
+  const forecastSteps = 10;
+  const pressureBias = (Math.max(0, Math.min(100, Number(analytics.buy_pressure_percent ?? 50))) - 50) / 50;
+  const driftMove = Math.max(-.08, Math.min(.08, drift * Math.min(8, Math.max(2, returns.length))));
+  const pressureMove = pressureBias * Math.min(.025, Math.sqrt(Math.max(0, variance)) * 4 + .004);
+  const forecastMove = Math.max(-.10, Math.min(.10, driftMove * .72 + pressureMove));
+  const forecastPrices = Array.from({length: forecastSteps}, (_, index) => {
+    const progress = (index + 1) / forecastSteps;
+    const easedProgress = 1 - Math.pow(1 - progress, 1.35);
+    return Math.max(.01, currentPrice * (1 + forecastMove * easedProgress));
+  });
   const chartValues = history.flatMap(row => [row.low, row.high])
     .concat(trendSeries.flatMap(row => [row.lower, row.upper]))
-    .concat(history.map(row => Number.isFinite(row.vwap) && row.vwap > 0 ? row.vwap : currentPrice));
+    .concat(history.map(row => Number.isFinite(row.vwap) && row.vwap > 0 ? row.vwap : currentPrice))
+    .concat(forecastPrices);
   const chartMin = Math.max(.01, Math.min(...chartValues) * .985);
   const chartMax = Math.max(...chartValues) * 1.015;
   const chartSpan = Math.max(.01, chartMax - chartMin);
   const yFor = value => 286 - ((value - chartMin) / chartSpan) * 238;
-  const actualEndX = 1332;
+  const actualEndX = 1035;
+  const forecastEndX = 1332;
   const declaredStart = Date.parse(data.history_range_start || "");
   const requestedChartStart = Number.isFinite(declaredStart) && data.history_range === range ? declaredStart : now - rangeMs;
   // If a sparse short window is extended with the latest recorded quotes,
@@ -5925,6 +5940,19 @@ function renderMarketWorkspace() {
     fromOpen: open ? (row.price / open - 1) * 100 : 0,
   }));
   const actualPoints = chartSeries.map(point => `${point.x},${point.y}`).join(" ");
+  const forecastSeries = [
+    {x: actualEndX, price: currentPrice},
+    ...forecastPrices.map((price, index) => ({
+      x: actualEndX + (index + 1) / forecastSteps * (forecastEndX - actualEndX),
+      price,
+    })),
+  ];
+  const forecastPoints = forecastSeries.map(point => `${point.x.toFixed(1)},${yFor(point.price).toFixed(1)}`).join(" ");
+  const forecastTicks = forecastSeries.slice(1).map(point => {
+    const y = yFor(point.price);
+    return `<line class="market-v14-projection-tick" x1="${point.x.toFixed(1)}" y1="${(y - 4).toFixed(1)}" x2="${point.x.toFixed(1)}" y2="${(y + 4).toFixed(1)}"/>`;
+  }).join("");
+  const forecastLast = forecastSeries.at(-1);
   const trendPoints = trendSeries.map((point, index) => `${chartSeries[index].x},${yFor(point.ema).toFixed(1)}`).join(" ");
   const bandPoints = [
     ...trendSeries.map((point, index) => `${chartSeries[index].x},${yFor(point.upper).toFixed(1)}`),
@@ -5996,6 +6024,7 @@ function renderMarketWorkspace() {
     chartDate(chartStart),
     chartDate(chartStart + (chartEnd - chartStart) / 2),
     chartDate(lastRecordedAt),
+    "STATISTICAL OUTLOOK",
   ];
 
   const invested = Number(data.portfolio_value || 0);
@@ -6048,10 +6077,10 @@ function renderMarketWorkspace() {
         <section class="market-v13-chart market-v14-chart"><header><div><small>RECORDED OHLC + VWAP + DYNAMIC EMA</small><h2>${escapeHtml(selected.ticker || "Market")} live price desk</h2><span data-market-live-clock>${range === "LIVE" ? "Live view auto-syncs every 12 seconds" : "Range synchronized"} · hover any visible series for exact data</span></div><nav>${[["LIVE", "Live"], ["15M", "15 min"], ["1H", "1 hour"], ["1D", "1 day"], ["1W", "1 week"], ["1M", "1 month"], ["1Y", "1 year"]].map(([item, label]) => `<button type="button" class="${range === item ? "active" : ""}" data-market-range="${item}">${label}</button>`).join("")}</nav></header>
           <div class="market-v13-canvas ${change >= 0 ? "positive" : "negative"} ${hiddenSeriesClasses}" data-market-price-chart data-market-points="${chartSeriesPayload}" data-market-ema-period="${emaPeriod}" tabindex="0" aria-label="Interactive ${escapeHtml(selected.ticker || "Market")} price history. Toggle chart series, then hover or use arrow keys to inspect their recorded values.">
             <div class="market-v13-gridlines"></div><div class="market-v13-y-axis"><span>${money(chartMax)}</span><span>${money((chartMax + chartMin) / 2)}</span><span>${money(chartMin)}</span></div>
-            <svg viewBox="0 0 1360 320" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="${chartId}-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".24"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient><linearGradient id="${chartId}-band" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#57dca8" stop-opacity=".16"/><stop offset="1" stop-color="#57dca8" stop-opacity=".025"/></linearGradient></defs><polygon class="trend-band" points="${bandPoints}" fill="url(#${chartId}-band)"/><g class="market-series-price"><polygon class="area" points="28,304 ${actualPoints} ${actualEndX},304" fill="url(#${chartId}-area)"/><g class="market-v14-candles">${candleMarkup}</g><polyline class="actual" points="${actualPoints}"/>${spikeMarker}${dropMarker}<circle class="pulse" cx="${actualEndX}" cy="${yFor(currentPrice).toFixed(1)}" r="7"/></g><polyline class="ema-line" points="${trendPoints}"/>${vwapPoints ? `<polyline class="vwap-line" points="${vwapPoints}"/>` : ""}</svg>
-            <div class="market-v14-legend" aria-label="Chart series visibility">${[["price", "OHLC candles"], ["ema", `EMA ${emaPeriod}`], ["vwap", vwapValue > 0 ? "Session VWAP" : "VWAP awaiting volume"], ["band", "Volatility band"]].map(([key, label]) => `<button type="button" class="${key} ${seriesVisibility[key] ? "active" : ""}" data-market-series="${key}" aria-pressed="${seriesVisibility[key] ? "true" : "false"}" title="${seriesVisibility[key] ? "Hide" : "Show"} ${escapeHtml(label)}"><i></i>${escapeHtml(label)}</button>`).join("")}<span class="market-v14-direction-key" title="Candle direction"><i class="up"></i>Up<i class="down"></i>Down<i class="neutral"></i>Flat</span></div>
+            <svg viewBox="0 0 1360 320" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="${chartId}-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".24"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient><linearGradient id="${chartId}-band" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#57dca8" stop-opacity=".16"/><stop offset="1" stop-color="#57dca8" stop-opacity=".025"/></linearGradient><linearGradient id="${chartId}-outlook" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b89cff" stop-opacity=".02"/><stop offset="1" stop-color="#b89cff" stop-opacity=".12"/></linearGradient></defs><rect class="market-v14-projection-zone" x="${actualEndX}" y="0" width="${forecastEndX - actualEndX}" height="304" fill="url(#${chartId}-outlook)"/><polygon class="trend-band" points="${bandPoints}" fill="url(#${chartId}-band)"/><g class="market-series-price"><polygon class="area" points="28,304 ${actualPoints} ${actualEndX},304" fill="url(#${chartId}-area)"/><g class="market-v14-candles">${candleMarkup}</g><polyline class="actual" points="${actualPoints}"/>${spikeMarker}${dropMarker}<circle class="market-v14-current-quote" cx="${actualEndX}" cy="${yFor(currentPrice).toFixed(1)}" r="5"/></g><polyline class="ema-line" points="${trendPoints}"/>${vwapPoints ? `<polyline class="vwap-line" points="${vwapPoints}"/>` : ""}<line class="market-v14-projection-divider" x1="${actualEndX}" y1="0" x2="${actualEndX}" y2="304"/><g class="market-v14-projection"><polyline class="market-v14-projection-line" points="${forecastPoints}"/>${forecastTicks}<circle class="market-v14-projection-end" cx="${forecastLast.x.toFixed(1)}" cy="${yFor(forecastLast.price).toFixed(1)}" r="4"/></g></svg>
+            <div class="market-v14-legend" aria-label="Chart series visibility">${[["price", "OHLC candles"], ["ema", `EMA ${emaPeriod}`], ["vwap", vwapValue > 0 ? "Session VWAP" : "VWAP awaiting volume"], ["band", "Volatility band"]].map(([key, label]) => `<button type="button" class="${key} ${seriesVisibility[key] ? "active" : ""}" data-market-series="${key}" aria-pressed="${seriesVisibility[key] ? "true" : "false"}" title="${seriesVisibility[key] ? "Hide" : "Show"} ${escapeHtml(label)}"><i></i>${escapeHtml(label)}</button>`).join("")}<span class="market-v14-projection-key" title="Statistical outlook; not a recorded quote"><i></i>Projection</span><span class="market-v14-direction-key" title="Candle direction"><i class="up"></i>Up<i class="down"></i>Down<i class="neutral"></i>Flat</span></div>
             <div class="market-v13-hover-guide" aria-hidden="true"></div><div class="market-v13-hover-dot" aria-hidden="true"></div><aside class="market-v13-tooltip" aria-live="polite"><small data-market-tooltip-symbol>${escapeHtml(selected.ticker || "MARKET")} · RECORDED CANDLE</small><strong data-market-tooltip-price>${money(currentPrice)}</strong><time data-market-tooltip-time>${new Date(lastRecordedAt).toLocaleString()}</time><span data-market-tooltip-change>Current verified price</span><em data-market-tooltip-detail>OHLC and volume available on hover</em></aside>
-            <div class="market-v13-chart-labels"><span>${escapeHtml(chartTimeLabels[0])}</span><span>${escapeHtml(chartTimeLabels[1])}</span><span>${escapeHtml(chartTimeLabels[2])}</span></div>
+            <div class="market-v13-chart-labels">${chartTimeLabels.map(label => `<span>${escapeHtml(label)}</span>`).join("")}</div>
           </div>
           <footer class="market-v14-statbar market-v16-statbar"><span><small>OPEN</small><b>${money(open)}</b></span><span><small>${range} LOW</small><b>${money(low)}</b></span><span><small>${range} HIGH</small><b>${money(high)}</b></span><span><small>VWAP</small><b>${vwapValue > 0 ? money(vwapValue) : "No trades"}</b></span><span><small>MARKET CAP</small><b>${money(selectedMarketCap)}</b></span><span><small>CAP RANK</small><b>${selectedMarketCapRank ? `#${selectedMarketCapRank} of ${marketCapRankCount}` : "Index fund"}</b></span><span><small>YOUR POSITION</small><b>${owned ? `${owned.toLocaleString(undefined, {maximumFractionDigits: 4})} shares` : "Not held"}</b></span></footer>
           <div class="market-v13-analysis market-v14-analysis"><article><small>EMA TREND</small><strong class="${trendSlope >= 0 ? "up" : "down"}">${directionLabel}</strong><span>${trendSlope >= 0 ? "+" : ""}${trendSlope.toFixed(2)}% slope</span><p>${directionCopy}</p></article><article><small>PRICE VS VWAP</small><strong class="${priceVsVwap == null ? "" : priceVsVwap >= 0 ? "up" : "down"}">${priceVsVwap == null ? "Awaiting volume" : `${priceVsVwap >= 0 ? "+" : ""}${priceVsVwap.toFixed(2)}%`}</strong><span>${vwapValue > 0 ? money(vwapValue) : "No executed volume in range"}</span><p>Volume-weighted average of executed Ravenhood orders.</p></article><article class="range"><small>RANGE POSITION</small><strong>${rangePosition.toFixed(0)}th percentile</strong><i><b style="left:${rangePosition.toFixed(1)}%"></b></i><span>${money(low)} low · ${money(high)} high</span></article><article class="flow"><small>ORDER FLOW</small><strong>${tradedVolume.toLocaleString(undefined, {maximumFractionDigits: 2})} shares</strong><i><b style="width:${tradedVolume > 0 ? buyPressure.toFixed(1) : "0"}%"></b></i>${tradedVolume > 0 ? `<span class="market-v15-flow-split"><b class="buy">${buyPressure.toFixed(0)}% buy pressure</b><b class="sell">${sellPressure.toFixed(0)}% sell pressure</b><em>${tradeCount} trade${tradeCount === 1 ? "" : "s"}</em></span>` : `<span>No executed flow in this range</span>`}</article><article><small>REALIZED MOVEMENT</small><strong>${periodSwing.toFixed(2)}% range</strong><span>Volatility ${quoteVolatility.toFixed(2)}%</span><p>Largest step: <b class="up">+${largestSpike.pct.toFixed(2)}%</b> / <b class="down">${largestDrop.pct.toFixed(2)}%</b></p></article></div>
@@ -16459,7 +16488,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.1-index-flow-v58").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.1-market-projection-v59").catch(() => {}));
 }
 
 legalFooterLink?.addEventListener("click", () => {
