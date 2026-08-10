@@ -16599,7 +16599,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.1-fcx-cap-v63").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.1-admin-finance-access-v64").catch(() => {}));
 }
 
 legalFooterLink?.addEventListener("click", () => {

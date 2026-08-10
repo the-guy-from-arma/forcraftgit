@@ -2317,7 +2317,7 @@ ADMIN_TOOLS_SECTIONS = (
     ("account-deletion", "Account Deletion"),
 )
 ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS = frozenset(
-    ("dashboard", "accounts", "intelligence", "housing-market", "anticheat", "audit", "banking-settings", "sportsbook-settings", "casino-tools")
+    ("dashboard", "accounts", "intelligence", "housing-market", "anticheat", "audit", "sportsbook-settings", "casino-tools")
 )
 ADMIN_TOOLS_DEVELOPER_ONLY_SECTIONS = frozenset(("account-deletion", "policy-settings"))
 ADMIN_TOOLS_CONFIGURABLE_SECTIONS = frozenset(
