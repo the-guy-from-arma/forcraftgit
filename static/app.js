@@ -74,6 +74,7 @@ const state = {
   marketTheme: localStorage.getItem("rp.market.theme") || "dark",
   marketRange: "LIVE",
   marketOrderFilter: "upcoming",
+  marketMarginView: "open",
   marketSeriesVisibility: savedMarketSeriesVisibility,
   bankActivityPage: 1,
   bankActivityStatus: "all",
@@ -6084,11 +6085,18 @@ function renderMarketWorkspace() {
     "STATISTICAL OUTLOOK",
   ];
 
+  const marginPositions = data.margin_positions || [];
+  const marginRequests = data.margin_order_requests || [];
+  const openMarginPositions = marginPositions.filter(row => String(row.status || "").toLowerCase() === "open");
+  const closedMarginPositions = marginPositions.filter(row => ["closed", "liquidated"].includes(String(row.status || "").toLowerCase()));
+  const queuedMarginOrders = marginRequests.filter(row => ["queued", "processing"].includes(String(row.status || "").toLowerCase()));
+  const marginSummary = data.margin_summary || {};
+  const marginEquity = Number(marginSummary.position_equity || 0);
   const invested = Number(data.portfolio_value || 0);
   const cash = Number(account.cash_balance || 0);
   const pendingWithdrawal = Number(data.pending_withdrawal_amount || 0);
   const availableWithdrawal = Number(data.available_withdrawal_amount ?? Math.max(0, cash - pendingWithdrawal));
-  const net = invested + cash;
+  const net = invested + cash + marginEquity;
   const cost = holdings.reduce((sum, row) => sum + Number(row.quantity || 0) * Number(row.average_cost || 0), 0);
   const profit = invested - cost;
   const selectedHolding = holdings.find(row => row.ticker === selected.ticker);
@@ -6148,10 +6156,25 @@ function renderMarketWorkspace() {
     return `<article class="market-order-row ${escapeHtml(status)}"><div class="market-order-identity"><span>${escapeHtml(String(order.side || "").toUpperCase())}</span><strong>${escapeHtml(order.ticker || "--")}</strong><small>${escapeHtml(order.name || "Ravenhood security")}</small></div><div><small>QUANTITY</small><strong>${Number(order.quantity || 0).toLocaleString(undefined, {maximumFractionDigits: 6})}</strong></div><div><small>${isUpcoming ? "SUBMITTED QUOTE" : "EXECUTION PRICE"}</small><strong>${money(price)}</strong></div><div><small>${String(order.side || "buy").toLowerCase() === "buy" ? "EST. / FINAL COST" : "EST. / FINAL PROCEEDS"}</small><strong>${money(total)}</strong></div><div class="market-order-state"><span class="${escapeHtml(status)}">${statusCopy}</span><small>${timestamp ? new Date(timestamp).toLocaleString() : "Time unavailable"}</small>${status === "failed" && order.failure_reason ? `<em>${escapeHtml(order.failure_reason)}</em>` : ""}</div>${isUpcoming ? `<button type="button" data-market-cancel-request="${Number(order.id)}">Cancel</button>` : `<i>${status === "executed" ? "SETTLED" : "CLOSED"}</i>`}</article>`;
   }).join("") || `<div class="market-orders-empty"><strong>${orderFilter === "upcoming" ? "No upcoming orders" : orderFilter === "executed" ? "No completed orders yet" : orderFilter === "closed" ? "No cancelled or failed orders" : "No stock orders yet"}</strong><span>${orderFilter === "upcoming" ? "Orders submitted while the market is closed will appear here until the next opening." : "Your Ravenhood order history will remain available here."}</span></div>`;
 
+  const marginLeverageCap = Math.max(5, Math.min(80, Number(selected.margin_max_leverage || 5)));
+  const marginLeverageSteps = [...new Set([5, 10, 20, 30, 50, 80, marginLeverageCap])].filter(value => value <= marginLeverageCap).sort((a, b) => a - b);
+  const marginLeverageOptions = marginLeverageSteps.map(value => `<option value="${value}" ${value === Math.min(5, marginLeverageCap) ? "selected" : ""}>${value}x</option>`).join("");
+  const marginTicket = data.margin_enabled && Number(selected.margin_enabled || 0) === 1
+    ? `<section class="market-margin-ticket"><header><span>ISOLATED MARGIN</span><b>Long / Short</b></header><form data-market-margin-order data-market-price="${currentPrice}" data-market-fee-percent="${Number(data.trade_fee_percent || 0)}" data-market-maintenance="${Number(data.margin_maintenance_percent || 20)}"><input type="hidden" name="ticker" value="${escapeHtml(selected.ticker || "")}"/><div class="market-margin-direction"><label><input type="radio" name="direction" value="long" checked/><span>LONG<small>Profit if price rises</small></span></label><label><input type="radio" name="direction" value="short"/><span>SHORT<small>Profit if price falls</small></span></label></div><label>Isolated collateral<input name="collateral" type="number" min="10" step="0.01" placeholder="10.00" required/></label><label>Leverage<select name="leverage">${marginLeverageOptions}</select></label><div class="market-margin-preview" data-market-margin-preview><p><span>Position size</span><strong data-margin-notional>${money(0)}</strong></p><p><span>Opening fee</span><strong data-margin-fee>${money(0)}</strong></p><p><span>Estimated liquidation</span><strong data-margin-liquidation>--</strong></p><p><span>Cash required</span><strong data-margin-required>${money(0)}</strong></p></div><button type="submit" class="market-margin-submit">${data.market_open ? "Review leveraged position" : "Queue for market open"}</button><small>Losses are isolated to collateral. Fees are separate. Liquidation runs server-side while Faircroft quotes continue after hours.</small></form></section>`
+    : `<section class="market-margin-ticket unavailable"><header><span>ISOLATED MARGIN</span><b>Unavailable</b></header><p>${data.margin_enabled ? "A developer has disabled leveraged positions for this security." : "Leveraged positions are paused exchange-wide."}</p></section>`;
+  const marginPositionRows = openMarginPositions.map(position => {
+    const pnl = Number(position.unrealized_pnl || 0);
+    const equity = Math.max(0, Number(position.equity || 0));
+    return `<article class="market-margin-position ${escapeHtml(position.direction)}"><header><span>${escapeHtml(position.ticker)} / ${escapeHtml(String(position.direction || "").toUpperCase())}</span><b>${Number(position.leverage || 0).toFixed(0)}x</b></header><dl><div><dt>Collateral</dt><dd>${money(position.collateral)}</dd></div><div><dt>Exposure</dt><dd>${money(position.entry_notional)}</dd></div><div><dt>Entry / Mark</dt><dd>${money(position.entry_price)} / ${money(position.mark_price)}</dd></div><div><dt>Liquidation</dt><dd>${money(position.liquidation_price)}</dd></div></dl><footer><span><small>LIVE P&amp;L</small><strong class="${pnl >= 0 ? "up" : "down"}">${pnl >= 0 ? "+" : ""}${money(pnl)}</strong><em>${money(equity)} position equity</em></span><button type="button" data-market-margin-close="${Number(position.id)}" ${data.market_open ? "" : "disabled"}>${data.market_open ? "Close position" : "Close at market open"}</button></footer></article>`;
+  }).join("") || `<div class="market-margin-empty"><strong>No open leveraged positions</strong><span>Use the isolated-margin ticket beside a listing to open a long or short.</span></div>`;
+  const queuedMarginRows = queuedMarginOrders.map(order => `<article class="market-margin-queue"><span><b>${escapeHtml(order.ticker)} ${escapeHtml(String(order.direction || "").toUpperCase())}</b><small>${Number(order.leverage || 0).toFixed(0)}x / ${money(order.collateral)} collateral</small></span><strong>${money(order.estimated_notional)} exposure</strong><button type="button" data-market-margin-cancel="${Number(order.id)}">Cancel</button></article>`).join("");
+  const marginHistoryRows = closedMarginPositions.slice(0, 25).map(position => `<article class="market-margin-history ${escapeHtml(position.status)}"><span><b>${escapeHtml(position.ticker)} ${escapeHtml(String(position.direction || "").toUpperCase())}</b><small>${position.closed_at ? new Date(position.closed_at).toLocaleString() : "Closed"}</small></span><strong class="${Number(position.realized_pnl || 0) >= 0 ? "up" : "down"}">${Number(position.realized_pnl || 0) >= 0 ? "+" : ""}${money(position.realized_pnl || 0)}</strong><em>${escapeHtml(humanLabel(position.close_reason || position.status))}</em></article>`).join("");
+  const marginDesk = `<section class="market-margin-desk" id="marketMarginDesk"><header><div><small>RAVENHOOD MARGIN DESK</small><h2>Controlled leverage. Isolated risk.</h2><p>Long and short exposure is separated from ordinary shares. Each position shows its live equity and liquidation boundary.</p></div><dl><div><dt>Open positions</dt><dd>${Number(marginSummary.open_positions || 0)}</dd></div><div><dt>Locked collateral</dt><dd>${money(marginSummary.locked_collateral || 0)}</dd></div><div><dt>Open exposure</dt><dd>${money(marginSummary.open_notional || 0)}</dd></div><div><dt>Unrealized P&amp;L</dt><dd class="${Number(marginSummary.unrealized_pnl || 0) >= 0 ? "up" : "down"}">${money(marginSummary.unrealized_pnl || 0)}</dd></div></dl></header>${queuedMarginRows ? `<section class="market-margin-upcoming"><h3>Queued for the opening bell</h3>${queuedMarginRows}</section>` : ""}<div class="market-margin-position-grid">${marginPositionRows}</div>${marginHistoryRows ? `<section class="market-margin-history-list"><h3>Closed position ledger</h3>${marginHistoryRows}</section>` : ""}<footer><b>Risk controls</b><span>${Number(data.margin_maintenance_percent || 20).toFixed(0)}% maintenance equity / ${Number(data.margin_max_open_positions || 5)} open-position limit / ${money(data.margin_max_account_notional || 0)} maximum exposure.</span></footer></section>`;
+
   return `<main class="market-workspace market-terminal-workspace market-v13 market-v13-${state.marketTheme === "light" ? "light" : "dark"}">
-    <header class="market-v13-top"><button type="button" class="market-v13-brand" data-market-overview><span>RH</span><div><b>Ravenhood</b><small>Faircroft Exchange / FCX</small></div></button><nav><button type="button" data-market-overview>Trade</button><button type="button" data-market-portfolio>Portfolio</button><button type="button" data-market-orders>Orders${upcomingOrders.length ? `<span>${upcomingOrders.length}</span>` : ""}</button><button type="button" data-market-dialog="deposit">Deposit</button><button type="button" data-market-dialog="withdrawal">Withdraw</button><button type="button" data-market-dialog="transfer">Transfer</button><button type="button" data-market-dialog="promo">Rewards</button></nav><div><span class="market-v13-status ${data.market_open ? "open" : "closed"}"><i></i>${data.market_open ? "Market open" : "Market closed"}</span><button type="button" data-market-theme>${state.marketTheme === "light" ? "Dark" : "Light"}</button><button type="button" data-refresh-market>Sync</button><button type="button" data-close-market>Exit</button></div></header>
+    <header class="market-v13-top"><button type="button" class="market-v13-brand" data-market-overview><span>RH</span><div><b>Ravenhood</b><small>Faircroft Exchange / FCX</small></div></button><nav><button type="button" data-market-overview>Trade</button><button type="button" data-market-portfolio>Portfolio</button><button type="button" data-market-margin-desk>Margin${openMarginPositions.length ? `<span>${openMarginPositions.length}</span>` : ""}</button><button type="button" data-market-orders>Orders${upcomingOrders.length ? `<span>${upcomingOrders.length}</span>` : ""}</button><button type="button" data-market-dialog="deposit">Deposit</button><button type="button" data-market-dialog="withdrawal">Withdraw</button><button type="button" data-market-dialog="transfer">Transfer</button><button type="button" data-market-dialog="promo">Rewards</button></nav><div><span class="market-v13-status ${data.market_open ? "open" : "closed"}"><i></i>${data.market_open ? "Market open" : "Market closed"}</span><button type="button" data-market-theme>${state.marketTheme === "light" ? "Dark" : "Light"}</button><button type="button" data-refresh-market>Sync</button><button type="button" data-close-market>Exit</button></div></header>
     <div class="market-v13-tape"><div>${securities.concat(securities).map(item => `<button type="button" data-market-ticker="${escapeHtml(item.ticker)}"><b>${escapeHtml(item.ticker)}</b><span>${money(item.price)}</span><i class="${marketChange(item) >= 0 ? "up" : "down"}">${marketChange(item) >= 0 ? "+" : ""}${marketChange(item).toFixed(2)}%</i></button>`).join("")}</div></div>
-    <section class="market-v13-account"><div><small>ACCOUNT EQUITY</small><strong>${money(net)}</strong><span class="${profit >= 0 ? "up" : "down"}">${profit >= 0 ? "+" : ""}${money(profit)} all-time</span></div><dl><div><dt>Invested</dt><dd>${money(invested)}</dd></div><div><dt>Buying power</dt><dd>${money(cash)}</dd></div><div><dt>Available to withdraw</dt><dd>${money(availableWithdrawal)}</dd></div><div><dt>Positions</dt><dd>${holdings.length}</dd></div></dl><nav><button type="button" data-market-dialog="deposit">Add funds</button><button type="button" data-market-dialog="withdrawal">Withdraw to bank</button><button type="button" data-market-dialog="promo">Redeem code</button></nav></section>
+    <section class="market-v13-account"><div><small>ACCOUNT EQUITY</small><strong>${money(net)}</strong><span class="${profit + Number(marginSummary.unrealized_pnl || 0) >= 0 ? "up" : "down"}">${profit + Number(marginSummary.unrealized_pnl || 0) >= 0 ? "+" : ""}${money(profit + Number(marginSummary.unrealized_pnl || 0))} all-time</span></div><dl><div><dt>Invested</dt><dd>${money(invested)}</dd></div><div><dt>Margin equity</dt><dd>${money(marginEquity)}</dd></div><div><dt>Buying power</dt><dd>${money(cash)}</dd></div><div><dt>Positions</dt><dd>${holdings.length + openMarginPositions.length}</dd></div></dl><nav><button type="button" data-market-dialog="deposit">Add funds</button><button type="button" data-market-dialog="withdrawal">Withdraw to bank</button><button type="button" data-market-margin-desk>Margin desk</button></nav></section>
     <section class="market-v15-indexes"><header><div><small>RAVENHOOD INDEX DESK</small><h2>Buy the market by risk profile.</h2><p>FCXS follows steadier Faircroft companies. FCXV follows the exchange's highest-movement companies. Existing stocks remain unchanged.</p></div><aside><small>FCX MARKET CAP</small><strong>${money(data.exchange_market_cap || 0)}</strong><span>Across active operating companies</span></aside></header><div>${indexFundShelf || `<p class="empty">Index composition is being calculated.</p>`}</div></section>
     <section class="market-v13-grid">
       <aside class="market-v13-discovery"><header><small>MARKET PULSE</small><h2>Hot right now</h2></header>${movers.slice(0, 7).map((item, index) => `<button type="button" class="${item.ticker === selected.ticker ? "active" : ""}" data-market-ticker="${escapeHtml(item.ticker)}"><i>${String(index + 1).padStart(2, "0")}</i><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}</small></span><strong>${money(item.price)}<em class="${marketChange(item) >= 0 ? "up" : "down"}">${marketChange(item) >= 0 ? "+" : ""}${marketChange(item).toFixed(2)}%</em></strong></button>`).join("")}</aside>
@@ -6169,12 +6192,13 @@ function renderMarketWorkspace() {
           <div class="market-v13-analysis market-v14-analysis"><article><small>EMA TREND</small><strong class="${trendSlope >= 0 ? "up" : "down"}">${directionLabel}</strong><span>${trendSlope >= 0 ? "+" : ""}${trendSlope.toFixed(2)}% slope</span><p>${directionCopy}</p></article><article><small>PRICE VS VWAP</small><strong class="${priceVsVwap == null ? "" : priceVsVwap >= 0 ? "up" : "down"}">${priceVsVwap == null ? "Awaiting volume" : `${priceVsVwap >= 0 ? "+" : ""}${priceVsVwap.toFixed(2)}%`}</strong><span>${vwapValue > 0 ? money(vwapValue) : "No executed volume in range"}</span><p>Volume-weighted average of executed Ravenhood orders.</p></article><article class="range"><small>RANGE POSITION</small><strong>${rangePosition.toFixed(0)}th percentile</strong><i><b style="left:${rangePosition.toFixed(1)}%"></b></i><span>${money(low)} low · ${money(high)} high</span></article><article class="flow"><small>ORDER FLOW</small><strong>${tradedVolume.toLocaleString(undefined, {maximumFractionDigits: 2})} shares</strong><i><b style="width:${tradedVolume > 0 ? buyPressure.toFixed(1) : "0"}%"></b></i>${tradedVolume > 0 ? `<span class="market-v15-flow-split"><b class="buy">${buyPressure.toFixed(0)}% buy pressure</b><b class="sell">${sellPressure.toFixed(0)}% sell pressure</b><em>${tradeCount} trade${tradeCount === 1 ? "" : "s"}</em></span>` : `<span>No executed flow in this range</span>`}</article><article><small>REALIZED MOVEMENT</small><strong>${periodSwing.toFixed(2)}% range</strong><span>Volatility ${quoteVolatility.toFixed(2)}%</span><p>Largest step: <b class="up">+${largestSpike.pct.toFixed(2)}%</b> / <b class="down">${largestDrop.pct.toFixed(2)}%</b></p></article></div>
         </section>
         ${selectedFundDetail}
+        ${marginDesk}
         <section class="market-v17-orders" id="marketOrdersDesk"><header><div><small>RAVENHOOD ORDER DESK</small><h2>Orders across every session.</h2><p>Open, completed, cancelled, and failed stock orders. Cash deposits and withdrawals are tracked separately.</p></div><aside class="${data.market_open ? "open" : "closed"}"><span>${data.market_open ? "LIVE EXECUTION" : "NEXT EXECUTION WINDOW"}</span><strong>${data.market_open ? "Market open" : nextMarketOpenLabel}</strong></aside></header><nav>${[["upcoming", `Upcoming ${upcomingOrders.length}`], ["executed", `Executed ${executedOrders.length}`], ["closed", `Closed ${closedOrders.length}`], ["all", `All ${allOrderRows.length}`]].map(([key, label]) => `<button type="button" class="${orderFilter === key ? "active" : ""}" data-market-order-filter="${key}">${label}</button>`).join("")}</nav><div class="market-order-ledger">${orderRowsMarkup}</div><footer><strong>After-hours order policy</strong><span>Orders submitted while Ravenhood is closed execute at the first available live quote after reopening. Cash, shares, and fees are revalidated at execution, so a queued order can fail if the account no longer has enough settled funds or shares.</span></footer></section>
         <section class="market-v13-opportunities"><header><div><small>RAVENHOOD SIGNALS</small><h2>Today's momentum leaders</h2></div><span>Live repricing</span></header><div>${gainers.map(item => `<button type="button" data-market-ticker="${escapeHtml(item.ticker)}"><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}</small></span><strong>${money(item.price)}<em class="${marketChange(item) >= 0 ? "up" : "down"}">${marketChange(item) >= 0 ? "+" : ""}${marketChange(item).toFixed(2)}%</em></strong></button>`).join("")}</div></section>
         <section class="market-v13-portfolio" id="marketPortfolioDesk"><header><div><small>YOUR RAVENHOOD ACCOUNT</small><h2>Portfolio command</h2><p>Every position, current value, and unrealized result in one view.</p></div><strong class="${profit >= 0 ? "up" : "down"}">${profit >= 0 ? "+" : ""}${money(profit)}</strong></header><div>${holdingRows}</div></section>
         <section class="market-v13-board market-v16-board"><header><div><small>FCX 24-HOUR BOARD</small><h2>Explore the exchange</h2></div><span>${securities.length} active listings</span></header><div>${exchangeListings.map(item => { const dayChange = Number(item.change_24h_percent || 0); const capRank = Number(item.market_cap_rank || 0); return `<button type="button" class="${item.ticker === selected.ticker ? "active" : ""}" data-market-ticker="${escapeHtml(item.ticker)}"><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}</small></span><em class="market-v16-rank"><b>${capRank ? `#${capRank}` : "INDEX"}</b><span>${escapeHtml(item.sector || "Market")}</span></em><strong class="market-v16-quote">${money(item.price)}<small class="${dayChange >= 0 ? "up" : "down"}">${dayChange >= 0 ? "+" : ""}${dayChange.toFixed(2)}% <i>24H</i></small><span>${money(item.market_cap || 0)} market cap</span></strong></button>`; }).join("")}</div></section>
       </section>
-      <aside class="market-v13-ticket"><header><small>ORDER ENTRY</small><h2>${escapeHtml(selected.ticker || "--")}</h2><p>${escapeHtml(selected.name || "")}</p><i class="${data.market_open ? "open" : ""}"></i></header><form data-market-order data-market-price="${currentPrice}" data-market-fee-percent="${Number(data.trade_fee_percent || 0)}" data-market-open="${data.market_open ? "true" : "false"}"><input type="hidden" name="ticker" value="${escapeHtml(selected.ticker || "")}"/><label>Action<select name="side"><option value="buy">Buy shares</option><option value="sell">Sell shares</option></select></label><label>Quantity<input name="quantity" type="number" min="0.000001" step="0.000001" placeholder="0.000000" required/></label><dl><div><dt>Market price</dt><dd>${money(currentPrice)}</dd></div><div><dt>Buying power</dt><dd>${money(cash)}</dd></div><div><dt>Shares owned</dt><dd>${owned.toLocaleString(undefined, {maximumFractionDigits: 6})}</dd></div><div><dt>Commission</dt><dd>${Number(data.trade_fee_percent || 0).toFixed(2)}%</dd></div></dl><div class="market-order-estimate" data-market-order-estimate aria-live="polite"><p><span>Stock subtotal</span><strong data-market-order-subtotal>${money(0)}</strong></p><p><span>Commission fee</span><strong data-market-order-fee>${money(0)}</strong></p><p class="total"><span data-market-order-total-label>Total cost</span><strong data-market-order-total>${money(0)}</strong></p><small data-market-order-guidance>Enter any whole or fractional share quantity.</small></div><button type="submit" class="market-primary">${data.market_open ? "Review order" : "Queue for market open"}</button><small>${data.market_open ? "Live estimate only. The displayed price and commission are confirmed at execution." : `The market is closed. Your order will wait until ${escapeHtml(nextMarketOpenLabel)} and execute at that session's first available live quote.`}</small></form><section><small>MARKET DIRECTION</small><b class="${trendSlope >= 0 ? "up" : "down"}">${escapeHtml(directionLabel)}</b><p>EMA ${emaPeriod} and executed-volume VWAP for the selected range.</p></section></aside>
+      <aside class="market-v13-ticket"><header><small>ORDER ENTRY</small><h2>${escapeHtml(selected.ticker || "--")}</h2><p>${escapeHtml(selected.name || "")}</p><i class="${data.market_open ? "open" : ""}"></i></header><form data-market-order data-market-price="${currentPrice}" data-market-fee-percent="${Number(data.trade_fee_percent || 0)}" data-market-open="${data.market_open ? "true" : "false"}"><input type="hidden" name="ticker" value="${escapeHtml(selected.ticker || "")}"/><label>Action<select name="side"><option value="buy">Buy shares</option><option value="sell">Sell shares</option></select></label><label>Quantity<input name="quantity" type="number" min="0.000001" step="0.000001" placeholder="0.000000" required/></label><dl><div><dt>Market price</dt><dd>${money(currentPrice)}</dd></div><div><dt>Buying power</dt><dd>${money(cash)}</dd></div><div><dt>Shares owned</dt><dd>${owned.toLocaleString(undefined, {maximumFractionDigits: 6})}</dd></div><div><dt>Commission</dt><dd>${Number(data.trade_fee_percent || 0).toFixed(2)}%</dd></div></dl><div class="market-order-estimate" data-market-order-estimate aria-live="polite"><p><span>Stock subtotal</span><strong data-market-order-subtotal>${money(0)}</strong></p><p><span>Commission fee</span><strong data-market-order-fee>${money(0)}</strong></p><p class="total"><span data-market-order-total-label>Total cost</span><strong data-market-order-total>${money(0)}</strong></p><small data-market-order-guidance>Enter any whole or fractional share quantity.</small></div><button type="submit" class="market-primary">${data.market_open ? "Review order" : "Queue for market open"}</button><small>${data.market_open ? "Live estimate only. The displayed price and commission are confirmed at execution." : `The market is closed. Your order will wait until ${escapeHtml(nextMarketOpenLabel)} and execute at that session's first available live quote.`}</small></form>${marginTicket}<section><small>MARKET DIRECTION</small><b class="${trendSlope >= 0 ? "up" : "down"}">${escapeHtml(directionLabel)}</b><p>EMA ${emaPeriod} and executed-volume VWAP for the selected range.</p></section></aside>
     </section>${renderMarketDialog(data, stockOptions)}
   </main>`;
 }
@@ -6296,7 +6320,7 @@ function bindMarketWorkspace() {
   if (!app.dataset.marketActionsBound) {
     app.dataset.marketActionsBound = "true";
     app.addEventListener("click", async event => {
-      const control = event.target instanceof Element ? event.target.closest("[data-market-ticker],[data-market-range],[data-market-series],[data-market-order-filter],[data-market-cancel-request],[data-market-orders],[data-market-dialog],[data-market-overview],[data-market-portfolio],[data-close-market-dialog],[data-close-market],[data-refresh-market],[data-market-theme],[data-create-market-account],[data-change-market-recipient]") : null;
+      const control = event.target instanceof Element ? event.target.closest("[data-market-ticker],[data-market-range],[data-market-series],[data-market-order-filter],[data-market-cancel-request],[data-market-orders],[data-market-margin-desk],[data-market-margin-close],[data-market-margin-cancel],[data-market-dialog],[data-market-overview],[data-market-portfolio],[data-close-market-dialog],[data-close-market],[data-refresh-market],[data-market-theme],[data-create-market-account],[data-change-market-recipient]") : null;
       if (!control || !app.contains(control)) return;
       event.preventDefault();
       event.stopPropagation();
@@ -6360,6 +6384,46 @@ function bindMarketWorkspace() {
           state.cache.wallstreet = await fetchWallstreetData();
           render();
           requestAnimationFrame(() => $("#marketOrdersDesk")?.scrollIntoView({behavior: "smooth", block: "start"}));
+        } catch (error) {
+          control.disabled = false;
+          toast(error.message);
+        }
+        return;
+      }
+      if (control.matches("[data-market-margin-desk]")) {
+        state.marketDialog = null;
+        render();
+        requestAnimationFrame(() => $("#marketMarginDesk")?.scrollIntoView({behavior: "smooth", block: "start"}));
+        return;
+      }
+      if (control.matches("[data-market-margin-close]")) {
+        const positionId = Number(control.dataset.marketMarginClose || 0);
+        if (!positionId || control.disabled) return;
+        if (!window.confirm("Close this leveraged position at the current Ravenhood quote?")) return;
+        control.disabled = true;
+        try {
+          const result = await api(`/api/wallstreet/margin/positions/${positionId}/close`, {method: "POST", body: {}, confirm: false});
+          const pnl = Number(result?.position?.realized_pnl || 0);
+          toast(`Margin position closed ${pnl >= 0 ? "+" : ""}${money(pnl)}`);
+          state.cache.wallstreet = await fetchWallstreetData();
+          render();
+          requestAnimationFrame(() => $("#marketMarginDesk")?.scrollIntoView({behavior: "smooth", block: "start"}));
+        } catch (error) {
+          control.disabled = false;
+          toast(error.message);
+        }
+        return;
+      }
+      if (control.matches("[data-market-margin-cancel]")) {
+        const requestId = Number(control.dataset.marketMarginCancel || 0);
+        if (!requestId || control.disabled) return;
+        control.disabled = true;
+        try {
+          await api(`/api/wallstreet/margin/orders/${requestId}/cancel`, {method: "POST", body: {}, confirm: false});
+          toast("Leveraged order cancelled");
+          state.cache.wallstreet = await fetchWallstreetData();
+          render();
+          requestAnimationFrame(() => $("#marketMarginDesk")?.scrollIntoView({behavior: "smooth", block: "start"}));
         } catch (error) {
           control.disabled = false;
           toast(error.message);
@@ -6525,6 +6589,55 @@ function bindMarketWorkspace() {
     marketOrderForm.elements.quantity?.addEventListener("input", updateMarketOrderEstimate);
     marketOrderForm.elements.side?.addEventListener("change", updateMarketOrderEstimate);
     updateMarketOrderEstimate();
+  }
+  const marginOrderForm = $("[data-market-margin-order]");
+  if (marginOrderForm) {
+    const updateMarginEstimate = () => {
+      const price = Math.max(0, Number(marginOrderForm.dataset.marketPrice || 0));
+      const feePercent = Math.max(0, Number(marginOrderForm.dataset.marketFeePercent || 0));
+      const maintenance = Math.max(0, Math.min(0.95, Number(marginOrderForm.dataset.marketMaintenance || 20) / 100));
+      const collateral = Math.max(0, Number(marginOrderForm.elements.collateral?.value || 0));
+      const leverage = Math.max(5, Number(marginOrderForm.elements.leverage?.value || 5));
+      const direction = String(new FormData(marginOrderForm).get("direction") || "long").toLowerCase();
+      const notional = collateral * leverage;
+      const fee = notional * feePercent / 100;
+      const liquidationDistance = leverage > 0 ? (1 - maintenance) / leverage : 0;
+      const liquidationPrice = price > 0
+        ? direction === "short" ? price * (1 + liquidationDistance) : Math.max(0.01, price * (1 - liquidationDistance))
+        : 0;
+      const notionalNode = $("[data-margin-notional]", marginOrderForm);
+      const feeNode = $("[data-margin-fee]", marginOrderForm);
+      const liquidationNode = $("[data-margin-liquidation]", marginOrderForm);
+      const requiredNode = $("[data-margin-required]", marginOrderForm);
+      const submitButton = marginOrderForm.querySelector('button[type="submit"]');
+      if (notionalNode) notionalNode.textContent = money(notional);
+      if (feeNode) feeNode.textContent = money(fee);
+      if (liquidationNode) liquidationNode.textContent = liquidationPrice > 0 ? money(liquidationPrice) : "--";
+      if (requiredNode) requiredNode.textContent = money(collateral + fee);
+      if (submitButton) submitButton.disabled = collateral < 10 || leverage < 1;
+      marginOrderForm.classList.toggle("short", direction === "short");
+    };
+    marginOrderForm.addEventListener("input", updateMarginEstimate);
+    marginOrderForm.addEventListener("change", updateMarginEstimate);
+    marginOrderForm.addEventListener("submit", async event => {
+      event.preventDefault();
+      const button = marginOrderForm.querySelector('button[type="submit"]');
+      if (button?.disabled) return;
+      const body = Object.fromEntries(new FormData(marginOrderForm));
+      if (!window.confirm(`Open a ${Number(body.leverage || 1)}x ${String(body.direction || "long").toUpperCase()} with ${money(body.collateral)} isolated collateral?`)) return;
+      if (button) button.disabled = true;
+      try {
+        const result = await api("/api/wallstreet/margin/positions", {method: "POST", body, confirm: false});
+        toast(result.status === "queued" ? "Leveraged position queued for market open" : "Leveraged position opened");
+        state.cache.wallstreet = await fetchWallstreetData();
+        render();
+        requestAnimationFrame(() => $("#marketMarginDesk")?.scrollIntoView({behavior: "smooth", block: "start"}));
+      } catch (error) {
+        if (button) button.disabled = false;
+        toast(error.message);
+      }
+    });
+    updateMarginEstimate();
   }
   $("[data-market-order]")?.addEventListener("submit", async event => { event.preventDefault(); const form=event.currentTarget,button=form.querySelector('button[type="submit"],button.market-primary'); if(button?.disabled)return; const body=Object.fromEntries(new FormData(form)); if(button)button.disabled=true; try { const result=await api("/api/wallstreet/orders",{method:"POST",body:JSON.stringify(body)}); toast(result.status==="queued"?"Order queued for market open":"Order executed"); if(result.status==="queued")state.marketOrderFilter="upcoming"; await loadAppData("wallstreet"); render(); if(result.status==="queued")requestAnimationFrame(()=>$("#marketOrdersDesk")?.scrollIntoView({behavior:"smooth",block:"start"})); } catch(error) { if(button)button.disabled=false; toast(error.message); } });
   $("[data-market-cash]")?.addEventListener("submit", async event => {
@@ -13040,13 +13153,12 @@ const ADMIN_TOOL_NAV = [
   ["enforcement", "Cases", "07"], ["warnings", "Internal Notes", "08"],
   ["linking", "Account Linking", "09"], ["campaigns", "Active Campaigns", "10"],
   ["settlement", "Settlement", "11"], ["banking-settings", "Banking Settings", "12"], ["market-settings", "Stock Market", "13"],
-  ["lottery-settings", "Lottery Settings", "13"], ["sportsbook-settings", "Sportsbook", "14"], ["casino-tools", "Casino Tools", "15"], ["gang-settings", "Gang Settings", "16"],
-  ["dmv-settings", "DMV Settings", "17"], ["mdt-settings", "MDT Settings", "18"],
-  ["court-settings", "Court Settings", "18"], ["ice-settings", "ICE Settings", "19"],
-  ["admin-2fa", "Admin 2FA", "20"], ["autopilot", "Auto Pilot", "21"],
-  ["system-update", "System Update", "22"], ["audit", "Activity Log", "23"],
-  ["policy-settings", "Policy Settings", "24"], ["fnn-settings", "FNN Settings", "25"], ["settings", "Settings", "26"],
-  ["account-deletion", "Account Deletion", "27"],
+  ["leverage-settings", "Leverage Settings", "14"], ["lottery-settings", "Lottery Settings", "15"], ["sportsbook-settings", "Sportsbook", "16"],
+  ["casino-tools", "Casino Tools", "17"], ["gang-settings", "Gang Settings", "18"], ["dmv-settings", "DMV Settings", "19"],
+  ["mdt-settings", "MDT Settings", "20"], ["court-settings", "Court Settings", "21"], ["ice-settings", "ICE Settings", "22"],
+  ["admin-2fa", "Admin 2FA", "23"], ["autopilot", "Auto Pilot", "24"], ["system-update", "System Update", "25"],
+  ["audit", "Activity Log", "26"], ["policy-settings", "Policy Settings", "27"], ["fnn-settings", "FNN Settings", "28"],
+  ["settings", "Settings", "29"], ["account-deletion", "Account Deletion", "30"],
 ];
 
 function adminToolAccess() {
@@ -13086,6 +13198,7 @@ function renderDevWorkspace() {
     "policy-settings": ["Policy Settings", "Monitor required EULA, Terms, acceptable-use, and privacy acceptance"],
     "gang-settings": ["Gang Settings", "Govern organizations, leaders, rosters, and recruitment PINs"],
     "market-settings": ["Stock Market Settings", "Operate Ravenhood pricing, settlement receipts, fees, and RP events"],
+    "leverage-settings": ["Leverage Settings", "Control isolated long and short exposure, leverage ceilings, and liquidation policy"],
     "lottery-settings": ["Lottery Settings", "Govern entries, prize funding, role eligibility, fraud review, and weekly drawings"],
     "sportsbook-settings": ["Sportsbook Settings", "Configure the live sports provider and inspect fixture, odds, and wager health"],
     "casino-tools": ["Casino Tools", "Operate Faircroft tables, published odds, Bank Bridge settlement, and audited balance automation"],
@@ -13345,6 +13458,38 @@ function renderDevMarketSettings(market, users) {
     <div class="dev-grid-2"><section class="dev-card"><div class="dev-card-header"><div><span>ACTIVE AUTOMATION</span><h2>Price programs</h2></div><strong>${programs.filter(x=>x.status==="active").length} ACTIVE</strong></div><div class="dev-detail-list">${programs.map(x => `<div><strong>${escapeHtml(x.ticker || "ALL")} Â· ${escapeHtml(x.event_name)}</strong><small>${Number(x.percent_change)>=0?"+":""}${Number(x.percent_change).toFixed(2)}% over ${Number(x.duration_minutes)} minutes Â· ${escapeHtml(x.status)}</small></div>`).join("") || `<div class="empty">No programs</div>`}</div></section><section class="dev-card"><div class="dev-card-header"><div><span>GEMINI ANALYST</span><h2>Generate market briefing</h2><p>Gemini reads current listings and your market scenario, then recommends optional programs. Nothing is applied automatically.</p></div><span class="pill ${market.ai_enabled ? "green" : ""}">${market.ai_enabled ? "enabled" : "disabled"}</span></div><form id="devMarketAiForm" class="form-grid"><label class="wide">Market scenario or operational inputs<textarea name="context" maxlength="2000" required placeholder="New mining permit, severe storm, major public contract, political uncertaintyâ€¦"></textarea></label><button class="primary wide" ${market.ai_enabled ? "" : "disabled"}>Generate analyst briefing</button></form>${state.marketAiBriefing ? `<pre class="market-ai-briefing">${escapeHtml(state.marketAiBriefing)}</pre>` : ""}</section></div>
     <section class="dev-card market-scratch-code-ledger"><div class="dev-card-header"><div><span>FAIRCROFT INSTANT SCRATCH</span><h2>Generated reward codes</h2><p>Every revealed lottery scratch card is issued as a traceable, single-use Ravenhood cash or stock promotion.</p></div><strong>${scratchPromotions.length} ISSUED</strong></div><div class="dev-promo-ledger"><div class="dev-promo-ledger-head"><span>Reward code</span><span>Prize</span><span>Claim status</span><span>Issued</span></div>${scratchPromotions.map(p=>`<article><span><strong><code>${escapeHtml(p.code_plain || `••••-${p.code_hint}`)}</code></strong><small>${escapeHtml(p.campaign_name)}</small></span><span>${p.reward_type==="cash"?money(p.cash_amount):`${Number(p.share_quantity)} ${escapeHtml(p.ticker||"stock share")}`}</span><span><strong>${Number(p.redemption_count) ? "REDEEMED" : p.active ? "READY" : "INACTIVE"}</strong><small>${Number(p.redemption_count)}/${Number(p.max_redemptions)} claims</small></span><span><strong>${escapeHtml(p.created_by_name || "System issue")}</strong><small>${escapeHtml(String(p.created_at || "").slice(0,19).replace("T"," "))}</small></span></article>`).join("")||`<div class="empty">No scratch reward codes have been generated.</div>`}</div></section>
     <section class="dev-card market-active-movements"><div class="dev-card-header"><div><span>LIVE PRICE AUTOMATION</span><h2>Active scheduled movements</h2><p>Choose whether to hold each security at its current quote or return it to the pre-event baseline.</p></div><strong>${activeMovements.length} RUNNING</strong></div><div>${activeMovements.map(program=>{const related=activePrograms.filter(item=>item.event_name===program.event_name&&item.created_at===program.created_at);const tickers=related.map(item=>item.ticker).filter(Boolean);const start=new Date(program.starts_at),end=new Date(program.ends_at),progress=Math.max(0,Math.min(100,(Date.now()-start.getTime())/Math.max(1,end.getTime()-start.getTime())*100));return `<article><div class="market-movement-status"><i></i><span>ACTIVE MOVEMENT</span></div><div><strong>${escapeHtml(program.event_name)}</strong><small>${tickers.length>8?`ENTIRE MARKET · ${tickers.length} securities`:escapeHtml(tickers.join(", ")||"Market-wide")}</small></div><div class="market-movement-change ${Number(program.percent_change)>=0?"positive":"negative"}"><strong>${Number(program.percent_change)>=0?"+":""}${Number(program.percent_change).toFixed(2)}%</strong><small>${start.toLocaleString()} → ${end.toLocaleString()}</small></div><div class="market-movement-progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="market-movement-actions"><button class="secondary" type="button" data-market-stop-program="${program.id}" data-market-program-name="${escapeHtml(program.event_name)}">Stop · keep current price</button><button class="danger" type="button" data-market-cancel-program="${program.id}" data-market-program-name="${escapeHtml(program.event_name)}">Stop & restore baseline</button></div></article>`}).join("")||`<div class="market-normal-state"><i></i><div><strong>Normal market operation</strong><span>No scheduled price movements are currently changing listed securities.</span></div></div>`}</div></section>
+  </div>`;
+}
+
+function renderDevLeverageSettings(market) {
+  const securities = market.securities || [];
+  const positions = market.margin_positions || [];
+  const openPositions = positions.filter(position => String(position.status || "").toLowerCase() === "open");
+  const openNotional = openPositions.reduce((sum, position) => sum + Number(position.entry_notional || 0), 0);
+  const livePnl = openPositions.reduce((sum, position) => sum + Number(position.live_pnl || 0), 0);
+  const enabledSecurities = securities.filter(security => Number(security.margin_enabled || 0) === 1);
+  const highestLeverage = securities.reduce((highest, security) => Math.max(highest, Number(security.margin_max_leverage || 0)), 0);
+  const securityRows = securities.map(security => {
+    const enabled = Number(security.margin_enabled || 0) === 1;
+    const cap = Math.max(5, Math.min(80, Number(security.margin_max_leverage || 5)));
+    return `<form class="dev-leverage-security" data-market-margin-security="${Number(security.id)}">
+      <span class="dev-leverage-symbol"><i>${escapeHtml(String(security.ticker || "--").slice(0, 4))}</i><b>${escapeHtml(security.name || "Ravenhood security")}<small>${escapeHtml(humanLabel(security.security_type || "stock"))} / ${money(security.price || 0)}</small></b></span>
+      <label class="dev-leverage-enable"><input name="enabled" type="checkbox" ${enabled ? "checked" : ""}/><span><b>${enabled ? "AUTHORIZED" : "DISABLED"}</b><small>Resident margin access</small></span></label>
+      <label class="dev-leverage-cap"><span>Maximum leverage</span><div><input name="max_leverage" type="number" min="5" max="80" step="1" value="${cap}" required/><b>x</b></div></label>
+      <button class="secondary" type="submit">Save limit</button>
+    </form>`;
+  }).join("") || `<div class="empty">No active Ravenhood securities are available.</div>`;
+  const positionRows = openPositions.map(position => {
+    const pnl = Number(position.live_pnl || 0);
+    const direction = String(position.direction || "").toLowerCase();
+    return `<article class="dev-leverage-position ${escapeHtml(direction)}"><span><i>${escapeHtml(position.ticker || "--")}</i><b>${escapeHtml(position.resident_name || "Resident")}<small>CIV ${escapeHtml(position.civ_number || "pending")}</small></b></span><strong>${escapeHtml(direction.toUpperCase())} / ${Number(position.leverage || 0).toFixed(0)}x</strong><dl><div><dt>Collateral</dt><dd>${money(position.collateral || 0)}</dd></div><div><dt>Exposure</dt><dd>${money(position.entry_notional || 0)}</dd></div><div><dt>Entry / Mark</dt><dd>${money(position.entry_price || 0)} / ${money(position.mark_price || 0)}</dd></div><div><dt>Live P&amp;L</dt><dd class="${pnl >= 0 ? "positive" : "negative"}">${pnl >= 0 ? "+" : ""}${money(pnl)}</dd></div><div><dt>Liquidation</dt><dd>${money(position.liquidation_price || 0)}</dd></div></dl></article>`;
+  }).join("") || `<div class="dev-leverage-clear"><i>RH</i><span><strong>No open leveraged positions</strong><small>The risk monitor is clear.</small></span></div>`;
+  return `<div class="stack dev-leverage-view">
+    <section class="dev-leverage-hero"><div><span>RAVENHOOD / DEVELOPER RISK CONTROL</span><h2>Leverage authority</h2><p>Set the exchange-wide margin policy and authorize leverage independently for each security. Resident positions remain isolated, fee-bearing, and subject to automatic maintenance liquidation.</p></div><aside><small>AUTHORIZED RANGE</small><strong>5x&ndash;80x</strong><span>5x resident-safe default</span></aside></section>
+    <section class="dev-leverage-pulse"><div><small>SYSTEM</small><strong class="${market.margin_enabled ? "positive" : "negative"}">${market.margin_enabled ? "ACTIVE" : "PAUSED"}</strong></div><div><small>AUTHORIZED SECURITIES</small><strong>${enabledSecurities.length} / ${securities.length}</strong></div><div><small>HIGHEST SECURITY CAP</small><strong>${highestLeverage.toFixed(0)}x</strong></div><div><small>OPEN POSITIONS</small><strong>${openPositions.length}</strong></div><div><small>LIVE EXPOSURE</small><strong>${money(openNotional)}</strong></div><div><small>LIVE P&amp;L</small><strong class="${livePnl >= 0 ? "positive" : "negative"}">${livePnl >= 0 ? "+" : ""}${money(livePnl)}</strong></div></section>
+    <div class="dev-leverage-layout"><section class="dev-card dev-market-margin-control"><header><div><span>GLOBAL RISK ENVELOPE</span><h2>Exchange leverage policy</h2><p>These limits apply before every open or queued order. Turning off margin blocks new positions without disabling automatic liquidation for positions already open.</p></div><strong>${market.margin_enabled ? "LIVE" : "PAUSED"}</strong></header><form id="devMarketMarginSettingsForm" class="form-grid"><label class="dev-certify wide"><input name="margin_enabled" type="checkbox" ${market.margin_enabled ? "checked" : ""}/> Allow residents to open or queue leveraged positions</label><label>Maintenance equity %<input name="margin_maintenance_percent" type="number" min="5" max="80" step="0.01" value="${Number(market.margin_maintenance_percent || 20)}" required/><small>Positions liquidate when equity reaches this share of collateral.</small></label><label>Open positions per account<input name="margin_max_open_positions" type="number" min="1" max="25" step="1" value="${Number(market.margin_max_open_positions || 5)}" required/><small>Queued margin orders are counted before acceptance.</small></label><label class="wide">Maximum account exposure<input name="margin_max_account_notional" type="number" min="100" max="1000000000" step="1" value="${Number(market.margin_max_account_notional || 10000000)}" required/><small>Total leveraged notional permitted across open and queued positions.</small></label><button class="primary wide" type="submit">Publish leverage policy</button></form><footer><b>High leverage warning</b><span>Limits above 10x create narrow liquidation bands. The 80x ceiling is developer controlled and is never granted automatically.</span></footer></section><section class="dev-card dev-leverage-principles"><span>CONTROL MODEL</span><h2>How execution works</h2><ol><li><b>Collateral first</b><small>Collateral and opening fees are deducted from settled Ravenhood buying power.</small></li><li><b>Isolated loss boundary</b><small>A losing position cannot consume the resident's ordinary stock portfolio.</small></li><li><b>Continuous protection</b><small>Liquidation checks follow the Faircroft quote engine, including after-hours movement.</small></li><li><b>Audited closure</b><small>Every open, close, cancellation, and liquidation remains in the resident and staff ledgers.</small></li></ol></section></div>
+    <section class="dev-card dev-leverage-security-matrix"><header><div><span>SECURITY AUTHORIZATION MATRIX</span><h2>Per-listing leverage ceilings</h2><p>Choose any whole-number maximum from 5x through 80x. Residents only see leverage choices at or below the saved ceiling.</p></div><strong>${enabledSecurities.length} ENABLED</strong></header><div>${securityRows}</div></section>
+    <section class="dev-card dev-leverage-monitor"><header><div><span>LIVE POSITION MONITOR</span><h2>Open resident exposure</h2><p>Read-only operational view of positions currently subject to profit, loss, and liquidation calculations.</p></div><strong>${openPositions.length} OPEN</strong></header><div>${positionRows}</div></section>
   </div>`;
 }
 
@@ -13622,6 +13767,7 @@ function renderDevTools() {
   if (state.devTab === "dmv-settings") return renderDevDmvSettings(data.dmv_settings || {});
   if (state.devTab === "court-settings") return renderDevCourtSettings(data.court_settings || {});
   if (state.devTab === "market-settings") return renderDevMarketSettings(data.market_settings || {}, users);
+  if (state.devTab === "leverage-settings") return renderDevLeverageSettings(data.leverage_settings || {});
   if (state.devTab === "lottery-settings") return renderDevLotterySettings(data.lottery_settings || {});
   if (state.devTab === "sportsbook-settings") return renderDevSportsbookSettings(data.sportsbook_settings || {});
   if (state.devTab === "casino-tools") return renderDevCasinoTools(data.casino_tools || {});
@@ -14499,6 +14645,38 @@ function bindDevWorkspace() {
   $$('[data-dev-gang-limit]').forEach(button=>button.addEventListener('click',async()=>{const limit=prompt('New maximum roster size',button.dataset.currentLimit||'20');if(!limit)return;try{await api(`/api/dev-tools/gangs/${button.dataset.devGangLimit}`,{method:'PATCH',body:{action:'limit',member_limit:limit}});toast('Roster limit updated');await refreshDevTools();}catch(error){toast(error.message);}}));
   $$('[data-dev-gang-member]').forEach(button=>button.addEventListener('click',async()=>{const current=button.dataset.status;const action=prompt('Member action: lock, unlock, or remove',current==='locked'?'unlock':'lock');if(!action)return;try{await api(`/api/dev-tools/gangs/members/${button.dataset.devGangMember}`,{method:'PATCH',body:{action}});toast('Gang member status updated');await refreshDevTools();}catch(error){toast(error.message);}}));
   $("#devMarketSettingsForm")?.addEventListener("submit", async event => { event.preventDefault(); const form=event.currentTarget; try { await api("/api/dev-tools/market/settings", {method:"PATCH",body:{schedule_open_time:form.schedule_open_time.value,schedule_close_time:form.schedule_close_time.value,weekends_enabled:form.weekends_enabled.checked,ai_enabled:form.ai_enabled.checked,trade_fee_percent:form.trade_fee_percent.value,transfer_fee_percent:form.transfer_fee_percent.value}}); toast("Ravenhood schedule and policy saved"); await refreshDevTools(); } catch(error){toast(error.message);} });
+  $("#devMarketMarginSettingsForm")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    try {
+      await api("/api/dev-tools/market/margin-settings", {method: "PATCH", body: {
+        margin_enabled: form.margin_enabled.checked,
+        margin_maintenance_percent: form.margin_maintenance_percent.value,
+        margin_max_open_positions: form.margin_max_open_positions.value,
+        margin_max_account_notional: form.margin_max_account_notional.value,
+      }});
+      toast("Margin risk policy saved");
+      await refreshDevTools();
+    } catch (error) { toast(error.message); }
+  });
+  $$("[data-market-margin-security]").forEach(form => form.addEventListener("submit", async event => {
+    event.preventDefault();
+    const securityId = Number(form.dataset.marketMarginSecurity || 0);
+    const button = form.querySelector('button[type="submit"], button');
+    if (!securityId) return;
+    if (button) button.disabled = true;
+    try {
+      await api(`/api/dev-tools/market/securities/${securityId}/margin`, {method: "PATCH", body: {
+        enabled: form.enabled.checked,
+        max_leverage: form.max_leverage.value,
+      }});
+      toast("Security margin policy saved");
+      await refreshDevTools();
+    } catch (error) {
+      if (button) button.disabled = false;
+      toast(error.message);
+    }
+  }));
   $$('[data-market-session-override]').forEach(button => button.addEventListener('click', async () => {
     const mode = button.dataset.marketSessionOverride;
     const promptText = mode === 'open' ? 'Force Ravenhood open now? Resident buy and sell orders will be allowed until scheduled mode is restored.' : mode === 'closed' ? 'Force Ravenhood closed now? New resident orders will be blocked until scheduled mode is restored.' : '';

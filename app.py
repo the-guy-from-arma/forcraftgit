@@ -30,7 +30,7 @@ import psycopg
 import paramiko
 from psycopg.rows import dict_row
 
-from market_math import market_gemini_exposure_shares
+from market_math import market_gemini_exposure_shares, ravenhood_margin_metrics, ravenhood_margin_quote
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -2204,6 +2204,10 @@ SYSTEM_SETTING_DEFAULTS = {
     "market_transfer_fee_percent": "1.50",
     "market_trade_fee_percent": "0.25",
     "market_holding_balance": "0.00",
+    "market_margin_enabled": "1",
+    "market_margin_maintenance_percent": "20.00",
+    "market_margin_max_open_positions": "5",
+    "market_margin_max_account_notional": "10000000.00",
     "market_ai_enabled": "1",
     "market_autopilot_enabled": "0",
     "market_autopilot_interval_minutes": "5",
@@ -2301,6 +2305,7 @@ ADMIN_TOOLS_SECTIONS = (
     ("settlement", "Settlement"),
     ("banking-settings", "Banking Settings"),
     ("market-settings", "Stock Market"),
+    ("leverage-settings", "Leverage Settings"),
     ("lottery-settings", "Lottery Settings"),
     ("sportsbook-settings", "Sportsbook Settings"),
     ("casino-tools", "Casino Tools"),
@@ -2321,7 +2326,7 @@ ADMIN_TOOLS_SECTIONS = (
 ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS = frozenset(
     ("dashboard", "accounts", "intelligence", "housing-market", "anticheat", "audit", "sportsbook-settings", "casino-tools")
 )
-ADMIN_TOOLS_DEVELOPER_ONLY_SECTIONS = frozenset(("account-deletion", "policy-settings"))
+ADMIN_TOOLS_DEVELOPER_ONLY_SECTIONS = frozenset(("account-deletion", "policy-settings", "leverage-settings"))
 ADMIN_TOOLS_CONFIGURABLE_SECTIONS = frozenset(
     section_id for section_id, _label in ADMIN_TOOLS_SECTIONS
     if section_id not in ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS
@@ -4259,6 +4264,8 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE market_securities ADD COLUMN IF NOT EXISTS closed_by INTEGER")
     db.execute("ALTER TABLE market_securities ADD COLUMN IF NOT EXISTS issued_shares NUMERIC(20,6) NOT NULL DEFAULT 1000000")
     db.execute("ALTER TABLE market_securities ADD COLUMN IF NOT EXISTS index_eligible INTEGER NOT NULL DEFAULT 1")
+    db.execute("ALTER TABLE market_securities ADD COLUMN IF NOT EXISTS margin_enabled INTEGER NOT NULL DEFAULT 1")
+    db.execute("ALTER TABLE market_securities ADD COLUMN IF NOT EXISTS margin_max_leverage NUMERIC(4,2) NOT NULL DEFAULT 5")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS market_holdings (
@@ -4319,6 +4326,64 @@ def ensure_migrations(db: Database) -> None:
     )
     db.execute("CREATE INDEX IF NOT EXISTS market_order_requests_account_status_idx ON market_order_requests(account_id, status, queued_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS market_order_requests_queue_idx ON market_order_requests(status, queued_at) WHERE status IN ('queued','processing')")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS market_margin_positions (
+            id SERIAL PRIMARY KEY,
+            account_id INTEGER NOT NULL,
+            security_id INTEGER NOT NULL,
+            direction TEXT NOT NULL,
+            leverage NUMERIC(4,2) NOT NULL,
+            collateral NUMERIC(14,2) NOT NULL,
+            quantity NUMERIC(20,8) NOT NULL,
+            entry_price NUMERIC(14,4) NOT NULL,
+            entry_notional NUMERIC(18,2) NOT NULL,
+            open_fee NUMERIC(14,2) NOT NULL DEFAULT 0,
+            liquidation_price NUMERIC(14,4) NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open',
+            opened_at TEXT NOT NULL,
+            close_price NUMERIC(14,4),
+            close_notional NUMERIC(18,2),
+            close_fee NUMERIC(14,2),
+            realized_pnl NUMERIC(18,2),
+            payout_amount NUMERIC(18,2),
+            close_reason TEXT NOT NULL DEFAULT '',
+            closed_at TEXT,
+            FOREIGN KEY (account_id) REFERENCES market_accounts(id) ON DELETE CASCADE,
+            FOREIGN KEY (security_id) REFERENCES market_securities(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS market_margin_positions_account_status_idx ON market_margin_positions(account_id,status,opened_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS market_margin_positions_open_idx ON market_margin_positions(status,security_id) WHERE status='open'")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS market_margin_order_requests (
+            id SERIAL PRIMARY KEY,
+            account_id INTEGER NOT NULL,
+            security_id INTEGER NOT NULL,
+            direction TEXT NOT NULL,
+            leverage NUMERIC(4,2) NOT NULL,
+            collateral NUMERIC(14,2) NOT NULL,
+            submitted_price NUMERIC(14,4) NOT NULL,
+            estimated_notional NUMERIC(18,2) NOT NULL,
+            estimated_fee NUMERIC(14,2) NOT NULL DEFAULT 0,
+            estimated_liquidation_price NUMERIC(14,4) NOT NULL,
+            status TEXT NOT NULL DEFAULT 'queued',
+            execute_after TEXT,
+            queued_at TEXT NOT NULL,
+            executed_position_id INTEGER,
+            executed_at TEXT,
+            cancelled_at TEXT,
+            failure_reason TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY (account_id) REFERENCES market_accounts(id) ON DELETE CASCADE,
+            FOREIGN KEY (security_id) REFERENCES market_securities(id) ON DELETE CASCADE,
+            FOREIGN KEY (executed_position_id) REFERENCES market_margin_positions(id) ON DELETE SET NULL
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS market_margin_requests_account_status_idx ON market_margin_order_requests(account_id,status,queued_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS market_margin_requests_queue_idx ON market_margin_order_requests(status,queued_at) WHERE status IN ('queued','processing')")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS market_system_trades (
@@ -5825,6 +5890,10 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "market_transfer_fee_percent": max(0.0, min(25.0, float(raw.get("market_transfer_fee_percent") or 1.5))),
         "market_trade_fee_percent": max(0.0, min(10.0, float(raw.get("market_trade_fee_percent") or 0.25))),
         "market_holding_balance": max(0.0, float(raw.get("market_holding_balance") or 0)),
+        "market_margin_enabled": str(raw.get("market_margin_enabled") or "1") in ("1", "true", "True", "yes", "on"),
+        "market_margin_maintenance_percent": max(5.0, min(80.0, float(raw.get("market_margin_maintenance_percent") or 20))),
+        "market_margin_max_open_positions": max(1, min(25, int(raw.get("market_margin_max_open_positions") or 5))),
+        "market_margin_max_account_notional": max(100.0, min(1000000000.0, float(raw.get("market_margin_max_account_notional") or 10000000))),
         "market_ai_enabled": str(raw.get("market_ai_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "market_autopilot_enabled": str(raw.get("market_autopilot_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "market_autopilot_interval_minutes": max(1, min(60, int(raw.get("market_autopilot_interval_minutes") or 5))),
@@ -7376,6 +7445,168 @@ def execute_ravenhood_order(
     }
 
 
+def adjust_market_holding_balance(db: Database, amount: float) -> None:
+    if not math.isfinite(amount) or abs(amount) < 0.005:
+        return
+    row = one(db, "SELECT setting_value FROM system_settings WHERE setting_key='market_holding_balance' FOR UPDATE")
+    current = float((row or {}).get("setting_value") or 0)
+    set_system_setting(db, "market_holding_balance", str(round(max(0.0, current + amount), 2)))
+
+
+def execute_ravenhood_margin_open(
+    db: Database,
+    account_id: int,
+    security_id: int,
+    direction: str,
+    collateral: float,
+    leverage: float,
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    """Open one isolated long/short position using settled Ravenhood cash."""
+    account = one(db, "SELECT * FROM market_accounts WHERE id=? FOR UPDATE", (account_id,))
+    security = one(db, "SELECT * FROM market_securities WHERE id=? AND active=1 FOR UPDATE", (security_id,))
+    direction = str(direction or "").strip().lower()
+    if not settings.get("market_margin_enabled"):
+        return {"ok": False, "status_code": 409, "error": "Leveraged positions are currently paused."}
+    if not account or str(account.get("status") or "active").lower() != "active":
+        return {"ok": False, "status_code": 409, "error": "Ravenhood account is not active."}
+    if not security or str(security.get("lifecycle_status") or "active").lower() != "active":
+        return {"ok": False, "status_code": 409, "error": "This security is no longer open for margin trading."}
+    if not bool(int(security.get("margin_enabled") or 0)):
+        return {"ok": False, "status_code": 409, "error": "Margin trading is disabled for this security."}
+    max_leverage = max(5.0, min(80.0, float(security.get("margin_max_leverage") or 5)))
+    if direction not in ("long", "short") or not math.isfinite(collateral) or collateral < 10:
+        return {"ok": False, "status_code": 400, "error": "Choose long or short and enter at least $10.00 collateral."}
+    if not math.isfinite(leverage) or leverage < 5 or leverage > max_leverage + 0.0001:
+        return {"ok": False, "status_code": 400, "error": f"This security allows leverage from 5x through {max_leverage:g}x."}
+    open_count = one(db, "SELECT COUNT(*) AS total FROM market_margin_positions WHERE account_id=? AND status='open'", (account_id,))
+    if int((open_count or {}).get("total") or 0) >= int(settings["market_margin_max_open_positions"]):
+        return {"ok": False, "status_code": 409, "error": f"This account already has the maximum {settings['market_margin_max_open_positions']} open margin positions."}
+    quote = ravenhood_margin_quote(
+        direction,
+        security["price"],
+        collateral,
+        leverage,
+        settings["market_trade_fee_percent"],
+        settings["market_margin_maintenance_percent"] / 100.0,
+    )
+    exposure = one(db, "SELECT COALESCE(SUM(entry_notional),0) AS total FROM market_margin_positions WHERE account_id=? AND status='open'", (account_id,))
+    next_exposure = float((exposure or {}).get("total") or 0) + float(quote["notional"])
+    if next_exposure > float(settings["market_margin_max_account_notional"]) + 0.0001:
+        return {"ok": False, "status_code": 409, "error": f"This position would exceed the account margin exposure limit of ${settings['market_margin_max_account_notional']:,.2f}."}
+    pending_withdrawals = one(
+        db,
+        "SELECT COALESCE(SUM(amount),0) AS total FROM market_cash_transactions WHERE account_id=? AND transaction_type='withdrawal' AND status='pending'",
+        (account_id,),
+    )
+    available_cash = float(account.get("cash_balance") or 0) - float((pending_withdrawals or {}).get("total") or 0)
+    opening_cost = round(collateral + float(quote["open_fee"]), 2)
+    if available_cash + 0.0001 < opening_cost:
+        return {"ok": False, "status_code": 409, "error": f"Insufficient settled buying power. Isolated collateral and opening fee require ${opening_cost:,.2f}."}
+    opened_at = now_iso()
+    db.execute("UPDATE market_accounts SET cash_balance=?,updated_at=? WHERE id=?", (round(float(account["cash_balance"]) - opening_cost, 2), opened_at, account_id))
+    position = one(db, """INSERT INTO market_margin_positions
+        (account_id,security_id,direction,leverage,collateral,quantity,entry_price,entry_notional,open_fee,liquidation_price,status,opened_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,'open',?) RETURNING id""",
+        (account_id, security_id, direction, leverage, collateral, quote["quantity"], security["price"], quote["notional"], quote["open_fee"], quote["liquidation_price"], opened_at))
+    adjust_market_holding_balance(db, float(quote["open_fee"]))
+    buy_volume = quote["quantity"] if direction == "long" else 0
+    sell_volume = quote["quantity"] if direction == "short" else 0
+    db.execute("""INSERT INTO market_system_trades
+        (security_id,buy_volume,sell_volume,buy_trade_count,sell_trade_count,reference_price,price_change_percent,source,rationale,created_at)
+        VALUES (?,?,?,?,?,?,0,'resident_margin',?,?)""",
+        (security_id, buy_volume, sell_volume, 1 if direction == "long" else 0, 1 if direction == "short" else 0,
+         security["price"], f"Resident opened an isolated {leverage:g}x {direction} position.", opened_at))
+    return {"ok": True, "position_id": int(position["id"]), "ticker": security["ticker"], "direction": direction,
+            "leverage": leverage, "collateral": round(collateral, 2), "entry_price": float(security["price"]),
+            "quantity": quote["quantity"], "notional": quote["notional"], "open_fee": quote["open_fee"],
+            "liquidation_price": quote["liquidation_price"], "opened_at": opened_at}
+
+
+def close_ravenhood_margin_position(
+    db: Database,
+    position_id: int,
+    settings: dict[str, Any],
+    reason: str,
+    account_id: int | None = None,
+) -> dict[str, Any]:
+    position = one(db, """SELECT p.*,s.ticker,s.price AS mark_price,a.user_id
+        FROM market_margin_positions p JOIN market_securities s ON s.id=p.security_id
+        JOIN market_accounts a ON a.id=p.account_id
+        WHERE p.id=? FOR UPDATE OF p""", (position_id,))
+    if not position or (account_id is not None and int(position["account_id"]) != account_id):
+        return {"ok": False, "status_code": 404, "error": "Margin position was not found."}
+    if str(position.get("status") or "").lower() != "open":
+        return {"ok": False, "status_code": 409, "error": "This margin position is already closed."}
+    metrics = ravenhood_margin_metrics(
+        position["direction"], position["entry_price"], position["mark_price"], position["quantity"],
+        position["collateral"], position["leverage"], settings["market_trade_fee_percent"],
+        settings["market_margin_maintenance_percent"] / 100.0,
+    )
+    closed_at = now_iso()
+    status = "liquidated" if reason == "liquidation" else "closed"
+    db.execute("""UPDATE market_margin_positions SET status=?,close_price=?,close_notional=?,close_fee=?,
+        realized_pnl=?,payout_amount=?,close_reason=?,closed_at=? WHERE id=?""",
+        (status, metrics["mark_price"], metrics["close_notional"], metrics["close_fee"], metrics["unrealized_pnl"],
+         metrics["estimated_payout"], reason[:80], closed_at, position_id))
+    account = one(db, "SELECT cash_balance FROM market_accounts WHERE id=? FOR UPDATE", (position["account_id"],))
+    db.execute("UPDATE market_accounts SET cash_balance=?,updated_at=? WHERE id=?",
+        (round(float((account or {}).get("cash_balance") or 0) + float(metrics["estimated_payout"]), 2), closed_at, position["account_id"]))
+    lost_collateral = max(0.0, float(position["collateral"]) - max(0.0, float(position["collateral"]) + float(metrics["unrealized_pnl"])))
+    adjust_market_holding_balance(db, lost_collateral + float(metrics["close_fee"]))
+    closing_buy = position["quantity"] if position["direction"] == "short" else 0
+    closing_sell = position["quantity"] if position["direction"] == "long" else 0
+    db.execute("""INSERT INTO market_system_trades
+        (security_id,buy_volume,sell_volume,buy_trade_count,sell_trade_count,reference_price,price_change_percent,source,rationale,created_at)
+        VALUES (?,?,?,?,?,?,0,'resident_margin_close',?,?)""",
+        (position["security_id"], closing_buy, closing_sell, 1 if closing_buy else 0, 1 if closing_sell else 0,
+         metrics["mark_price"], f"Isolated margin position closed: {reason}.", closed_at))
+    return {"ok": True, "position_id": position_id, "status": status, "ticker": position["ticker"],
+            "realized_pnl": metrics["unrealized_pnl"], "payout_amount": metrics["estimated_payout"],
+            "close_price": metrics["mark_price"], "close_fee": metrics["close_fee"], "closed_at": closed_at,
+            "user_id": int(position["user_id"])}
+
+
+def process_queued_ravenhood_margin_orders(db: Database, settings: dict[str, Any]) -> int:
+    if not settings["market_open"] or not settings["market_margin_enabled"]:
+        return 0
+    queued = all_rows(db, """SELECT * FROM market_margin_order_requests WHERE status='queued'
+        ORDER BY queued_at,id LIMIT 25 FOR UPDATE SKIP LOCKED""")
+    processed = 0
+    for request in queued:
+        db.execute("UPDATE market_margin_order_requests SET status='processing',failure_reason='' WHERE id=? AND status='queued'", (request["id"],))
+        result = execute_ravenhood_margin_open(
+            db, int(request["account_id"]), int(request["security_id"]), str(request["direction"]),
+            float(request["collateral"]), float(request["leverage"]), settings,
+        )
+        if result["ok"]:
+            db.execute("""UPDATE market_margin_order_requests SET status='executed',executed_position_id=?,executed_at=?,failure_reason=''
+                WHERE id=?""", (result["position_id"], result["opened_at"], request["id"]))
+        else:
+            db.execute("UPDATE market_margin_order_requests SET status='failed',failure_reason=? WHERE id=?", (str(result["error"])[:500], request["id"]))
+        processed += 1
+    return processed
+
+
+def process_ravenhood_margin_liquidations(db: Database, settings: dict[str, Any]) -> int:
+    open_positions = all_rows(db, """SELECT p.id,p.direction,p.entry_price,p.quantity,p.collateral,p.leverage,s.price AS mark_price
+        FROM market_margin_positions p JOIN market_securities s ON s.id=p.security_id WHERE p.status='open'""")
+    liquidated = 0
+    for position in open_positions:
+        metrics = ravenhood_margin_metrics(
+            position["direction"], position["entry_price"], position["mark_price"], position["quantity"],
+            position["collateral"], position["leverage"], settings["market_trade_fee_percent"],
+            settings["market_margin_maintenance_percent"] / 100.0,
+        )
+        if not metrics["liquidatable"]:
+            continue
+        result = close_ravenhood_margin_position(db, int(position["id"]), settings, "liquidation")
+        if result["ok"]:
+            add_admin_audit(db, result["user_id"], "market.margin.liquidated", result["user_id"], result)
+            liquidated += 1
+    return liquidated
+
+
 def process_queued_ravenhood_orders(db: Database, settings: dict[str, Any]) -> int:
     """Execute after-hours stock orders once the exchange is open."""
     if not settings["market_open"]:
@@ -7436,6 +7667,7 @@ def market_automation_worker() -> None:
                 # orders remain queued while the exchange itself keeps moving.
                 if settings["market_open"]:
                     process_queued_ravenhood_orders(db, settings)
+                    process_queued_ravenhood_margin_orders(db, settings)
                 apply_market_price_programs(db)
                 if settings["market_autopilot_enabled"]:
                     last = parse_iso(settings["market_autopilot_last_tick"]) if settings["market_autopilot_last_tick"] else None
@@ -7467,6 +7699,9 @@ def market_automation_worker() -> None:
                     rebalance_market_index_funds(db)
                 else:
                     update_market_index_prices(db)
+                # Risk checks follow every quote/index cycle and remain active
+                # after hours because the Faircroft exchange continues moving.
+                process_ravenhood_margin_liquidations(db, settings)
         except Exception as exc:
             print(f"Market automation error: {type(exc).__name__}: {exc}")
         time.sleep(15)
@@ -8465,6 +8700,11 @@ def admin_tools_section_required(db: Database, user: DbRow | None, section_id: s
 
 
 def admin_tools_route_section(path: str) -> str:
+    # Per-security leverage policy belongs to the dedicated developer-only
+    # workspace. Other security actions (bankruptcy, index eligibility, etc.)
+    # must continue to use the normal Stock Market permission boundary.
+    if path.startswith("/api/dev-tools/market/securities/") and path.endswith("/margin"):
+        return "leverage-settings"
     route_map = (
         ("/api/dev-tools/account-deletion/", "account-deletion"),
         ("/api/dev-tools/accounts/", "accounts"),
@@ -8480,6 +8720,7 @@ def admin_tools_route_section(path: str) -> str:
         ("/api/dev-tools/admin-2fa", "admin-2fa"),
         ("/api/dev-tools/myfaircroft-payment-codes", "settlement"),
         ("/api/dev-tools/banking/", "banking-settings"),
+        ("/api/dev-tools/market/margin-settings", "leverage-settings"),
         ("/api/dev-tools/market/", "market-settings"),
         ("/api/dev-tools/lottery/", "lottery-settings"),
         ("/api/dev-tools/casino/", "casino-tools"),
@@ -9994,6 +10235,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_wallstreet_order(db, user)
                 elif path.startswith("/api/wallstreet/orders/") and path.endswith("/cancel") and method == "POST":
                     self.api_wallstreet_cancel_order(db, user, self.path_int(path, 3))
+                elif path == "/api/wallstreet/margin/positions" and method == "POST":
+                    self.api_wallstreet_margin_open(db, user)
+                elif path.startswith("/api/wallstreet/margin/positions/") and path.endswith("/close") and method == "POST":
+                    self.api_wallstreet_margin_close(db, user, self.path_int(path, 5))
+                elif path.startswith("/api/wallstreet/margin/orders/") and path.endswith("/cancel") and method == "POST":
+                    self.api_wallstreet_margin_cancel(db, user, self.path_int(path, 5))
                 elif path == "/api/wallstreet/recipient" and method == "GET":
                     self.api_wallstreet_recipient(db, user, query)
                 elif path == "/api/wallstreet/transfers" and method == "POST":
@@ -10242,7 +10489,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_resend_bank_command(db, user, path.split("/")[5])
                 elif path == "/api/dev-tools/market/codes" and method == "POST":
                     self.api_dev_market_code(db, user)
-                elif path == "/api/dev-tools/market/settings" and method == "PATCH":
+                elif path in ("/api/dev-tools/market/settings", "/api/dev-tools/market/margin-settings") and method == "PATCH":
                     self.api_dev_market_settings(db, user)
                 elif path == "/api/dev-tools/market/securities" and method == "POST":
                     self.api_dev_market_security_create(db, user)
@@ -10252,6 +10499,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_market_security_bankruptcy(db, user, self.path_int(path, 4))
                 elif path.startswith("/api/dev-tools/market/securities/") and path.endswith("/index-eligibility") and method == "PATCH":
                     self.api_dev_market_security_index_eligibility(db, user, self.path_int(path, 4))
+                elif path.startswith("/api/dev-tools/market/securities/") and path.endswith("/margin") and method == "PATCH":
+                    self.api_dev_market_security_margin(db, user, self.path_int(path, 4))
                 elif path == "/api/dev-tools/market/indexes/rebalance" and method == "POST":
                     self.api_dev_market_indexes_rebalance(db, user)
                 elif path == "/api/dev-tools/market/programs" and method == "POST":
@@ -16102,6 +16351,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         cash_log: list[DbRow] = []
         transfers: list[DbRow] = []
         promo_redemptions: list[DbRow] = []
+        margin_positions: list[dict[str, Any]] = []
+        margin_order_requests: list[DbRow] = []
         pending_withdrawal_amount = 0.0
         available_withdrawal_amount = 0.0
         requested_ticker = str(history_ticker or "").upper().strip()[:12]
@@ -16290,7 +16541,25 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             promo_redemptions = all_rows(db, """SELECT r.reward_summary,r.redeemed_at,p.campaign_name
                 FROM market_promo_redemptions r JOIN market_promo_codes p ON p.id=r.promo_id
                 WHERE r.account_id=? ORDER BY r.redeemed_at DESC LIMIT 20""", (account["id"],))
+            raw_margin_positions = all_rows(db, """SELECT p.*,s.ticker,s.name,s.price AS mark_price,s.margin_max_leverage
+                FROM market_margin_positions p JOIN market_securities s ON s.id=p.security_id
+                WHERE p.account_id=? ORDER BY CASE WHEN p.status='open' THEN 0 ELSE 1 END,p.opened_at DESC LIMIT 150""", (account["id"],))
+            for row in raw_margin_positions:
+                item = dict(row)
+                if str(item.get("status") or "").lower() == "open":
+                    item.update(ravenhood_margin_metrics(
+                        item["direction"], item["entry_price"], item["mark_price"], item["quantity"], item["collateral"],
+                        item["leverage"], settings["market_trade_fee_percent"], settings["market_margin_maintenance_percent"] / 100.0,
+                    ))
+                margin_positions.append(item)
+            margin_order_requests = all_rows(db, """SELECT r.*,s.ticker,s.name FROM market_margin_order_requests r
+                JOIN market_securities s ON s.id=r.security_id WHERE r.account_id=? ORDER BY r.queued_at DESC LIMIT 150""", (account["id"],))
         portfolio_value = sum(float(row["quantity"]) * float(row["price"]) for row in holdings)
+        open_margin_positions = [row for row in margin_positions if str(row.get("status") or "").lower() == "open"]
+        margin_collateral = sum(float(row.get("collateral") or 0) for row in open_margin_positions)
+        margin_equity = sum(max(0.0, float(row.get("equity") or 0)) for row in open_margin_positions)
+        margin_unrealized = sum(float(row.get("unrealized_pnl") or 0) for row in open_margin_positions)
+        margin_notional = sum(float(row.get("entry_notional") or 0) for row in open_margin_positions)
         index_funds = market_index_payload(db)
         index_funds_by_security = {int(fund["security_id"]): fund for fund in index_funds}
         for security in securities:
@@ -16307,6 +16576,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "orders": [dict(x) for x in orders], "order_requests": [dict(x) for x in order_requests],
                 "cash_transactions": [dict(x) for x in cash_log], "transfers": [dict(x) for x in transfers],
                 "promo_redemptions": [dict(x) for x in promo_redemptions],
+                "margin_positions": margin_positions,
+                "margin_order_requests": [dict(x) for x in margin_order_requests],
+                "margin_summary": {"open_positions": len(open_margin_positions), "locked_collateral": round(margin_collateral, 2),
+                    "position_equity": round(margin_equity, 2), "unrealized_pnl": round(margin_unrealized, 2),
+                    "open_notional": round(margin_notional, 2)},
                 "index_funds": index_funds,
                 "exchange_market_cap": round(exchange_market_cap, 2),
                 "price_history": price_history,
@@ -16317,6 +16591,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "pending_withdrawal_amount": pending_withdrawal_amount,
                 "available_withdrawal_amount": available_withdrawal_amount,
                 "portfolio_value": round(portfolio_value, 2), "market_open": settings["market_open"],
+                "margin_enabled": settings["market_margin_enabled"],
+                "margin_maintenance_percent": settings["market_margin_maintenance_percent"],
+                "margin_max_open_positions": settings["market_margin_max_open_positions"],
+                "margin_max_account_notional": settings["market_margin_max_account_notional"],
                 "market_session_reason": settings["market_session_reason"],
                 "market_next_transition_at": settings["market_next_transition_at"],
                 "transfer_fee_percent": settings["market_transfer_fee_percent"], "trade_fee_percent": settings["market_trade_fee_percent"]}
@@ -16469,6 +16747,121 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         add_admin_audit(db, int(user["id"]), "market.order.cancelled", int(user["id"]), {
             "request_id": request_id, "ticker": str((security or {}).get("ticker") or ""),
             "side": cancelled["side"], "quantity": float(cancelled["quantity"]),
+        })
+        self.send_json(200, {"ok": True, "status": "cancelled", "request_id": request_id})
+
+    def api_wallstreet_margin_open(self, db: Database, user: DbRow | None) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        settings = get_system_settings(db)
+        if not settings["market_margin_enabled"]:
+            self.error(409, "Leveraged positions are currently paused."); return
+        account = one(db, "SELECT * FROM market_accounts WHERE user_id=? FOR UPDATE", (user["id"],))
+        payload = self.read_json()
+        ticker = str(payload.get("ticker") or "").upper().strip()[:12]
+        direction = str(payload.get("direction") or "").lower().strip()
+        try:
+            collateral = round(float(payload.get("collateral") or 0), 2)
+            leverage = round(float(payload.get("leverage") or 0), 2)
+        except (TypeError, ValueError):
+            collateral = 0; leverage = 0
+        if not math.isfinite(collateral) or not math.isfinite(leverage):
+            collateral = 0; leverage = 0
+        security = one(db, "SELECT * FROM market_securities WHERE ticker=? AND active=1 FOR UPDATE", (ticker,))
+        if not account or not security or direction not in ("long", "short") or collateral < 10:
+            self.error(400, "Choose an active ticker, long or short direction, and at least $10.00 collateral."); return
+        if str(account.get("status") or "active").lower() != "active":
+            self.error(409, "Ravenhood account is not active."); return
+        if not bool(int(security.get("margin_enabled") or 0)):
+            self.error(409, "Margin trading is disabled for this security."); return
+        max_leverage = max(5.0, min(80.0, float(security.get("margin_max_leverage") or 5)))
+        if leverage < 5 or leverage > max_leverage + 0.0001:
+            self.error(400, f"{ticker} allows leverage from 5x through {max_leverage:g}x."); return
+        quote = ravenhood_margin_quote(direction, security["price"], collateral, leverage,
+            settings["market_trade_fee_percent"], settings["market_margin_maintenance_percent"] / 100.0)
+
+        if not settings["market_open"]:
+            stock_requests = one(db, "SELECT COUNT(*) AS total FROM market_order_requests WHERE account_id=? AND status IN ('queued','processing')", (account["id"],))
+            margin_requests = one(db, "SELECT COUNT(*) AS total FROM market_margin_order_requests WHERE account_id=? AND status IN ('queued','processing')", (account["id"],))
+            queued_total = int((stock_requests or {}).get("total") or 0) + int((margin_requests or {}).get("total") or 0)
+            if queued_total >= RAVENHOOD_MAX_QUEUED_ORDERS:
+                self.error(429, f"You may hold up to {RAVENHOOD_MAX_QUEUED_ORDERS} upcoming Ravenhood orders."); return
+            open_positions = one(db, "SELECT COUNT(*) AS total FROM market_margin_positions WHERE account_id=? AND status='open'", (account["id"],))
+            active_margin_total = int((open_positions or {}).get("total") or 0) + int((margin_requests or {}).get("total") or 0)
+            if active_margin_total >= int(settings["market_margin_max_open_positions"]):
+                self.error(409, f"This account may have no more than {settings['market_margin_max_open_positions']} open or upcoming leveraged positions."); return
+            open_exposure = one(db, "SELECT COALESCE(SUM(entry_notional),0) AS total FROM market_margin_positions WHERE account_id=? AND status='open'", (account["id"],))
+            queued_exposure = one(db, "SELECT COALESCE(SUM(estimated_notional),0) AS total FROM market_margin_order_requests WHERE account_id=? AND status IN ('queued','processing')", (account["id"],))
+            next_exposure = float((open_exposure or {}).get("total") or 0) + float((queued_exposure or {}).get("total") or 0) + float(quote["notional"])
+            if next_exposure > float(settings["market_margin_max_account_notional"]) + 0.0001:
+                self.error(409, f"This order would exceed the account leverage exposure limit of ${settings['market_margin_max_account_notional']:,.2f}."); return
+            pending_withdrawals = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM market_cash_transactions WHERE account_id=? AND transaction_type='withdrawal' AND status='pending'", (account["id"],))
+            equity_reservations = one(db, "SELECT COALESCE(SUM(CASE WHEN side='buy' THEN estimated_gross+estimated_fee ELSE 0 END),0) AS total FROM market_order_requests WHERE account_id=? AND status IN ('queued','processing')", (account["id"],))
+            margin_reservations = one(db, "SELECT COALESCE(SUM(collateral+estimated_fee),0) AS total FROM market_margin_order_requests WHERE account_id=? AND status IN ('queued','processing')", (account["id"],))
+            available = float(account.get("cash_balance") or 0) - float((pending_withdrawals or {}).get("total") or 0) - float((equity_reservations or {}).get("total") or 0) - float((margin_reservations or {}).get("total") or 0)
+            required = collateral + float(quote["open_fee"])
+            if available + 0.0001 < required:
+                self.error(409, f"Insufficient unreserved buying power. This queued position requires ${required:,.2f}."); return
+            queued_at = now_iso()
+            request = one(db, """INSERT INTO market_margin_order_requests
+                (account_id,security_id,direction,leverage,collateral,submitted_price,estimated_notional,estimated_fee,
+                 estimated_liquidation_price,status,execute_after,queued_at)
+                VALUES (?,?,?,?,?,?,?,?,?,'queued',?,?) RETURNING id""",
+                (account["id"], security["id"], direction, leverage, collateral, security["price"], quote["notional"],
+                 quote["open_fee"], quote["liquidation_price"], settings["market_next_transition_at"] or None, queued_at))
+            add_admin_audit(db, int(user["id"]), "market.margin.queued", int(user["id"]), {
+                "request_id": int(request["id"]), "ticker": ticker, "direction": direction,
+                "leverage": leverage, "collateral": collateral, "estimated_notional": quote["notional"],
+            })
+            self.send_json(202, {"ok": True, "status": "queued", "request_id": int(request["id"]),
+                "ticker": ticker, "direction": direction, "leverage": leverage, "collateral": collateral, **quote})
+            return
+
+        result = execute_ravenhood_margin_open(db, int(account["id"]), int(security["id"]), direction, collateral, leverage, settings)
+        if not result["ok"]:
+            self.error(int(result["status_code"]), str(result["error"])); return
+        add_admin_audit(db, int(user["id"]), "market.margin.opened", int(user["id"]), result)
+        self.send_json(201, {"ok": True, "status": "opened", **result})
+
+    def api_wallstreet_margin_close(self, db: Database, user: DbRow | None, position_id: int) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        settings = get_system_settings(db)
+        if not settings["market_open"]:
+            self.error(409, "Resident margin closes are held while Ravenhood is closed. Automatic liquidation protection remains active."); return
+        account = one(db, "SELECT id FROM market_accounts WHERE user_id=?", (user["id"],))
+        if not account:
+            self.error(404, "Ravenhood account was not found."); return
+        result = close_ravenhood_margin_position(db, position_id, settings, "resident_close", int(account["id"]))
+        if not result["ok"]:
+            self.error(int(result["status_code"]), str(result["error"])); return
+        add_admin_audit(db, int(user["id"]), "market.margin.closed", int(user["id"]), result)
+        self.send_json(200, result)
+
+    def api_wallstreet_margin_cancel(self, db: Database, user: DbRow | None, request_id: int) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        account = one(db, "SELECT id FROM market_accounts WHERE user_id=?", (user["id"],))
+        if not account:
+            self.error(404, "Ravenhood account was not found."); return
+        cancelled = one(db, """UPDATE market_margin_order_requests SET status='cancelled',cancelled_at=?,failure_reason=''
+            WHERE id=? AND account_id=? AND status='queued' RETURNING id,security_id,direction,leverage,collateral""",
+            (now_iso(), request_id, account["id"]))
+        if not cancelled:
+            existing = one(db, "SELECT status FROM market_margin_order_requests WHERE id=? AND account_id=?", (request_id, account["id"]))
+            if not existing:
+                self.error(404, "Upcoming margin order was not found."); return
+            self.error(409, f"This margin order can no longer be cancelled because it is {str(existing['status']).replace('_', ' ')}."); return
+        security = one(db, "SELECT ticker FROM market_securities WHERE id=?", (cancelled["security_id"],))
+        add_admin_audit(db, int(user["id"]), "market.margin.cancelled", int(user["id"]), {
+            "request_id": request_id, "ticker": str((security or {}).get("ticker") or ""),
+            "direction": cancelled["direction"], "leverage": float(cancelled["leverage"]), "collateral": float(cancelled["collateral"]),
         })
         self.send_json(200, {"ok": True, "status": "cancelled", "request_id": request_id})
 
@@ -22928,6 +23321,28 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 ],
             })
 
+        if section == "leverage-settings":
+            payload["leverage_settings"] = {
+                "margin_enabled": settings["market_margin_enabled"],
+                "margin_maintenance_percent": settings["market_margin_maintenance_percent"],
+                "margin_max_open_positions": settings["market_margin_max_open_positions"],
+                "margin_max_account_notional": settings["market_margin_max_account_notional"],
+                "securities": [dict(row) for row in all_rows(db, """SELECT id,ticker,name,security_type,active,lifecycle_status,
+                    margin_enabled,margin_max_leverage,price
+                    FROM market_securities
+                    WHERE active=1 AND lifecycle_status<>'bankrupt'
+                    ORDER BY security_type,ticker""")],
+                "margin_positions": [dict(row) for row in all_rows(db, """SELECT p.*,s.ticker,s.name AS security_name,s.price AS mark_price,
+                    u.id AS user_id,u.name AS resident_name,u.civ_number,
+                    CASE WHEN p.direction='long' THEN p.quantity*(s.price-p.entry_price)
+                         ELSE p.quantity*(p.entry_price-s.price) END AS live_pnl
+                    FROM market_margin_positions p
+                    JOIN market_securities s ON s.id=p.security_id
+                    JOIN market_accounts a ON a.id=p.account_id
+                    JOIN users u ON u.id=a.user_id
+                    ORDER BY CASE WHEN p.status='open' THEN 0 ELSE 1 END,p.opened_at DESC LIMIT 500""")],
+            }
+
         if section == "market-settings":
             payload["market_settings"] = {
                 "market_open": settings["market_open"],
@@ -22944,6 +23359,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "transfer_fee_percent": settings["market_transfer_fee_percent"],
                 "trade_fee_percent": settings["market_trade_fee_percent"],
                 "holding_balance": settings["market_holding_balance"],
+                "margin_enabled": settings["market_margin_enabled"],
+                "margin_maintenance_percent": settings["market_margin_maintenance_percent"],
+                "margin_max_open_positions": settings["market_margin_max_open_positions"],
+                "margin_max_account_notional": settings["market_margin_max_account_notional"],
                 "ai_enabled": settings["market_ai_enabled"],
                 "autopilot_enabled": settings["market_autopilot_enabled"],
                 "autopilot_interval_minutes": settings["market_autopilot_interval_minutes"],
@@ -22976,6 +23395,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                         GROUP BY h.account_id
                     ) position ON position.account_id=a.id
                     ORDER BY (a.cash_balance+COALESCE(position.market_value,0)) DESC,u.name""")],
+                "margin_positions": [dict(row) for row in all_rows(db, """SELECT p.*,s.ticker,s.name AS security_name,s.price AS mark_price,
+                    u.id AS user_id,u.name AS resident_name,u.civ_number,
+                    CASE WHEN p.direction='long' THEN p.quantity*(s.price-p.entry_price)
+                         ELSE p.quantity*(p.entry_price-s.price) END AS live_pnl
+                    FROM market_margin_positions p
+                    JOIN market_securities s ON s.id=p.security_id
+                    JOIN market_accounts a ON a.id=p.account_id
+                    JOIN users u ON u.id=a.user_id
+                    ORDER BY CASE WHEN p.status='open' THEN 0 ELSE 1 END,p.opened_at DESC LIMIT 500""")],
                 "securities": [dict(row) for row in all_rows(db, """SELECT s.*,
                     COALESCE(position.holder_count,0) AS holder_count,
                     COALESCE(position.outstanding_shares,0) AS outstanding_shares,
@@ -24821,6 +25249,30 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         })
         self.send_json(200, {"ok": True, "eligible": bool(eligible), "rebalance": result})
 
+    def api_dev_market_security_margin(self, db: Database, user: DbRow | None, security_id: int | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        security = one(db, "SELECT * FROM market_securities WHERE id=?", (security_id,)) if security_id else None
+        if not security or not bool(int(security.get("active") or 0)):
+            self.error(404, "Active Ravenhood security not found."); return
+        payload = self.read_json()
+        enabled = bool(payload.get("enabled"))
+        try:
+            max_leverage = float(payload.get("max_leverage") or 5)
+        except (TypeError, ValueError):
+            self.error(400, "Maximum leverage must be a whole number from 5x through 80x."); return
+        if not math.isfinite(max_leverage) or max_leverage < 5 or max_leverage > 80 or not max_leverage.is_integer():
+            self.error(400, "Maximum leverage must be a whole number from 5x through 80x."); return
+        db.execute("UPDATE market_securities SET margin_enabled=?,margin_max_leverage=?,updated_at=? WHERE id=?",
+            (1 if enabled else 0, max_leverage, now_iso(), security["id"]))
+        add_admin_audit(db, int(user["id"]), "market.security.margin_policy", details={
+            "security_id": int(security["id"]), "ticker": security["ticker"], "enabled": enabled, "max_leverage": max_leverage,
+        })
+        self.send_json(200, {"ok": True, "security_id": int(security["id"]), "ticker": security["ticker"],
+            "margin_enabled": enabled, "margin_max_leverage": max_leverage})
+
     def api_dev_market_indexes_rebalance(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
         if err:
@@ -24880,6 +25332,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             set_system_setting(db, "market_transfer_fee_percent", str(transfer_fee))
         if "trade_fee_percent" in payload:
             set_system_setting(db, "market_trade_fee_percent", str(trade_fee))
+        if "margin_enabled" in payload:
+            set_system_setting(db, "market_margin_enabled", "1" if bool(payload.get("margin_enabled")) else "0")
+        try:
+            margin_maintenance = max(5, min(80, float(payload.get("margin_maintenance_percent", current_settings["market_margin_maintenance_percent"]))))
+            margin_open_limit = max(1, min(25, int(payload.get("margin_max_open_positions", current_settings["market_margin_max_open_positions"]))))
+            margin_notional_limit = max(100, min(1000000000, float(payload.get("margin_max_account_notional", current_settings["market_margin_max_account_notional"]))))
+        except (TypeError, ValueError):
+            self.error(400, "Margin maintenance, position limit, and exposure limit must be numeric."); return
+        if "margin_maintenance_percent" in payload:
+            set_system_setting(db, "market_margin_maintenance_percent", str(margin_maintenance))
+        if "margin_max_open_positions" in payload:
+            set_system_setting(db, "market_margin_max_open_positions", str(margin_open_limit))
+        if "margin_max_account_notional" in payload:
+            set_system_setting(db, "market_margin_max_account_notional", str(margin_notional_limit))
         if "ai_enabled" in payload:
             set_system_setting(db, "market_ai_enabled", "1" if bool(payload.get("ai_enabled")) else "0")
         try:
