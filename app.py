@@ -22955,6 +22955,27 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "gemini_configured": bool(GEMINI_API_KEY),
                 "index_funds": market_index_payload(db),
                 "exchange_market_cap": round(float((one(db, "SELECT COALESCE(SUM(price*issued_shares),0) AS total FROM market_securities WHERE active=1 AND security_type<>'fund'") or {}).get("total") or 0), 2),
+                "accounts": [dict(row) for row in all_rows(db, """SELECT a.id AS account_id,u.id AS user_id,u.name,u.civ_number,u.email,
+                    a.status,a.cash_balance,a.created_at,a.updated_at,
+                    COALESCE(position.position_count,0) AS position_count,
+                    COALESCE(position.total_shares,0) AS total_shares,
+                    COALESCE(position.cost_basis,0) AS cost_basis,
+                    COALESCE(position.market_value,0) AS market_value,
+                    COALESCE(position.unrealized_gain_loss,0) AS unrealized_gain_loss,
+                    a.cash_balance+COALESCE(position.market_value,0) AS total_equity
+                    FROM market_accounts a
+                    JOIN users u ON u.id=a.user_id
+                    LEFT JOIN (
+                        SELECT h.account_id,COUNT(*) AS position_count,SUM(h.quantity) AS total_shares,
+                               SUM(h.quantity*h.average_cost) AS cost_basis,
+                               SUM(h.quantity*s.price) AS market_value,
+                               SUM(h.quantity*(s.price-h.average_cost)) AS unrealized_gain_loss
+                        FROM market_holdings h
+                        JOIN market_securities s ON s.id=h.security_id
+                        WHERE h.quantity>0 AND s.active=1
+                        GROUP BY h.account_id
+                    ) position ON position.account_id=a.id
+                    ORDER BY (a.cash_balance+COALESCE(position.market_value,0)) DESC,u.name""")],
                 "securities": [dict(row) for row in all_rows(db, """SELECT s.*,
                     COALESCE(position.holder_count,0) AS holder_count,
                     COALESCE(position.outstanding_shares,0) AS outstanding_shares,
@@ -22969,9 +22990,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     ) position ON position.security_id=s.id
                     ORDER BY CASE WHEN s.active=1 THEN 0 ELSE 1 END,s.security_type,s.ticker""")],
                 "shareholders": [dict(row) for row in all_rows(db, """SELECT s.id AS security_id,s.ticker,s.name AS company_name,
+                    s.security_type,s.sector,s.price AS current_price,s.previous_price,
                     a.id AS account_id,u.id AS user_id,u.name AS shareholder_name,u.civ_number,
                     h.quantity,h.average_cost,ROUND(h.quantity*h.average_cost,2) AS invested_basis,
-                    ROUND(h.quantity*s.price,2) AS current_value
+                    ROUND(h.quantity*s.price,2) AS current_value,
+                    ROUND(h.quantity*(s.price-h.average_cost),2) AS unrealized_gain_loss
                     FROM market_holdings h
                     JOIN market_securities s ON s.id=h.security_id
                     JOIN market_accounts a ON a.id=h.account_id
