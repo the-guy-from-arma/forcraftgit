@@ -1,6 +1,54 @@
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from typing import Any
+
+
+def market_cap_weighted_allocations(
+    capitalizations: list[tuple[int, Any]], total_amount: Any
+) -> list[dict[str, float | int]]:
+    """Allocate a currency amount across securities by market capitalization.
+
+    Every returned allocation is rounded down to cents.  Any remaining cents
+    are assigned to the final eligible security so the allocations always
+    reconcile exactly to the requested custody-pool disposition.
+    """
+    try:
+        total = Decimal(str(total_amount or 0)).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("total_amount_must_be_numeric") from exc
+    if total <= 0:
+        raise ValueError("total_amount_must_be_positive")
+
+    eligible: list[tuple[int, Decimal]] = []
+    for security_id, raw_cap in capitalizations:
+        try:
+            cap = Decimal(str(raw_cap or 0))
+        except (InvalidOperation, ValueError):
+            continue
+        if int(security_id) > 0 and cap > 0:
+            eligible.append((int(security_id), cap))
+    total_cap = sum((cap for _, cap in eligible), Decimal("0"))
+    if total_cap <= 0:
+        raise ValueError("no_positive_market_capitalizations")
+
+    remaining = total
+    allocations: list[dict[str, float | int]] = []
+    for index, (security_id, cap) in enumerate(eligible):
+        amount = (
+            remaining
+            if index == len(eligible) - 1
+            else (total * cap / total_cap).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        )
+        remaining -= amount
+        allocations.append(
+            {
+                "security_id": security_id,
+                "amount": float(amount),
+                "weight": float(cap / total_cap),
+            }
+        )
+    return allocations
 
 
 def market_gemini_exposure_shares(buy_shares: Any, sell_shares: Any) -> float:

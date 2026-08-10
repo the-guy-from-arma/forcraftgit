@@ -30,7 +30,12 @@ import psycopg
 import paramiko
 from psycopg.rows import dict_row
 
-from market_math import market_gemini_exposure_shares, ravenhood_margin_metrics, ravenhood_margin_quote
+from market_math import (
+    market_cap_weighted_allocations,
+    market_gemini_exposure_shares,
+    ravenhood_margin_metrics,
+    ravenhood_margin_quote,
+)
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -4403,6 +4408,42 @@ def ensure_migrations(db: Database) -> None:
         """
     )
     db.execute("CREATE INDEX IF NOT EXISTS market_system_trades_security_time_idx ON market_system_trades(security_id, created_at DESC)")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS market_fec_asset_pool (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            balance NUMERIC(18,2) NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    db.execute(
+        "INSERT INTO market_fec_asset_pool (id,balance,updated_at) VALUES (1,0,?) ON CONFLICT (id) DO NOTHING",
+        (now_iso(),),
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS market_fec_asset_ledger (
+            id SERIAL PRIMARY KEY,
+            event_type TEXT NOT NULL,
+            amount NUMERIC(18,2) NOT NULL,
+            pool_delta NUMERIC(18,2) NOT NULL,
+            pool_balance_after NUMERIC(18,2) NOT NULL,
+            market_account_id INTEGER,
+            target_user_id INTEGER,
+            target_name TEXT NOT NULL DEFAULT '',
+            target_civ_number TEXT NOT NULL DEFAULT '',
+            case_reference TEXT NOT NULL DEFAULT '',
+            reason TEXT NOT NULL,
+            allocation_json TEXT NOT NULL DEFAULT '[]',
+            created_by INTEGER,
+            created_by_name TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS market_fec_asset_ledger_time_idx ON market_fec_asset_ledger(created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS market_fec_asset_ledger_target_idx ON market_fec_asset_ledger(target_user_id,created_at DESC)")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS market_security_writeoffs (
@@ -10503,6 +10544,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_market_security_margin(db, user, self.path_int(path, 4))
                 elif path == "/api/dev-tools/market/indexes/rebalance" and method == "POST":
                     self.api_dev_market_indexes_rebalance(db, user)
+                elif path == "/api/dev-tools/market/fec/seizures" and method == "POST":
+                    self.api_dev_market_fec_seizure(db, user)
+                elif path == "/api/dev-tools/market/fec/pool/dispose" and method == "POST":
+                    self.api_dev_market_fec_pool_dispose(db, user)
                 elif path == "/api/dev-tools/market/programs" and method == "POST":
                     self.api_dev_market_program(db, user)
                 elif path.startswith("/api/dev-tools/market/programs/") and path.endswith("/stop") and method == "PATCH":
@@ -23359,6 +23404,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "transfer_fee_percent": settings["market_transfer_fee_percent"],
                 "trade_fee_percent": settings["market_trade_fee_percent"],
                 "holding_balance": settings["market_holding_balance"],
+                "fec_pool_balance": float((one(db, "SELECT balance FROM market_fec_asset_pool WHERE id=1") or {}).get("balance") or 0),
+                "fec_totals": dict(one(db, """SELECT
+                    COALESCE(SUM(CASE WHEN event_type='seizure' THEN amount ELSE 0 END),0) AS seized,
+                    COALESCE(SUM(CASE WHEN event_type='forfeiture' THEN amount ELSE 0 END),0) AS forfeited,
+                    COALESCE(SUM(CASE WHEN event_type='reinvestment' THEN amount ELSE 0 END),0) AS reinvested
+                    FROM market_fec_asset_ledger""") or {}),
+                "fec_ledger": [dict(row) for row in all_rows(db, """SELECT id,event_type,amount,pool_delta,pool_balance_after,
+                    market_account_id,target_user_id,target_name,target_civ_number,case_reference,reason,
+                    allocation_json,created_by,created_by_name,created_at
+                    FROM market_fec_asset_ledger ORDER BY created_at DESC,id DESC LIMIT 250""")],
                 "margin_enabled": settings["market_margin_enabled"],
                 "margin_maintenance_percent": settings["market_margin_maintenance_percent"],
                 "margin_max_open_positions": settings["market_margin_max_open_positions"],
@@ -25283,6 +25338,154 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         result = rebalance_market_index_funds(db, force=True, actor_id=int(user["id"]))
         add_admin_audit(db, int(user["id"]), "market.indexes.rebalanced", details=result)
         self.send_json(200, {"ok": True, **result, "index_funds": market_index_payload(db)})
+
+    def api_dev_market_fec_seizure(self, db: Database, user: DbRow | None) -> None:
+        """Move settled Ravenhood buying power into audited FEC custody."""
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        payload = self.read_json()
+        try:
+            account_id = int(payload.get("account_id") or 0)
+            amount = round(float(payload.get("amount") or 0), 2)
+        except (TypeError, ValueError):
+            self.error(400, "Choose a Ravenhood account and enter a valid seizure amount."); return
+        case_reference = str(payload.get("case_reference") or "").strip().upper()[:80]
+        reason = str(payload.get("reason") or "").strip()[:2000]
+        confirmation = str(payload.get("confirmation") or "").strip().upper()
+        if account_id <= 0 or amount <= 0:
+            self.error(400, "The seizure amount must be greater than zero."); return
+        if amount > 1_000_000_000:
+            self.error(400, "A single FEC seizure cannot exceed $1,000,000,000."); return
+        if len(case_reference) < 3:
+            self.error(400, "Enter the FEC case or investigation reference."); return
+        if len(reason) < 10:
+            self.error(400, "Document the suspected securities-fraud basis using at least 10 characters."); return
+        if confirmation != "SEIZE":
+            self.error(400, "Type SEIZE to certify this custody action."); return
+
+        account = one(db, """SELECT a.id AS account_id,a.user_id,a.cash_balance,a.status,
+            u.name,u.civ_number FROM market_accounts a JOIN users u ON u.id=a.user_id
+            WHERE a.id=? FOR UPDATE OF a""", (account_id,))
+        if not account:
+            self.error(404, "That Ravenhood equity account was not found."); return
+        settled_cash = round(float(account.get("cash_balance") or 0), 2)
+        if amount > settled_cash:
+            self.error(409, f"Only ${settled_cash:,.2f} in settled Ravenhood buying power is available for seizure."); return
+
+        timestamp = now_iso()
+        new_cash_balance = round(settled_cash - amount, 2)
+        db.execute("UPDATE market_accounts SET cash_balance=?,updated_at=? WHERE id=?", (new_cash_balance, timestamp, account_id))
+        pool = one(db, "SELECT balance FROM market_fec_asset_pool WHERE id=1 FOR UPDATE") or {"balance": 0}
+        pool_balance = round(float(pool.get("balance") or 0) + amount, 2)
+        db.execute("UPDATE market_fec_asset_pool SET balance=?,updated_at=? WHERE id=1", (pool_balance, timestamp))
+        db.execute("""INSERT INTO market_fec_asset_ledger
+            (event_type,amount,pool_delta,pool_balance_after,market_account_id,target_user_id,target_name,
+             target_civ_number,case_reference,reason,allocation_json,created_by,created_by_name,created_at)
+            VALUES ('seizure',?,?,?,?,?,?,?,?,?,'[]',?,?,?)""",
+            (amount, amount, pool_balance, account_id, account["user_id"], account["name"], account.get("civ_number") or "",
+             case_reference, reason, user["id"], user.get("name") or "Authorized operator", timestamp))
+        db.execute("""INSERT INTO market_cash_transactions
+            (account_id,code_id,transaction_type,amount,processed_by,command_id,status,created_at)
+            VALUES (?,NULL,'fec_asset_seizure',?,?,NULL,'completed',?)""", (account_id, amount, user["id"], timestamp))
+        db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('fec_asset_seizure',?,?,?,?)",
+            (f"FEC custody filing {case_reference}", f"${amount:,.2f} moved from {account['name']}'s settled Ravenhood balance into FEC custody.", user["id"], timestamp))
+        add_admin_audit(db, int(user["id"]), "market.fec.asset_seized", int(account["user_id"]), {
+            "account_id": account_id, "case_reference": case_reference, "amount": amount,
+            "reason": reason, "cash_balance_after": new_cash_balance, "pool_balance_after": pool_balance,
+        })
+        self.send_json(201, {"ok": True, "amount": amount, "case_reference": case_reference,
+            "resident": account["name"], "cash_balance": new_cash_balance, "fec_pool_balance": pool_balance})
+
+    def api_dev_market_fec_pool_dispose(self, db: Database, user: DbRow | None) -> None:
+        """Permanently forfeit held assets or reinvest them by company market cap."""
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        payload = self.read_json()
+        action = str(payload.get("action") or "").strip().lower()
+        try:
+            amount = round(float(payload.get("amount") or 0), 2)
+        except (TypeError, ValueError):
+            self.error(400, "Enter a valid FEC pool amount."); return
+        reason = str(payload.get("reason") or "").strip()[:2000]
+        confirmation = str(payload.get("confirmation") or "").strip().upper()
+        if action not in ("forfeit", "reinvest"):
+            self.error(400, "Choose permanent forfeiture or market-cap reinvestment."); return
+        if amount <= 0:
+            self.error(400, "The disposition amount must be greater than zero."); return
+        if len(reason) < 10:
+            self.error(400, "Document the disposition basis using at least 10 characters."); return
+        required_confirmation = "FORFEIT" if action == "forfeit" else "REINVEST"
+        if confirmation != required_confirmation:
+            self.error(400, f"Type {required_confirmation} to certify this disposition."); return
+
+        pool = one(db, "SELECT balance FROM market_fec_asset_pool WHERE id=1 FOR UPDATE") or {"balance": 0}
+        current_pool = round(float(pool.get("balance") or 0), 2)
+        if amount > current_pool:
+            self.error(409, f"Only ${current_pool:,.2f} is currently held in FEC custody."); return
+
+        timestamp = now_iso()
+        allocations: list[dict[str, Any]] = []
+        if action == "reinvest":
+            companies = [dict(row) for row in all_rows(db, """SELECT id,ticker,name,price,issued_shares,
+                price*issued_shares AS market_cap FROM market_securities
+                WHERE active=1 AND security_type<>'fund' AND COALESCE(lifecycle_status,'active')='active'
+                  AND price>0 AND issued_shares>0 ORDER BY (price*issued_shares) DESC,id FOR UPDATE""")]
+            try:
+                weighted = market_cap_weighted_allocations(
+                    [(int(company["id"]), company.get("market_cap") or 0) for company in companies], amount
+                )
+            except ValueError:
+                self.error(409, "No active operating companies have a positive market capitalization."); return
+            by_id = {int(company["id"]): company for company in companies}
+            for allocation in weighted:
+                company = by_id[int(allocation["security_id"])]
+                allocated = round(float(allocation["amount"]), 2)
+                old_price = max(0.0001, float(company.get("price") or 0))
+                issued_shares = max(0.000001, float(company.get("issued_shares") or 0))
+                new_price = max(0.01, round(old_price + allocated / issued_shares, 4))
+                price_change = (new_price / old_price - 1) * 100
+                buy_volume = round(allocated / old_price, 6)
+                db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?",
+                    (new_price, timestamp, company["id"]))
+                db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,'fec_reinvestment',?)",
+                    (company["id"], new_price, timestamp))
+                db.execute("""INSERT INTO market_system_trades
+                    (security_id,buy_volume,sell_volume,buy_trade_count,sell_trade_count,reference_price,
+                     price_change_percent,source,rationale,created_at)
+                    VALUES (?,?,0,1,0,? ,?,'fec_reinvestment',?,?)""",
+                    (company["id"], buy_volume, new_price, price_change,
+                     f"FEC custody assets reinvested by operating-company market capitalization: {reason}", timestamp))
+                allocations.append({
+                    "security_id": int(company["id"]), "ticker": company["ticker"], "name": company["name"],
+                    "weight": round(float(allocation["weight"]), 8), "amount": allocated,
+                    "price_before": round(old_price, 4), "price_after": new_price,
+                })
+            update_market_index_prices(db, force_history=True)
+
+        pool_balance = round(current_pool - amount, 2)
+        db.execute("UPDATE market_fec_asset_pool SET balance=?,updated_at=? WHERE id=1", (pool_balance, timestamp))
+        event_type = "forfeiture" if action == "forfeit" else "reinvestment"
+        db.execute("""INSERT INTO market_fec_asset_ledger
+            (event_type,amount,pool_delta,pool_balance_after,market_account_id,target_user_id,target_name,
+             target_civ_number,case_reference,reason,allocation_json,created_by,created_by_name,created_at)
+            VALUES (?,?,?, ?,NULL,NULL,'','','',?,?,?,?,?)""",
+            (event_type, amount, -amount, pool_balance, reason, json.dumps(allocations, separators=(",", ":")),
+             user["id"], user.get("name") or "Authorized operator", timestamp))
+        title = "FEC assets removed from circulation" if action == "forfeit" else "FEC assets reinvested across Ravenhood"
+        detail = (f"${amount:,.2f} permanently forfeited from the FEC custody pool."
+                  if action == "forfeit" else f"${amount:,.2f} allocated across {len(allocations)} active companies by market capitalization.")
+        db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES (?,?,?,?,?)",
+            (f"fec_{event_type}", title, detail, user["id"], timestamp))
+        add_admin_audit(db, int(user["id"]), f"market.fec.{event_type}", details={
+            "amount": amount, "reason": reason, "pool_balance_after": pool_balance,
+            "allocation_count": len(allocations), "allocations": allocations,
+        })
+        self.send_json(200, {"ok": True, "action": action, "amount": amount,
+            "fec_pool_balance": pool_balance, "allocations": allocations})
 
     def api_dev_market_settings(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
