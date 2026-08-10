@@ -24,6 +24,9 @@
         "Added mandatory EULA, Terms of Use, Acceptable Use, and Privacy acceptance tracking for new and existing accounts with a Developer Tools compliance ledger."
       ],
       "changed": [
+        "Changed Ravenhood scheduled movements to support explicit FCXS and FCXV index-fund targets, including stable post-program pricing and correct keep-current or restore-baseline controls.",
+        "Changed Ravenhood index-fund capitalization to include the net Gemini-generated fund position alongside resident-held shares, with separate resident, Gemini, total-share, and capitalization figures in Developer Tools.",
+        "Changed Ravenhood security pages to show average cost paid per share, live market capitalization, and exchange market-cap rank, while Explore the Exchange now uses recorded 24-hour percentage movement and ranks every active company by market capitalization.",
         "Changed Ravenhood chart navigation to Live, 15-minute, 1-hour, 1-day, 1-week, 1-month, and 1-year recorded windows with independently filterable close, EMA, VWAP, and volatility-band series.",
         "Rebuilt the Ravenhood live price desk around continuous recorded market movement so authentic scheduled spikes, crashes, and recoveries remain visible at every supported range.",
         "Expanded the Ravenhood order ticket with live share-cost, commission, and total-order estimates before execution and whole-dollar withdrawal enforcement.",

@@ -6902,7 +6902,9 @@ def rebalance_market_index_funds(db: Database, force: bool = False, actor_id: in
 
 def update_market_index_prices(db: Database, force_history: bool = False) -> int:
     funds = all_rows(db, """SELECT f.*,s.price,s.previous_price,s.ticker FROM market_index_funds f
-        JOIN market_securities s ON s.id=f.security_id WHERE f.enabled=1 AND s.active=1 ORDER BY f.id""")
+        JOIN market_securities s ON s.id=f.security_id WHERE f.enabled=1 AND s.active=1
+        AND NOT EXISTS (SELECT 1 FROM market_price_programs p WHERE p.security_id=f.security_id AND p.status='active')
+        ORDER BY f.id""")
     timestamp = now_iso()
     updated = 0
     for fund in funds:
@@ -6929,13 +6931,43 @@ def update_market_index_prices(db: Database, force_history: bool = False) -> int
     return updated
 
 
+def rebase_market_index_security(db: Database, security_id: int, target_price: float) -> bool:
+    """Keep a manually moved index quote stable after its price program ends."""
+    fund = one(db, "SELECT id FROM market_index_funds WHERE security_id=? AND enabled=1", (security_id,))
+    if not fund:
+        return False
+    members = all_rows(db, """SELECT m.weight,m.reference_price,s.price FROM market_index_members m
+        JOIN market_securities s ON s.id=m.security_id
+        WHERE m.fund_id=? AND s.active=1 AND COALESCE(s.lifecycle_status,'active')='active'""", (fund["id"],))
+    performance = sum(
+        float(member["weight"] or 0)
+        * (float(member["price"] or 0) / max(0.0001, float(member["reference_price"] or 0)))
+        for member in members
+    ) if members else 1.0
+    rebased_nav = max(0.01, float(target_price) / max(0.0001, performance))
+    timestamp = now_iso()
+    db.execute(
+        "UPDATE market_index_funds SET base_nav=?,last_valued_at=?,updated_at=? WHERE id=?",
+        (round(rebased_nav, 4), timestamp, timestamp, fund["id"]),
+    )
+    return True
+
+
 def market_index_payload(db: Database) -> list[dict[str, Any]]:
     funds = [dict(row) for row in all_rows(db, """SELECT f.*,s.ticker,s.name,s.price,s.previous_price,s.description,
             COALESCE(position.holder_count,0) AS holder_count,
-            COALESCE(position.units_outstanding,0) AS units_outstanding
+            COALESCE(position.units_outstanding,0) AS units_outstanding,
+            COALESCE(system_position.generated_buy_shares,0) AS gemini_buy_shares,
+            COALESCE(system_position.generated_sell_shares,0) AS gemini_sell_shares
         FROM market_index_funds f JOIN market_securities s ON s.id=f.security_id
         LEFT JOIN (SELECT security_id,COUNT(*) AS holder_count,SUM(quantity) AS units_outstanding
                    FROM market_holdings WHERE quantity>0 GROUP BY security_id) position ON position.security_id=s.id
+        LEFT JOIN (
+            SELECT security_id,SUM(buy_volume) AS generated_buy_shares,SUM(sell_volume) AS generated_sell_shares
+            FROM market_system_trades
+            WHERE security_id IN (SELECT security_id FROM market_index_funds WHERE enabled=1)
+            GROUP BY security_id
+        ) system_position ON system_position.security_id=s.id
         WHERE f.enabled=1 AND s.active=1 ORDER BY f.risk_profile""")]
     if not funds:
         return []
@@ -6956,8 +6988,18 @@ def market_index_payload(db: Database) -> list[dict[str, Any]]:
     for fund in funds:
         price = float(fund.get("price") or 0)
         previous = float(fund.get("previous_price") or price)
+        resident_units = max(0.0, float(fund.get("units_outstanding") or 0))
+        gemini_buy_shares = max(0.0, float(fund.get("gemini_buy_shares") or 0))
+        gemini_sell_shares = max(0.0, float(fund.get("gemini_sell_shares") or 0))
+        gemini_shares = max(0.0, gemini_buy_shares - gemini_sell_shares)
+        total_capitalized_units = resident_units + gemini_shares
         fund["change_percent"] = round((price / previous - 1) * 100, 2) if previous else 0.0
-        fund["market_cap"] = round(price * float(fund.get("units_outstanding") or 0), 2)
+        fund["resident_units"] = round(resident_units, 6)
+        fund["gemini_shares"] = round(gemini_shares, 6)
+        fund["total_capitalized_units"] = round(total_capitalized_units, 6)
+        fund["resident_capitalization"] = round(price * resident_units, 2)
+        fund["gemini_capitalization"] = round(price * gemini_shares, 2)
+        fund["market_cap"] = round(price * total_capitalized_units, 2)
         fund["constituents"] = grouped.get(int(fund["id"]), [])
     return funds
 
@@ -7106,11 +7148,8 @@ def apply_market_price_programs(db: Database) -> int:
         if current < starts:
             continue
         progress = 1.0 if current >= ends else max(0.0, min(1.0, (current - starts).total_seconds() / max(1, (ends - starts).total_seconds())))
-        targets = all_rows(
-            db,
-            "SELECT id, price FROM market_securities WHERE active = 1 AND security_type<>'fund'" + (" AND id = ?" if program.get("security_id") else ""),
-            ((program["security_id"],) if program.get("security_id") else ()),
-        )
+        targets = all_rows(db, "SELECT id,price,security_type FROM market_securities WHERE active=1 AND id=?", (program["security_id"],)) \
+            if program.get("security_id") else all_rows(db, "SELECT id,price,security_type FROM market_securities WHERE active=1 AND security_type<>'fund'")
         for security in targets:
             start_price = float(program.get("start_price") or security["price"])
             new_price = max(0.01, start_price * (1 + float(program["percent_change"]) * progress / 100.0))
@@ -7120,6 +7159,8 @@ def apply_market_price_programs(db: Database) -> int:
             last_time = parse_iso(last_history["recorded_at"]) if last_history and last_history.get("recorded_at") else None
             if not last_history or abs(float(last_history["price"]) - rounded_price) >= 0.0001 or not last_time or (current - last_time).total_seconds() >= 300:
                 db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], rounded_price, "scheduled_program", current.isoformat()))
+            if progress >= 1 and str(security.get("security_type") or "") == "fund":
+                rebase_market_index_security(db, int(security["id"]), rounded_price)
             updated += 1
         if progress >= 1:
             db.execute("UPDATE market_price_programs SET status = 'completed' WHERE id = ?", (program["id"],))
@@ -15562,20 +15603,47 @@ class RoleplayHandler(BaseHTTPRequestHandler):
     def market_payload(self, db: Database, user: DbRow, history_ticker: str = "", history_range: str = "LIVE") -> dict[str, Any]:
         settings = get_system_settings(db)
         account = one(db, "SELECT * FROM market_accounts WHERE user_id = ?", (user["id"],))
+        day_cutoff = (utcnow() - dt.timedelta(hours=24)).isoformat()
         securities = all_rows(db, """SELECT s.*,
                 COALESCE(position.holder_count,0) AS holder_count,
                 COALESCE(position.outstanding_shares,0) AS outstanding_shares,
                 COALESCE(position.invested_basis,0) AS invested_basis,
                 CASE WHEN s.security_type='fund'
                     THEN s.price*COALESCE(position.outstanding_shares,0)
-                    ELSE s.price*COALESCE(s.issued_shares,0) END AS market_cap
+                    ELSE s.price*COALESCE(s.issued_shares,0) END AS market_cap,
+                COALESCE(day_reference.price, earliest_reference.price, s.previous_price, s.price) AS price_24h_ago
             FROM market_securities s
             LEFT JOIN (
                 SELECT security_id,COUNT(*) AS holder_count,SUM(quantity) AS outstanding_shares,
                        SUM(quantity*average_cost) AS invested_basis
                 FROM market_holdings WHERE quantity>0 GROUP BY security_id
             ) position ON position.security_id=s.id
-            WHERE s.active=1 ORDER BY CASE WHEN s.security_type='fund' THEN 0 ELSE 1 END,s.security_type,s.ticker""")
+            LEFT JOIN LATERAL (
+                SELECT h.price FROM market_price_history h
+                WHERE h.security_id=s.id AND h.recorded_at<=?
+                ORDER BY h.recorded_at DESC,h.id DESC LIMIT 1
+            ) day_reference ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT h.price FROM market_price_history h
+                WHERE h.security_id=s.id
+                ORDER BY h.recorded_at ASC,h.id ASC LIMIT 1
+            ) earliest_reference ON TRUE
+            WHERE s.active=1 ORDER BY CASE WHEN s.security_type='fund' THEN 0 ELSE 1 END,s.security_type,s.ticker""", (day_cutoff,))
+        securities = [dict(row) for row in securities]
+        ranked_stocks = sorted(
+            (row for row in securities if str(row.get("security_type") or "") != "fund"),
+            key=lambda row: (-float(row.get("market_cap") or 0), str(row.get("ticker") or "")),
+        )
+        market_cap_ranks = {int(row["id"]): rank for rank, row in enumerate(ranked_stocks, start=1)}
+        for security in securities:
+            current_price = float(security.get("price") or 0)
+            price_24h_ago = float(security.get("price_24h_ago") or current_price)
+            security["change_24h_percent"] = round(
+                ((current_price / price_24h_ago) - 1) * 100 if price_24h_ago > 0 else 0,
+                4,
+            )
+            security["market_cap_rank"] = market_cap_ranks.get(int(security["id"]))
+            security["market_cap_rank_count"] = len(ranked_stocks)
         holdings: list[DbRow] = []
         orders: list[DbRow] = []
         cash_log: list[DbRow] = []
@@ -15768,8 +15836,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 WHERE r.account_id=? ORDER BY r.redeemed_at DESC LIMIT 20""", (account["id"],))
         portfolio_value = sum(float(row["quantity"]) * float(row["price"]) for row in holdings)
         index_funds = market_index_payload(db)
+        index_funds_by_security = {int(fund["security_id"]): fund for fund in index_funds}
+        for security in securities:
+            fund = index_funds_by_security.get(int(security["id"]))
+            if not fund:
+                continue
+            security["resident_units"] = fund["resident_units"]
+            security["gemini_shares"] = fund["gemini_shares"]
+            security["total_capitalized_units"] = fund["total_capitalized_units"]
+            security["gemini_capitalization"] = fund["gemini_capitalization"]
+            security["market_cap"] = fund["market_cap"]
         exchange_market_cap = sum(float(row.get("market_cap") or 0) for row in securities if str(row.get("security_type") or "") != "fund")
-        return {"account": dict(account) if account else None, "securities": [dict(x) for x in securities], "holdings": [dict(x) for x in holdings],
+        return {"account": dict(account) if account else None, "securities": securities, "holdings": [dict(x) for x in holdings],
                 "orders": [dict(x) for x in orders], "cash_transactions": [dict(x) for x in cash_log], "transfers": [dict(x) for x in transfers],
                 "promo_redemptions": [dict(x) for x in promo_redemptions],
                 "index_funds": index_funds,
@@ -24289,7 +24367,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         payload = self.read_json(); ticker = str(payload.get("ticker") or "ALL").upper().strip(); name = str(payload.get("event_name") or "Market adjustment").strip()[:100]
         try: percent = max(-500, min(500, float(payload.get("percent_change") or 0))); duration = max(1, min(10080, int(payload.get("duration_minutes") or 60)))
         except (TypeError, ValueError): self.error(400, "Percent and duration are required."); return
-        security = None if ticker == "ALL" else one(db, "SELECT * FROM market_securities WHERE ticker=? AND active=1 AND security_type<>'fund'", (ticker,))
+        security = None if ticker == "ALL" else one(db, "SELECT * FROM market_securities WHERE ticker=? AND active=1", (ticker,))
         if ticker != "ALL" and not security: self.error(404, "Ticker not found."); return
         start = utcnow(); end = start + dt.timedelta(minutes=duration)
         targets = [security] if security else all_rows(db, "SELECT id,price FROM market_securities WHERE active=1 AND security_type<>'fund'")
@@ -24318,6 +24396,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     restored_at = now_iso()
                     db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?", (restored_price, restored_at, item["security_id"]))
                     db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (item["security_id"], restored_price, "program_cancelled", restored_at))
+                    rebase_market_index_security(db, int(item["security_id"]), restored_price)
                     restored += 1
             db.execute("UPDATE market_price_programs SET status='cancelled' WHERE id=?", (item["id"],))
         db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('program_cancelled',?,?,?,?)", (f"Stopped: {program['event_name']}", f"Restored {restored} security price(s) to their pre-movement baseline.", user["id"], now_iso()))
@@ -24344,6 +24423,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 if security:
                     held_price = max(0.01, float(security["price"] or 0.01))
                     db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (item["security_id"], held_price, "program_stopped_at_market", stopped_at))
+                    rebase_market_index_security(db, int(item["security_id"]), held_price)
                     held_quotes.append({"ticker": security["ticker"], "price": round(held_price, 4)})
                     held += 1
             db.execute("UPDATE market_price_programs SET status='stopped' WHERE id=?", (item["id"],))
