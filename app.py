@@ -2198,6 +2198,7 @@ SYSTEM_SETTING_DEFAULTS = {
     "market_schedule_timezone": "America/New_York",
     "market_weekends_enabled": "1",
     "market_manual_override": "schedule",
+    "market_price_freeze_started_at": "",
     "market_transfer_fee_percent": "1.50",
     "market_trade_fee_percent": "0.25",
     "market_holding_balance": "0.00",
@@ -5786,6 +5787,7 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "market_session_reason": market_session["reason"],
         "market_local_time": market_session["local_time"],
         "market_next_transition_at": market_session["next_transition_at"],
+        "market_price_freeze_started_at": str(raw.get("market_price_freeze_started_at") or "")[:80],
         "market_transfer_fee_percent": max(0.0, min(25.0, float(raw.get("market_transfer_fee_percent") or 1.5))),
         "market_trade_fee_percent": max(0.0, min(10.0, float(raw.get("market_trade_fee_percent") or 0.25))),
         "market_holding_balance": max(0.0, float(raw.get("market_holding_balance") or 0)),
@@ -7328,44 +7330,94 @@ def process_queued_ravenhood_orders(db: Database, settings: dict[str, Any]) -> i
     return processed
 
 
+def sync_ravenhood_price_freeze(db: Database, settings: dict[str, Any], current: dt.datetime) -> bool:
+    """Freeze all quote automation while the exchange is closed and resume programs without time jumps."""
+    freeze_text = str(settings.get("market_price_freeze_started_at") or "").strip()
+    if not settings["market_open"]:
+        if not freeze_text:
+            set_system_setting(db, "market_price_freeze_started_at", current.isoformat())
+        return False
+
+    if not freeze_text:
+        return True
+
+    try:
+        freeze_started = parse_iso(freeze_text)
+    except (TypeError, ValueError):
+        freeze_started = current
+    if freeze_started.tzinfo is None:
+        freeze_started = freeze_started.replace(tzinfo=dt.timezone.utc)
+    if current > freeze_started:
+        paused_for = current - freeze_started
+        programs = all_rows(db, "SELECT id,starts_at,ends_at FROM market_price_programs WHERE status='active' ORDER BY id")
+        for program in programs:
+            try:
+                starts = parse_iso(program["starts_at"])
+                ends = parse_iso(program["ends_at"])
+            except (TypeError, ValueError):
+                continue
+            if starts >= freeze_started:
+                duration = max(dt.timedelta(seconds=1), ends - starts)
+                resumed_start = current
+                resumed_end = current + duration
+            else:
+                resumed_start = starts + paused_for
+                resumed_end = ends + paused_for
+            db.execute(
+                "UPDATE market_price_programs SET starts_at=?,ends_at=? WHERE id=? AND status='active'",
+                (resumed_start.isoformat(), resumed_end.isoformat(), program["id"]),
+            )
+
+    # A closed session does not accrue missed volatility or Gemini cycles. Their clocks restart at the open.
+    set_system_setting(db, "market_autopilot_last_tick", current.isoformat())
+    set_system_setting(db, "market_gemini_last_tick", current.isoformat())
+    set_system_setting(db, "market_price_freeze_started_at", "")
+    settings["market_autopilot_last_tick"] = current.isoformat()
+    settings["market_gemini_last_tick"] = current.isoformat()
+    settings["market_price_freeze_started_at"] = ""
+    return True
+
+
 def market_automation_worker() -> None:
     while True:
         try:
             with conn() as db:
-                apply_market_price_programs(db)
                 settings = get_system_settings(db)
-                process_queued_ravenhood_orders(db, settings)
                 current = utcnow()
-                if settings["market_autopilot_enabled"]:
-                    last = parse_iso(settings["market_autopilot_last_tick"]) if settings["market_autopilot_last_tick"] else None
-                    if not last or (current - last).total_seconds() >= settings["market_autopilot_interval_minutes"] * 60:
-                        market_volatility_cycle(db, settings["market_volatility_percent"])
-                        set_system_setting(db, "market_autopilot_last_tick", current.isoformat())
-                if settings["market_gemini_autopilot_enabled"] and settings["market_ai_enabled"] and GEMINI_API_KEY:
-                    last_ai = parse_iso(settings["market_gemini_last_tick"]) if settings["market_gemini_last_tick"] else None
-                    if not last_ai or (current - last_ai).total_seconds() >= settings["market_gemini_interval_minutes"] * 60:
-                        try:
-                            market_gemini_adjustment_cycle(db)
-                            set_system_setting(db, "market_gemini_last_tick", current.isoformat())
-                        except urllib.error.HTTPError as exc:
-                            # A quota response should not be retried every 15 seconds.
-                            # Advance the scheduler and wait for the configured interval.
-                            if exc.code == 429:
+                if sync_ravenhood_price_freeze(db, settings, current):
+                    # Queued resident orders receive the unchanged opening quote before automation resumes.
+                    process_queued_ravenhood_orders(db, settings)
+                    apply_market_price_programs(db)
+                    if settings["market_autopilot_enabled"]:
+                        last = parse_iso(settings["market_autopilot_last_tick"]) if settings["market_autopilot_last_tick"] else None
+                        if not last or (current - last).total_seconds() >= settings["market_autopilot_interval_minutes"] * 60:
+                            market_volatility_cycle(db, settings["market_volatility_percent"])
+                            set_system_setting(db, "market_autopilot_last_tick", current.isoformat())
+                    if settings["market_gemini_autopilot_enabled"] and settings["market_ai_enabled"] and GEMINI_API_KEY:
+                        last_ai = parse_iso(settings["market_gemini_last_tick"]) if settings["market_gemini_last_tick"] else None
+                        if not last_ai or (current - last_ai).total_seconds() >= settings["market_gemini_interval_minutes"] * 60:
+                            try:
+                                market_gemini_adjustment_cycle(db)
                                 set_system_setting(db, "market_gemini_last_tick", current.isoformat())
-                                print(f"Market automation paused after Gemini rate limit; next review in {settings['market_gemini_interval_minutes']} minute(s)")
-                            else:
-                                raise
-                funds = all_rows(db, "SELECT id,last_rebalanced_at,rebalance_interval_hours FROM market_index_funds WHERE enabled=1")
-                needs_rebalance = any(
-                    not fund.get("last_rebalanced_at")
-                    or (current - parse_iso(fund["last_rebalanced_at"])).total_seconds() >= max(1, int(fund.get("rebalance_interval_hours") or 24)) * 3600
-                    or not one(db, "SELECT 1 AS present FROM market_index_members WHERE fund_id=? LIMIT 1", (fund["id"],))
-                    for fund in funds
-                )
-                if needs_rebalance:
-                    rebalance_market_index_funds(db)
-                else:
-                    update_market_index_prices(db)
+                            except urllib.error.HTTPError as exc:
+                                # A quota response should not be retried every 15 seconds.
+                                # Advance the scheduler and wait for the configured interval.
+                                if exc.code == 429:
+                                    set_system_setting(db, "market_gemini_last_tick", current.isoformat())
+                                    print(f"Market automation paused after Gemini rate limit; next review in {settings['market_gemini_interval_minutes']} minute(s)")
+                                else:
+                                    raise
+                    funds = all_rows(db, "SELECT id,last_rebalanced_at,rebalance_interval_hours FROM market_index_funds WHERE enabled=1")
+                    needs_rebalance = any(
+                        not fund.get("last_rebalanced_at")
+                        or (current - parse_iso(fund["last_rebalanced_at"])).total_seconds() >= max(1, int(fund.get("rebalance_interval_hours") or 24)) * 3600
+                        or not one(db, "SELECT 1 AS present FROM market_index_members WHERE fund_id=? LIMIT 1", (fund["id"],))
+                        for fund in funds
+                    )
+                    if needs_rebalance:
+                        rebalance_market_index_funds(db)
+                    else:
+                        update_market_index_prices(db)
         except Exception as exc:
             print(f"Market automation error: {type(exc).__name__}: {exc}")
         time.sleep(15)
@@ -24524,6 +24576,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err); return
         assert user is not None
+        if not get_system_settings(db)["market_open"]:
+            self.error(409, "Ravenhood Markets is closed. Index rebalancing will be available when the exchange reopens."); return
         result = rebalance_market_index_funds(db, force=True, actor_id=int(user["id"]))
         add_admin_audit(db, int(user["id"]), "market.indexes.rebalanced", details=result)
         self.send_json(200, {"ok": True, **result, "index_funds": market_index_payload(db)})
@@ -24600,6 +24654,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err); return
         settings = get_system_settings(db)
+        if not settings["market_open"]:
+            self.error(409, "Ravenhood Markets is closed. Quotes are frozen until the exchange reopens."); return
         result = market_volatility_cycle(db, settings["market_volatility_percent"], "manual", int(user["id"]))
         set_system_setting(db, "market_autopilot_last_tick", now_iso())
         add_admin_audit(db, int(user["id"]), "market.volatility_cycle", details=result)
@@ -24626,6 +24682,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         err = developer_required(user)
         if err:
             self.error(403 if user else 401, err); return
+        if not get_system_settings(db)["market_open"]:
+            self.error(409, "Ravenhood Markets is closed. Quotes cannot be restored until the exchange reopens; use Stop and hold to end the movement at its frozen price."); return
         program = one(db, "SELECT * FROM market_price_programs WHERE id=?", (program_id,)) if program_id else None
         if not program:
             self.error(404, "Market movement not found."); return
