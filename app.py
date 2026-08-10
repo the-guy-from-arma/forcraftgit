@@ -46,6 +46,9 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 DATABASE_MAX_CONNECTIONS = max(2, int(os.environ.get("DATABASE_MAX_CONNECTIONS", "5")))
 DATABASE_CONNECT_TIMEOUT_SECONDS = max(3, int(os.environ.get("DATABASE_CONNECT_TIMEOUT_SECONDS", "10")))
 DATABASE_CONNECTION_SEMAPHORE = threading.BoundedSemaphore(DATABASE_MAX_CONNECTIONS)
+APPLICATION_READY = threading.Event()
+APPLICATION_STARTUP_ERROR = ""
+APPLICATION_STARTED_AT = dt.datetime.now(dt.timezone.utc).isoformat()
 SHADOWHAVEN_SFTP_SESSION_SEMAPHORE = threading.BoundedSemaphore(1)
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-before-production")
 COOKIE_NAME = "rp_session"
@@ -9471,6 +9474,30 @@ class RoleplayHandler(BaseHTTPRequestHandler):
 
     def route_api(self, path: str, query: dict[str, list[str]]) -> None:
         method = self.command
+        if path == "/api/health" and method == "GET":
+            startup_error = APPLICATION_STARTUP_ERROR
+            self.send_json(
+                503 if startup_error else 200,
+                {
+                    "ok": not bool(startup_error),
+                    "ready": APPLICATION_READY.is_set(),
+                    "state": "ready" if APPLICATION_READY.is_set() else "failed" if startup_error else "initializing",
+                    "started_at": APPLICATION_STARTED_AT,
+                    "time": now_iso(),
+                },
+            )
+            return
+        if not APPLICATION_READY.is_set():
+            self.send_json(
+                503,
+                {
+                    "error": "Application initialization is still in progress. Please retry shortly.",
+                    "code": "application_initializing",
+                    "ready": False,
+                },
+                {"Retry-After": "5"},
+            )
+            return
         if path == "/api/casino/rounds" and method == "POST":
             retry_after = self.casino_wager_retry_after()
             if retry_after > 0:
@@ -27346,61 +27373,74 @@ def casino_balance_worker() -> None:
         time.sleep(300)
 
 
-def main() -> None:
+def initialize_application() -> None:
+    global APPLICATION_STARTUP_ERROR
     schema_ready = False
-    for attempt in range(1, 31):
-        try:
-            ensure_schema()
-            schema_ready = True
-            break
-        except psycopg.OperationalError as exc:
-            print(f"Database unavailable during startup (attempt {attempt}/30): {exc}")
-            time.sleep(min(2 * attempt, 15))
-    if not schema_ready:
-        raise RuntimeError("Database remained unavailable after startup retries")
     try:
-        initialize_insurance_balance_tracking()
+        for attempt in range(1, 31):
+            try:
+                print(f"Database schema initialization started (attempt {attempt}/30)", flush=True)
+                ensure_schema()
+                schema_ready = True
+                print("Database schema initialization completed", flush=True)
+                break
+            except psycopg.OperationalError as exc:
+                print(f"Database unavailable during startup (attempt {attempt}/30): {exc}", flush=True)
+                time.sleep(min(2 * attempt, 15))
+        if not schema_ready:
+            raise RuntimeError("Database remained unavailable after startup retries")
+        try:
+            initialize_insurance_balance_tracking()
+        except Exception as exc:
+            print(f"Insurance balance tracking initialization failed: {type(exc).__name__}: {exc}", flush=True)
+        threading.Thread(target=shadowhaven_bank_sync_worker, name="shadowhaven-bank-sync", daemon=True).start()
+        threading.Thread(
+            target=shadowhaven_reputation_sync_worker,
+            name="shadowhaven-reputation-sync",
+            daemon=True,
+        ).start()
+        threading.Thread(
+            target=shadowhaven_camera_events_sync_worker,
+            name="shadowhaven-fluck-camera-sync",
+            daemon=True,
+        ).start()
+        threading.Thread(
+            target=shadowhaven_anticheat_sync_worker,
+            name="shadowhaven-anticheat-sync",
+            daemon=True,
+        ).start()
+        threading.Thread(
+            target=shadowhaven_persistence_sync_worker,
+            name="shadowhaven-persistence-sync",
+            daemon=True,
+        ).start()
+        threading.Thread(
+            target=shadowhaven_property_sync_worker,
+            name="shadowhaven-property-sync",
+            daemon=True,
+        ).start()
+        threading.Thread(
+            target=fnn_generation_worker,
+            name="fnn-daily-generation",
+            daemon=True,
+        ).start()
+        threading.Thread(target=lottery_worker, name="faircroft-lottery", daemon=True).start()
+        threading.Thread(target=market_automation_worker, name="ravenhood-market-automation", daemon=True).start()
+        threading.Thread(target=sportsbook_sync_worker, name="faircroft-sportsbook-sync", daemon=True).start()
+        threading.Thread(target=casino_balance_worker, name="faircroft-casino-balance", daemon=True).start()
+        APPLICATION_READY.set()
+        print("Application initialization completed; API traffic is ready", flush=True)
     except Exception as exc:
-        print(f"Insurance balance tracking initialization failed: {type(exc).__name__}: {exc}")
-    threading.Thread(target=shadowhaven_bank_sync_worker, name="shadowhaven-bank-sync", daemon=True).start()
-    threading.Thread(
-        target=shadowhaven_reputation_sync_worker,
-        name="shadowhaven-reputation-sync",
-        daemon=True,
-    ).start()
-    threading.Thread(
-        target=shadowhaven_camera_events_sync_worker,
-        name="shadowhaven-fluck-camera-sync",
-        daemon=True,
-    ).start()
-    threading.Thread(
-        target=shadowhaven_anticheat_sync_worker,
-        name="shadowhaven-anticheat-sync",
-        daemon=True,
-    ).start()
-    threading.Thread(
-        target=shadowhaven_persistence_sync_worker,
-        name="shadowhaven-persistence-sync",
-        daemon=True,
-    ).start()
-    threading.Thread(
-        target=shadowhaven_property_sync_worker,
-        name="shadowhaven-property-sync",
-        daemon=True,
-    ).start()
-    threading.Thread(
-        target=fnn_generation_worker,
-        name="fnn-daily-generation",
-        daemon=True,
-    ).start()
-    threading.Thread(target=lottery_worker, name="faircroft-lottery", daemon=True).start()
-    threading.Thread(target=market_automation_worker, name="ravenhood-market-automation", daemon=True).start()
-    threading.Thread(target=sportsbook_sync_worker, name="faircroft-sportsbook-sync", daemon=True).start()
-    threading.Thread(target=casino_balance_worker, name="faircroft-casino-balance", daemon=True).start()
+        APPLICATION_STARTUP_ERROR = f"{type(exc).__name__}: {exc}"
+        print(f"Application initialization failed: {APPLICATION_STARTUP_ERROR}", flush=True)
+
+
+def main() -> None:
     port = int(os.environ.get("PORT", "8080"))
     host = os.environ.get("HOST", "0.0.0.0")
     server = ThreadingHTTPServer((host, port), RoleplayHandler)
-    print(f"Roleplay PWA running on http://{host}:{port}")
+    threading.Thread(target=initialize_application, name="application-initialization", daemon=True).start()
+    print(f"Roleplay PWA listening on http://{host}:{port}; initialization is running", flush=True)
     server.serve_forever()
 
 
