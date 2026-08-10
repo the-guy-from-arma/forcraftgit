@@ -181,6 +181,7 @@ TREASURY_MAX_REQUEST_AMOUNT = 10_000_000.00
 INSURANCE_BANK_COMMAND_MAX_AMOUNT = 10_000_000
 LOTTERY_BANK_COMMAND_MAX_AMOUNT = 10_000_000
 RAVENHOOD_BANK_COMMAND_MAX_AMOUNT = 10_000_000
+RAVENHOOD_MAX_QUEUED_ORDERS = 25
 INSURANCE_PROPERTY_BASE_VALUE = 150_000.00
 INSURANCE_PROPERTY_PROTECTED_VALUE = 400_000.00
 INSURANCE_PROPERTY_PROTECTION_PREMIUM = 50_000.00
@@ -4288,6 +4289,35 @@ def ensure_migrations(db: Database) -> None:
     )
     db.execute(
         """
+        CREATE TABLE IF NOT EXISTS market_order_requests (
+            id SERIAL PRIMARY KEY,
+            account_id INTEGER NOT NULL,
+            security_id INTEGER NOT NULL,
+            side TEXT NOT NULL,
+            quantity NUMERIC(18,6) NOT NULL,
+            submitted_price NUMERIC(14,4) NOT NULL,
+            estimated_gross NUMERIC(14,2) NOT NULL,
+            estimated_fee NUMERIC(14,2) NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'queued',
+            execute_after TEXT,
+            queued_at TEXT NOT NULL,
+            executed_order_id INTEGER,
+            executed_unit_price NUMERIC(14,4),
+            executed_gross NUMERIC(14,2),
+            executed_fee NUMERIC(14,2),
+            executed_at TEXT,
+            cancelled_at TEXT,
+            failure_reason TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY (account_id) REFERENCES market_accounts(id) ON DELETE CASCADE,
+            FOREIGN KEY (security_id) REFERENCES market_securities(id) ON DELETE CASCADE,
+            FOREIGN KEY (executed_order_id) REFERENCES market_orders(id) ON DELETE SET NULL
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS market_order_requests_account_status_idx ON market_order_requests(account_id, status, queued_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS market_order_requests_queue_idx ON market_order_requests(status, queued_at) WHERE status IN ('queued','processing')")
+    db.execute(
+        """
         CREATE TABLE IF NOT EXISTS market_system_trades (
             id SERIAL PRIMARY KEY,
             security_id INTEGER NOT NULL,
@@ -7179,12 +7209,132 @@ def apply_market_price_programs(db: Database) -> int:
     return updated
 
 
+def execute_ravenhood_order(
+    db: Database,
+    account_id: int,
+    security_id: int,
+    side: str,
+    quantity: float,
+    trade_fee_percent: float,
+) -> dict[str, Any]:
+    """Execute one stock order at the current quote without touching Bank Bridge."""
+    account = one(db, "SELECT * FROM market_accounts WHERE id=? FOR UPDATE", (account_id,))
+    security = one(db, "SELECT * FROM market_securities WHERE id=? AND active=1 FOR UPDATE", (security_id,))
+    if not account:
+        return {"ok": False, "status_code": 409, "error": "Ravenhood account is no longer available."}
+    if str(account.get("status") or "active").lower() != "active":
+        return {"ok": False, "status_code": 409, "error": "Ravenhood account is not active."}
+    if not security or str(security.get("lifecycle_status") or "active").lower() != "active":
+        return {"ok": False, "status_code": 409, "error": "This security is no longer open for trading."}
+    if side not in ("buy", "sell") or not math.isfinite(quantity) or quantity <= 0:
+        return {"ok": False, "status_code": 400, "error": "A valid side and quantity are required."}
+
+    price = float(security["price"] or 0)
+    raw_gross = price * quantity
+    if raw_gross < 0.01:
+        minimum_quantity = max(0.000001, math.ceil((0.01 / max(price, 0.000001)) * 1_000_000) / 1_000_000)
+        return {
+            "ok": False,
+            "status_code": 400,
+            "error": f"Fractional orders must be worth at least $0.01. Enter at least {minimum_quantity:.6f} shares at the current price.",
+        }
+
+    gross = round(raw_gross, 2)
+    fee = round(gross * trade_fee_percent / 100, 2)
+    holding = one(db, "SELECT * FROM market_holdings WHERE account_id=? AND security_id=? FOR UPDATE", (account_id, security_id))
+    cash = float(account["cash_balance"] or 0)
+    if side == "buy":
+        total = gross + fee
+        pending_withdrawals = one(
+            db,
+            "SELECT COALESCE(SUM(amount),0) AS total FROM market_cash_transactions WHERE account_id=? AND transaction_type='withdrawal' AND status='pending'",
+            (account_id,),
+        )
+        available_cash = cash - float((pending_withdrawals or {}).get("total") or 0)
+        if available_cash + 0.0001 < total:
+            return {
+                "ok": False,
+                "status_code": 409,
+                "error": f"Insufficient settled cash at execution. Available after pending withdrawals: ${available_cash:,.2f}.",
+            }
+        old_quantity = float(holding["quantity"] or 0) if holding else 0
+        old_cost = float(holding["average_cost"] or 0) if holding else 0
+        average_cost = ((old_quantity * old_cost) + gross) / (old_quantity + quantity)
+        db.execute(
+            """INSERT INTO market_holdings (account_id, security_id, quantity, average_cost) VALUES (?, ?, ?, ?)
+            ON CONFLICT(account_id, security_id) DO UPDATE SET quantity=market_holdings.quantity+excluded.quantity, average_cost=excluded.average_cost""",
+            (account_id, security_id, quantity, round(average_cost, 4)),
+        )
+        new_cash = cash - total
+    else:
+        if not holding or float(holding["quantity"] or 0) + 0.0000001 < quantity:
+            return {"ok": False, "status_code": 409, "error": "You do not own enough shares at execution."}
+        db.execute("UPDATE market_holdings SET quantity=quantity-? WHERE id=?", (quantity, holding["id"]))
+        new_cash = cash + gross - fee
+
+    executed_at = now_iso()
+    db.execute("UPDATE market_accounts SET cash_balance=?, updated_at=? WHERE id=?", (round(new_cash, 2), executed_at, account_id))
+    execution = one(
+        db,
+        """INSERT INTO market_orders (account_id, security_id, side, quantity, unit_price, gross_amount, fee_amount, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
+        (account_id, security_id, side, quantity, price, gross, fee, executed_at),
+    )
+    holding_balance_row = one(db, "SELECT setting_value FROM system_settings WHERE setting_key='market_holding_balance' FOR UPDATE")
+    holding_balance = float((holding_balance_row or {}).get("setting_value") or 0)
+    set_system_setting(db, "market_holding_balance", str(round(holding_balance + fee, 2)))
+    return {
+        "ok": True,
+        "order_id": int(execution["id"]),
+        "unit_price": price,
+        "gross": gross,
+        "fee": fee,
+        "executed_at": executed_at,
+    }
+
+
+def process_queued_ravenhood_orders(db: Database, settings: dict[str, Any]) -> int:
+    """Execute after-hours stock orders once the exchange is open."""
+    if not settings["market_open"]:
+        return 0
+    queued = all_rows(
+        db,
+        """SELECT * FROM market_order_requests
+        WHERE status='queued' ORDER BY queued_at,id LIMIT 25 FOR UPDATE SKIP LOCKED""",
+    )
+    processed = 0
+    for request in queued:
+        db.execute("UPDATE market_order_requests SET status='processing', failure_reason='' WHERE id=? AND status='queued'", (request["id"],))
+        result = execute_ravenhood_order(
+            db,
+            int(request["account_id"]),
+            int(request["security_id"]),
+            str(request["side"]),
+            float(request["quantity"]),
+            float(settings["market_trade_fee_percent"]),
+        )
+        if result["ok"]:
+            db.execute(
+                """UPDATE market_order_requests SET status='executed', executed_order_id=?, executed_unit_price=?,
+                executed_gross=?, executed_fee=?, executed_at=?, failure_reason='' WHERE id=?""",
+                (result["order_id"], result["unit_price"], result["gross"], result["fee"], result["executed_at"], request["id"]),
+            )
+        else:
+            db.execute(
+                "UPDATE market_order_requests SET status='failed', failure_reason=? WHERE id=?",
+                (str(result["error"])[:500], request["id"]),
+            )
+        processed += 1
+    return processed
+
+
 def market_automation_worker() -> None:
     while True:
         try:
             with conn() as db:
                 apply_market_price_programs(db)
                 settings = get_system_settings(db)
+                process_queued_ravenhood_orders(db, settings)
                 current = utcnow()
                 if settings["market_autopilot_enabled"]:
                     last = parse_iso(settings["market_autopilot_last_tick"]) if settings["market_autopilot_last_tick"] else None
@@ -9741,6 +9891,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_wallstreet_cash(db, user)
                 elif path == "/api/wallstreet/orders" and method == "POST":
                     self.api_wallstreet_order(db, user)
+                elif path.startswith("/api/wallstreet/orders/") and path.endswith("/cancel") and method == "POST":
+                    self.api_wallstreet_cancel_order(db, user, self.path_int(path, 3))
                 elif path == "/api/wallstreet/recipient" and method == "GET":
                     self.api_wallstreet_recipient(db, user, query)
                 elif path == "/api/wallstreet/transfers" and method == "POST":
@@ -15682,6 +15834,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             security["market_cap_rank_count"] = len(ranked_stocks)
         holdings: list[DbRow] = []
         orders: list[DbRow] = []
+        order_requests: list[DbRow] = []
         cash_log: list[DbRow] = []
         transfers: list[DbRow] = []
         promo_redemptions: list[DbRow] = []
@@ -15855,6 +16008,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 WHERE h.account_id = ? AND h.quantity > 0 ORDER BY (h.quantity * s.price) DESC""", (account["id"],))
             orders = all_rows(db, """SELECT o.*, s.ticker, s.name FROM market_orders o JOIN market_securities s ON s.id = o.security_id
                 WHERE o.account_id = ? ORDER BY o.created_at DESC LIMIT 50""", (account["id"],))
+            order_requests = all_rows(db, """SELECT r.*, s.ticker, s.name FROM market_order_requests r
+                JOIN market_securities s ON s.id=r.security_id
+                WHERE r.account_id=? ORDER BY r.queued_at DESC LIMIT 150""", (account["id"],))
             cash_log = all_rows(db, """SELECT t.*, issuer.name AS processed_by_name FROM market_cash_transactions t
                 LEFT JOIN users issuer ON issuer.id = t.processed_by WHERE t.account_id = ? ORDER BY t.created_at DESC LIMIT 30""", (account["id"],))
             pending_withdrawal = one(db, """SELECT COALESCE(SUM(amount),0) AS total
@@ -15884,7 +16040,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             security["market_cap"] = fund["market_cap"]
         exchange_market_cap = sum(float(row.get("market_cap") or 0) for row in securities if str(row.get("security_type") or "") != "fund")
         return {"account": dict(account) if account else None, "securities": [dict(x) for x in securities], "holdings": [dict(x) for x in holdings],
-                "orders": [dict(x) for x in orders], "cash_transactions": [dict(x) for x in cash_log], "transfers": [dict(x) for x in transfers],
+                "orders": [dict(x) for x in orders], "order_requests": [dict(x) for x in order_requests],
+                "cash_transactions": [dict(x) for x in cash_log], "transfers": [dict(x) for x in transfers],
                 "promo_redemptions": [dict(x) for x in promo_redemptions],
                 "index_funds": index_funds,
                 "exchange_market_cap": round(exchange_market_cap, 2),
@@ -15896,6 +16053,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "pending_withdrawal_amount": pending_withdrawal_amount,
                 "available_withdrawal_amount": available_withdrawal_amount,
                 "portfolio_value": round(portfolio_value, 2), "market_open": settings["market_open"],
+                "market_session_reason": settings["market_session_reason"],
+                "market_next_transition_at": settings["market_next_transition_at"],
                 "transfer_fee_percent": settings["market_transfer_fee_percent"], "trade_fee_percent": settings["market_trade_fee_percent"]}
 
     def api_wallstreet(self, db: Database, user: DbRow | None, query: dict[str, list[str]]) -> None:
@@ -15964,40 +16123,90 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err); return
         settings = get_system_settings(db)
-        if not settings["market_open"]:
-            self.error(409, "Ravenhood Markets is currently closed."); return
-        account = one(db, "SELECT * FROM market_accounts WHERE user_id=?", (user["id"],))
+        account = one(db, "SELECT * FROM market_accounts WHERE user_id=? FOR UPDATE", (user["id"],))
         payload = self.read_json(); ticker = str(payload.get("ticker") or "").upper().strip(); side = str(payload.get("side") or "").lower()
         try: quantity = round(float(payload.get("quantity") or 0), 6)
         except (TypeError, ValueError): quantity = 0
+        if not math.isfinite(quantity): quantity = 0
         security = one(db, "SELECT * FROM market_securities WHERE ticker=? AND active=1 FOR UPDATE", (ticker,))
         if not account or not security or side not in ("buy", "sell") or quantity <= 0:
             self.error(400, "Valid account, ticker, side, and quantity are required."); return
-        price = float(security["price"]); raw_gross = price * quantity
+        if str(account.get("status") or "active").lower() != "active":
+            self.error(409, "Ravenhood account is not active."); return
+        if str(security.get("lifecycle_status") or "active").lower() != "active":
+            self.error(409, "This security is no longer open for trading."); return
+        price = float(security["price"] or 0); raw_gross = price * quantity
         if raw_gross < 0.01:
             minimum_quantity = max(0.000001, math.ceil((0.01 / max(price, 0.000001)) * 1_000_000) / 1_000_000)
             self.error(400, f"Fractional orders must be worth at least $0.01. Enter at least {minimum_quantity:.6f} shares at the current price."); return
         gross = round(raw_gross, 2); fee = round(gross * settings["market_trade_fee_percent"] / 100, 2)
-        holding = one(db, "SELECT * FROM market_holdings WHERE account_id=? AND security_id=?", (account["id"], security["id"]))
-        cash = float(account["cash_balance"] or 0)
-        if side == "buy":
-            total = gross + fee
+
+        if not settings["market_open"]:
+            open_count = one(db, "SELECT COUNT(*) AS total FROM market_order_requests WHERE account_id=? AND status IN ('queued','processing')", (account["id"],))
+            if int((open_count or {}).get("total") or 0) >= RAVENHOOD_MAX_QUEUED_ORDERS:
+                self.error(429, f"You may hold up to {RAVENHOOD_MAX_QUEUED_ORDERS} upcoming market orders. Cancel or wait for an order to execute before adding another."); return
             pending_withdrawals = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM market_cash_transactions WHERE account_id=? AND transaction_type='withdrawal' AND status='pending'", (account["id"],))
-            available_cash = cash - float((pending_withdrawals or {}).get("total") or 0)
-            if available_cash < total: self.error(409, f"Insufficient settled cash. Available after pending withdrawals: ${available_cash:,.2f}."); return
-            old_qty = float(holding["quantity"] or 0) if holding else 0; old_cost = float(holding["average_cost"] or 0) if holding else 0
-            avg = ((old_qty * old_cost) + gross) / (old_qty + quantity)
-            db.execute("""INSERT INTO market_holdings (account_id, security_id, quantity, average_cost) VALUES (?, ?, ?, ?)
-                ON CONFLICT(account_id, security_id) DO UPDATE SET quantity=market_holdings.quantity+excluded.quantity, average_cost=excluded.average_cost""", (account["id"], security["id"], quantity, round(avg, 4)))
-            new_cash = cash - total
-        else:
-            if not holding or float(holding["quantity"] or 0) < quantity: self.error(409, "You do not own enough shares."); return
-            db.execute("UPDATE market_holdings SET quantity=quantity-? WHERE id=?", (quantity, holding["id"]))
-            new_cash = cash + gross - fee
-        db.execute("UPDATE market_accounts SET cash_balance=?, updated_at=? WHERE id=?", (round(new_cash, 2), now_iso(), account["id"]))
-        db.execute("INSERT INTO market_orders (account_id, security_id, side, quantity, unit_price, gross_amount, fee_amount, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (account["id"], security["id"], side, quantity, price, gross, fee, now_iso()))
-        set_system_setting(db, "market_holding_balance", str(round(settings["market_holding_balance"] + fee, 2)))
-        self.send_json(201, {"ok": True, "gross": gross, "fee": fee})
+            reservations = one(db, """SELECT
+                    COALESCE(SUM(CASE WHEN side='buy' THEN estimated_gross+estimated_fee ELSE 0 END),0) AS buy_total,
+                    COALESCE(SUM(CASE WHEN side='sell' AND security_id=? THEN quantity ELSE 0 END),0) AS sell_quantity
+                FROM market_order_requests WHERE account_id=? AND status IN ('queued','processing')""", (security["id"], account["id"]))
+            if side == "buy":
+                available_cash = float(account["cash_balance"] or 0) - float((pending_withdrawals or {}).get("total") or 0) - float((reservations or {}).get("buy_total") or 0)
+                if available_cash + 0.0001 < gross + fee:
+                    self.error(409, f"Insufficient unreserved cash for this queued order. Available: ${available_cash:,.2f}."); return
+            else:
+                holding = one(db, "SELECT quantity FROM market_holdings WHERE account_id=? AND security_id=?", (account["id"], security["id"]))
+                available_shares = float((holding or {}).get("quantity") or 0) - float((reservations or {}).get("sell_quantity") or 0)
+                if available_shares + 0.0000001 < quantity:
+                    self.error(409, f"Insufficient unreserved shares for this queued sell. Available: {available_shares:,.6f}."); return
+            queued_at = now_iso()
+            queued = one(db, """INSERT INTO market_order_requests
+                (account_id,security_id,side,quantity,submitted_price,estimated_gross,estimated_fee,status,execute_after,queued_at)
+                VALUES (?,?,?,?,?,?,?,'queued',?,?) RETURNING id""",
+                (account["id"], security["id"], side, quantity, price, gross, fee, settings["market_next_transition_at"] or None, queued_at))
+            add_admin_audit(db, int(user["id"]), "market.order.queued", int(user["id"]), {
+                "request_id": int(queued["id"]), "ticker": ticker, "side": side, "quantity": quantity,
+                "submitted_price": price, "execute_after": settings["market_next_transition_at"],
+            })
+            self.send_json(202, {
+                "ok": True, "status": "queued", "request_id": int(queued["id"]), "ticker": ticker,
+                "side": side, "quantity": quantity, "submitted_price": price,
+                "estimated_gross": gross, "estimated_fee": fee,
+                "execute_after": settings["market_next_transition_at"],
+            })
+            return
+
+        result = execute_ravenhood_order(db, int(account["id"]), int(security["id"]), side, quantity, float(settings["market_trade_fee_percent"]))
+        if not result["ok"]:
+            self.error(int(result["status_code"]), str(result["error"])); return
+        add_admin_audit(db, int(user["id"]), "market.order.executed", int(user["id"]), {
+            "order_id": result["order_id"], "ticker": ticker, "side": side, "quantity": quantity,
+            "unit_price": result["unit_price"], "gross": result["gross"], "fee": result["fee"],
+        })
+        self.send_json(201, {"ok": True, "status": "executed", **result})
+
+    def api_wallstreet_cancel_order(self, db: Database, user: DbRow | None, request_id: int) -> None:
+        err = verified_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        account = one(db, "SELECT id FROM market_accounts WHERE user_id=?", (user["id"],))
+        if not account:
+            self.error(404, "Ravenhood account was not found."); return
+        cancelled_at = now_iso()
+        cancelled = one(db, """UPDATE market_order_requests SET status='cancelled',cancelled_at=?,failure_reason=''
+            WHERE id=? AND account_id=? AND status='queued' RETURNING id,security_id,side,quantity""",
+            (cancelled_at, request_id, account["id"]))
+        if not cancelled:
+            existing = one(db, "SELECT status FROM market_order_requests WHERE id=? AND account_id=?", (request_id, account["id"]))
+            if not existing:
+                self.error(404, "Upcoming order was not found."); return
+            self.error(409, f"This order can no longer be cancelled because it is {str(existing['status']).replace('_', ' ')}."); return
+        security = one(db, "SELECT ticker FROM market_securities WHERE id=?", (cancelled["security_id"],))
+        add_admin_audit(db, int(user["id"]), "market.order.cancelled", int(user["id"]), {
+            "request_id": request_id, "ticker": str((security or {}).get("ticker") or ""),
+            "side": cancelled["side"], "quantity": float(cancelled["quantity"]),
+        })
+        self.send_json(200, {"ok": True, "status": "cancelled", "request_id": request_id})
 
     def api_wallstreet_recipient(self, db: Database, user: DbRow | None, query: dict[str, list[str]]) -> None:
         err = verified_required(user)
