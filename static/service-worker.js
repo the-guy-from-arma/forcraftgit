@@ -1,10 +1,10 @@
-const CACHE = "faircroft-rp-v031-admin-finance-access-v64";
+const CACHE = "faircroft-rp-v031-lottery-forfeitures-v65";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.3.1-admin-finance-access-v64",
+  "/static/styles.css?v=0.3.1-lottery-forfeitures-v65",
   "/static/insurance-v7.css?v=0.3.1-index-flow-v58",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.3.1-admin-finance-access-v64",
+  "/static/app.js?v=0.3.1-lottery-forfeitures-v65",
   "/static/thunderlink-eula-v1.0.txt",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",

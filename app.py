@@ -4559,6 +4559,7 @@ def ensure_migrations(db: Database) -> None:
             status TEXT NOT NULL DEFAULT 'scheduled',
             source_fines NUMERIC(14,2) NOT NULL DEFAULT 0,
             source_market_fees NUMERIC(14,2) NOT NULL DEFAULT 0,
+            source_forfeitures NUMERIC(20,2) NOT NULL DEFAULT 0,
             prize_pool NUMERIC(14,2) NOT NULL DEFAULT 0,
             payout_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
             winning_entry_id INTEGER,
@@ -4603,6 +4604,7 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE lottery_entries ADD COLUMN IF NOT EXISTS payout_command_id TEXT")
     db.execute("ALTER TABLE lottery_draws ADD COLUMN IF NOT EXISTS winning_numbers TEXT NOT NULL DEFAULT '[]'")
     db.execute("ALTER TABLE lottery_draws ADD COLUMN IF NOT EXISTS rollover_amount NUMERIC(14,2) NOT NULL DEFAULT 0")
+    db.execute("ALTER TABLE lottery_draws ADD COLUMN IF NOT EXISTS source_forfeitures NUMERIC(20,2) NOT NULL DEFAULT 0")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS lottery_fund_adjustments (
@@ -4614,6 +4616,36 @@ def ensure_migrations(db: Database) -> None:
             FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT
         )
         """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS lottery_forfeiture_filings (
+            id SERIAL PRIMARY KEY,
+            security_id INTEGER NOT NULL UNIQUE,
+            amount NUMERIC(20,2) NOT NULL CHECK(amount >= 0),
+            ticker TEXT NOT NULL,
+            company_name TEXT NOT NULL,
+            bankruptcy_chapter TEXT NOT NULL DEFAULT 'Chapter 7',
+            reason TEXT NOT NULL,
+            filed_by INTEGER,
+            filed_at TEXT NOT NULL,
+            FOREIGN KEY (security_id) REFERENCES market_securities(id) ON DELETE RESTRICT,
+            FOREIGN KEY (filed_by) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS lottery_forfeiture_filed_at_idx ON lottery_forfeiture_filings(filed_at DESC)")
+    db.execute(
+        """INSERT INTO lottery_forfeiture_filings
+           (security_id,amount,ticker,company_name,bankruptcy_chapter,reason,filed_by,filed_at)
+           SELECT s.id,ROUND(GREATEST(0,COALESCE(s.previous_price,0))*GREATEST(0,COALESCE(s.issued_shares,0)),2),
+                  s.ticker,s.name,COALESCE(NULLIF(s.bankruptcy_chapter,''),'Chapter 7'),
+                  COALESCE(NULLIF(s.bankruptcy_reason,''),'Historical Chapter 7 market-cap forfeiture'),
+                  s.closed_by,COALESCE(s.bankruptcy_at,s.updated_at)
+           FROM market_securities s
+           WHERE (s.lifecycle_status='bankrupt' OR s.bankruptcy_at IS NOT NULL)
+             AND COALESCE(s.previous_price,0)>0 AND COALESCE(s.issued_shares,0)>0
+           ON CONFLICT(security_id) DO NOTHING"""
     )
     db.execute(
         """
@@ -5915,16 +5947,30 @@ def lottery_funding_snapshot(db: Database, settings: dict[str, Any] | None = Non
     taxes = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM myfaircroft_tax_payments")
     property_taxes = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM myfaircroft_property_tax_payments")
     awarded = one(db, "SELECT COALESCE(SUM(payout_amount),0) AS total FROM lottery_draws WHERE status='completed'")
-    manual = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM lottery_fund_adjustments")
+    allocations = one(db, """SELECT
+        (SELECT COALESCE(SUM(amount),0) FROM lottery_fund_adjustments) AS manual_total,
+        (SELECT COALESCE(SUM(amount),0) FROM lottery_forfeiture_filings) AS forfeiture_total""") or {}
     player_activity = one(db, "SELECT COALESCE(SUM(amount),0) AS total FROM lottery_player_pool_accruals")
     fines = float(direct["total"] or 0) + float(settled["total"] or 0)
     tax_receipts = float(taxes["total"] or 0) + float(property_taxes["total"] or 0)
     market = float(settings["market_holding_balance"] or 0)
     paid = float(awarded["total"] or 0)
-    manual_total = float(manual["total"] or 0)
+    manual_total = float(allocations.get("manual_total") or 0)
+    forfeiture_total = float(allocations.get("forfeiture_total") or 0)
     player_activity_total = float(player_activity["total"] or 0)
     public_receipts = fines + tax_receipts
-    return {"fines": round(public_receipts, 2), "taxes": round(tax_receipts, 2), "market_fees": round(market, 2), "manual": round(manual_total, 2), "player_activity": round(player_activity_total, 2), "awarded": round(paid, 2), "available": round(max(0.0, public_receipts + market + manual_total + player_activity_total - paid), 2)}
+    return {"fines": round(public_receipts, 2), "taxes": round(tax_receipts, 2), "market_fees": round(market, 2), "manual": round(manual_total, 2), "forfeitures": round(forfeiture_total, 2), "player_activity": round(player_activity_total, 2), "awarded": round(paid, 2), "available": round(max(0.0, public_receipts + market + manual_total + forfeiture_total + player_activity_total - paid), 2)}
+
+
+def lottery_forfeiture_filings(db: Database, limit: int = 100) -> list[dict[str, Any]]:
+    return [dict(row) for row in all_rows(
+        db,
+        """SELECT f.*,COALESCE(u.name,'System backfill') AS filed_by_name
+           FROM lottery_forfeiture_filings f
+           LEFT JOIN users u ON u.id=f.filed_by
+           ORDER BY f.filed_at DESC,f.id DESC LIMIT ?""",
+        (max(1, min(int(limit), 500)),),
+    )]
 
 
 def lottery_player_pool_status(db: Database, settings: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -7526,7 +7572,7 @@ def run_due_lottery_draws(db: Database) -> None:
         # subtracts only completed payouts. Record the carried amount on the
         # draw as an auditable rollover without adding it to the pool twice.
         rollover = round(max(0.0, float(funding["available"]) - payout), 2)
-        db.execute("""UPDATE lottery_draws SET status='completed',winning_numbers=?,source_fines=?,source_market_fees=?,prize_pool=?,payout_amount=?,rollover_amount=?,winning_entry_id=?,winner_user_id=?,completed_at=? WHERE id=? AND status='scheduled'""", (json.dumps(winning_numbers), funding["fines"], funding["market_fees"], funding["available"], payout, rollover, winner["id"] if winner else None, winner["user_id"] if winner else None, now_iso(), draw["id"]))
+        db.execute("""UPDATE lottery_draws SET status='completed',winning_numbers=?,source_fines=?,source_market_fees=?,source_forfeitures=?,prize_pool=?,payout_amount=?,rollover_amount=?,winning_entry_id=?,winner_user_id=?,completed_at=? WHERE id=? AND status='scheduled'""", (json.dumps(winning_numbers), funding["fines"], funding["market_fees"], funding["forfeitures"], funding["available"], payout, rollover, winner["id"] if winner else None, winner["user_id"] if winner else None, now_iso(), draw["id"]))
         if winner:
             payout_batch = queue_lottery_bank_payout(db, int(winner["user_id"]), payout, f"Lottery weekly payout FCW-{int(winner['id']):07d}", "weekly", int(winner["id"]))
             if payout_batch:
@@ -23029,6 +23075,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "quick_draw_entries": settings["lottery_quick_draw_entries"],
                 "player_pool": lottery_player_pool_status(db, settings),
                 "funding": lottery_funding_snapshot(db, settings),
+                "forfeiture_filings": lottery_forfeiture_filings(db),
                 "player_pool_accruals": [dict(row) for row in all_rows(db, "SELECT * FROM lottery_player_pool_accruals ORDER BY created_at DESC LIMIT 100")],
                 "draws": [dict(row) for row in all_rows(db, "SELECT d.*,u.name AS winner_name,u.civ_number AS winner_civ FROM lottery_draws d LEFT JOIN users u ON u.id=d.winner_user_id ORDER BY d.scheduled_at DESC LIMIT 30")],
                 "entries": [dict(row) for row in all_rows(db, "SELECT e.*,u.name,u.civ_number,u.roles FROM lottery_entries e JOIN users u ON u.id=e.user_id ORDER BY e.created_at DESC LIMIT 250")],
@@ -23907,6 +23954,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "quick_draw_entries": system_settings["lottery_quick_draw_entries"],
                     "player_pool": lottery_player_pool_status(db, system_settings),
                     "funding": lottery_funding_snapshot(db, system_settings),
+                    "forfeiture_filings": lottery_forfeiture_filings(db),
                     "player_pool_accruals": [dict(row) for row in all_rows(db, "SELECT * FROM lottery_player_pool_accruals ORDER BY created_at DESC LIMIT 100")],
                     "draws": [dict(row) for row in all_rows(db, """SELECT d.*,u.name AS winner_name,u.civ_number AS winner_civ FROM lottery_draws d LEFT JOIN users u ON u.id=d.winner_user_id ORDER BY d.scheduled_at DESC LIMIT 30""")],
                     "entries": [dict(row) for row in all_rows(db, """SELECT e.*,u.name,u.civ_number,u.roles FROM lottery_entries e JOIN users u ON u.id=e.user_id ORDER BY e.created_at DESC LIMIT 250""")],
@@ -24678,6 +24726,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(400, "Document a bankruptcy reason using at least ten characters."); return
         chapter = "Chapter 7"
         timestamp = now_iso()
+        forfeiture_amount = round(
+            max(0.0, float(security.get("price") or 0))
+            * max(0.0, float(security.get("issued_shares") or 0)),
+            2,
+        )
         loss = one(db, """SELECT COUNT(*) AS affected_accounts,COALESCE(SUM(quantity),0) AS forfeited_shares,
             COALESCE(SUM(quantity*average_cost),0) AS invested_basis,
             COALESCE(SUM(quantity*?),0) AS final_market_value
@@ -24690,6 +24743,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                ON CONFLICT(security_id,account_id) DO NOTHING""",
             (security["price"], chapter, reason, user["id"], timestamp, security["id"]),
         )
+        db.execute(
+            """INSERT INTO lottery_forfeiture_filings
+               (security_id,amount,ticker,company_name,bankruptcy_chapter,reason,filed_by,filed_at)
+               VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(security_id) DO NOTHING""",
+            (security["id"], forfeiture_amount, security["ticker"], security["name"], chapter, reason, user["id"], timestamp),
+        )
         affected_holders = all_rows(db, """SELECT w.id,w.quantity,w.invested_basis,w.final_market_value,ma.user_id
             FROM market_security_writeoffs w JOIN market_accounts ma ON ma.id=w.account_id
             WHERE w.security_id=? ORDER BY w.id""", (security["id"],))
@@ -24699,7 +24758,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 db,
                 int(holder["user_id"]),
                 f"Ravenhood bankruptcy loss: {security['ticker']}",
-                f"{security['name']} entered {chapter}. Your {float(holder.get('quantity') or 0):,.6f} share(s) were written down to zero, recording a ${recorded_loss:,.2f} loss. Open Faircroft Insurance to review Stock Protection claim eligibility.",
+                f"{security['name']} entered {chapter}. Your {float(holder.get('quantity') or 0):,.6f} share(s) were written down to zero, recording a ${recorded_loss:,.2f} loss. The company's forfeited market capitalization was filed into the Faircroft Lottery pool. Open Faircroft Insurance to review Stock Protection claim eligibility.",
                 int(user["id"]),
             )
         active_programs = int((one(db, "SELECT COUNT(*) AS count FROM market_price_programs WHERE security_id=? AND status='active'", (security["id"],)) or {}).get("count") or 0)
@@ -24719,7 +24778,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         detail = (
             f"{security['name']} ({security['ticker']}) closed under {chapter}. "
             f"{int(loss.get('affected_accounts') or 0)} account(s) and {float(loss.get('forfeited_shares') or 0):,.6f} share(s) "
-            f"were written down to $0; ${float(loss.get('invested_basis') or 0):,.2f} in recorded cost basis was forfeited."
+            f"were written down to $0; ${float(loss.get('invested_basis') or 0):,.2f} in recorded cost basis was forfeited. "
+            f"${forfeiture_amount:,.2f} in pre-filing market capitalization was transferred to the Faircroft Lottery as a forfeiture filing."
         )
         db.execute(
             "INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('bankruptcy',?,?,?,?)",
@@ -24734,6 +24794,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "forfeited_shares": round(float(loss.get("forfeited_shares") or 0), 6),
             "invested_basis": round(float(loss.get("invested_basis") or 0), 2),
             "final_market_value": round(float(loss.get("final_market_value") or 0), 2),
+            "lottery_forfeiture_amount": forfeiture_amount,
             "cancelled_programs": active_programs,
             "disabled_promotions": active_promotions,
             "bankruptcy_at": timestamp,
