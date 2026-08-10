@@ -20326,3 +20326,8 @@ textarea:focus {
 @media(max-width:1120px){.dev-leverage-security{grid-template-columns:minmax(210px,1fr) minmax(140px,.45fr) minmax(230px,.75fr) 90px}}
 @media(max-width:820px){.dev-leverage-security{grid-template-columns:1fr 1fr}.dev-leverage-cap{align-self:end}.dev-leverage-security>button{align-self:end}}
 @media(max-width:560px){.dev-leverage-security{grid-template-columns:1fr}.dev-leverage-cap{width:100%}.dev-leverage-security>button{width:100%}}
+/* The retired FCXV after-hours switch is intentionally hidden. Ravenhood now
+   uses one session gate for every resident equity order. */
+label:has(> input[name="fcxv_always_open"]) {
+  display: none !important;
+}

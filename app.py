@@ -2200,7 +2200,6 @@ SYSTEM_SETTING_DEFAULTS = {
     "market_schedule_timezone": "America/New_York",
     "market_weekends_enabled": "1",
     "market_manual_override": "schedule",
-    "market_fcxv_always_open": "1",
     "market_price_freeze_started_at": "",
     "market_transfer_fee_percent": "1.50",
     "market_trade_fee_percent": "0.25",
@@ -5732,23 +5731,6 @@ def market_session_state(raw: dict[str, Any], current_utc: dt.datetime | None = 
     }
 
 
-def ravenhood_security_session_open(settings: dict[str, Any], ticker: Any, leveraged: bool = False) -> bool:
-    """Return whether a resident order may execute in the current session.
-
-    Leveraged positions always follow the core exchange clock. Ordinary FCXV
-    shares may trade continuously when the developer-controlled exemption is
-    enabled.
-    """
-    if bool(settings.get("market_open")):
-        return True
-    if leveraged:
-        return False
-    return (
-        bool(settings.get("market_fcxv_always_open"))
-        and str(ticker or "").upper().strip() == "FCXV"
-    )
-
-
 def get_system_settings(db: Database) -> dict[str, Any]:
     rows = all_rows(db, "SELECT setting_key, setting_value FROM system_settings")
     raw = {row["setting_key"]: row["setting_value"] for row in rows}
@@ -5901,7 +5883,6 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "market_schedule_timezone": market_session["timezone"],
         "market_weekends_enabled": market_session["weekends_enabled"],
         "market_weekends_closed": market_session["weekends_closed"],
-        "market_fcxv_always_open": str(raw.get("market_fcxv_always_open") or "1") in ("1", "true", "True", "yes", "on"),
         "market_session_reason": market_session["reason"],
         "market_local_time": market_session["local_time"],
         "market_next_transition_at": market_session["next_transition_at"],
@@ -7627,25 +7608,14 @@ def process_ravenhood_margin_liquidations(db: Database, settings: dict[str, Any]
 
 
 def process_queued_ravenhood_orders(db: Database, settings: dict[str, Any]) -> int:
-    """Execute orders whose security is currently eligible for execution."""
-    global_open = bool(settings["market_open"])
-    fcxv_open = bool(settings.get("market_fcxv_always_open"))
-    if not global_open and not fcxv_open:
+    """Execute after-hours stock orders once the exchange is open."""
+    if not settings["market_open"]:
         return 0
-    if global_open:
-        queued = all_rows(
-            db,
-            """SELECT r.* FROM market_order_requests r
-            WHERE r.status='queued' ORDER BY r.queued_at,r.id LIMIT 25 FOR UPDATE OF r SKIP LOCKED""",
-        )
-    else:
-        queued = all_rows(
-            db,
-            """SELECT r.* FROM market_order_requests r
-            JOIN market_securities s ON s.id=r.security_id
-            WHERE r.status='queued' AND UPPER(s.ticker)='FCXV'
-            ORDER BY r.queued_at,r.id LIMIT 25 FOR UPDATE OF r SKIP LOCKED""",
-        )
+    queued = all_rows(
+        db,
+        """SELECT * FROM market_order_requests
+        WHERE status='queued' ORDER BY queued_at,id LIMIT 25 FOR UPDATE SKIP LOCKED""",
+    )
     processed = 0
     for request in queued:
         db.execute("UPDATE market_order_requests SET status='processing', failure_reason='' WHERE id=? AND status='queued'", (request["id"],))
@@ -7693,10 +7663,11 @@ def market_automation_worker() -> None:
                 settings = get_system_settings(db)
                 current = utcnow()
                 clear_legacy_ravenhood_price_freeze(db, settings)
-                # Ordinary FCXV orders may execute continuously; every other
-                # equity order and all leverage orders follow the core clock.
-                process_queued_ravenhood_orders(db, settings)
-                process_queued_ravenhood_margin_orders(db, settings)
+                # Session hours gate resident trades only. Closed-session
+                # orders remain queued while the exchange itself keeps moving.
+                if settings["market_open"]:
+                    process_queued_ravenhood_orders(db, settings)
+                    process_queued_ravenhood_margin_orders(db, settings)
                 apply_market_price_programs(db)
                 if settings["market_autopilot_enabled"]:
                     last = parse_iso(settings["market_autopilot_last_tick"]) if settings["market_autopilot_last_tick"] else None
@@ -16622,7 +16593,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "pending_withdrawal_amount": pending_withdrawal_amount,
                 "available_withdrawal_amount": available_withdrawal_amount,
                 "portfolio_value": round(portfolio_value, 2), "market_open": settings["market_open"],
-                "fcxv_always_open": settings["market_fcxv_always_open"],
                 "margin_enabled": settings["market_margin_enabled"],
                 "margin_maintenance_percent": settings["market_margin_maintenance_percent"],
                 "margin_max_open_positions": settings["market_margin_max_open_positions"],
@@ -16715,7 +16685,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(400, f"Fractional orders must be worth at least $0.01. Enter at least {minimum_quantity:.6f} shares at the current price."); return
         gross = round(raw_gross, 2); fee = round(gross * settings["market_trade_fee_percent"] / 100, 2)
 
-        if not ravenhood_security_session_open(settings, ticker):
+        if not settings["market_open"]:
             open_count = one(db, "SELECT COUNT(*) AS total FROM market_order_requests WHERE account_id=? AND status IN ('queued','processing')", (account["id"],))
             if int((open_count or {}).get("total") or 0) >= RAVENHOOD_MAX_QUEUED_ORDERS:
                 self.error(429, f"You may hold up to {RAVENHOOD_MAX_QUEUED_ORDERS} upcoming market orders. Cancel or wait for an order to execute before adding another."); return
@@ -16814,7 +16784,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         quote = ravenhood_margin_quote(direction, security["price"], collateral, leverage,
             settings["market_trade_fee_percent"], settings["market_margin_maintenance_percent"] / 100.0)
 
-        if not ravenhood_security_session_open(settings, ticker, leveraged=True):
+        if not settings["market_open"]:
             self.error(409, "Leveraged long and short positions are unavailable while Ravenhood is closed."); return
 
         result = execute_ravenhood_margin_open(db, int(account["id"]), int(security["id"]), direction, collateral, leverage, settings)
@@ -23351,7 +23321,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "schedule_timezone": settings["market_schedule_timezone"],
                 "weekends_enabled": settings["market_weekends_enabled"],
                 "weekends_closed": settings["market_weekends_closed"],
-                "fcxv_always_open": settings["market_fcxv_always_open"],
                 "session_reason": settings["market_session_reason"],
                 "local_time": settings["market_local_time"],
                 "next_transition_at": settings["market_next_transition_at"],
@@ -24284,7 +24253,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "schedule_timezone": system_settings["market_schedule_timezone"],
                     "weekends_enabled": system_settings["market_weekends_enabled"],
                     "weekends_closed": system_settings["market_weekends_closed"],
-                    "fcxv_always_open": system_settings["market_fcxv_always_open"],
                     "session_reason": system_settings["market_session_reason"],
                     "local_time": system_settings["market_local_time"],
                     "next_transition_at": system_settings["market_next_transition_at"],
@@ -25353,9 +25321,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if "weekends_enabled" in payload:
             weekends_enabled = str(payload.get("weekends_enabled") or "").strip().lower() in ("1", "true", "yes", "on")
             set_system_setting(db, "market_weekends_enabled", "1" if weekends_enabled else "0")
-        if "fcxv_always_open" in payload:
-            fcxv_always_open = str(payload.get("fcxv_always_open") or "").strip().lower() in ("1", "true", "yes", "on")
-            set_system_setting(db, "market_fcxv_always_open", "1" if fcxv_always_open else "0")
         if "transfer_fee_percent" in payload:
             set_system_setting(db, "market_transfer_fee_percent", str(transfer_fee))
         if "trade_fee_percent" in payload:
@@ -25390,8 +25355,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             set_system_setting(db, "market_gemini_autopilot_enabled", "1" if bool(payload.get("gemini_autopilot_enabled")) else "0")
             set_system_setting(db, "market_gemini_interval_minutes", str(gemini_interval))
         updated_settings = get_system_settings(db)
-        add_admin_audit(db, int(user["id"]), "market.settings.updated", details={"market_open": updated_settings["market_open"], "manual_override": updated_settings["market_manual_override"], "schedule_open_time": updated_settings["market_schedule_open_time"], "schedule_close_time": updated_settings["market_schedule_close_time"], "schedule_timezone": updated_settings["market_schedule_timezone"], "weekends_enabled": updated_settings["market_weekends_enabled"], "fcxv_always_open": updated_settings["market_fcxv_always_open"], "transfer_fee": transfer_fee, "trade_fee": trade_fee})
-        self.send_json(200, {"ok": True, "market_session": {"market_open": updated_settings["market_open"], "manual_override": updated_settings["market_manual_override"], "fcxv_always_open": updated_settings["market_fcxv_always_open"], "session_reason": updated_settings["market_session_reason"], "local_time": updated_settings["market_local_time"], "next_transition_at": updated_settings["market_next_transition_at"]}})
+        add_admin_audit(db, int(user["id"]), "market.settings.updated", details={"market_open": updated_settings["market_open"], "manual_override": updated_settings["market_manual_override"], "schedule_open_time": updated_settings["market_schedule_open_time"], "schedule_close_time": updated_settings["market_schedule_close_time"], "schedule_timezone": updated_settings["market_schedule_timezone"], "weekends_enabled": updated_settings["market_weekends_enabled"], "transfer_fee": transfer_fee, "trade_fee": trade_fee})
+        self.send_json(200, {"ok": True, "market_session": {"market_open": updated_settings["market_open"], "manual_override": updated_settings["market_manual_override"], "session_reason": updated_settings["market_session_reason"], "local_time": updated_settings["market_local_time"], "next_transition_at": updated_settings["market_next_transition_at"]}})
 
     def api_dev_market_volatility_cycle(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
