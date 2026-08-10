@@ -4250,6 +4250,8 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE market_securities ADD COLUMN IF NOT EXISTS bankruptcy_reason TEXT")
     db.execute("ALTER TABLE market_securities ADD COLUMN IF NOT EXISTS bankruptcy_at TEXT")
     db.execute("ALTER TABLE market_securities ADD COLUMN IF NOT EXISTS closed_by INTEGER")
+    db.execute("ALTER TABLE market_securities ADD COLUMN IF NOT EXISTS issued_shares NUMERIC(20,6) NOT NULL DEFAULT 1000000")
+    db.execute("ALTER TABLE market_securities ADD COLUMN IF NOT EXISTS index_eligible INTEGER NOT NULL DEFAULT 1")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS market_holdings (
@@ -4406,6 +4408,46 @@ def ensure_migrations(db: Database) -> None:
         """
     )
     db.execute("CREATE INDEX IF NOT EXISTS idx_market_price_history_security_time ON market_price_history(security_id, recorded_at)")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS market_index_funds (
+            id SERIAL PRIMARY KEY,
+            fund_key TEXT NOT NULL UNIQUE,
+            security_id INTEGER NOT NULL UNIQUE,
+            display_name TEXT NOT NULL,
+            risk_profile TEXT NOT NULL,
+            target_size INTEGER NOT NULL DEFAULT 8,
+            base_nav NUMERIC(14,4) NOT NULL DEFAULT 100,
+            management_fee_percent NUMERIC(8,4) NOT NULL DEFAULT 0,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            rebalance_interval_hours INTEGER NOT NULL DEFAULT 24,
+            last_rebalanced_at TEXT,
+            last_valued_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (security_id) REFERENCES market_securities(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS market_index_members (
+            fund_id INTEGER NOT NULL,
+            security_id INTEGER NOT NULL,
+            weight NUMERIC(12,8) NOT NULL,
+            score NUMERIC(14,6) NOT NULL DEFAULT 0,
+            reference_price NUMERIC(14,4) NOT NULL,
+            market_cap_at_rebalance NUMERIC(20,2) NOT NULL DEFAULT 0,
+            realized_volatility NUMERIC(14,6) NOT NULL DEFAULT 0,
+            rank INTEGER NOT NULL DEFAULT 0,
+            added_at TEXT NOT NULL,
+            PRIMARY KEY (fund_id, security_id),
+            FOREIGN KEY (fund_id) REFERENCES market_index_funds(id) ON DELETE CASCADE,
+            FOREIGN KEY (security_id) REFERENCES market_securities(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS market_index_members_security_idx ON market_index_members(security_id, fund_id)")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS market_promo_codes (
@@ -4800,12 +4842,39 @@ def ensure_migrations(db: Database) -> None:
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?) ON CONFLICT(ticker) DO NOTHING""",
             (ticker, name, kind, sector, f"A Faircroft roleplay {kind} operating in {sector.lower()}.", price, price, volatility, now_iso()),
         )
+    index_securities = (
+        ("FCXS", "Faircroft Stability Index Fund", "Lower-volatility companies selected from the live Ravenhood exchange."),
+        ("FCXV", "Faircroft Volatility Index Fund", "Higher-movement companies selected from the live Ravenhood exchange."),
+    )
+    for ticker, name, description in index_securities:
+        db.execute(
+            """INSERT INTO market_securities
+               (ticker,name,security_type,sector,description,price,previous_price,volatility,active,issued_shares,index_eligible,updated_at)
+               VALUES (?,?,'fund','Index Funds',?,100,100,1,1,0,0,?) ON CONFLICT(ticker) DO UPDATE SET
+               security_type='fund',sector='Index Funds',issued_shares=0,index_eligible=0""",
+            (ticker, name, description, now_iso()),
+        )
+    fund_definitions = (
+        ("stability", "FCXS", "Faircroft Stability Index", "stability", 8),
+        ("volatility", "FCXV", "Faircroft Volatility Index", "volatility", 6),
+    )
+    for fund_key, ticker, display_name, risk_profile, target_size in fund_definitions:
+        db.execute(
+            """INSERT INTO market_index_funds
+               (fund_key,security_id,display_name,risk_profile,target_size,base_nav,management_fee_percent,enabled,rebalance_interval_hours,created_at,updated_at)
+               SELECT ?,id,?,?,?,100,0,1,24,?,? FROM market_securities WHERE ticker=?
+               ON CONFLICT(fund_key) DO UPDATE SET security_id=excluded.security_id,display_name=excluded.display_name,
+               risk_profile=excluded.risk_profile,target_size=excluded.target_size,updated_at=excluded.updated_at""",
+            (fund_key, display_name, risk_profile, target_size, now_iso(), now_iso(), ticker),
+        )
     db.execute(
         """INSERT INTO market_price_history (security_id,price,source,recorded_at)
         SELECT s.id,s.price,'opening_snapshot',? FROM market_securities s
         WHERE NOT EXISTS (SELECT 1 FROM market_price_history h WHERE h.security_id=s.id)""",
         (now_iso(),),
     )
+    if not one(db, "SELECT 1 AS present FROM market_index_members LIMIT 1"):
+        rebalance_market_index_funds(db, force=True)
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS dmv_driver_exam_attempts (
@@ -6658,9 +6727,217 @@ def generated_market_company(db: Database, actor_id: int) -> dict[str, Any]:
     )
 
 
+def capped_market_weights(raw_values: list[float], cap: float = 0.25) -> list[float]:
+    """Normalize constituent weights while preventing one issuer dominating a fund."""
+    if not raw_values:
+        return []
+    clean = [max(0.000001, float(value or 0)) for value in raw_values]
+    weights = [0.0 for _ in clean]
+    remaining = set(range(len(clean)))
+    remaining_weight = 1.0
+    while remaining:
+        denominator = sum(clean[index] for index in remaining)
+        if denominator <= 0:
+            even = remaining_weight / len(remaining)
+            for index in remaining:
+                weights[index] = even
+            break
+        capped = []
+        for index in remaining:
+            proposed = remaining_weight * clean[index] / denominator
+            if proposed > cap and len(remaining) > 1:
+                weights[index] = cap
+                remaining_weight -= cap
+                capped.append(index)
+        if not capped:
+            for index in remaining:
+                weights[index] = remaining_weight * clean[index] / denominator
+            break
+        remaining.difference_update(capped)
+    total = sum(weights) or 1.0
+    return [value / total for value in weights]
+
+
+def market_index_candidate_metrics(db: Database) -> list[dict[str, Any]]:
+    rows = all_rows(db, """SELECT s.*,
+            COALESCE(position.holder_count,0) AS holder_count,
+            COALESCE(position.outstanding_shares,0) AS outstanding_shares,
+            COALESCE(position.invested_basis,0) AS invested_basis,
+            COALESCE(flow.traded_volume,0) AS traded_volume,
+            COALESCE(flow.trade_count,0) AS trade_count
+        FROM market_securities s
+        LEFT JOIN (
+            SELECT security_id,COUNT(*) AS holder_count,SUM(quantity) AS outstanding_shares,
+                   SUM(quantity*average_cost) AS invested_basis
+            FROM market_holdings WHERE quantity>0 GROUP BY security_id
+        ) position ON position.security_id=s.id
+        LEFT JOIN (
+            SELECT security_id,SUM(quantity) AS traded_volume,COUNT(*) AS trade_count
+            FROM market_orders WHERE created_at>=? GROUP BY security_id
+        ) flow ON flow.security_id=s.id
+        WHERE s.active=1 AND COALESCE(s.lifecycle_status,'active')='active' AND COALESCE(s.index_eligible,1)=1
+          AND s.security_type IN ('stock','volatile') ORDER BY s.ticker""",
+        ((utcnow() - dt.timedelta(days=30)).isoformat(),),
+    )
+    if not rows:
+        return []
+    history_rows = all_rows(db, """WITH ranked AS (
+            SELECT security_id,price,recorded_at,id,
+                   ROW_NUMBER() OVER (PARTITION BY security_id ORDER BY recorded_at DESC,id DESC) AS sequence
+            FROM market_price_history WHERE recorded_at>=?
+        )
+        SELECT security_id,price,recorded_at FROM ranked WHERE sequence<=360
+        ORDER BY security_id,recorded_at,id""",
+        ((utcnow() - dt.timedelta(days=30)).isoformat(),),
+    )
+    histories: dict[int, list[float]] = {}
+    for row in history_rows:
+        histories.setdefault(int(row["security_id"]), []).append(float(row["price"] or 0))
+    metrics: list[dict[str, Any]] = []
+    for raw in rows:
+        item = dict(raw)
+        prices = [price for price in histories.get(int(item["id"]), []) if price > 0]
+        returns = [prices[index] / prices[index - 1] - 1 for index in range(1, len(prices)) if prices[index - 1] > 0]
+        mean_return = sum(returns) / len(returns) if returns else 0.0
+        variance = sum((value - mean_return) ** 2 for value in returns) / len(returns) if returns else 0.0
+        realized_volatility = math.sqrt(max(0.0, variance)) * 100
+        declared_volatility = float(item.get("volatility") or 1)
+        price = float(item.get("price") or 0)
+        issued_shares = max(0.0, float(item.get("issued_shares") or 0))
+        market_cap = price * issued_shares
+        traded_volume = max(0.0, float(item.get("traded_volume") or 0))
+        liquidity = math.log10(1 + traded_volume) + min(2.0, len(prices) / 120.0)
+        item.update({
+            "history_depth": len(prices),
+            "realized_volatility": round(realized_volatility, 6),
+            "market_cap": round(market_cap, 2),
+            "liquidity_score": round(liquidity, 6),
+            "stability_score": round(realized_volatility * 1.7 + declared_volatility * 0.8 - liquidity * 0.18, 6),
+            "volatility_score": round(realized_volatility * 1.6 + declared_volatility * 2.0 + liquidity * 0.12, 6),
+        })
+        metrics.append(item)
+    return metrics
+
+
+def rebalance_market_index_funds(db: Database, force: bool = False, actor_id: int | None = None) -> dict[str, Any]:
+    # Settle the old basket at current quotes before replacing its membership.
+    # This preserves gains and losses (including a bankrupt constituent's write-off)
+    # instead of silently rebasing them away during a manual or scheduled review.
+    if one(db, "SELECT 1 AS present FROM market_index_members LIMIT 1"):
+        update_market_index_prices(db, force_history=force)
+    funds = all_rows(db, """SELECT f.*,s.ticker,s.price FROM market_index_funds f
+        JOIN market_securities s ON s.id=f.security_id WHERE f.enabled=1
+        ORDER BY CASE WHEN f.risk_profile='stability' THEN 0 ELSE 1 END,f.id""")
+    candidates = market_index_candidate_metrics(db)
+    if not funds or not candidates:
+        return {"rebalanced": 0, "funds": []}
+    safe_ranked = sorted(candidates, key=lambda item: (float(item["stability_score"]), -float(item["market_cap"]), -int(item["holder_count"] or 0)))
+    safe_ids: set[int] = {
+        int(row["security_id"])
+        for row in all_rows(db, """SELECT m.security_id FROM market_index_members m
+            JOIN market_index_funds f ON f.id=m.fund_id WHERE f.risk_profile='stability'""")
+    }
+    outcomes: list[dict[str, Any]] = []
+    timestamp = now_iso()
+    for fund in funds:
+        existing_count = int((one(db, "SELECT COUNT(*) AS count FROM market_index_members WHERE fund_id=?", (fund["id"],)) or {}).get("count") or 0)
+        last_rebalanced = parse_iso(fund["last_rebalanced_at"]) if fund.get("last_rebalanced_at") else None
+        due = not last_rebalanced or (utcnow() - last_rebalanced).total_seconds() >= max(1, int(fund["rebalance_interval_hours"] or 24)) * 3600
+        if not force and existing_count and not due:
+            continue
+        target_size = max(2, min(20, int(fund["target_size"] or 8)))
+        if str(fund["risk_profile"]) == "stability":
+            selected = safe_ranked[:target_size]
+            safe_ids = {int(item["id"]) for item in selected}
+            raw_weights = [math.sqrt(max(1.0, float(item["market_cap"]))) / (1 + float(item["realized_volatility"]) + float(item["volatility"]) * 0.25) for item in selected]
+        else:
+            pool = [item for item in candidates if int(item["id"]) not in safe_ids] or candidates
+            selected = sorted(pool, key=lambda item: (float(item["volatility_score"]), float(item["market_cap"])), reverse=True)[:target_size]
+            raw_weights = [max(0.1, float(item["volatility_score"])) * (1 + math.log10(1 + max(0.0, float(item["market_cap"]))) / 20) for item in selected]
+        weights = capped_market_weights(raw_weights)
+        db.execute("DELETE FROM market_index_members WHERE fund_id=?", (fund["id"],))
+        for rank, (item, weight) in enumerate(zip(selected, weights), start=1):
+            score = float(item["stability_score"] if str(fund["risk_profile"]) == "stability" else item["volatility_score"])
+            db.execute(
+                """INSERT INTO market_index_members
+                   (fund_id,security_id,weight,score,reference_price,market_cap_at_rebalance,realized_volatility,rank,added_at)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (fund["id"], item["id"], round(weight, 8), score, float(item["price"]), float(item["market_cap"]), float(item["realized_volatility"]), rank, timestamp),
+            )
+        current_nav = max(0.01, float(fund["price"] or 100))
+        db.execute("UPDATE market_index_funds SET base_nav=?,last_rebalanced_at=?,last_valued_at=?,updated_at=? WHERE id=?", (current_nav, timestamp, timestamp, timestamp, fund["id"]))
+        members = ", ".join(str(item["ticker"]) for item in selected)
+        db.execute(
+            "INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('index_rebalanced',?,?,?,?)",
+            (f"{fund['ticker']} rebalanced", f"{len(selected)} constituents selected: {members}.", actor_id, timestamp),
+        )
+        outcomes.append({"ticker": fund["ticker"], "constituents": len(selected)})
+    update_market_index_prices(db, force_history=force)
+    return {"rebalanced": len(outcomes), "funds": outcomes}
+
+
+def update_market_index_prices(db: Database, force_history: bool = False) -> int:
+    funds = all_rows(db, """SELECT f.*,s.price,s.previous_price,s.ticker FROM market_index_funds f
+        JOIN market_securities s ON s.id=f.security_id WHERE f.enabled=1 AND s.active=1 ORDER BY f.id""")
+    timestamp = now_iso()
+    updated = 0
+    for fund in funds:
+        members = all_rows(db, """SELECT m.weight,m.reference_price,s.price FROM market_index_members m
+            JOIN market_securities s ON s.id=m.security_id
+            WHERE m.fund_id=? AND s.active=1 AND COALESCE(s.lifecycle_status,'active')='active'""", (fund["id"],))
+        if not members:
+            continue
+        performance = sum(float(member["weight"] or 0) * (float(member["price"] or 0) / max(0.0001, float(member["reference_price"] or 0))) for member in members)
+        new_nav = max(0.01, round(float(fund["base_nav"] or 100) * performance, 4))
+        old_nav = float(fund["price"] or 0)
+        if abs(new_nav - old_nav) >= 0.0001:
+            db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?", (new_nav, timestamp, fund["security_id"]))
+            updated += 1
+        last_history = one(db, "SELECT price,recorded_at FROM market_price_history WHERE security_id=? ORDER BY id DESC LIMIT 1", (fund["security_id"],))
+        last_time = parse_iso(last_history["recorded_at"]) if last_history and last_history.get("recorded_at") else None
+        if force_history or not last_history or abs(float(last_history["price"] or 0) - new_nav) >= 0.0001 or not last_time or (utcnow() - last_time).total_seconds() >= 300:
+            db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,'index_nav',?)", (fund["security_id"], new_nav, timestamp))
+        db.execute("UPDATE market_index_funds SET last_valued_at=?,updated_at=? WHERE id=?", (timestamp, timestamp, fund["id"]))
+    return updated
+
+
+def market_index_payload(db: Database) -> list[dict[str, Any]]:
+    funds = [dict(row) for row in all_rows(db, """SELECT f.*,s.ticker,s.name,s.price,s.previous_price,s.description,
+            COALESCE(position.holder_count,0) AS holder_count,
+            COALESCE(position.units_outstanding,0) AS units_outstanding
+        FROM market_index_funds f JOIN market_securities s ON s.id=f.security_id
+        LEFT JOIN (SELECT security_id,COUNT(*) AS holder_count,SUM(quantity) AS units_outstanding
+                   FROM market_holdings WHERE quantity>0 GROUP BY security_id) position ON position.security_id=s.id
+        WHERE f.enabled=1 AND s.active=1 ORDER BY f.risk_profile""")]
+    if not funds:
+        return []
+    members = all_rows(db, """SELECT m.*,f.fund_key,s.ticker,s.name,s.sector,s.price,s.previous_price,s.issued_shares,
+            COALESCE(position.holder_count,0) AS holder_count
+        FROM market_index_members m JOIN market_index_funds f ON f.id=m.fund_id
+        JOIN market_securities s ON s.id=m.security_id
+        LEFT JOIN (SELECT security_id,COUNT(*) AS holder_count FROM market_holdings WHERE quantity>0 GROUP BY security_id) position ON position.security_id=s.id
+        ORDER BY f.id,m.rank""")
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for raw in members:
+        item = dict(raw)
+        price = float(item.get("price") or 0)
+        previous = float(item.get("previous_price") or price)
+        item["market_cap"] = round(price * float(item.get("issued_shares") or 0), 2)
+        item["change_percent"] = round((price / previous - 1) * 100, 2) if previous else 0.0
+        grouped.setdefault(int(item["fund_id"]), []).append(item)
+    for fund in funds:
+        price = float(fund.get("price") or 0)
+        previous = float(fund.get("previous_price") or price)
+        fund["change_percent"] = round((price / previous - 1) * 100, 2) if previous else 0.0
+        fund["market_cap"] = round(price * float(fund.get("units_outstanding") or 0), 2)
+        fund["constituents"] = grouped.get(int(fund["id"]), [])
+    return funds
+
+
 def market_volatility_cycle(db: Database, amplitude: float, source: str = "autopilot", actor_id: int | None = None) -> dict[str, Any]:
     securities = all_rows(db, """SELECT id,ticker,price,volatility,security_type FROM market_securities s
-        WHERE active=1 AND NOT EXISTS (SELECT 1 FROM market_price_programs p WHERE p.security_id=s.id AND p.status='active') ORDER BY ticker""")
+        WHERE active=1 AND security_type<>'fund'
+        AND NOT EXISTS (SELECT 1 FROM market_price_programs p WHERE p.security_id=s.id AND p.status='active') ORDER BY ticker""")
     if not securities:
         return {"updated": 0, "average_change": 0.0}
     broad_bias = ((secrets.randbelow(20001) - 10000) / 10000.0) * amplitude * 0.35
@@ -6689,7 +6966,7 @@ def market_gemini_adjustment_cycle(db: Database) -> dict[str, Any]:
         raise RuntimeError("GEMINI_API_KEY is not configured")
     listings = [
         {"ticker": row["ticker"], "name": row["name"], "sector": row["sector"], "type": row["security_type"], "price": float(row["price"] or 0), "previous_price": float(row["previous_price"] or 0)}
-        for row in all_rows(db, "SELECT ticker,name,sector,security_type,price,previous_price FROM market_securities WHERE active=1 ORDER BY ticker")
+        for row in all_rows(db, "SELECT ticker,name,sector,security_type,price,previous_price FROM market_securities WHERE active=1 AND security_type<>'fund' ORDER BY ticker")
     ]
     recent = [dict(row) for row in all_rows(db, "SELECT event_type,title,detail,created_at FROM market_events ORDER BY id DESC LIMIT 20")]
     prompt = (
@@ -6713,7 +6990,7 @@ def market_gemini_adjustment_cycle(db: Database) -> dict[str, Any]:
         if not isinstance(item, dict):
             continue
         ticker = str(item.get("ticker") or "").upper().strip()[:12]
-        security = one(db, """SELECT id,price FROM market_securities s WHERE active=1 AND ticker=?
+        security = one(db, """SELECT id,price FROM market_securities s WHERE active=1 AND security_type<>'fund' AND ticker=?
             AND NOT EXISTS (SELECT 1 FROM market_price_programs p WHERE p.security_id=s.id AND p.status='active')""", (ticker,))
         if not security:
             continue
@@ -6745,7 +7022,7 @@ def apply_market_price_programs(db: Database) -> int:
         progress = 1.0 if current >= ends else max(0.0, min(1.0, (current - starts).total_seconds() / max(1, (ends - starts).total_seconds())))
         targets = all_rows(
             db,
-            "SELECT id, price FROM market_securities WHERE active = 1" + (" AND id = ?" if program.get("security_id") else ""),
+            "SELECT id, price FROM market_securities WHERE active = 1 AND security_type<>'fund'" + (" AND id = ?" if program.get("security_id") else ""),
             ((program["security_id"],) if program.get("security_id") else ()),
         )
         for security in targets:
@@ -6789,6 +7066,17 @@ def market_automation_worker() -> None:
                                 print(f"Market automation paused after Gemini rate limit; next review in {settings['market_gemini_interval_minutes']} minute(s)")
                             else:
                                 raise
+                funds = all_rows(db, "SELECT id,last_rebalanced_at,rebalance_interval_hours FROM market_index_funds WHERE enabled=1")
+                needs_rebalance = any(
+                    not fund.get("last_rebalanced_at")
+                    or (current - parse_iso(fund["last_rebalanced_at"])).total_seconds() >= max(1, int(fund.get("rebalance_interval_hours") or 24)) * 3600
+                    or not one(db, "SELECT 1 AS present FROM market_index_members WHERE fund_id=? LIMIT 1", (fund["id"],))
+                    for fund in funds
+                )
+                if needs_rebalance:
+                    rebalance_market_index_funds(db)
+                else:
+                    update_market_index_prices(db)
         except Exception as exc:
             print(f"Market automation error: {type(exc).__name__}: {exc}")
         time.sleep(15)
@@ -9546,6 +9834,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_market_security_generate(db, user)
                 elif path.startswith("/api/dev-tools/market/securities/") and path.endswith("/bankruptcy") and method == "PATCH":
                     self.api_dev_market_security_bankruptcy(db, user, self.path_int(path, 4))
+                elif path.startswith("/api/dev-tools/market/securities/") and path.endswith("/index-eligibility") and method == "PATCH":
+                    self.api_dev_market_security_index_eligibility(db, user, self.path_int(path, 4))
+                elif path == "/api/dev-tools/market/indexes/rebalance" and method == "POST":
+                    self.api_dev_market_indexes_rebalance(db, user)
                 elif path == "/api/dev-tools/market/programs" and method == "POST":
                     self.api_dev_market_program(db, user)
                 elif path.startswith("/api/dev-tools/market/programs/") and path.endswith("/stop") and method == "PATCH":
@@ -15178,7 +15470,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
     def market_payload(self, db: Database, user: DbRow, history_ticker: str = "", history_range: str = "LIVE") -> dict[str, Any]:
         settings = get_system_settings(db)
         account = one(db, "SELECT * FROM market_accounts WHERE user_id = ?", (user["id"],))
-        securities = all_rows(db, "SELECT * FROM market_securities WHERE active = 1 ORDER BY security_type, ticker")
+        securities = all_rows(db, """SELECT s.*,
+                COALESCE(position.holder_count,0) AS holder_count,
+                COALESCE(position.outstanding_shares,0) AS outstanding_shares,
+                COALESCE(position.invested_basis,0) AS invested_basis,
+                CASE WHEN s.security_type='fund'
+                    THEN s.price*COALESCE(position.outstanding_shares,0)
+                    ELSE s.price*COALESCE(s.issued_shares,0) END AS market_cap
+            FROM market_securities s
+            LEFT JOIN (
+                SELECT security_id,COUNT(*) AS holder_count,SUM(quantity) AS outstanding_shares,
+                       SUM(quantity*average_cost) AS invested_basis
+                FROM market_holdings WHERE quantity>0 GROUP BY security_id
+            ) position ON position.security_id=s.id
+            WHERE s.active=1 ORDER BY CASE WHEN s.security_type='fund' THEN 0 ELSE 1 END,s.security_type,s.ticker""")
         holdings: list[DbRow] = []
         orders: list[DbRow] = []
         cash_log: list[DbRow] = []
@@ -15357,9 +15662,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 FROM market_promo_redemptions r JOIN market_promo_codes p ON p.id=r.promo_id
                 WHERE r.account_id=? ORDER BY r.redeemed_at DESC LIMIT 20""", (account["id"],))
         portfolio_value = sum(float(row["quantity"]) * float(row["price"]) for row in holdings)
+        index_funds = market_index_payload(db)
+        exchange_market_cap = sum(float(row.get("market_cap") or 0) for row in securities if str(row.get("security_type") or "") != "fund")
         return {"account": dict(account) if account else None, "securities": [dict(x) for x in securities], "holdings": [dict(x) for x in holdings],
                 "orders": [dict(x) for x in orders], "cash_transactions": [dict(x) for x in cash_log], "transfers": [dict(x) for x in transfers],
                 "promo_redemptions": [dict(x) for x in promo_redemptions],
+                "index_funds": index_funds,
+                "exchange_market_cap": round(exchange_market_cap, 2),
                 "price_history": price_history,
                 "market_analytics": market_analytics,
                 "history_ticker": selected_ticker,
@@ -21952,10 +22261,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "gemini_interval_minutes": settings["market_gemini_interval_minutes"],
                 "gemini_last_tick": settings["market_gemini_last_tick"],
                 "gemini_configured": bool(GEMINI_API_KEY),
+                "index_funds": market_index_payload(db),
+                "exchange_market_cap": round(float((one(db, "SELECT COALESCE(SUM(price*issued_shares),0) AS total FROM market_securities WHERE active=1 AND security_type<>'fund'") or {}).get("total") or 0), 2),
                 "securities": [dict(row) for row in all_rows(db, """SELECT s.*,
                     COALESCE(position.holder_count,0) AS holder_count,
                     COALESCE(position.outstanding_shares,0) AS outstanding_shares,
-                    COALESCE(position.invested_basis,0) AS invested_basis
+                    COALESCE(position.invested_basis,0) AS invested_basis,
+                    CASE WHEN s.security_type='fund' THEN s.price*COALESCE(position.outstanding_shares,0)
+                         ELSE s.price*COALESCE(s.issued_shares,0) END AS market_cap
                     FROM market_securities s
                     LEFT JOIN (
                         SELECT security_id,COUNT(*) AS holder_count,SUM(quantity) AS outstanding_shares,
@@ -22843,10 +23156,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "gemini_interval_minutes": system_settings["market_gemini_interval_minutes"],
                     "gemini_last_tick": system_settings["market_gemini_last_tick"],
                     "gemini_configured": bool(GEMINI_API_KEY),
+                    "index_funds": market_index_payload(db),
+                    "exchange_market_cap": round(float((one(db, "SELECT COALESCE(SUM(price*issued_shares),0) AS total FROM market_securities WHERE active=1 AND security_type<>'fund'") or {}).get("total") or 0), 2),
                     "securities": [dict(row) for row in all_rows(db, """SELECT s.*,
                         COALESCE(position.holder_count,0) AS holder_count,
                         COALESCE(position.outstanding_shares,0) AS outstanding_shares,
-                        COALESCE(position.invested_basis,0) AS invested_basis
+                        COALESCE(position.invested_basis,0) AS invested_basis,
+                        CASE WHEN s.security_type='fund' THEN s.price*COALESCE(position.outstanding_shares,0)
+                             ELSE s.price*COALESCE(s.issued_shares,0) END AS market_cap
                         FROM market_securities s
                         LEFT JOIN (
                             SELECT security_id,COUNT(*) AS holder_count,SUM(quantity) AS outstanding_shares,
@@ -23649,8 +23966,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             actor_id=int(user["id"]),
             source="developer_listing",
         )
+        rebalance = rebalance_market_index_funds(db, force=True, actor_id=int(user["id"]))
         add_admin_audit(db, int(user["id"]), "market.security.created", details=security)
-        self.send_json(201, {"ok": True, "security": security})
+        self.send_json(201, {"ok": True, "security": security, "index_rebalance": rebalance})
 
     def api_dev_market_security_generate(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
@@ -23665,11 +23983,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if count not in {3, 5, 10}:
             self.error(400, "Automatic listing batches must contain 3, 5, or 10 companies."); return
         created = [generated_market_company(db, int(user["id"])) for _ in range(count)]
+        rebalance = rebalance_market_index_funds(db, force=True, actor_id=int(user["id"]))
         add_admin_audit(db, int(user["id"]), "market.securities.generated", details={
             "count": count,
             "tickers": [security["ticker"] for security in created],
         })
-        self.send_json(201, {"ok": True, "count": len(created), "securities": created})
+        self.send_json(201, {"ok": True, "count": len(created), "securities": created, "index_rebalance": rebalance})
 
     def api_dev_market_security_bankruptcy(self, db: Database, user: DbRow | None, security_id: int | None) -> None:
         err = developer_required(user)
@@ -23679,6 +23998,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         security = one(db, "SELECT * FROM market_securities WHERE id=? FOR UPDATE", (security_id,)) if security_id else None
         if not security:
             self.error(404, "Ravenhood company not found."); return
+        if str(security.get("security_type") or "") == "fund":
+            self.error(409, "Index funds cannot enter issuer bankruptcy. Rebalance the fund instead."); return
         if not bool(security.get("active")) or str(security.get("lifecycle_status") or "active") == "bankrupt":
             self.error(409, "That company is already closed or bankrupt."); return
         payload = self.read_json()
@@ -23751,7 +24072,33 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "bankruptcy_at": timestamp,
         }
         add_admin_audit(db, int(user["id"]), "market.security.bankruptcy", details={**result, "reason": reason})
+        rebalance_market_index_funds(db, force=True, actor_id=int(user["id"]))
         self.send_json(200, {"ok": True, "bankruptcy": result})
+
+    def api_dev_market_security_index_eligibility(self, db: Database, user: DbRow | None, security_id: int | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        security = one(db, "SELECT * FROM market_securities WHERE id=?", (security_id,)) if security_id else None
+        if not security or str(security.get("security_type") or "") == "fund":
+            self.error(404, "Eligible Ravenhood company not found."); return
+        eligible = 1 if bool(self.read_json().get("eligible")) else 0
+        db.execute("UPDATE market_securities SET index_eligible=?,updated_at=? WHERE id=?", (eligible, now_iso(), security["id"]))
+        result = rebalance_market_index_funds(db, force=True, actor_id=int(user["id"]))
+        add_admin_audit(db, int(user["id"]), "market.security.index_eligibility", details={
+            "security_id": int(security["id"]), "ticker": security["ticker"], "eligible": bool(eligible), "rebalance": result,
+        })
+        self.send_json(200, {"ok": True, "eligible": bool(eligible), "rebalance": result})
+
+    def api_dev_market_indexes_rebalance(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        result = rebalance_market_index_funds(db, force=True, actor_id=int(user["id"]))
+        add_admin_audit(db, int(user["id"]), "market.indexes.rebalanced", details=result)
+        self.send_json(200, {"ok": True, **result, "index_funds": market_index_payload(db)})
 
     def api_dev_market_settings(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
@@ -23837,10 +24184,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         payload = self.read_json(); ticker = str(payload.get("ticker") or "ALL").upper().strip(); name = str(payload.get("event_name") or "Market adjustment").strip()[:100]
         try: percent = max(-500, min(500, float(payload.get("percent_change") or 0))); duration = max(1, min(10080, int(payload.get("duration_minutes") or 60)))
         except (TypeError, ValueError): self.error(400, "Percent and duration are required."); return
-        security = None if ticker == "ALL" else one(db, "SELECT * FROM market_securities WHERE ticker=? AND active=1", (ticker,))
+        security = None if ticker == "ALL" else one(db, "SELECT * FROM market_securities WHERE ticker=? AND active=1 AND security_type<>'fund'", (ticker,))
         if ticker != "ALL" and not security: self.error(404, "Ticker not found."); return
         start = utcnow(); end = start + dt.timedelta(minutes=duration)
-        targets = [security] if security else all_rows(db, "SELECT id,price FROM market_securities WHERE active=1")
+        targets = [security] if security else all_rows(db, "SELECT id,price FROM market_securities WHERE active=1 AND security_type<>'fund'")
         for target in targets:
             db.execute("""INSERT INTO market_price_programs (security_id, event_name, percent_change, duration_minutes, start_price, starts_at, ends_at, status, created_by, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""", (target["id"], name, percent, duration, float(target["price"]), start.isoformat(), end.isoformat(), user["id"], start.isoformat()))
@@ -23907,13 +24254,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         preset = str(self.read_json().get("preset") or "").lower()
         presets = {"market_crash": ("Faircroft market crash", -30.0, 10, "ALL"), "market_rally": ("Broad market rally", 18.0, 15, "ALL"), "flash_crash": ("Flash crash", -12.0, 2, "ALL")}
         if preset == "random_skyrocket":
-            choices = all_rows(db, "SELECT ticker FROM market_securities WHERE security_type != 'bond' AND active=1")
+            choices = all_rows(db, "SELECT ticker FROM market_securities WHERE security_type NOT IN ('bond','fund') AND active=1")
             if not choices: self.error(409, "No active securities."); return
             event_name, percent, duration, ticker = "Breakout event", 125.0, 5, secrets.choice(choices)["ticker"]
         elif preset in presets: event_name, percent, duration, ticker = presets[preset]
         else: self.error(400, "Unknown market preset."); return
-        security = None if ticker == "ALL" else one(db, "SELECT * FROM market_securities WHERE ticker=? AND active=1", (ticker,)); start=utcnow(); end=start+dt.timedelta(minutes=duration)
-        targets = [security] if security else all_rows(db, "SELECT id,price FROM market_securities WHERE active=1")
+        security = None if ticker == "ALL" else one(db, "SELECT * FROM market_securities WHERE ticker=? AND active=1 AND security_type<>'fund'", (ticker,)); start=utcnow(); end=start+dt.timedelta(minutes=duration)
+        targets = [security] if security else all_rows(db, "SELECT id,price FROM market_securities WHERE active=1 AND security_type<>'fund'")
         for target in targets:
             db.execute("""INSERT INTO market_price_programs (security_id,event_name,percent_change,duration_minutes,start_price,starts_at,ends_at,status,created_by,created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""", (target["id"],event_name,percent,duration,float(target["price"]),start.isoformat(),end.isoformat(),user["id"],start.isoformat()))

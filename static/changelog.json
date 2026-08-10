@@ -6,6 +6,9 @@
       "version": "0.3.1",
       "title": "RP OS 0.3.1 · Markets, Protection and Platform Control",
       "added": [
+        "Added two resident-tradable Ravenhood index funds: the Faircroft Stability Index (FCXS) and Faircroft Volatility Index (FCXV), both using the existing order ticket, buying power, portfolio, and transaction history.",
+        "Added automatic index classification and capped constituent weighting based on recorded volatility, quote depth, market capitalization, liquidity, and verified shareholder activity without resetting existing securities or holdings.",
+        "Added an Index Operations desk in Developer Tools with live composition, fund capitalization, company market capitalization, manual rebalancing, and per-company inclusion controls.",
         "Added an automatic Ravenhood trading session using configurable New York open and close times, weekend trading by default, an optional weekend closure toggle, and audited Force Open, Force Closed, and Return to Schedule controls.",
         "Added true executed-order VWAP analytics to Ravenhood, including traded volume, trade count, buy and sell flow, and buy-pressure reporting for each selected market range.",
         "Added recorded OHLC market candles, dynamic EMA trend guidance, volatility bands, synchronized spike and drop markers, and exact hover details for price, time, volume, and VWAP.",
