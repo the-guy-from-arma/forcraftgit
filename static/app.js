@@ -6189,11 +6189,15 @@ function renderMarketWorkspace() {
     return `<article class="market-order-row ${escapeHtml(status)}"><div class="market-order-identity"><span>${escapeHtml(String(order.side || "").toUpperCase())}</span><strong>${escapeHtml(order.ticker || "--")}</strong><small>${escapeHtml(order.name || "Ravenhood security")}</small></div><div><small>QUANTITY</small><strong>${Number(order.quantity || 0).toLocaleString(undefined, {maximumFractionDigits: 6})}</strong></div><div><small>${isUpcoming ? "SUBMITTED QUOTE" : "EXECUTION PRICE"}</small><strong>${money(price)}</strong></div><div><small>${String(order.side || "buy").toLowerCase() === "buy" ? "EST. / FINAL COST" : "EST. / FINAL PROCEEDS"}</small><strong>${money(total)}</strong></div><div class="market-order-state"><span class="${escapeHtml(status)}">${statusCopy}</span><small>${timestamp ? new Date(timestamp).toLocaleString() : "Time unavailable"}</small>${status === "failed" && order.failure_reason ? `<em>${escapeHtml(order.failure_reason)}</em>` : ""}</div>${isUpcoming ? `<button type="button" data-market-cancel-request="${Number(order.id)}">Cancel</button>` : `<i>${status === "executed" ? "SETTLED" : "CLOSED"}</i>`}</article>`;
   }).join("") || `<div class="market-orders-empty"><strong>${orderFilter === "upcoming" ? "No upcoming orders" : orderFilter === "executed" ? "No completed orders yet" : orderFilter === "closed" ? "No cancelled or failed orders" : "No stock orders yet"}</strong><span>${orderFilter === "upcoming" ? "Orders submitted while the market is closed will appear here until the next opening." : "Your Ravenhood order history will remain available here."}</span></div>`;
 
-  const marginLeverageCap = Math.max(5, Math.min(80, Number(selected.margin_max_leverage || 5)));
-  const marginLeverageSteps = [...new Set([5, 10, 20, 30, 50, 80, marginLeverageCap])].filter(value => value <= marginLeverageCap).sort((a, b) => a - b);
-  const marginLeverageOptions = marginLeverageSteps.map(value => `<option value="${value}" ${value === Math.min(5, marginLeverageCap) ? "selected" : ""}>${value}x</option>`).join("");
+  const marginLeverageCap = Math.max(5, Math.min(80, Math.floor(Number(selected.margin_max_leverage || 5) / 5) * 5));
+  const marginLeverageVisualMax = marginLeverageCap <= 20 ? 20 : 80;
+  const visibleLeverageMarks = marginLeverageVisualMax === 20 ? [5, 10, 15, 20] : [5, 20, 40, 60, 80];
+  const marginLeverageScale = visibleLeverageMarks.map(value => {
+    const position = ((value - 5) / (marginLeverageVisualMax - 5)) * 100;
+    return `<span class="${value > marginLeverageCap ? "locked" : ""}" style="left:${position.toFixed(2)}%">${value}x</span>`;
+  }).join("");
   const marginTicket = data.margin_enabled && Number(selected.margin_enabled || 0) === 1
-    ? `<section class="market-margin-ticket"><header><span>ISOLATED MARGIN</span><b>Long / Short</b></header><form data-market-margin-order data-market-price="${currentPrice}" data-market-fee-percent="${Number(data.trade_fee_percent || 0)}" data-market-maintenance="${Number(data.margin_maintenance_percent || 20)}"><input type="hidden" name="ticker" value="${escapeHtml(selected.ticker || "")}"/><div class="market-margin-direction"><label><input type="radio" name="direction" value="long" checked/><span>LONG<small>Profit if price rises</small></span></label><label><input type="radio" name="direction" value="short"/><span>SHORT<small>Profit if price falls</small></span></label></div><label>Isolated collateral<input name="collateral" type="number" min="10" step="0.01" placeholder="10.00" required/></label><label>Leverage<select name="leverage">${marginLeverageOptions}</select></label><div class="market-margin-preview" data-market-margin-preview><p><span>Position size</span><strong data-margin-notional>${money(0)}</strong></p><p><span>Opening fee</span><strong data-margin-fee>${money(0)}</strong></p><p><span>Estimated liquidation</span><strong data-margin-liquidation>--</strong></p><p><span>Cash required</span><strong data-margin-required>${money(0)}</strong></p></div><button type="submit" class="market-margin-submit">${data.market_open ? "Review leveraged position" : "Queue for market open"}</button><small>Losses are isolated to collateral. Fees are separate. Liquidation runs server-side while Faircroft quotes continue after hours.</small></form></section>`
+    ? `<section class="market-margin-ticket"><header><span>ISOLATED MARGIN</span><b>Long / Short</b></header><form data-market-margin-order data-market-price="${currentPrice}" data-market-fee-percent="${Number(data.trade_fee_percent || 0)}" data-market-maintenance="${Number(data.margin_maintenance_percent || 20)}"><input type="hidden" name="ticker" value="${escapeHtml(selected.ticker || "")}"/><div class="market-margin-direction"><label><input type="radio" name="direction" value="long" checked/><span>LONG<small>Profit if price rises</small></span></label><label><input type="radio" name="direction" value="short"/><span>SHORT<small>Profit if price falls</small></span></label></div><label>Isolated collateral<input name="collateral" type="number" min="10" step="0.01" placeholder="10.00" required/></label><label class="market-margin-leverage"><span>Leverage <output data-margin-leverage-output>5x</output></span><input name="leverage" type="range" min="5" max="${marginLeverageVisualMax}" step="5" value="5" data-leverage-cap="${marginLeverageCap}" aria-label="Leverage, maximum ${marginLeverageCap}x"/><div class="market-leverage-scale">${marginLeverageScale}</div><small>Developer ceiling: ${marginLeverageCap}x</small></label><div class="market-margin-preview" data-market-margin-preview><p><span>Position size</span><strong data-margin-notional>${money(0)}</strong></p><p><span>Opening fee</span><strong data-margin-fee>${money(0)}</strong></p><p><span>Estimated liquidation</span><strong data-margin-liquidation>--</strong></p><p><span>Cash required</span><strong data-margin-required>${money(0)}</strong></p></div><button type="submit" class="market-margin-submit">${data.market_open ? "Review leveraged position" : "Queue for market open"}</button><small>Losses are isolated to collateral. Fees are separate. Liquidation runs server-side while Faircroft quotes continue after hours.</small></form></section>`
     : `<section class="market-margin-ticket unavailable"><header><span>ISOLATED MARGIN</span><b>Unavailable</b></header><p>${data.margin_enabled ? "A developer has disabled leveraged positions for this security." : "Leveraged positions are paused exchange-wide."}</p></section>`;
   const marginPositionRows = openMarginPositions.map(position => {
     const pnl = Number(position.unrealized_pnl || 0);
@@ -6630,7 +6634,10 @@ function bindMarketWorkspace() {
       const feePercent = Math.max(0, Number(marginOrderForm.dataset.marketFeePercent || 0));
       const maintenance = Math.max(0, Math.min(0.95, Number(marginOrderForm.dataset.marketMaintenance || 20) / 100));
       const collateral = Math.max(0, Number(marginOrderForm.elements.collateral?.value || 0));
-      const leverage = Math.max(5, Number(marginOrderForm.elements.leverage?.value || 5));
+      const leverageControl = marginOrderForm.elements.leverage;
+      const leverageCap = Math.max(5, Number(leverageControl?.dataset.leverageCap || leverageControl?.max || 5));
+      const leverage = Math.min(leverageCap, Math.max(5, Number(leverageControl?.value || 5)));
+      if (leverageControl && Number(leverageControl.value) !== leverage) leverageControl.value = String(leverage);
       const direction = String(new FormData(marginOrderForm).get("direction") || "long").toLowerCase();
       const notional = collateral * leverage;
       const fee = notional * feePercent / 100;
@@ -6642,7 +6649,17 @@ function bindMarketWorkspace() {
       const feeNode = $("[data-margin-fee]", marginOrderForm);
       const liquidationNode = $("[data-margin-liquidation]", marginOrderForm);
       const requiredNode = $("[data-margin-required]", marginOrderForm);
+      const leverageOutput = $("[data-margin-leverage-output]", marginOrderForm);
       const submitButton = marginOrderForm.querySelector('button[type="submit"]');
+      if (leverageOutput) leverageOutput.textContent = `${leverage.toFixed(0)}x`;
+      if (leverageControl) {
+        const minimum = Number(leverageControl.min || 5);
+        const maximum = Number(leverageControl.max || minimum);
+        const progress = maximum <= minimum ? 100 : ((leverage - minimum) / (maximum - minimum)) * 100;
+        const capProgress = maximum <= minimum ? 100 : ((leverageCap - minimum) / (maximum - minimum)) * 100;
+        leverageControl.style.setProperty("--leverage-progress", `${Math.max(0, Math.min(100, progress)).toFixed(2)}%`);
+        leverageControl.style.setProperty("--leverage-cap-progress", `${Math.max(0, Math.min(100, capProgress)).toFixed(2)}%`);
+      }
       if (notionalNode) notionalNode.textContent = money(notional);
       if (feeNode) feeNode.textContent = money(fee);
       if (liquidationNode) liquidationNode.textContent = liquidationPrice > 0 ? money(liquidationPrice) : "--";
@@ -13504,11 +13521,11 @@ function renderDevLeverageSettings(market) {
   const highestLeverage = securities.reduce((highest, security) => Math.max(highest, Number(security.margin_max_leverage || 0)), 0);
   const securityRows = securities.map(security => {
     const enabled = Number(security.margin_enabled || 0) === 1;
-    const cap = Math.max(5, Math.min(80, Number(security.margin_max_leverage || 5)));
+    const cap = Math.max(5, Math.min(80, Math.round(Number(security.margin_max_leverage || 5) / 5) * 5));
     return `<form class="dev-leverage-security" data-market-margin-security="${Number(security.id)}">
       <span class="dev-leverage-symbol"><i>${escapeHtml(String(security.ticker || "--").slice(0, 4))}</i><b>${escapeHtml(security.name || "Ravenhood security")}<small>${escapeHtml(humanLabel(security.security_type || "stock"))} / ${money(security.price || 0)}</small></b></span>
       <label class="dev-leverage-enable"><input name="enabled" type="checkbox" ${enabled ? "checked" : ""}/><span><b>${enabled ? "AUTHORIZED" : "DISABLED"}</b><small>Resident margin access</small></span></label>
-      <label class="dev-leverage-cap"><span>Maximum leverage</span><div><input name="max_leverage" type="number" min="5" max="80" step="1" value="${cap}" required/><b>x</b></div></label>
+      <label class="dev-leverage-cap"><span>Maximum leverage <output data-dev-leverage-output>${cap}x</output></span><div class="dev-leverage-range"><input name="max_leverage" type="range" min="5" max="80" step="5" value="${cap}" data-dev-leverage-range required/><div class="dev-leverage-range-scale"><span>5x</span><span>20x</span><span>40x</span><span>60x</span><span>80x</span></div></div></label>
       <button class="secondary" type="submit">Save limit</button>
     </form>`;
   }).join("") || `<div class="empty">No active Ravenhood securities are available.</div>`;
@@ -14692,24 +14709,39 @@ function bindDevWorkspace() {
       await refreshDevTools();
     } catch (error) { toast(error.message); }
   });
-  $$("[data-market-margin-security]").forEach(form => form.addEventListener("submit", async event => {
-    event.preventDefault();
-    const securityId = Number(form.dataset.marketMarginSecurity || 0);
-    const button = form.querySelector('button[type="submit"], button');
-    if (!securityId) return;
-    if (button) button.disabled = true;
-    try {
-      await api(`/api/dev-tools/market/securities/${securityId}/margin`, {method: "PATCH", body: {
-        enabled: form.enabled.checked,
-        max_leverage: form.max_leverage.value,
-      }});
-      toast("Security margin policy saved");
-      await refreshDevTools();
-    } catch (error) {
-      if (button) button.disabled = false;
-      toast(error.message);
-    }
-  }));
+  $$("[data-market-margin-security]").forEach(form => {
+    const leverageRange = form.querySelector("[data-dev-leverage-range]");
+    const leverageOutput = form.querySelector("[data-dev-leverage-output]");
+    const syncLeverageRange = () => {
+      if (!leverageRange) return;
+      const value = Number(leverageRange.value || 5);
+      const minimum = Number(leverageRange.min || 5);
+      const maximum = Number(leverageRange.max || 80);
+      const progress = maximum <= minimum ? 100 : ((value - minimum) / (maximum - minimum)) * 100;
+      leverageRange.style.setProperty("--leverage-progress", `${Math.max(0, Math.min(100, progress)).toFixed(2)}%`);
+      if (leverageOutput) leverageOutput.textContent = `${value.toFixed(0)}x`;
+    };
+    leverageRange?.addEventListener("input", syncLeverageRange);
+    syncLeverageRange();
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      const securityId = Number(form.dataset.marketMarginSecurity || 0);
+      const button = form.querySelector('button[type="submit"], button');
+      if (!securityId) return;
+      if (button) button.disabled = true;
+      try {
+        await api(`/api/dev-tools/market/securities/${securityId}/margin`, {method: "PATCH", body: {
+          enabled: form.enabled.checked,
+          max_leverage: form.max_leverage.value,
+        }});
+        toast("Security margin policy saved");
+        await refreshDevTools();
+      } catch (error) {
+        if (button) button.disabled = false;
+        toast(error.message);
+      }
+    });
+  });
   $$('[data-market-session-override]').forEach(button => button.addEventListener('click', async () => {
     const mode = button.dataset.marketSessionOverride;
     const promptText = mode === 'open' ? 'Force Ravenhood open now? Resident buy and sell orders will be allowed until scheduled mode is restored.' : mode === 'closed' ? 'Force Ravenhood closed now? New resident orders will be blocked until scheduled mode is restored.' : '';
