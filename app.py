@@ -6899,6 +6899,8 @@ def rebalance_market_index_funds(db: Database, force: bool = False, actor_id: in
     outcomes: list[dict[str, Any]] = []
     timestamp = now_iso()
     for fund in funds:
+        if one(db, "SELECT 1 AS active FROM market_price_programs WHERE security_id=? AND status='active' LIMIT 1", (fund["security_id"],)):
+            continue
         existing_count = int((one(db, "SELECT COUNT(*) AS count FROM market_index_members WHERE fund_id=?", (fund["id"],)) or {}).get("count") or 0)
         last_rebalanced = parse_iso(fund["last_rebalanced_at"]) if fund.get("last_rebalanced_at") else None
         due = not last_rebalanced or (utcnow() - last_rebalanced).total_seconds() >= max(1, int(fund["rebalance_interval_hours"] or 24)) * 3600
@@ -6937,7 +6939,9 @@ def rebalance_market_index_funds(db: Database, force: bool = False, actor_id: in
 
 def update_market_index_prices(db: Database, force_history: bool = False) -> int:
     funds = all_rows(db, """SELECT f.*,s.price,s.previous_price,s.ticker FROM market_index_funds f
-        JOIN market_securities s ON s.id=f.security_id WHERE f.enabled=1 AND s.active=1 ORDER BY f.id""")
+        JOIN market_securities s ON s.id=f.security_id WHERE f.enabled=1 AND s.active=1
+        AND NOT EXISTS (SELECT 1 FROM market_price_programs p WHERE p.security_id=s.id AND p.status='active')
+        ORDER BY f.id""")
     timestamp = now_iso()
     updated = 0
     for fund in funds:
@@ -7157,6 +7161,25 @@ def market_gemini_adjustment_cycle(db: Database) -> dict[str, Any]:
     return {"updated": len(applied), "adjustments": applied}
 
 
+def rebase_market_index_quote(db: Database, security_id: int, quote: float, timestamp: str) -> None:
+    """Make a completed direct index movement the fund's new durable NAV level."""
+    fund = one(db, "SELECT id FROM market_index_funds WHERE security_id=? AND enabled=1", (security_id,))
+    if not fund:
+        return
+    members = all_rows(db, """SELECT m.weight,m.reference_price,s.price FROM market_index_members m
+        JOIN market_securities s ON s.id=m.security_id
+        WHERE m.fund_id=? AND s.active=1 AND COALESCE(s.lifecycle_status,'active')='active'""", (fund["id"],))
+    performance = sum(
+        float(member["weight"] or 0) * (float(member["price"] or 0) / max(0.0001, float(member["reference_price"] or 0)))
+        for member in members
+    )
+    base_nav = quote / performance if performance > 0 else quote
+    db.execute(
+        "UPDATE market_index_funds SET base_nav=?,last_valued_at=?,updated_at=? WHERE id=?",
+        (round(max(0.01, base_nav), 4), timestamp, timestamp, fund["id"]),
+    )
+
+
 def apply_market_price_programs(db: Database) -> int:
     """Advance scheduled price programs outside resident-facing read requests."""
     current = utcnow()
@@ -7172,11 +7195,10 @@ def apply_market_price_programs(db: Database) -> int:
         if current < starts:
             continue
         progress = 1.0 if current >= ends else max(0.0, min(1.0, (current - starts).total_seconds() / max(1, (ends - starts).total_seconds())))
-        targets = all_rows(
-            db,
-            "SELECT id, price FROM market_securities WHERE active = 1 AND security_type<>'fund'" + (" AND id = ?" if program.get("security_id") else ""),
-            ((program["security_id"],) if program.get("security_id") else ()),
-        )
+        if program.get("security_id"):
+            targets = all_rows(db, "SELECT id,price,security_type FROM market_securities WHERE active=1 AND id=?", (program["security_id"],))
+        else:
+            targets = all_rows(db, "SELECT id,price,security_type FROM market_securities WHERE active=1 AND security_type<>'fund'")
         for security in targets:
             start_price = float(program.get("start_price") or security["price"])
             new_price = max(0.01, start_price * (1 + float(program["percent_change"]) * progress / 100.0))
@@ -7206,6 +7228,8 @@ def apply_market_price_programs(db: Database) -> int:
             if not last_history or abs(float(last_history["price"]) - rounded_price) >= 0.0001 or not last_time or (current - last_time).total_seconds() >= 300:
                 db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], rounded_price, "scheduled_program", current.isoformat()))
             updated += 1
+            if progress >= 1 and str(security.get("security_type") or "") == "fund":
+                rebase_market_index_quote(db, int(security["id"]), rounded_price, current.isoformat())
         if progress >= 1:
             db.execute("UPDATE market_price_programs SET status = 'completed' WHERE id = ?", (program["id"],))
     return updated
@@ -24668,7 +24692,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         payload = self.read_json(); ticker = str(payload.get("ticker") or "ALL").upper().strip(); name = str(payload.get("event_name") or "Market adjustment").strip()[:100]
         try: percent = max(-500, min(500, float(payload.get("percent_change") or 0))); duration = max(1, min(10080, int(payload.get("duration_minutes") or 60)))
         except (TypeError, ValueError): self.error(400, "Percent and duration are required."); return
-        security = None if ticker == "ALL" else one(db, "SELECT * FROM market_securities WHERE ticker=? AND active=1 AND security_type<>'fund'", (ticker,))
+        security = None if ticker == "ALL" else one(db, "SELECT * FROM market_securities WHERE ticker=? AND active=1", (ticker,))
         if ticker != "ALL" and not security: self.error(404, "Ticker not found."); return
         start = utcnow(); end = start + dt.timedelta(minutes=duration)
         targets = [security] if security else all_rows(db, "SELECT id,price FROM market_securities WHERE active=1 AND security_type<>'fund'")
