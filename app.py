@@ -24724,6 +24724,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     restored_at = now_iso()
                     db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?", (restored_price, restored_at, item["security_id"]))
                     db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (item["security_id"], restored_price, "program_cancelled", restored_at))
+                    rebase_market_index_quote(db, int(item["security_id"]), restored_price, restored_at)
                     record_market_system_trades(
                         db,
                         int(item["security_id"]),
@@ -24758,6 +24759,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 if security:
                     held_price = max(0.01, float(security["price"] or 0.01))
                     db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (item["security_id"], held_price, "program_stopped_at_market", stopped_at))
+                    rebase_market_index_quote(db, int(item["security_id"]), held_price, stopped_at)
                     held_quotes.append({"ticker": security["ticker"], "price": round(held_price, 4)})
                     held += 1
             db.execute("UPDATE market_price_programs SET status='stopped' WHERE id=?", (item["id"],))
