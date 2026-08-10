@@ -7255,34 +7255,57 @@ def record_market_system_trades(
 
 
 def market_volatility_cycle(db: Database, amplitude: float, source: str = "autopilot", actor_id: int | None = None) -> dict[str, Any]:
-    securities = all_rows(db, """SELECT id,ticker,price,volatility,security_type FROM market_securities s
-        WHERE active=1 AND security_type<>'fund'
-        AND NOT EXISTS (SELECT 1 FROM market_price_programs p WHERE p.security_id=s.id AND p.status='active') ORDER BY ticker""")
+    amplitude = max(0.1, min(15.0, float(amplitude or 0)))
+    securities = all_rows(db, """SELECT id,ticker,price,volatility,security_type FROM market_securities
+        WHERE active=1 AND COALESCE(lifecycle_status,'active')='active'
+        AND COALESCE(security_type,'stock')<>'fund' ORDER BY ticker""")
     if not securities:
-        return {"updated": 0, "average_change": 0.0}
+        return {"updated": 0, "operating_updated": 0, "index_updated": 0, "average_change": 0.0, "changes": []}
+    active_programs: dict[int, list[DbRow]] = {}
+    for program in all_rows(db, """SELECT id,security_id,start_price FROM market_price_programs
+        WHERE status='active' AND security_id IS NOT NULL"""):
+        active_programs.setdefault(int(program["security_id"]), []).append(program)
     broad_bias = ((secrets.randbelow(20001) - 10000) / 10000.0) * amplitude * 0.35
     changes: list[float] = []
+    listing_changes: list[dict[str, Any]] = []
+    cycle_time = now_iso()
     for security in securities:
         security_factor = max(0.45, min(1.8, float(security.get("volatility") or 1.0)))
         if str(security.get("security_type") or "").lower() == "bond":
             security_factor *= 0.28
         independent = ((secrets.randbelow(20001) - 10000) / 10000.0) * amplitude * security_factor
         percent = max(-15.0, min(15.0, broad_bias + independent))
+        minimum_move = min(amplitude, max(0.05, amplitude * 0.03))
+        if abs(percent) < minimum_move:
+            direction = 1.0 if percent > 0 or (percent == 0 and int(security["id"]) % 2 == 0) else -1.0
+            percent = direction * minimum_move
         old_price = float(security.get("price") or 0)
         new_price = max(0.01, round(old_price * (1 + percent / 100.0), 4))
-        db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?", (new_price, now_iso(), security["id"]))
+        db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?", (new_price, cycle_time, security["id"]))
         db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], new_price, source[:40], now_iso()))
+        price_factor = new_price / max(0.01, old_price)
+        for program in active_programs.get(int(security["id"]), []):
+            rebased_start = max(0.01, round(float(program.get("start_price") or old_price) * price_factor, 4))
+            db.execute("UPDATE market_price_programs SET start_price=? WHERE id=?", (rebased_start, program["id"]))
         record_market_system_trades(
             db, int(security["id"]), old_price, new_price, source,
             f"Automated volatility cycle moved the quote {percent:+.2f}%.",
         )
         changes.append(percent)
+        listing_changes.append({"ticker": security["ticker"], "percent_change": round(percent, 2), "price": new_price})
     average = sum(changes) / len(changes)
+    index_updated = update_market_index_prices(db, force_history=True)
     db.execute(
         "INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES (?,?,?,?,?)",
-        ("volatility_cycle", "Volatility cycle", f"{len(changes)} listings moved; exchange average {average:+.2f}% with mixed gains and losses.", actor_id, now_iso()),
+        ("volatility_cycle", "Volatility cycle", f"{len(changes)} operating listings moved and {index_updated} index quotes revalued; exchange average {average:+.2f}%.", actor_id, cycle_time),
     )
-    return {"updated": len(changes), "average_change": round(average, 2)}
+    return {
+        "updated": len(changes) + index_updated,
+        "operating_updated": len(changes),
+        "index_updated": index_updated,
+        "average_change": round(average, 2),
+        "changes": listing_changes,
+    }
 
 
 def market_gemini_adjustment_cycle(db: Database) -> dict[str, Any]:
