@@ -5837,7 +5837,7 @@ function renderMarketWorkspace() {
   state.marketTicker = selected.ticker || "";
   const range = ["LIVE", "15M", "1H", "1D", "1W", "1M", "1Y"].includes(state.marketRange) ? state.marketRange : "LIVE";
   state.marketRange = range;
-  const seriesVisibility = state.marketSeriesVisibility || {price: true, ema: true, vwap: true, band: false};
+  const seriesVisibility = state.marketSeriesVisibility || {price: true, ema: true, vwap: true, band: true};
   const hiddenSeriesClasses = Object.entries(seriesVisibility).filter(([, visible]) => !visible).map(([key]) => `hide-${key}`).join(" ");
   const now = Date.now();
   const rangeMs = {"LIVE": 3e5, "15M": 9e5, "1H": 36e5, "1D": 864e5, "1W": 6048e5, "1M": 2592e6, "1Y": 31536e6}[range];
@@ -5939,6 +5939,7 @@ function renderMarketWorkspace() {
     time: row.time,
     fromOpen: open ? (row.price / open - 1) * 100 : 0,
   }));
+  const actualPoints = chartSeries.map(point => `${point.x},${point.y}`).join(" ");
   const forecastSeries = [
     {x: actualEndX, price: currentPrice},
     ...forecastPrices.map((price, index) => ({
@@ -5947,8 +5948,9 @@ function renderMarketWorkspace() {
     })),
   ];
   const forecastPoints = forecastSeries.map(point => `${point.x.toFixed(1)},${yFor(point.price).toFixed(1)}`).join(" ");
-  const forecastDots = forecastSeries.slice(2).filter((_, index) => index % 2 === 0).map(point => {
-    return `<circle class="market-v14-projection-dot" cx="${point.x.toFixed(1)}" cy="${yFor(point.price).toFixed(1)}" r="2.1"/>`;
+  const forecastTicks = forecastSeries.slice(1).map(point => {
+    const y = yFor(point.price);
+    return `<line class="market-v14-projection-tick" x1="${point.x.toFixed(1)}" y1="${(y - 4).toFixed(1)}" x2="${point.x.toFixed(1)}" y2="${(y + 4).toFixed(1)}"/>`;
   }).join("");
   const forecastLast = forecastSeries.at(-1);
   const trendPoints = trendSeries.map((point, index) => `${chartSeries[index].x},${yFor(point.ema).toFixed(1)}`).join(" ");
@@ -5956,8 +5958,7 @@ function renderMarketWorkspace() {
     ...trendSeries.map((point, index) => `${chartSeries[index].x},${yFor(point.upper).toFixed(1)}`),
     ...trendSeries.map((point, index) => `${chartSeries[index].x},${yFor(point.lower).toFixed(1)}`).reverse(),
   ].join(" ");
-  const vwapSeries = chartSeries.filter(point => Number.isFinite(point.vwap) && point.vwap > 0);
-  const vwapPoints = vwapSeries.map(point => `${point.x},${yFor(point.vwap).toFixed(1)}`).join(" ");
+  const vwapPoints = chartSeries.filter(point => Number.isFinite(point.vwap) && point.vwap > 0).map(point => `${point.x},${yFor(point.vwap).toFixed(1)}`).join(" ");
   const maxCandles = {"LIVE": 24, "15M": 30, "1H": 48, "1D": 72, "1W": 84, "1M": 96, "1Y": 96}[range] || 72;
   const candleGroupSize = Math.max(1, Math.ceil(history.length / maxCandles));
   const candleGroups = [];
@@ -5972,8 +5973,7 @@ function renderMarketWorkspace() {
       volume: rows.reduce((sum, row) => sum + row.volume, 0),
     });
   }
-  const candleSpacing = (actualEndX - 28) / Math.max(1, candleGroups.length);
-  const candleWidth = Math.max(5, Math.min(18, candleSpacing * .62));
+  const candleWidth = Math.max(2.2, Math.min(8, (actualEndX - 28) / Math.max(1, candleGroups.length) * .55));
   const candleMarkup = candleGroups.map(candle => {
     const x = xForTime(candle.time);
     const openY = yFor(candle.open);
@@ -5981,10 +5981,10 @@ function renderMarketWorkspace() {
     const highY = yFor(candle.high);
     const lowY = yFor(candle.low);
     const bodyY = Math.min(openY, closeY);
-    const bodyHeight = Math.max(3.6, Math.abs(closeY - openY));
+    const bodyHeight = Math.max(2.2, Math.abs(closeY - openY));
     const tolerance = Math.max(.000001, Math.max(Math.abs(candle.open), Math.abs(candle.close)) * .000001);
     const direction = Math.abs(candle.close - candle.open) <= tolerance ? "neutral" : candle.close > candle.open ? "up" : "down";
-    return `<g class="market-v14-candle ${direction}"><line class="wick" x1="${x.toFixed(1)}" y1="${highY.toFixed(1)}" x2="${x.toFixed(1)}" y2="${lowY.toFixed(1)}"/><rect class="body" x="${(x - candleWidth / 2).toFixed(1)}" y="${bodyY.toFixed(1)}" width="${candleWidth.toFixed(1)}" height="${bodyHeight.toFixed(1)}" rx="1.2"/></g>`;
+    return `<g class="market-v14-candle ${direction}"><line class="wick" x1="${x.toFixed(1)}" y1="${highY.toFixed(1)}" x2="${x.toFixed(1)}" y2="${lowY.toFixed(1)}"/><rect class="body" x="${(x - candleWidth / 2).toFixed(1)}" y="${bodyY.toFixed(1)}" width="${candleWidth.toFixed(1)}" height="${bodyHeight.toFixed(1)}" rx=".7"/></g>`;
   }).join("");
   const chartId = `rh-${String(selected.ticker || "market").replace(/[^a-z0-9]/gi, "")}`;
   const chartSeriesPayload = escapeHtml(JSON.stringify(chartSeries));
@@ -6009,6 +6009,8 @@ function renderMarketWorkspace() {
   }));
   const largestSpike = movementRows.reduce((best, item) => item.pct > best.pct ? item : best, {pct: 0, point: null});
   const largestDrop = movementRows.reduce((best, item) => item.pct < best.pct ? item : best, {pct: 0, point: null});
+  const spikeMarker = largestSpike.point && largestSpike.pct > 0 ? `<g class="market-v14-move-marker spike"><circle cx="${largestSpike.point.x}" cy="${largestSpike.point.y}" r="5"/></g>` : "";
+  const dropMarker = largestDrop.point && largestDrop.pct < 0 ? `<g class="market-v14-move-marker drop"><circle cx="${largestDrop.point.x}" cy="${largestDrop.point.y}" r="5"/></g>` : "";
   const lastRecordedAt = history.at(-1)?.time || now;
   const chartDateOptions = range === "LIVE"
     ? {hour: "numeric", minute: "2-digit", second: "2-digit"}
@@ -6075,9 +6077,8 @@ function renderMarketWorkspace() {
         <section class="market-v13-chart market-v14-chart"><header><div><small>RECORDED OHLC + VWAP + DYNAMIC EMA</small><h2>${escapeHtml(selected.ticker || "Market")} live price desk</h2><span data-market-live-clock>${range === "LIVE" ? "Live view auto-syncs every 12 seconds" : "Range synchronized"} · hover any visible series for exact data</span></div><nav>${[["LIVE", "Live"], ["15M", "15 min"], ["1H", "1 hour"], ["1D", "1 day"], ["1W", "1 week"], ["1M", "1 month"], ["1Y", "1 year"]].map(([item, label]) => `<button type="button" class="${range === item ? "active" : ""}" data-market-range="${item}">${label}</button>`).join("")}</nav></header>
           <div class="market-v13-canvas ${change >= 0 ? "positive" : "negative"} ${hiddenSeriesClasses}" data-market-price-chart data-market-points="${chartSeriesPayload}" data-market-ema-period="${emaPeriod}" tabindex="0" aria-label="Interactive ${escapeHtml(selected.ticker || "Market")} price history. Toggle chart series, then hover or use arrow keys to inspect their recorded values.">
             <div class="market-v13-gridlines"></div><div class="market-v13-y-axis"><span>${money(chartMax)}</span><span>${money((chartMax + chartMin) / 2)}</span><span>${money(chartMin)}</span></div>
-            <svg viewBox="0 0 1360 320" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="${chartId}-band" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#57dca8" stop-opacity=".1"/><stop offset="1" stop-color="#57dca8" stop-opacity=".015"/></linearGradient><linearGradient id="${chartId}-outlook" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b89cff" stop-opacity=".025"/><stop offset="1" stop-color="#b89cff" stop-opacity=".1"/></linearGradient></defs><rect class="market-v14-projection-zone" x="${actualEndX}" y="0" width="${forecastEndX - actualEndX}" height="304" fill="url(#${chartId}-outlook)"/><polygon class="trend-band" points="${bandPoints}" fill="url(#${chartId}-band)"/><line class="market-v14-current-guide" x1="28" y1="${yFor(currentPrice).toFixed(1)}" x2="${actualEndX}" y2="${yFor(currentPrice).toFixed(1)}"/><g class="market-series-price"><g class="market-v14-candles">${candleMarkup}</g><circle class="market-v14-current-quote" cx="${actualEndX}" cy="${yFor(currentPrice).toFixed(1)}" r="4.5"/></g><polyline class="ema-line" points="${trendPoints}"/>${vwapPoints ? `<polyline class="vwap-line" points="${vwapPoints}"/>` : ""}<line class="market-v14-projection-divider" x1="${actualEndX}" y1="0" x2="${actualEndX}" y2="304"/><g class="market-v14-projection"><polyline class="market-v14-projection-line" points="${forecastPoints}"/>${forecastDots}<path class="market-v14-projection-end" d="M ${forecastLast.x.toFixed(1)} ${(yFor(forecastLast.price) - 5).toFixed(1)} L ${(forecastLast.x + 5).toFixed(1)} ${yFor(forecastLast.price).toFixed(1)} L ${forecastLast.x.toFixed(1)} ${(yFor(forecastLast.price) + 5).toFixed(1)} L ${(forecastLast.x - 5).toFixed(1)} ${yFor(forecastLast.price).toFixed(1)} Z"/></g></svg>
-            <div class="market-v14-chart-zones" aria-hidden="true"><span>RECORDED MARKET</span><span>MODEL OUTLOOK</span></div>
-            <div class="market-v14-legend" aria-label="Chart series visibility">${[["price", "OHLC"], ["ema", `EMA ${emaPeriod}`], ["vwap", vwapValue > 0 ? "Executed VWAP" : "VWAP awaiting volume"], ["band", "Volatility band"]].map(([key, label]) => `<button type="button" class="${key} ${seriesVisibility[key] ? "active" : ""}" data-market-series="${key}" aria-pressed="${seriesVisibility[key] ? "true" : "false"}" title="${seriesVisibility[key] ? "Hide" : "Show"} ${escapeHtml(label)}"><i></i>${escapeHtml(label)}</button>`).join("")}<span class="market-v14-projection-key" title="Statistical outlook; not a recorded quote"><i></i>Model outlook</span></div>
+            <svg viewBox="0 0 1360 320" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="${chartId}-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".24"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient><linearGradient id="${chartId}-band" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#57dca8" stop-opacity=".16"/><stop offset="1" stop-color="#57dca8" stop-opacity=".025"/></linearGradient><linearGradient id="${chartId}-outlook" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b89cff" stop-opacity=".02"/><stop offset="1" stop-color="#b89cff" stop-opacity=".12"/></linearGradient></defs><rect class="market-v14-projection-zone" x="${actualEndX}" y="0" width="${forecastEndX - actualEndX}" height="304" fill="url(#${chartId}-outlook)"/><polygon class="trend-band" points="${bandPoints}" fill="url(#${chartId}-band)"/><g class="market-series-price"><polygon class="area" points="28,304 ${actualPoints} ${actualEndX},304" fill="url(#${chartId}-area)"/><g class="market-v14-candles">${candleMarkup}</g><polyline class="actual" points="${actualPoints}"/>${spikeMarker}${dropMarker}<circle class="market-v14-current-quote" cx="${actualEndX}" cy="${yFor(currentPrice).toFixed(1)}" r="5"/></g><polyline class="ema-line" points="${trendPoints}"/>${vwapPoints ? `<polyline class="vwap-line" points="${vwapPoints}"/>` : ""}<line class="market-v14-projection-divider" x1="${actualEndX}" y1="0" x2="${actualEndX}" y2="304"/><g class="market-v14-projection"><polyline class="market-v14-projection-line" points="${forecastPoints}"/>${forecastTicks}<circle class="market-v14-projection-end" cx="${forecastLast.x.toFixed(1)}" cy="${yFor(forecastLast.price).toFixed(1)}" r="4"/></g></svg>
+            <div class="market-v14-legend" aria-label="Chart series visibility">${[["price", "OHLC candles"], ["ema", `EMA ${emaPeriod}`], ["vwap", vwapValue > 0 ? "Session VWAP" : "VWAP awaiting volume"], ["band", "Volatility band"]].map(([key, label]) => `<button type="button" class="${key} ${seriesVisibility[key] ? "active" : ""}" data-market-series="${key}" aria-pressed="${seriesVisibility[key] ? "true" : "false"}" title="${seriesVisibility[key] ? "Hide" : "Show"} ${escapeHtml(label)}"><i></i>${escapeHtml(label)}</button>`).join("")}<span class="market-v14-projection-key" title="Statistical outlook; not a recorded quote"><i></i>Projection</span><span class="market-v14-direction-key" title="Candle direction"><i class="up"></i>Up<i class="down"></i>Down<i class="neutral"></i>Flat</span></div>
             <div class="market-v13-hover-guide" aria-hidden="true"></div><div class="market-v13-hover-dot" aria-hidden="true"></div><aside class="market-v13-tooltip" aria-live="polite"><small data-market-tooltip-symbol>${escapeHtml(selected.ticker || "MARKET")} · RECORDED CANDLE</small><strong data-market-tooltip-price>${money(currentPrice)}</strong><time data-market-tooltip-time>${new Date(lastRecordedAt).toLocaleString()}</time><span data-market-tooltip-change>Current verified price</span><em data-market-tooltip-detail>OHLC and volume available on hover</em></aside>
             <div class="market-v13-chart-labels">${chartTimeLabels.map(label => `<span>${escapeHtml(label)}</span>`).join("")}</div>
           </div>
@@ -6252,7 +6253,7 @@ function bindMarketWorkspace() {
         const series = String(control.dataset.marketSeries || "");
         if (!["price", "ema", "vwap", "band"].includes(series)) return;
         state.marketSeriesVisibility = {
-          ...(state.marketSeriesVisibility || {price: true, ema: true, vwap: true, band: false}),
+          ...(state.marketSeriesVisibility || {price: true, ema: true, vwap: true, band: true}),
           [series]: state.marketSeriesVisibility?.[series] === false,
         };
         localStorage.setItem("rp.market.series", JSON.stringify(state.marketSeriesVisibility));
@@ -6307,7 +6308,7 @@ function bindMarketWorkspace() {
   if (interactivePriceChart) {
     let chartPoints = [];
     try { chartPoints = JSON.parse(interactivePriceChart.dataset.marketPoints || "[]"); } catch (_) { chartPoints = []; }
-    const visibleSeries = state.marketSeriesVisibility || {price: true, ema: true, vwap: true, band: false};
+    const visibleSeries = state.marketSeriesVisibility || {price: true, ema: true, vwap: true, band: true};
     const activeSeries = ["price", "ema", "vwap", "band"].filter(key => visibleSeries[key] !== false);
     const focusedSeries = activeSeries.length === 1 ? activeSeries[0] : "price";
     const emaPeriod = Number(interactivePriceChart.dataset.marketEmaPeriod || 12);
@@ -16487,7 +16488,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.1-chart-desk-v60").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.3.1-market-projection-v59").catch(() => {}));
 }
 
 legalFooterLink?.addEventListener("click", () => {
