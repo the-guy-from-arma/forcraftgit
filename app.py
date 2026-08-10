@@ -7027,13 +7027,29 @@ def market_index_payload(db: Database) -> list[dict[str, Any]]:
     members = all_rows(db, """SELECT m.*,f.fund_key,s.ticker,s.name,s.sector,s.price,s.previous_price,s.issued_shares,
             COALESCE(position.holder_count,0) AS holder_count,
             COALESCE(gemini_flow.generated_buy_shares,0) AS gemini_buy_shares,
-            COALESCE(gemini_flow.generated_sell_shares,0) AS gemini_sell_shares
+            COALESCE(gemini_flow.generated_sell_shares,0) AS gemini_sell_shares,
+            COALESCE(gemini_flow.generated_position_shares,0) AS gemini_position_shares
         FROM market_index_members m JOIN market_index_funds f ON f.id=m.fund_id
         JOIN market_securities s ON s.id=m.security_id
         LEFT JOIN (SELECT security_id,COUNT(*) AS holder_count FROM market_holdings WHERE quantity>0 GROUP BY security_id) position ON position.security_id=s.id
         LEFT JOIN (
-            SELECT security_id,SUM(buy_volume) AS generated_buy_shares,SUM(sell_volume) AS generated_sell_shares
-            FROM market_system_trades WHERE LOWER(source)='gemini' GROUP BY security_id
+            WITH gemini_deltas AS (
+                SELECT id,security_id,created_at,
+                       COALESCE(buy_volume,0)-COALESCE(sell_volume,0) AS share_delta
+                FROM market_system_trades WHERE LOWER(source)='gemini'
+            ), gemini_running AS (
+                SELECT security_id,share_delta,
+                       SUM(share_delta) OVER (
+                           PARTITION BY security_id ORDER BY created_at,id
+                           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                       ) AS running_position
+                FROM gemini_deltas
+            )
+            SELECT security_id,
+                   SUM(GREATEST(share_delta,0)) AS generated_buy_shares,
+                   SUM(GREATEST(-share_delta,0)) AS generated_sell_shares,
+                   GREATEST(0,SUM(share_delta)-LEAST(0,MIN(running_position))) AS generated_position_shares
+            FROM gemini_running GROUP BY security_id
         ) gemini_flow ON gemini_flow.security_id=s.id
         ORDER BY f.id,m.rank""")
     grouped: dict[int, list[dict[str, Any]]] = {}
@@ -7057,7 +7073,10 @@ def market_index_payload(db: Database) -> list[dict[str, Any]]:
             sell_shares = max(0.0, float(constituent.get("gemini_sell_shares") or 0))
             if buy_shares > 0 or sell_shares > 0:
                 gemini_activity_constituents += 1
-            net_shares = max(0.0, buy_shares - sell_shares)
+            # Gemini's synthetic desk cannot hold a negative position. The
+            # database query walks every trade chronologically and floors the
+            # position at zero, so an old sell wave cannot erase later buys.
+            net_shares = max(0.0, float(constituent.get("gemini_position_shares") or 0))
             constituent["gemini_net_shares"] = round(net_shares, 6)
             if net_shares <= 0:
                 continue
