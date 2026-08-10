@@ -1545,20 +1545,53 @@ function renderUpdateLockdownHome(apps) {
   const eta = state.session?.system?.update_lockdown_eta || "Engineering team actively monitoring";
   return `
     <section class="update-lockdown-screen faircroft-update-mode">
-      <header><img src="/static/brand/faircroft-emblem.webp" alt="" /><div><span>FAIRCROFT RELEASE OPERATIONS</span><strong>Limited-service mode</strong></div><i></i></header>
+      <div class="faircroft-update-ambient" aria-hidden="true"><i></i><i></i><i></i></div>
+      <header class="faircroft-update-masthead">
+        <button class="faircroft-update-brand" type="button" aria-label="Faircroft RP OS">
+          <img src="/static/brand/faircroft-emblem.webp" alt="" />
+          <span><small>FAIRCROFT RELEASE OPERATIONS</small><strong>RP OS Care Team</strong></span>
+        </button>
+        <div class="faircroft-update-live"><i></i><span>Limited-service mode</span><b>LIVE</b></div>
+      </header>
       <article class="faircroft-update-brief">
         <div class="faircroft-update-sequence"><span>RP OS</span><strong>${OS_VERSION}</strong></div>
-        <div><p class="eyebrow">Platform maintenance</p><h2>${escapeHtml(title)}</h2><p>${escapeHtml(updateLockdownMessage())}</p></div>
-        <div class="faircroft-update-progress"><span></span></div>
-        <footer><span><i></i> Essential network online</span><strong>${escapeHtml(eta)}</strong></footer>
+        <div class="faircroft-update-copy">
+          <p class="faircroft-update-apology">Hey, it's us &mdash; not you.</p>
+          <p class="eyebrow">Platform maintenance</p>
+          <h2>${escapeHtml(title)}</h2>
+          <p class="faircroft-update-message">${escapeHtml(updateLockdownMessage())}</p>
+          <p class="faircroft-update-reassurance">Your account is safe. We're tuning the city while you keep moving.</p>
+        </div>
+        <div class="faircroft-update-orbit" aria-hidden="true">
+          <span class="faircroft-update-ring ring-one"></span>
+          <span class="faircroft-update-ring ring-two"></span>
+          <span class="faircroft-update-ring ring-three"></span>
+          <i class="faircroft-update-satellite satellite-one"></i>
+          <i class="faircroft-update-satellite satellite-two"></i>
+          <div><img src="/static/brand/faircroft-emblem.webp" alt="" /><b>FC</b></div>
+        </div>
+        <div class="faircroft-update-progress"><span></span><i></i></div>
+        <footer>
+          <span><i></i><b>Essential network online</b><small>Identity and public-safety access protected</small></span>
+          <strong>${escapeHtml(eta)}</strong>
+        </footer>
       </article>
-      <div class="faircroft-update-services"><header><span>AVAILABLE SERVICES</span><strong>${allowed.length}</strong></header>
-        ${allowed.map((item) => `
-          <button data-open-app="${item.id}">
-            <span>${escapeHtml(item.label)}</span><strong>Available</strong><i>›</i>
-          </button>
-        `).join("") || `<div class="empty">No available update-mode actions</div>`}
-      </div>
+      <section class="faircroft-update-services">
+        <header>
+          <div><span>AVAILABLE DURING THE UPDATE</span><h3>Keep moving while we work.</h3><p>These services are live, secure, and ready to open.</p></div>
+          <strong>${String(allowed.length).padStart(2, "0")} <small>ONLINE</small></strong>
+        </header>
+        <div class="faircroft-update-service-grid">
+          ${allowed.map((item, index) => `
+            <button data-open-app="${item.id}">
+              <i>${String(index + 1).padStart(2, "0")}</i>
+              <span><strong>${escapeHtml(item.label)}</strong><small>Available service</small></span>
+              <em><b></b> Online</em>
+              <mark>&nearr;</mark>
+            </button>
+          `).join("") || `<div class="empty">No available update-mode actions</div>`}
+        </div>
+      </section>
     </section>
   `;
 }
