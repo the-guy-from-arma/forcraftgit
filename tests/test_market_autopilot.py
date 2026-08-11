@@ -26,6 +26,26 @@ class MarketAutopilotTests(unittest.TestCase):
         self.assertIn('name="autopilot_profile"', FRONTEND_SOURCE)
         self.assertIn('name="volatility_min_percent"', FRONTEND_SOURCE)
 
+    def test_local_gemini_and_deepseek_engines_have_ordered_fallback(self) -> None:
+        self.assertIn('DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY"', APP_SOURCE)
+        self.assertIn('DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL"', APP_SOURCE)
+        self.assertIn('DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL"', APP_SOURCE)
+        self.assertIn('primary in ("gemini", "deepseek")', APP_SOURCE)
+        self.assertIn('provider_order.append(alternate)', APP_SOURCE)
+        self.assertIn('settings["market_ai_local_fallback_enabled"]', APP_SOURCE)
+        self.assertIn('f"ai-fallback:{profile}"', APP_SOURCE)
+        self.assertIn('name="automation_provider" value="local"', FRONTEND_SOURCE)
+        self.assertIn('name="automation_provider" value="gemini"', FRONTEND_SOURCE)
+        self.assertIn('name="automation_provider" value="deepseek"', FRONTEND_SOURCE)
+
+    def test_external_provider_attempts_use_interval_and_cooldown_guards(self) -> None:
+        self.assertIn('"market_ai_interval_minutes"', APP_SOURCE)
+        self.assertIn('"market_ai_cooldown_minutes"', APP_SOURCE)
+        self.assertIn('f"market_{provider}_cooldown_until"', APP_SOURCE)
+        self.assertIn('set_system_setting(db, "market_ai_last_tick", attempt_at.isoformat())', APP_SOURCE)
+        self.assertIn('name="ai_interval_minutes"', FRONTEND_SOURCE)
+        self.assertIn('name="ai_cooldown_minutes"', FRONTEND_SOURCE)
+
     def test_future_programs_wait_and_capture_the_activation_quote(self) -> None:
         function_source = APP_SOURCE.split("def apply_market_price_programs", 1)[1].split(
             "def execute_ravenhood_order", 1

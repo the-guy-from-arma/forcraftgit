@@ -167,6 +167,9 @@ SHADOWHAVEN_ANTICHEAT_SYNC_SECONDS = max(
 )
 ANTICHEAT_LIVE_TTL_SECONDS = max(90, int(os.environ.get("ANTICHEAT_LIVE_TTL_SECONDS", "900")))
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip().rstrip("/")
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash").strip()
 SPORTS_DATA_PROVIDER = os.environ.get("SPORTS_DATA_PROVIDER", "kalshi").strip().lower()
 SPORTS_DATA_API_KEY = os.environ.get("SPORTS_DATA_API_KEY", "").strip()
 SPORTS_DATA_BASE_URL = os.environ.get("SPORTS_DATA_BASE_URL", "https://api.the-odds-api.com/v4").strip().rstrip("/")
@@ -2238,6 +2241,18 @@ SYSTEM_SETTING_DEFAULTS = {
     "market_volatility_min_percent": "0.10",
     "market_volatility_percent": "3.50",
     "market_autopilot_last_tick": "",
+    "market_automation_provider": "local",
+    "market_ai_fallback_enabled": "1",
+    "market_ai_local_fallback_enabled": "1",
+    "market_ai_interval_minutes": "60",
+    "market_ai_cooldown_minutes": "60",
+    "market_ai_last_tick": "",
+    "market_ai_last_success_at": "",
+    "market_ai_last_status": "idle",
+    "market_ai_last_error": "",
+    "market_ai_last_provider": "",
+    "market_gemini_cooldown_until": "",
+    "market_deepseek_cooldown_until": "",
     "market_gemini_autopilot_enabled": "0",
     "market_gemini_interval_minutes": "5",
     "market_gemini_last_tick": "",
@@ -5972,6 +5987,18 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "market_volatility_min_percent": max(0.01, min(15.0, float(raw.get("market_volatility_min_percent") or 0.1))),
         "market_volatility_percent": max(0.1, min(15.0, float(raw.get("market_volatility_percent") or 3.5))),
         "market_autopilot_last_tick": str(raw.get("market_autopilot_last_tick") or "")[:80],
+        "market_automation_provider": str(raw.get("market_automation_provider") or "local").strip().lower() if str(raw.get("market_automation_provider") or "local").strip().lower() in ("local", "gemini", "deepseek") else "local",
+        "market_ai_fallback_enabled": str(raw.get("market_ai_fallback_enabled") or "1") in ("1", "true", "True", "yes", "on"),
+        "market_ai_local_fallback_enabled": str(raw.get("market_ai_local_fallback_enabled") or "1") in ("1", "true", "True", "yes", "on"),
+        "market_ai_interval_minutes": max(2, min(1440, int(raw.get("market_ai_interval_minutes") or raw.get("market_gemini_interval_minutes") or 60))),
+        "market_ai_cooldown_minutes": max(5, min(1440, int(raw.get("market_ai_cooldown_minutes") or 60))),
+        "market_ai_last_tick": str(raw.get("market_ai_last_tick") or raw.get("market_gemini_last_tick") or "")[:80],
+        "market_ai_last_success_at": str(raw.get("market_ai_last_success_at") or raw.get("market_gemini_last_success_at") or "")[:80],
+        "market_ai_last_status": str(raw.get("market_ai_last_status") or raw.get("market_gemini_last_status") or "idle").strip().lower()[:40],
+        "market_ai_last_error": str(raw.get("market_ai_last_error") or raw.get("market_gemini_last_error") or "")[:500],
+        "market_ai_last_provider": str(raw.get("market_ai_last_provider") or "").strip().lower()[:40],
+        "market_gemini_cooldown_until": str(raw.get("market_gemini_cooldown_until") or "")[:80],
+        "market_deepseek_cooldown_until": str(raw.get("market_deepseek_cooldown_until") or "")[:80],
         "market_gemini_autopilot_enabled": str(raw.get("market_gemini_autopilot_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "market_gemini_interval_minutes": max(2, min(1440, int(raw.get("market_gemini_interval_minutes") or 5))),
         "market_gemini_last_tick": str(raw.get("market_gemini_last_tick") or "")[:80],
@@ -7414,47 +7441,70 @@ def market_gemini_adjustment_cycle(
     minimum_percent: float = 0.10,
     maximum_percent: float = 8.00,
     profile: str = "light",
+    provider: str = "gemini",
 ) -> dict[str, Any]:
-    if not GEMINI_API_KEY:
+    provider = str(provider or "gemini").strip().lower()
+    if provider not in ("gemini", "deepseek"):
+        raise ValueError("AI market provider must be Gemini or DeepSeek")
+    if provider == "gemini" and not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not configured")
+    if provider == "deepseek" and not DEEPSEEK_API_KEY:
+        raise RuntimeError("DEEPSEEK_API_KEY is not configured")
+    provider_name = "Gemini" if provider == "gemini" else "DeepSeek"
     minimum_percent = max(0.01, min(15.0, float(minimum_percent or 0.1)))
     maximum_percent = max(minimum_percent, min(15.0, float(maximum_percent or 8)))
     profile = profile if profile in MARKET_AUTOPILOT_PROFILES else "light"
     listing_rows = all_rows(db, """SELECT s.id,s.ticker,s.name,s.sector,s.security_type,s.price,s.previous_price,
             issuer.id AS issuer_company_id,issuer.controlling_user_id AS issuer_controller_id,issuer.control_source,
             (SELECT MAX(trade.created_at) FROM market_system_trades trade
-             WHERE trade.security_id=s.id AND LOWER(trade.source)='gemini') AS last_gemini_trade
+             WHERE trade.security_id=s.id AND LOWER(trade.source)=?) AS last_provider_trade
         FROM market_securities s
         LEFT JOIN business_issuer_companies issuer ON issuer.security_id=s.id
         WHERE s.active=1 AND s.security_type<>'fund'
-        ORDER BY s.ticker""")
+        ORDER BY s.ticker""", (provider,))
     listings = [{
         "ticker": row["ticker"], "name": row["name"], "sector": row["sector"], "type": row["security_type"],
         "price": float(row["price"] or 0), "previous_price": float(row["previous_price"] or 0),
         "resident_controlled": bool(row.get("issuer_company_id") and row.get("issuer_controller_id")),
         "control_source": row.get("control_source") or "exchange",
-        "last_gemini_trade": row.get("last_gemini_trade") or "",
+        "last_provider_trade": row.get("last_provider_trade") or "",
     } for row in listing_rows]
     recent = [dict(row) for row in all_rows(db, "SELECT event_type,title,detail,created_at FROM market_events ORDER BY id DESC LIMIT 20")]
     prompt = (
-        "You operate the fictional Faircroft Ravenhood exchange. Read the current listings and recent market events, then return ONLY valid JSON as an array "
-        "of 1 to 8 adjustments. Each object must contain ticker, percent_change, and rationale. Use both gains and losses when appropriate. "
+        "You operate the fictional Faircroft Ravenhood exchange. Read the current listings and recent market events, then return ONLY valid JSON as an object "
+        "with an adjustments array containing 1 to 8 objects. Each object must contain ticker, percent_change, and rationale. Use both gains and losses when appropriate. "
         "Resident-controlled issuers are ordinary eligible FCX securities and must receive the same market participation as exchange-created listings. "
         "When at least one resident-controlled issuer is present, include at least one in this review and normally give one a positive, buy-compatible move. "
         f"The selected autopilot posture is {profile}. Keep the absolute size of each meaningful move between {minimum_percent:.2f}% and {maximum_percent:.2f}%, "
         "use both gains and losses, and avoid repeating identical moves. A zero move is allowed only when the evidence strongly supports holding a quote. No markdown.\n"
         f"LISTINGS={json.dumps(listings, separators=(',', ':'))}\nRECENT_EVENTS={json.dumps(recent, separators=(',', ':'), default=str)}"
     )
-    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.8, "maxOutputTokens": 1600, "responseMimeType": "application/json"}}
-    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{FNN_GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    request = urllib.request.Request(endpoint, data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json"}, method="POST")
+    if provider == "gemini":
+        body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.8, "maxOutputTokens": 1600, "responseMimeType": "application/json"}}
+        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{FNN_GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+        headers = {"Content-Type": "application/json"}
+    else:
+        body = {
+            "model": DEEPSEEK_MODEL,
+            "messages": [{"role": "system", "content": "Return one valid JSON object and no markdown."}, {"role": "user", "content": prompt}],
+            "temperature": 0.8,
+            "max_tokens": 1600,
+            "response_format": {"type": "json_object"},
+        }
+        endpoint = f"{DEEPSEEK_BASE_URL}/chat/completions"
+        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
+    request = urllib.request.Request(endpoint, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
     with urllib.request.urlopen(request, timeout=90) as response:
         result = json.loads(response.read().decode("utf-8"))
-    raw_text = str(result["candidates"][0]["content"]["parts"][0]["text"]).strip()
+    if provider == "gemini":
+        raw_text = str(result["candidates"][0]["content"]["parts"][0]["text"]).strip()
+    else:
+        raw_text = str(result["choices"][0]["message"]["content"]).strip()
     raw_text = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_text, flags=re.I)
-    adjustments = json.loads(raw_text)
+    decoded = json.loads(raw_text)
+    adjustments = decoded.get("adjustments") if isinstance(decoded, dict) else decoded
     if not isinstance(adjustments, list):
-        raise ValueError("Gemini market response was not an adjustment list")
+        raise ValueError(f"{provider_name} market response was not an adjustment list")
     applied: list[dict[str, Any]] = []
     applied_tickers: set[str] = set()
 
@@ -7472,8 +7522,8 @@ def market_gemini_adjustment_cycle(
         new_price = max(0.01, round(old_price * (1 + percent / 100.0), 4))
         timestamp = now_iso()
         db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?", (new_price, timestamp, security["id"]))
-        db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], new_price, "gemini", timestamp))
-        flow = record_market_system_trades(db, int(security["id"]), old_price, new_price, "gemini", rationale)
+        db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], new_price, provider, timestamp))
+        flow = record_market_system_trades(db, int(security["id"]), old_price, new_price, provider, rationale)
         applied_tickers.add(ticker)
         applied.append({
             "ticker": ticker, "percent_change": round(percent, 2), "rationale": rationale,
@@ -7495,23 +7545,23 @@ def market_gemini_adjustment_cycle(
         rationale = str(item.get("rationale") or "Market conditions")[:240]
         apply_adjustment(ticker, percent, rationale)
 
-    # Resident-controlled stocks remain in the same Gemini flow as every other listing.
+    # Resident-controlled stocks remain in the same AI flow as every other listing.
     # If the model omits all of them, rotate in the least-recently traded eligible issuer.
     issuer_applied = any(bool(item.get("resident_controlled")) for item in applied)
     if not issuer_applied:
         issuer_candidates = sorted(
             (item for item in listings if item["resident_controlled"] and item["ticker"] not in applied_tickers),
-            key=lambda item: (str(item.get("last_gemini_trade") or ""), str(item["ticker"])),
+            key=lambda item: (str(item.get("last_provider_trade") or ""), str(item["ticker"])),
         )
         market_bias = sum(float(item["percent_change"]) for item in applied) / len(applied) if applied else 0.75
         participation_percent = round(max(0.35, min(2.0, abs(market_bias))), 2)
         for candidate in issuer_candidates:
-            rationale = "Resident issuer participation aligned with the current Gemini market review."
+            rationale = f"Resident issuer participation aligned with the current {provider_name} market review."
             if apply_adjustment(str(candidate["ticker"]), participation_percent, rationale, True):
                 break
     detail = "; ".join(f"{item['ticker']} {item['percent_change']:+.2f}% — {item['rationale']}" for item in applied)
-    db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('ai_adjustment','Gemini market adjustment',?,NULL,?)", (detail or "No eligible adjustments returned.", now_iso()))
-    return {"updated": len(applied), "resident_issuer_updates": sum(1 for item in applied if item.get("resident_controlled")), "adjustments": applied}
+    db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('ai_adjustment',?,?,NULL,?)", (f"{provider_name} market adjustment", detail or "No eligible adjustments returned.", now_iso()))
+    return {"provider": provider, "updated": len(applied), "resident_issuer_updates": sum(1 for item in applied if item.get("resident_controlled")), "adjustments": applied}
 
 
 def rebase_market_index_quote(db: Database, security_id: int, quote: float, timestamp: str) -> None:
@@ -7929,7 +7979,7 @@ def market_automation_worker() -> None:
                 process_queued_ravenhood_orders(db, settings)
                 process_queued_ravenhood_margin_orders(db, settings)
                 apply_market_price_programs(db)
-                if settings["market_autopilot_enabled"]:
+                if settings["market_autopilot_enabled"] and settings["market_automation_provider"] == "local":
                     last = parse_iso(settings["market_autopilot_last_tick"]) if settings["market_autopilot_last_tick"] else None
                     if not last or (current - last).total_seconds() >= settings["market_autopilot_interval_minutes"] * 60:
                         profile, _minimum, _maximum = market_autopilot_bounds(settings)
@@ -7956,7 +8006,7 @@ def market_automation_worker() -> None:
 
 
 def market_gemini_worker() -> None:
-    """Run AI reviews independently so a slow provider never pauses quote cycles."""
+    """Run one selected AI provider with bounded alternate-provider and local fallbacks."""
     while True:
         should_run = False
         settings: dict[str, Any] = {}
@@ -7964,49 +8014,88 @@ def market_gemini_worker() -> None:
         try:
             with conn() as db:
                 settings = get_system_settings(db)
-                last_ai = parse_iso(settings["market_gemini_last_tick"]) if settings["market_gemini_last_tick"] else None
+                primary = settings["market_automation_provider"]
+                last_ai = parse_iso(settings["market_ai_last_tick"]) if settings["market_ai_last_tick"] else None
                 should_run = bool(
-                    settings["market_gemini_autopilot_enabled"]
+                    settings["market_autopilot_enabled"]
                     and settings["market_ai_enabled"]
-                    and GEMINI_API_KEY
-                    and (not last_ai or (attempt_at - last_ai).total_seconds() >= settings["market_gemini_interval_minutes"] * 60)
+                    and primary in ("gemini", "deepseek")
+                    and (not last_ai or (attempt_at - last_ai).total_seconds() >= settings["market_ai_interval_minutes"] * 60)
                 )
                 if should_run:
-                    # Commit the attempt before calling Gemini. Provider failures then
+                    # Commit the attempt before calling a provider. Provider failures then
                     # honor the configured interval instead of hot-looping every 15 seconds.
-                    set_system_setting(db, "market_gemini_last_tick", attempt_at.isoformat())
-                    set_system_setting(db, "market_gemini_last_status", "running")
-                    set_system_setting(db, "market_gemini_last_error", "")
+                    set_system_setting(db, "market_ai_last_tick", attempt_at.isoformat())
+                    set_system_setting(db, "market_ai_last_status", "running")
+                    set_system_setting(db, "market_ai_last_error", "")
             if should_run:
                 profile, minimum, maximum = market_autopilot_bounds(settings)
+                configured = {"gemini": bool(GEMINI_API_KEY), "deepseek": bool(DEEPSEEK_API_KEY)}
+                provider_order = [primary]
+                alternate = "deepseek" if primary == "gemini" else "gemini"
+                if settings["market_ai_fallback_enabled"]:
+                    provider_order.append(alternate)
+                failures: list[str] = []
+                result: dict[str, Any] | None = None
+                successful_provider = ""
+                for provider in provider_order:
+                    if not configured[provider]:
+                        failures.append(f"{provider.title()} is not configured")
+                        continue
+                    cooldown_value = settings.get(f"market_{provider}_cooldown_until") or ""
+                    cooldown_until = parse_iso(cooldown_value) if cooldown_value else None
+                    if cooldown_until and cooldown_until > attempt_at:
+                        failures.append(f"{provider.title()} cooling down until {cooldown_until.isoformat()}")
+                        continue
+                    try:
+                        with conn() as db:
+                            result = market_gemini_adjustment_cycle(db, minimum, maximum, profile, provider)
+                        successful_provider = provider
+                        break
+                    except urllib.error.HTTPError as exc:
+                        detail = f"{provider.title()} HTTP {exc.code}: {exc.reason}"[:300]
+                        failures.append(detail)
+                        cooldown_until = (utcnow() + dt.timedelta(minutes=settings["market_ai_cooldown_minutes"])).isoformat()
+                        with conn() as db:
+                            set_system_setting(db, f"market_{provider}_cooldown_until", cooldown_until)
+                    except Exception as exc:
+                        detail = f"{provider.title()} {type(exc).__name__}: {exc}"[:300]
+                        failures.append(detail)
+                        cooldown_until = (utcnow() + dt.timedelta(minutes=settings["market_ai_cooldown_minutes"])).isoformat()
+                        with conn() as db:
+                            set_system_setting(db, f"market_{provider}_cooldown_until", cooldown_until)
+                if result is None and settings["market_ai_local_fallback_enabled"]:
+                    with conn() as db:
+                        amplitude = market_autopilot_amplitude(settings)
+                        result = market_volatility_cycle(db, amplitude, f"ai-fallback:{profile}")
+                        set_system_setting(db, "market_autopilot_last_tick", now_iso())
+                    successful_provider = "local"
                 with conn() as db:
-                    result = market_gemini_adjustment_cycle(db, minimum, maximum, profile)
                     completed_at = now_iso()
-                    set_system_setting(db, "market_gemini_last_success_at", completed_at)
-                    set_system_setting(db, "market_gemini_last_status", "completed")
-                    set_system_setting(db, "market_gemini_last_error", "")
-                    print(
-                        f"Gemini market review completed: {int(result.get('updated') or 0)} listing(s) adjusted under {profile} autopilot",
-                        flush=True,
-                    )
-        except urllib.error.HTTPError as exc:
-            detail = f"HTTP {exc.code}: {exc.reason}"[:500]
-            try:
-                with conn() as db:
-                    set_system_setting(db, "market_gemini_last_status", "rate_limited" if exc.code == 429 else "failed")
-                    set_system_setting(db, "market_gemini_last_error", detail)
-            except Exception as status_exc:
-                print(f"Gemini market status update failed: {type(status_exc).__name__}: {status_exc}", flush=True)
-            print(f"Gemini market review failed: {detail}", flush=True)
+                    if result is not None:
+                        status = "completed" if successful_provider == primary else ("fallback_local" if successful_provider == "local" else "fallback_completed")
+                        set_system_setting(db, "market_ai_last_success_at", completed_at)
+                        set_system_setting(db, "market_ai_last_status", status)
+                        set_system_setting(db, "market_ai_last_provider", successful_provider)
+                        set_system_setting(db, "market_ai_last_error", "; ".join(failures)[:500])
+                        if successful_provider == "gemini":
+                            set_system_setting(db, "market_gemini_last_success_at", completed_at)
+                            set_system_setting(db, "market_gemini_last_status", "completed")
+                            set_system_setting(db, "market_gemini_last_error", "")
+                        print(f"Market AI cycle completed with {successful_provider}: {int(result.get('updated') or 0)} listing(s) adjusted under {profile} autopilot", flush=True)
+                    else:
+                        set_system_setting(db, "market_ai_last_status", "failed")
+                        set_system_setting(db, "market_ai_last_provider", "")
+                        set_system_setting(db, "market_ai_last_error", "; ".join(failures)[:500] or "No configured automation provider was available")
         except Exception as exc:
             detail = f"{type(exc).__name__}: {exc}"[:500]
             try:
                 with conn() as db:
-                    set_system_setting(db, "market_gemini_last_status", "failed")
-                    set_system_setting(db, "market_gemini_last_error", detail)
+                    set_system_setting(db, "market_ai_last_status", "failed")
+                    set_system_setting(db, "market_ai_last_error", detail)
             except Exception as status_exc:
-                print(f"Gemini market status update failed: {type(status_exc).__name__}: {status_exc}", flush=True)
-            print(f"Gemini market review failed: {detail}", flush=True)
+                print(f"Market AI status update failed: {type(status_exc).__name__}: {status_exc}", flush=True)
+            print(f"Market AI review failed: {detail}", flush=True)
         time.sleep(15)
 
 
@@ -23927,6 +24016,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "volatility_min_percent": settings["market_volatility_min_percent"],
                 "volatility_percent": settings["market_volatility_percent"],
                 "autopilot_last_tick": settings["market_autopilot_last_tick"],
+                "automation_provider": settings["market_automation_provider"],
+                "ai_fallback_enabled": settings["market_ai_fallback_enabled"],
+                "local_fallback_enabled": settings["market_ai_local_fallback_enabled"],
+                "ai_interval_minutes": settings["market_ai_interval_minutes"],
+                "ai_cooldown_minutes": settings["market_ai_cooldown_minutes"],
+                "ai_last_tick": settings["market_ai_last_tick"],
+                "ai_last_success_at": settings["market_ai_last_success_at"],
+                "ai_last_status": settings["market_ai_last_status"],
+                "ai_last_error": settings["market_ai_last_error"],
+                "ai_last_provider": settings["market_ai_last_provider"],
                 "gemini_autopilot_enabled": settings["market_gemini_autopilot_enabled"],
                 "gemini_interval_minutes": settings["market_gemini_interval_minutes"],
                 "gemini_last_tick": settings["market_gemini_last_tick"],
@@ -23934,6 +24033,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "gemini_last_status": settings["market_gemini_last_status"],
                 "gemini_last_error": settings["market_gemini_last_error"],
                 "gemini_configured": bool(GEMINI_API_KEY),
+                "deepseek_configured": bool(DEEPSEEK_API_KEY),
+                "deepseek_model": DEEPSEEK_MODEL,
                 "index_funds": market_index_payload(db),
                 "exchange_market_cap": round(float((one(db, "SELECT COALESCE(SUM(price*issued_shares),0) AS total FROM market_securities WHERE active=1 AND security_type<>'fund'") or {}).get("total") or 0), 2),
                 "accounts": [dict(row) for row in all_rows(db, """SELECT a.id AS account_id,u.id AS user_id,u.name,u.civ_number,u.email,
@@ -24866,6 +24967,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "volatility_min_percent": system_settings["market_volatility_min_percent"],
                     "volatility_percent": system_settings["market_volatility_percent"],
                     "autopilot_last_tick": system_settings["market_autopilot_last_tick"],
+                    "automation_provider": system_settings["market_automation_provider"],
+                    "ai_fallback_enabled": system_settings["market_ai_fallback_enabled"],
+                    "local_fallback_enabled": system_settings["market_ai_local_fallback_enabled"],
+                    "ai_interval_minutes": system_settings["market_ai_interval_minutes"],
+                    "ai_cooldown_minutes": system_settings["market_ai_cooldown_minutes"],
+                    "ai_last_tick": system_settings["market_ai_last_tick"],
+                    "ai_last_success_at": system_settings["market_ai_last_success_at"],
+                    "ai_last_status": system_settings["market_ai_last_status"],
+                    "ai_last_error": system_settings["market_ai_last_error"],
+                    "ai_last_provider": system_settings["market_ai_last_provider"],
                     "gemini_autopilot_enabled": system_settings["market_gemini_autopilot_enabled"],
                     "gemini_interval_minutes": system_settings["market_gemini_interval_minutes"],
                     "gemini_last_tick": system_settings["market_gemini_last_tick"],
@@ -24873,6 +24984,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "gemini_last_status": system_settings["market_gemini_last_status"],
                     "gemini_last_error": system_settings["market_gemini_last_error"],
                     "gemini_configured": bool(GEMINI_API_KEY),
+                    "deepseek_configured": bool(DEEPSEEK_API_KEY),
+                    "deepseek_model": DEEPSEEK_MODEL,
                     "index_funds": market_index_payload(db),
                     "exchange_market_cap": round(float((one(db, "SELECT COALESCE(SUM(price*issued_shares),0) AS total FROM market_securities WHERE active=1 AND security_type<>'fund'") or {}).get("total") or 0), 2),
                     "securities": [dict(row) for row in all_rows(db, """SELECT s.*,
@@ -26250,34 +26363,47 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         autopilot_profile = str(payload.get("autopilot_profile") or current_settings["market_autopilot_profile"]).strip().lower()
         if autopilot_profile not in MARKET_AUTOPILOT_PROFILES:
             self.error(400, "Autopilot profile must be light, aggressive, or extreme."); return
+        automation_provider = str(payload.get("automation_provider") or current_settings["market_automation_provider"]).strip().lower()
+        if automation_provider not in ("local", "gemini", "deepseek"):
+            self.error(400, "Automation provider must be Local, Gemini, or DeepSeek."); return
         try:
             automation_interval = max(1, min(60, int(payload.get("autopilot_interval_minutes") or 5)))
             volatility_minimum = max(0.01, min(15.0, float(payload.get("volatility_min_percent") or current_settings["market_volatility_min_percent"])))
             volatility = max(0.1, min(15.0, float(payload.get("volatility_percent") or 3.5)))
-            gemini_interval = max(2, min(1440, int(payload.get("gemini_interval_minutes") or 5)))
+            ai_interval = max(2, min(1440, int(payload.get("ai_interval_minutes") or current_settings["market_ai_interval_minutes"])))
+            ai_cooldown = max(5, min(1440, int(payload.get("ai_cooldown_minutes") or current_settings["market_ai_cooldown_minutes"])))
         except (TypeError, ValueError):
             self.error(400, "Automation intervals and volatility must be numeric."); return
         if volatility_minimum > volatility:
             self.error(400, "Minimum fluctuation cannot be greater than the maximum fluctuation."); return
         if "autopilot_enabled" in payload:
-            autopilot_enabled = bool(payload.get("autopilot_enabled"))
+            autopilot_enabled = str(payload.get("autopilot_enabled") or "").strip().lower() in ("1", "true", "yes", "on")
             set_system_setting(db, "market_autopilot_enabled", "1" if autopilot_enabled else "0")
             set_system_setting(db, "market_autopilot_interval_minutes", str(automation_interval))
             set_system_setting(db, "market_autopilot_profile", autopilot_profile)
             set_system_setting(db, "market_volatility_min_percent", str(volatility_minimum))
             set_system_setting(db, "market_volatility_percent", str(volatility))
-            if autopilot_enabled and not current_settings["market_autopilot_enabled"]:
+            set_system_setting(db, "market_automation_provider", automation_provider)
+            set_system_setting(db, "market_ai_interval_minutes", str(ai_interval))
+            set_system_setting(db, "market_ai_cooldown_minutes", str(ai_cooldown))
+            fallback_enabled = current_settings["market_ai_fallback_enabled"]
+            if "ai_fallback_enabled" in payload:
+                fallback_enabled = str(payload.get("ai_fallback_enabled") or "").strip().lower() in ("1", "true", "yes", "on")
+            local_fallback_enabled = current_settings["market_ai_local_fallback_enabled"]
+            if "local_fallback_enabled" in payload:
+                local_fallback_enabled = str(payload.get("local_fallback_enabled") or "").strip().lower() in ("1", "true", "yes", "on")
+            set_system_setting(db, "market_ai_fallback_enabled", "1" if fallback_enabled else "0")
+            set_system_setting(db, "market_ai_local_fallback_enabled", "1" if local_fallback_enabled else "0")
+            # Keep the legacy Gemini fields synchronized for older deployed clients.
+            set_system_setting(db, "market_gemini_autopilot_enabled", "1" if autopilot_enabled and automation_provider == "gemini" else "0")
+            set_system_setting(db, "market_gemini_interval_minutes", str(ai_interval))
+            if autopilot_enabled and (not current_settings["market_autopilot_enabled"] or automation_provider != current_settings["market_automation_provider"]):
                 set_system_setting(db, "market_autopilot_last_tick", "")
-        if "gemini_autopilot_enabled" in payload:
-            gemini_enabled = bool(payload.get("gemini_autopilot_enabled"))
-            set_system_setting(db, "market_gemini_autopilot_enabled", "1" if gemini_enabled else "0")
-            set_system_setting(db, "market_gemini_interval_minutes", str(gemini_interval))
-            if gemini_enabled and not current_settings["market_gemini_autopilot_enabled"]:
-                set_system_setting(db, "market_gemini_last_tick", "")
-                set_system_setting(db, "market_gemini_last_status", "waiting")
-                set_system_setting(db, "market_gemini_last_error", "")
+                set_system_setting(db, "market_ai_last_tick", "")
+                set_system_setting(db, "market_ai_last_status", "waiting")
+                set_system_setting(db, "market_ai_last_error", "")
         updated_settings = get_system_settings(db)
-        add_admin_audit(db, int(user["id"]), "market.settings.updated", details={"market_open": updated_settings["market_open"], "manual_override": updated_settings["market_manual_override"], "schedule_open_time": updated_settings["market_schedule_open_time"], "schedule_close_time": updated_settings["market_schedule_close_time"], "schedule_timezone": updated_settings["market_schedule_timezone"], "weekends_enabled": updated_settings["market_weekends_enabled"], "fcxv_24h_enabled": updated_settings["market_fcxv_24h_enabled"], "transfer_fee": transfer_fee, "trade_fee": trade_fee, "autopilot_profile": updated_settings["market_autopilot_profile"], "volatility_range": [updated_settings["market_volatility_min_percent"], updated_settings["market_volatility_percent"]], "gemini_interval_minutes": updated_settings["market_gemini_interval_minutes"]})
+        add_admin_audit(db, int(user["id"]), "market.settings.updated", details={"market_open": updated_settings["market_open"], "manual_override": updated_settings["market_manual_override"], "schedule_open_time": updated_settings["market_schedule_open_time"], "schedule_close_time": updated_settings["market_schedule_close_time"], "schedule_timezone": updated_settings["market_schedule_timezone"], "weekends_enabled": updated_settings["market_weekends_enabled"], "fcxv_24h_enabled": updated_settings["market_fcxv_24h_enabled"], "transfer_fee": transfer_fee, "trade_fee": trade_fee, "automation_provider": updated_settings["market_automation_provider"], "autopilot_profile": updated_settings["market_autopilot_profile"], "volatility_range": [updated_settings["market_volatility_min_percent"], updated_settings["market_volatility_percent"]], "ai_interval_minutes": updated_settings["market_ai_interval_minutes"], "ai_cooldown_minutes": updated_settings["market_ai_cooldown_minutes"], "ai_fallback_enabled": updated_settings["market_ai_fallback_enabled"], "local_fallback_enabled": updated_settings["market_ai_local_fallback_enabled"]})
         self.send_json(200, {"ok": True, "market_session": {"market_open": updated_settings["market_open"], "fcxv_24h_enabled": updated_settings["market_fcxv_24h_enabled"], "manual_override": updated_settings["market_manual_override"], "session_reason": updated_settings["market_session_reason"], "local_time": updated_settings["market_local_time"], "next_transition_at": updated_settings["market_next_transition_at"]}})
 
     def api_dev_market_volatility_cycle(self, db: Database, user: DbRow | None) -> None:

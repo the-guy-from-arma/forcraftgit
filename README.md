@@ -39,6 +39,10 @@ Useful environment variables:
 - `DATABASE_URL`: required PostgreSQL connection string.
 - `DATABASE_MAX_CONNECTIONS`: maximum concurrent app database connections, default `5`.
 - `DATABASE_CONNECT_TIMEOUT_SECONDS`: wait time for a database connection, default `10`.
+- `GEMINI_API_KEY`: optional Gemini credential for Ravenhood AI market automation and analyst briefings.
+- `DEEPSEEK_API_KEY`: optional DeepSeek credential for Ravenhood AI market automation and provider failover.
+- `DEEPSEEK_BASE_URL`: optional DeepSeek-compatible API base URL, default `https://api.deepseek.com`.
+- `DEEPSEEK_MODEL`: optional DeepSeek market-automation model, default `deepseek-v4-flash`.
 - `DESKTOP_INSTALLER_URL`: official Faircroft Windows installer URL returned only after an authenticated Beta Program access check.
 - `OWNER_EMAIL`: owner bootstrap email.
 - `OWNER_PASSWORD`: owner bootstrap password.
