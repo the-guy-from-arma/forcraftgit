@@ -230,6 +230,7 @@ CASINO_WAGER_REQUEST_TIMES: dict[str, float] = {}
 CASINO_WAGER_REQUEST_LOCK = threading.Lock()
 MARKET_MANUAL_CYCLE_LOCK = threading.Lock()
 MARKET_AUTOMATION_SEQUENCE_LOCK = threading.Lock()
+MARKET_ANALYST_BRIEFING_LOCK = threading.Lock()
 
 
 def now_iso() -> str:
@@ -7810,6 +7811,111 @@ def run_market_automation_sequence(
         MARKET_AUTOMATION_SEQUENCE_LOCK.release()
 
 
+def market_ai_provider_order(settings: dict[str, Any]) -> list[str]:
+    """Return the configured external analyst providers in failover order."""
+    configured = {"gemini": bool(GEMINI_API_KEY), "deepseek": bool(DEEPSEEK_API_KEY)}
+    primary = str(settings.get("market_automation_provider") or "").strip().lower()
+    if primary not in configured:
+        primary = "gemini" if configured["gemini"] else "deepseek"
+    providers = [primary]
+    alternate = "deepseek" if primary == "gemini" else "gemini"
+    if settings.get("market_ai_fallback_enabled"):
+        providers.append(alternate)
+    return [provider for provider in dict.fromkeys(providers) if configured.get(provider)]
+
+
+def market_ai_http_error_detail(provider: str, exc: urllib.error.HTTPError) -> str:
+    """Extract a useful provider error without exposing credentials or full payloads."""
+    detail = ""
+    try:
+        payload = json.loads(exc.read().decode("utf-8", errors="replace"))
+        if isinstance(payload, dict):
+            if provider == "gemini":
+                detail = str(payload.get("error", {}).get("message") or "").strip()
+            else:
+                error_value = payload.get("error")
+                detail = str(error_value.get("message") if isinstance(error_value, dict) else error_value or "").strip()
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        detail = ""
+    return (detail or str(exc.reason or "request rejected"))[:300]
+
+
+def generate_market_analyst_briefing(provider: str, prompt: str) -> str:
+    """Make exactly one external provider request for a manual analyst briefing."""
+    provider = str(provider or "").strip().lower()
+    if provider == "gemini":
+        if not GEMINI_API_KEY:
+            raise RuntimeError("GEMINI_API_KEY is not configured")
+        body = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.55, "maxOutputTokens": 1800},
+        }
+        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{FNN_GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+        headers = {"Content-Type": "application/json"}
+    elif provider == "deepseek":
+        if not DEEPSEEK_API_KEY:
+            raise RuntimeError("DEEPSEEK_API_KEY is not configured")
+        body = {
+            "model": DEEPSEEK_MODEL,
+            "messages": [
+                {"role": "system", "content": "You are Ravenhood Markets' fictional in-world analyst. Return plain text with no markdown fence."},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.55,
+            "max_tokens": 1800,
+        }
+        endpoint = f"{DEEPSEEK_BASE_URL}/chat/completions"
+        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
+    else:
+        raise ValueError("Market analyst provider must be Gemini or DeepSeek")
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(body).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=90) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    if provider == "gemini":
+        briefing = str(result["candidates"][0]["content"]["parts"][0]["text"]).strip()
+    else:
+        briefing = str(result["choices"][0]["message"]["content"]).strip()
+    if not briefing:
+        raise ValueError(f"{provider.title()} returned an empty market briefing")
+    return briefing[:12000]
+
+
+def local_market_analyst_briefing(listings: list[dict[str, Any]], context: str, notices: list[str] | None = None) -> str:
+    """Provide a deterministic briefing when external analyst providers are resting."""
+    ranked: list[dict[str, Any]] = []
+    for listing in listings:
+        current = float(listing.get("price") or 0)
+        previous = float(listing.get("previous_price") or 0)
+        change = ((current - previous) / previous * 100.0) if previous > 0 else 0.0
+        ranked.append({**listing, "change_percent": change})
+    gainers = sorted(ranked, key=lambda item: item["change_percent"], reverse=True)[:3]
+    decliners = sorted(ranked, key=lambda item: item["change_percent"])[:3]
+    volatile = sorted(ranked, key=lambda item: float(item.get("volatility") or 0), reverse=True)[:3]
+
+    def line(items: list[dict[str, Any]]) -> str:
+        return ", ".join(
+            f"{item.get('ticker') or 'N/A'} {item['change_percent']:+.2f}% at FC${float(item.get('price') or 0):,.2f}"
+            for item in items
+        ) or "No active listings"
+
+    notice_text = "; ".join(notices or [])
+    return (
+        "RAVENHOOD MARKET OPERATIONS BRIEF\n\n"
+        f"Scenario: {context}\n\n"
+        f"Exchange breadth: {len(ranked)} active operating listings.\n"
+        f"Leaders: {line(gainers)}.\n"
+        f"Pressure points: {line(decliners)}.\n"
+        f"Highest configured volatility: {', '.join(str(item.get('ticker') or 'N/A') for item in volatile) or 'None'}.\n\n"
+        "Optional RP programs: review the leading and declining groups before scheduling any movement; use short, bounded programs and preserve the current quote if the scenario changes. Nothing in this briefing has been applied automatically."
+        + (f"\n\nProvider notice: {notice_text}. A local exchange brief was generated instead." if notice_text else "")
+    )[:12000]
+
+
 def market_gemini_adjustment_cycle(
     db: Database,
     minimum_percent: float = 0.10,
@@ -8573,7 +8679,8 @@ def market_gemini_worker() -> None:
                 primary = settings["market_automation_provider"]
                 last_ai = parse_iso(settings["market_ai_last_tick"]) if settings["market_ai_last_tick"] else None
                 should_run = bool(
-                    not MARKET_AUTOMATION_SEQUENCE_LOCK.locked()
+                    not MARKET_ANALYST_BRIEFING_LOCK.locked()
+                    and not MARKET_AUTOMATION_SEQUENCE_LOCK.locked()
                     and settings["market_autopilot_enabled"]
                     and settings["market_ai_enabled"]
                     and primary in ("gemini", "deepseek")
@@ -27152,6 +27259,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         configured = {"gemini": bool(GEMINI_API_KEY), "deepseek": bool(DEEPSEEK_API_KEY)}
         if provider != "local" and not configured[provider]:
             self.error(409, f"{provider.title()} is not configured in Railway."); return
+        if provider != "local" and MARKET_ANALYST_BRIEFING_LOCK.locked():
+            self.error(409, "A market analyst briefing is already using the AI provider. Wait for it to finish before starting a market cycle."); return
         if provider != "local":
             cooldown_value = settings.get(f"market_{provider}_cooldown_until") or ""
             cooldown_until = parse_iso(cooldown_value) if cooldown_value else None
@@ -27444,31 +27553,97 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         err = developer_required(user)
         if err:
             self.error(403 if user else 401, err); return
-        if not GEMINI_API_KEY or not get_system_settings(db)["market_ai_enabled"]:
-            self.error(409, "Gemini market briefings are not configured or are disabled."); return
-        context = str(self.read_json().get("context") or "Routine Faircroft market session").strip()[:2000]
-        listings = [
-            {
-                **dict(row),
-                "price": float(row["price"] or 0),
-                "previous_price": float(row["previous_price"] or 0),
-                "volatility": float(row["volatility"] or 0),
-            }
-            for row in all_rows(db, "SELECT ticker,name,security_type,sector,price,previous_price,volatility FROM market_securities WHERE active=1 ORDER BY ticker")
-        ]
-        prompt = ("You are the analyst for Ravenhood Markets, Faircroft's in-world stock exchange. Produce a concise market operations briefing. "
-                  "Do not claim this is real financial advice. Recommend at most three OPTIONAL RP price programs with ticker, percent_change, duration_minutes, and rationale. "
-                  f"STAFF SCENARIO:\n{context}\nLISTINGS:\n{json.dumps(listings, separators=(',', ':'), default=str)}")
-        body = {"contents":[{"role":"user","parts":[{"text":prompt}]}],"generationConfig":{"temperature":0.55,"maxOutputTokens":1800}}
-        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{FNN_GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-        request = urllib.request.Request(endpoint,data=json.dumps(body).encode("utf-8"),headers={"Content-Type":"application/json"},method="POST")
+        if not MARKET_ANALYST_BRIEFING_LOCK.acquire(blocking=False):
+            self.send_json(
+                409,
+                {"error": "A market analyst briefing is already being generated. Please wait for that request to finish.", "code": "market_briefing_in_progress"},
+            )
+            return
         try:
-            with urllib.request.urlopen(request, timeout=90) as response: result=json.loads(response.read().decode("utf-8"))
-            briefing=str(result["candidates"][0]["content"]["parts"][0]["text"]).strip()[:12000]
-        except (urllib.error.URLError, urllib.error.HTTPError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-            self.error(502, f"Gemini market briefing failed: {str(exc)[:300]}"); return
-        db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('ai_briefing','Gemini market briefing',?,?,?)", (briefing,user["id"],now_iso()))
-        self.send_json(200, {"ok": True, "briefing": briefing})
+            settings = get_system_settings(db)
+            if not settings["market_ai_enabled"]:
+                self.error(409, "Market analyst briefings are disabled in Stock Settings.")
+                return
+            context = str(self.read_json().get("context") or "Routine Faircroft market session").strip()[:2000]
+            listings = [
+                {
+                    **dict(row),
+                    "price": float(row["price"] or 0),
+                    "previous_price": float(row["previous_price"] or 0),
+                    "volatility": float(row["volatility"] or 0),
+                }
+                for row in all_rows(db, "SELECT ticker,name,security_type,sector,price,previous_price,volatility FROM market_securities WHERE active=1 ORDER BY ticker")
+            ]
+            prompt = (
+                "You are the analyst for Ravenhood Markets, Faircroft's in-world stock exchange. Produce a concise market operations briefing. "
+                "Do not claim this is real financial advice. Recommend at most three OPTIONAL RP price programs with ticker, percent_change, duration_minutes, and rationale. "
+                "Nothing is applied automatically. "
+                f"STAFF SCENARIO:\n{context}\nLISTINGS:\n{json.dumps(listings, separators=(',', ':'), default=str)}"
+            )
+            attempted_at = utcnow()
+            failures: list[str] = []
+            briefing = ""
+            successful_provider = ""
+            last_ai_tick = parse_iso(settings["market_ai_last_tick"]) if settings["market_ai_last_tick"] else None
+            automated_request_active = bool(
+                settings["market_ai_last_status"] == "running"
+                and last_ai_tick
+                and (attempted_at - last_ai_tick).total_seconds() < 120
+            )
+            if automated_request_active:
+                failures.append("A scheduled market AI cycle is already using the external analyst provider")
+            provider_order = [] if automated_request_active else market_ai_provider_order(settings)
+            for provider in provider_order:
+                cooldown_value = str(settings.get(f"market_{provider}_cooldown_until") or "")
+                cooldown_until = parse_iso(cooldown_value) if cooldown_value else None
+                if cooldown_until and cooldown_until > attempted_at:
+                    failures.append(f"{provider.title()} cooling down until {cooldown_until.isoformat()}")
+                    continue
+                try:
+                    briefing = generate_market_analyst_briefing(provider, prompt)
+                    successful_provider = provider
+                    break
+                except urllib.error.HTTPError as exc:
+                    detail = market_ai_http_error_detail(provider, exc)
+                    failures.append(f"{provider.title()} HTTP {exc.code}: {detail}")
+                    if exc.code in (429, 500, 502, 503, 504):
+                        cooldown_until = (utcnow() + dt.timedelta(minutes=settings["market_ai_cooldown_minutes"])).isoformat()
+                        set_system_setting(db, f"market_{provider}_cooldown_until", cooldown_until)
+                except urllib.error.URLError as exc:
+                    failures.append(f"{provider.title()} connection error: {str(exc.reason)[:200]}")
+                    cooldown_until = (utcnow() + dt.timedelta(minutes=settings["market_ai_cooldown_minutes"])).isoformat()
+                    set_system_setting(db, f"market_{provider}_cooldown_until", cooldown_until)
+                except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError, RuntimeError) as exc:
+                    failures.append(f"{provider.title()} response error: {str(exc)[:200]}")
+            if not briefing and settings["market_ai_local_fallback_enabled"]:
+                briefing = local_market_analyst_briefing(listings, context, failures)
+                successful_provider = "local"
+            if not briefing:
+                wait_seconds = max(60, int(settings["market_ai_cooldown_minutes"]) * 60)
+                message = "; ".join(failures)[:500] or "No configured market analyst provider is available"
+                self.send_json(
+                    503,
+                    {"error": f"Market analyst is temporarily unavailable. {message}", "code": "market_briefing_unavailable", "retry_after_seconds": wait_seconds},
+                    {"Retry-After": str(wait_seconds)},
+                )
+                return
+            provider_label = "Faircroft Engine" if successful_provider == "local" else successful_provider.title()
+            db.execute(
+                "INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('ai_briefing',?,?,?,?)",
+                (f"{provider_label} market briefing", briefing, user["id"], now_iso()),
+            )
+            add_admin_audit(
+                db,
+                int(user["id"]),
+                "market.analyst_briefing.generated",
+                details={"provider": successful_provider, "fallback": bool(failures), "provider_notices": failures[:4]},
+            )
+            self.send_json(
+                200,
+                {"ok": True, "briefing": briefing, "provider": successful_provider, "fallback_used": bool(failures), "provider_notices": failures[:4]},
+            )
+        finally:
+            MARKET_ANALYST_BRIEFING_LOCK.release()
 
     def api_dev_casino_settings(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
