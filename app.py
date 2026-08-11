@@ -4459,12 +4459,14 @@ def ensure_migrations(db: Database) -> None:
             allocation_json TEXT NOT NULL DEFAULT '[]',
             created_by INTEGER,
             created_by_name TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            notice_acknowledged_at TEXT
         )
         """
     )
     db.execute("CREATE INDEX IF NOT EXISTS market_fec_asset_ledger_time_idx ON market_fec_asset_ledger(created_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS market_fec_asset_ledger_target_idx ON market_fec_asset_ledger(target_user_id,created_at DESC)")
+    db.execute("ALTER TABLE market_fec_asset_ledger ADD COLUMN IF NOT EXISTS notice_acknowledged_at TEXT")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS market_security_writeoffs (
@@ -10338,6 +10340,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_insurance_claim_create(db, user)
                 elif path == "/api/market-bankruptcy-notice/acknowledge" and method == "POST":
                     self.api_market_bankruptcy_notice_acknowledge(db, user)
+                elif path == "/api/fec-clearance-notice/acknowledge" and method == "POST":
+                    self.api_fec_clearance_notice_acknowledge(db, user)
                 elif path == "/api/gangs" and method == "GET":
                     self.api_gangs(db, user)
                 elif path == "/api/gangs" and method == "POST":
@@ -11106,6 +11110,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             market_bankruptcy_notice["stock_protected"] = bool(stock_protection)
             market_bankruptcy_notice["stock_protection"] = dict(stock_protection) if stock_protection else None
             market_bankruptcy_notice["claim"] = dict(existing_claim) if existing_claim else None
+        fec_clearance_row = one(
+            db,
+            """SELECT id,amount,case_reference,reason,created_by_name,created_at
+               FROM market_fec_asset_ledger
+               WHERE event_type='return' AND target_user_id=? AND notice_acknowledged_at IS NULL
+               ORDER BY created_at,id LIMIT 1""",
+            (user["id"],),
+        )
         beta_response = one(
             db,
             "SELECT response FROM beta_program_responses WHERE user_id = ? AND campaign_id = ?",
@@ -11168,6 +11180,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "dmv_action_notice": dict(dmv_action_notice) if dmv_action_notice else None,
                 "settlement_notice": dict(settlement_notice) if settlement_notice else None,
                 "market_bankruptcy_notice": market_bankruptcy_notice,
+                "fec_clearance_notice": dict(fec_clearance_row) if fec_clearance_row else None,
                 "sanction": (
                     {
                         "type": block["sanction_type"],
@@ -23782,6 +23795,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "fec_pool_balance": float((one(db, "SELECT balance FROM market_fec_asset_pool WHERE id=1") or {}).get("balance") or 0),
                 "fec_totals": dict(one(db, """SELECT
                     COALESCE(SUM(CASE WHEN event_type='seizure' THEN amount ELSE 0 END),0) AS seized,
+                    COALESCE(SUM(CASE WHEN event_type='return' THEN amount ELSE 0 END),0) AS returned,
                     COALESCE(SUM(CASE WHEN event_type='forfeiture' THEN amount ELSE 0 END),0) AS forfeited,
                     COALESCE(SUM(CASE WHEN event_type='reinvestment' THEN amount ELSE 0 END),0) AS reinvested
                     FROM market_fec_asset_ledger""") or {}),
@@ -23789,6 +23803,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     market_account_id,target_user_id,target_name,target_civ_number,case_reference,reason,
                     allocation_json,created_by,created_by_name,created_at
                     FROM market_fec_asset_ledger ORDER BY created_at DESC,id DESC LIMIT 250""")],
+                "fec_return_accounts": [dict(row) for row in all_rows(db, """SELECT
+                    market_account_id AS account_id,target_user_id AS user_id,target_name AS name,
+                    target_civ_number AS civ_number,
+                    COALESCE(SUM(CASE WHEN event_type='seizure' THEN amount
+                                      WHEN event_type='return' THEN -amount ELSE 0 END),0) AS returnable_amount
+                    FROM market_fec_asset_ledger
+                    WHERE market_account_id IS NOT NULL AND event_type IN ('seizure','return')
+                    GROUP BY market_account_id,target_user_id,target_name,target_civ_number
+                    HAVING COALESCE(SUM(CASE WHEN event_type='seizure' THEN amount
+                                             WHEN event_type='return' THEN -amount ELSE 0 END),0) > 0.005
+                    ORDER BY target_name,market_account_id""")],
                 "margin_enabled": settings["market_margin_enabled"],
                 "margin_maintenance_percent": settings["market_margin_maintenance_percent"],
                 "margin_max_open_positions": settings["market_margin_max_open_positions"],
@@ -25891,7 +25916,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "resident": account["name"], "cash_balance": new_cash_balance, "fec_pool_balance": pool_balance})
 
     def api_dev_market_fec_pool_dispose(self, db: Database, user: DbRow | None) -> None:
-        """Permanently forfeit held assets or reinvest them by company market cap."""
+        """Forfeit, reinvest, or return held FEC assets through an audited disposition."""
         err = developer_required(user)
         if err:
             self.error(403 if user else 401, err); return
@@ -25904,13 +25929,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(400, "Enter a valid FEC pool amount."); return
         reason = str(payload.get("reason") or "").strip()[:2000]
         confirmation = str(payload.get("confirmation") or "").strip().upper()
-        if action not in ("forfeit", "reinvest"):
-            self.error(400, "Choose permanent forfeiture or market-cap reinvestment."); return
+        if action not in ("forfeit", "reinvest", "return"):
+            self.error(400, "Choose permanent forfeiture, market-cap reinvestment, or return to the cleared resident."); return
         if amount <= 0:
             self.error(400, "The disposition amount must be greater than zero."); return
         if len(reason) < 10:
             self.error(400, "Document the disposition basis using at least 10 characters."); return
-        required_confirmation = "FORFEIT" if action == "forfeit" else "REINVEST"
+        required_confirmation = {"forfeit": "FORFEIT", "reinvest": "REINVEST", "return": "RETURN"}[action]
         if confirmation != required_confirmation:
             self.error(400, f"Type {required_confirmation} to certify this disposition."); return
 
@@ -25921,7 +25946,42 @@ class RoleplayHandler(BaseHTTPRequestHandler):
 
         timestamp = now_iso()
         allocations: list[dict[str, Any]] = []
-        if action == "reinvest":
+        return_account: DbRow | None = None
+        return_case_reference = ""
+        return_cash_balance: float | None = None
+        if action == "return":
+            try:
+                account_id = int(payload.get("account_id") or 0)
+            except (TypeError, ValueError):
+                account_id = 0
+            if account_id <= 0:
+                self.error(400, "Select the cleared resident account receiving these assets."); return
+            return_account = one(db, """SELECT a.id AS account_id,a.user_id,a.cash_balance,a.status,
+                u.name,u.civ_number FROM market_accounts a JOIN users u ON u.id=a.user_id
+                WHERE a.id=? FOR UPDATE OF a""", (account_id,))
+            if not return_account:
+                self.error(404, "That Ravenhood equity account was not found."); return
+            returnable_row = one(db, """SELECT COALESCE(SUM(CASE WHEN event_type='seizure' THEN amount
+                    WHEN event_type='return' THEN -amount ELSE 0 END),0) AS returnable_amount
+                FROM market_fec_asset_ledger
+                WHERE market_account_id=? AND event_type IN ('seizure','return')""", (account_id,)) or {}
+            returnable_amount = round(float(returnable_row.get("returnable_amount") or 0), 2)
+            if amount > returnable_amount:
+                self.error(409, f"Only ${returnable_amount:,.2f} remains returnable to this resident from recorded seizures."); return
+            if abs(amount - returnable_amount) > 0.005:
+                self.error(409, f"A clearance must return the resident's full remaining ${returnable_amount:,.2f} custody balance."); return
+            seizure_filing = one(db, """SELECT case_reference FROM market_fec_asset_ledger
+                WHERE market_account_id=? AND event_type='seizure'
+                ORDER BY created_at DESC,id DESC LIMIT 1""", (account_id,)) or {}
+            return_case_reference = str(seizure_filing.get("case_reference") or "FEC-CLEARED")
+            return_cash_balance = round(float(return_account.get("cash_balance") or 0) + amount, 2)
+            db.execute("UPDATE market_accounts SET cash_balance=?,updated_at=? WHERE id=?",
+                (return_cash_balance, timestamp, account_id))
+            db.execute("""INSERT INTO market_cash_transactions
+                (account_id,code_id,transaction_type,amount,processed_by,command_id,status,created_at)
+                VALUES (?,NULL,'fec_asset_return',?,?,NULL,'completed',?)""",
+                (account_id, amount, user["id"], timestamp))
+        elif action == "reinvest":
             companies = [dict(row) for row in all_rows(db, """SELECT id,ticker,name,price,issued_shares,
                 price*issued_shares AS market_cap FROM market_securities
                 WHERE active=1 AND security_type<>'fund' AND COALESCE(lifecycle_status,'active')='active'
@@ -25960,24 +26020,53 @@ class RoleplayHandler(BaseHTTPRequestHandler):
 
         pool_balance = round(current_pool - amount, 2)
         db.execute("UPDATE market_fec_asset_pool SET balance=?,updated_at=? WHERE id=1", (pool_balance, timestamp))
-        event_type = "forfeiture" if action == "forfeit" else "reinvestment"
-        db.execute("""INSERT INTO market_fec_asset_ledger
-            (event_type,amount,pool_delta,pool_balance_after,market_account_id,target_user_id,target_name,
-             target_civ_number,case_reference,reason,allocation_json,created_by,created_by_name,created_at)
-            VALUES (?,?,?, ?,NULL,NULL,'','','',?,?,?,?,?)""",
-            (event_type, amount, -amount, pool_balance, reason, json.dumps(allocations, separators=(",", ":")),
-             user["id"], user.get("name") or "Authorized operator", timestamp))
-        title = "FEC assets removed from circulation" if action == "forfeit" else "FEC assets reinvested across Ravenhood"
-        detail = (f"${amount:,.2f} permanently forfeited from the FEC custody pool."
-                  if action == "forfeit" else f"${amount:,.2f} allocated across {len(allocations)} active companies by market capitalization.")
+        event_type = {"forfeit": "forfeiture", "reinvest": "reinvestment", "return": "return"}[action]
+        if action == "return" and return_account:
+            db.execute("""INSERT INTO market_fec_asset_ledger
+                (event_type,amount,pool_delta,pool_balance_after,market_account_id,target_user_id,target_name,
+                 target_civ_number,case_reference,reason,allocation_json,created_by,created_by_name,created_at)
+                VALUES ('return',?,?,?,?,?,?,?,?,?,'[]',?,?,?)""",
+                (amount, -amount, pool_balance, return_account["account_id"], return_account["user_id"],
+                 return_account["name"], return_account.get("civ_number") or "", return_case_reference, reason,
+                 user["id"], user.get("name") or "Authorized operator", timestamp))
+        else:
+            db.execute("""INSERT INTO market_fec_asset_ledger
+                (event_type,amount,pool_delta,pool_balance_after,market_account_id,target_user_id,target_name,
+                 target_civ_number,case_reference,reason,allocation_json,created_by,created_by_name,created_at)
+                VALUES (?,?,?, ?,NULL,NULL,'','','',?,?,?,?,?)""",
+                (event_type, amount, -amount, pool_balance, reason, json.dumps(allocations, separators=(",", ":")),
+                 user["id"], user.get("name") or "Authorized operator", timestamp))
+        if action == "forfeit":
+            title = "FEC assets removed from circulation"
+            detail = f"${amount:,.2f} permanently forfeited from the FEC custody pool."
+        elif action == "reinvest":
+            title = "FEC assets reinvested across Ravenhood"
+            detail = f"${amount:,.2f} allocated across {len(allocations)} active companies by market capitalization."
+        else:
+            title = "Resident cleared by FEC Market Integrity"
+            detail = f"${amount:,.2f} returned without penalty to {return_account['name']}'s Ravenhood buying power."
         db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES (?,?,?,?,?)",
             (f"fec_{event_type}", title, detail, user["id"], timestamp))
-        add_admin_audit(db, int(user["id"]), f"market.fec.{event_type}", details={
+        target_user_id = int(return_account["user_id"]) if action == "return" and return_account else None
+        add_admin_audit(db, int(user["id"]), f"market.fec.{event_type}", target_user_id=target_user_id, details={
             "amount": amount, "reason": reason, "pool_balance_after": pool_balance,
             "allocation_count": len(allocations), "allocations": allocations,
+            "account_id": int(return_account["account_id"]) if action == "return" and return_account else None,
+            "case_reference": return_case_reference if action == "return" else "",
         })
+        if action == "return" and return_account:
+            add_message(
+                db,
+                int(return_account["user_id"]),
+                "FEC investigation cleared",
+                f"FEC Market Integrity cleared you without penalty under filing {return_case_reference}. "
+                f"${amount:,.2f} has been restored to your Ravenhood buying power. Resolution: {reason}",
+                int(user["id"]),
+            )
         self.send_json(200, {"ok": True, "action": action, "amount": amount,
-            "fec_pool_balance": pool_balance, "allocations": allocations})
+            "fec_pool_balance": pool_balance, "allocations": allocations,
+            "resident": return_account["name"] if action == "return" and return_account else None,
+            "cash_balance": return_cash_balance})
 
     def api_dev_market_settings(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
@@ -27372,6 +27461,31 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             (now_iso(), writeoff_id),
         )
         self.send_json(200, {"ok": True, "writeoff_id": writeoff_id})
+
+    def api_fec_clearance_notice_acknowledge(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        payload = self.read_json()
+        try:
+            notice_id = int(payload.get("notice_id") or 0)
+        except (TypeError, ValueError):
+            notice_id = 0
+        notice = one(
+            db,
+            """SELECT id FROM market_fec_asset_ledger
+               WHERE id=? AND event_type='return' AND target_user_id=?
+                 AND notice_acknowledged_at IS NULL""",
+            (notice_id, user["id"]),
+        )
+        if not notice:
+            self.error(404, "FEC clearance notice not found")
+            return
+        db.execute(
+            "UPDATE market_fec_asset_ledger SET notice_acknowledged_at=? WHERE id=?",
+            (now_iso(), notice_id),
+        )
+        self.send_json(200, {"ok": True, "notice_id": notice_id})
 
     def api_settlement_notice_acknowledge(self, db: Database, user: DbRow | None) -> None:
         if not user:

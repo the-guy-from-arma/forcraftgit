@@ -628,6 +628,11 @@ function marketBankruptcyNoticeToken(session) {
   return notice ? `${notice.id || ""}:${notice.created_at || ""}:${notice.claim?.status || ""}` : "";
 }
 
+function fecClearanceNoticeToken(session) {
+  const notice = session?.fec_clearance_notice;
+  return notice ? `${notice.id || ""}:${notice.created_at || ""}:${notice.amount || ""}` : "";
+}
+
 function startSessionRefresh() {
   if (sessionRefreshTimer) return;
   sessionRefreshTimer = window.setInterval(refreshSessionInBackground, SESSION_REFRESH_MS);
@@ -645,10 +650,12 @@ async function refreshSessionInBackground() {
   try {
     const previousLock = antiCheatLockToken(state.session);
     const previousBankruptcyNotice = marketBankruptcyNoticeToken(state.session);
+    const previousFecClearanceNotice = fecClearanceNoticeToken(state.session);
     const previousUnread = Number(state.session?.unread_messages || 0);
     const nextSession = await api("/api/session", { timeoutMs: 8000 });
     const nextLock = antiCheatLockToken(nextSession);
     const nextBankruptcyNotice = marketBankruptcyNoticeToken(nextSession);
+    const nextFecClearanceNotice = fecClearanceNoticeToken(nextSession);
     state.session = nextSession;
     if (!nextSession?.user) {
       stopSessionRefresh();
@@ -673,7 +680,7 @@ async function refreshSessionInBackground() {
       render();
       return;
     }
-    if (nextBankruptcyNotice !== previousBankruptcyNotice) {
+    if (nextBankruptcyNotice !== previousBankruptcyNotice || nextFecClearanceNotice !== previousFecClearanceNotice) {
       render();
       return;
     }
@@ -1114,7 +1121,19 @@ function renderCallsignRequiredModal() {
 
 function renderRequiredProfileModals() {
   if (state.session?.sanction?.type === "timeout") return "";
-  return renderLegacyCharacterAssignmentModal() || renderMarketBankruptcyNoticeModal() || renderDmvActionNoticeModal() || renderSettlementNoticeModal() || renderSystemSplash() || renderPressPassNoticeModal() || renderCarEntryRequiredModal() || renderArmaLinkRequiredModal() || renderDmvComplianceModal() || renderBetaInviteModal();
+  return renderLegacyCharacterAssignmentModal() || renderFecClearanceNoticeModal() || renderMarketBankruptcyNoticeModal() || renderDmvActionNoticeModal() || renderSettlementNoticeModal() || renderSystemSplash() || renderPressPassNoticeModal() || renderCarEntryRequiredModal() || renderArmaLinkRequiredModal() || renderDmvComplianceModal() || renderBetaInviteModal();
+}
+
+function renderFecClearanceNoticeModal() {
+  const notice = state.session?.fec_clearance_notice;
+  if (!notice) return "";
+  return `<div class="modal-backdrop fec-clearance-notice-backdrop"><section class="mdt-modal fec-clearance-notice-modal" role="alertdialog" aria-modal="true" aria-label="FEC investigation clearance notice">
+    <header><div class="fec-clearance-seal"><i>FEC</i><span>CLEARED</span></div><div><p class="eyebrow">STATE OF FAIRCROFT · MARKET INTEGRITY</p><h2>You have been cleared.</h2><p>The investigation is closed without penalty.</p></div></header>
+    <div class="fec-clearance-ruling"><span>OFFICIAL DISPOSITION</span><strong>NO ADVERSE FINDING</strong><p>${escapeHtml(notice.reason || "The reviewed activity did not warrant further market-integrity action.")}</p></div>
+    <dl><div><dt>Assets restored</dt><dd>${money(notice.amount || 0)}</dd></div><div><dt>Filing</dt><dd>${escapeHtml(notice.case_reference || "FEC-CLEARED")}</dd></div><div><dt>Resolved</dt><dd>${notice.created_at ? new Date(notice.created_at).toLocaleString() : "Official record"}</dd></div></dl>
+    <aside><i>✓</i><span><strong>Your Ravenhood buying power has been restored.</strong><small>This notice and the return remain recorded in the FEC chain-of-custody ledger.</small></span></aside>
+    <footer><span>Authorized by ${escapeHtml(notice.created_by_name || "FEC Market Integrity")}</span><button type="button" class="primary" data-fec-clearance-acknowledge="${Number(notice.id)}">Acknowledge clearance</button></footer>
+  </section></div>`;
 }
 
 function renderMarketBankruptcyNoticeModal() {
@@ -13606,6 +13625,7 @@ function renderDevMarketSettings(market, users) {
   const ravenhoodAccounts = market.accounts || [];
   const fecLedger = market.fec_ledger || [];
   const fecTotals = market.fec_totals || {};
+  const fecReturnAccounts = market.fec_return_accounts || [];
   const positionsByAccount = shareholders.reduce((directory, position) => {
     const accountId = Number(position.account_id || 0);
     if (!directory.has(accountId)) directory.set(accountId, []);
@@ -13636,12 +13656,12 @@ function renderDevMarketSettings(market, users) {
   </section>`;
   const fecCustody = `<section class="dev-card market-fec-custody">
     <header class="market-fec-head"><div><span>FEC MARKET INTEGRITY DIVISION</span><h2>Asset custody & forfeiture</h2><p>Move settled Ravenhood buying power into evidentiary custody for a documented securities-fraud investigation. Stock holdings, margin positions, and the linked Arma bank remain untouched.</p></div><aside><small>ASSETS HELD IN CUSTODY</small><strong>${money(market.fec_pool_balance || 0)}</strong><em>FEC CONTROLLED POOL</em></aside></header>
-    <div class="market-fec-totals"><span><small>SEIZED TO DATE</small><strong>${money(fecTotals.seized || 0)}</strong></span><span><small>PERMANENTLY FORFEITED</small><strong>${money(fecTotals.forfeited || 0)}</strong></span><span><small>MARKET-CAP REINVESTMENT</small><strong>${money(fecTotals.reinvested || 0)}</strong></span><span><small>AUDIT FILINGS</small><strong>${fecLedger.length}</strong></span></div>
+    <div class="market-fec-totals"><span><small>SEIZED TO DATE</small><strong>${money(fecTotals.seized || 0)}</strong></span><span><small>RETURNED · CLEARED</small><strong>${money(fecTotals.returned || 0)}</strong></span><span><small>PERMANENTLY FORFEITED</small><strong>${money(fecTotals.forfeited || 0)}</strong></span><span><small>MARKET-CAP REINVESTMENT</small><strong>${money(fecTotals.reinvested || 0)}</strong></span><span><small>AUDIT FILINGS</small><strong>${fecLedger.length}</strong></span></div>
     <div class="market-fec-workbench">
       <form id="devMarketFecSeizureForm" class="market-fec-form seizure"><div class="market-fec-form-title"><i>01</i><span><small>NEW CUSTODY ACTION</small><h3>Seize settled buying power</h3></span></div><label>Ravenhood equity account<select name="account_id" required><option value="">Select resident account</option>${ravenhoodAccounts.map(account=>`<option value="${Number(account.account_id)}">${escapeHtml(account.name || "Resident")} · CIV ${escapeHtml(account.civ_number || "pending")} · ${money(account.cash_balance || 0)} settled</option>`).join("")}</select><small>Only the displayed settled cash balance may be seized.</small></label><div class="market-fec-fields"><label>Seizure amount<input name="amount" type="number" min="0.01" max="50000000000" step="0.01" placeholder="0.00" required/><small>Maximum single filing: $50,000,000,000.</small></label><label>FEC case reference<input name="case_reference" maxlength="80" placeholder="FEC-2026-0001" required/></label></div><label>Probable securities-fraud basis<textarea name="reason" minlength="10" maxlength="2000" placeholder="Document the conduct, evidence, and custody basis." required></textarea></label><label>Typed authorization<input name="confirmation" maxlength="10" autocomplete="off" placeholder="Type SEIZE" required/></label><label class="market-fec-certify"><input name="certify" type="checkbox" required/><span>I certify this is an authorized roleplay enforcement action and understand it immediately reduces settled Ravenhood buying power.</span></label><button class="danger">Place assets in FEC custody</button></form>
-      <form id="devMarketFecDispositionForm" class="market-fec-form disposition"><div class="market-fec-form-title"><i>02</i><span><small>POOL DISPOSITION</small><h3>Resolve held assets</h3></span></div><label>Disposition<select name="action" required><option value="forfeit">Permanent forfeiture · remove from circulation</option><option value="reinvest">Reinvest · distribute by company market cap</option></select><small>Forfeiture destroys the held currency but preserves its audit record. Reinvestment allocates capital across active operating companies.</small></label><label>Amount from custody pool<input name="amount" type="number" min="0.01" max="${Math.max(0.01,Number(market.fec_pool_balance||0))}" step="0.01" placeholder="0.00" required/></label><label>Disposition order & rationale<textarea name="reason" minlength="10" maxlength="2000" placeholder="Document the final order authorizing this disposition." required></textarea></label><label>Typed authorization<input name="confirmation" maxlength="12" autocomplete="off" placeholder="FORFEIT or REINVEST" required/></label><label class="market-fec-certify"><input name="certify" type="checkbox" required/><span>I understand this removes funds from FEC custody and cannot be reversed from this screen.</span></label><button class="primary" ${Number(market.fec_pool_balance||0)>0?"":"disabled"}>Execute pool disposition</button></form>
+      <form id="devMarketFecDispositionForm" class="market-fec-form disposition"><div class="market-fec-form-title"><i>02</i><span><small>POOL DISPOSITION</small><h3>Resolve held assets</h3></span></div><label>Disposition<select name="action" required><option value="forfeit">Permanent forfeiture · remove from circulation</option><option value="reinvest">Reinvest · distribute by company market cap</option><option value="return">Return to resident · cleared without penalty</option></select><small data-fec-disposition-help>Forfeiture destroys the held currency but preserves its audit record.</small></label><label data-fec-return-account hidden>Cleared resident account<select name="account_id"><option value="">Select original seized account</option>${fecReturnAccounts.map(account=>`<option value="${Number(account.account_id)}" data-returnable="${Number(account.returnable_amount||0)}">${escapeHtml(account.name||"Resident")} · CIV ${escapeHtml(account.civ_number||"pending")} · ${money(account.returnable_amount||0)} returnable</option>`).join("")}</select><small>A clearance returns this account's full remaining custody balance.</small></label><label>Amount from custody pool<input name="amount" type="number" min="0.01" max="${Math.max(0.01,Number(market.fec_pool_balance||0))}" step="0.01" placeholder="0.00" required/></label><label>Disposition order & rationale<textarea name="reason" minlength="10" maxlength="2000" placeholder="Document the final order authorizing this disposition." required></textarea></label><label>Typed authorization<input name="confirmation" maxlength="12" autocomplete="off" placeholder="Type FORFEIT" required/></label><label class="market-fec-certify"><input name="certify" type="checkbox" required/><span data-fec-disposition-certify>I understand this permanently removes funds from FEC custody.</span></label><button class="primary" data-fec-disposition-submit ${Number(market.fec_pool_balance||0)>0?"":"disabled"}>Execute permanent forfeiture</button></form>
     </div>
-    <div class="market-fec-ledger"><header><div><span>CHAIN OF CUSTODY</span><h3>FEC asset ledger</h3></div><strong>IMMUTABLE AUDIT HISTORY</strong></header><div>${fecLedger.map(entry=>{const kind=String(entry.event_type||"");const delta=Number(entry.pool_delta||0);return `<article class="${escapeHtml(kind)}"><i>${kind==="seizure"?"S":kind==="reinvestment"?"R":"F"}</i><div><span><b>${escapeHtml(humanLabel(kind))}</b><small>${entry.case_reference?escapeHtml(entry.case_reference):"POOL DISPOSITION"}</small></span><strong>${money(entry.amount||0)}</strong></div><p>${escapeHtml(entry.reason||"No rationale recorded")}</p><footer><span>${entry.target_name?`${escapeHtml(entry.target_name)} · CIV ${escapeHtml(entry.target_civ_number||"pending")}`:"FEC custody pool"}</span><span>${entry.created_at?new Date(entry.created_at).toLocaleString():"Time unavailable"} · ${escapeHtml(entry.created_by_name||"Authorized operator")}</span><b class="${delta>=0?"positive":"negative"}">${delta>=0?"+":"−"}${money(Math.abs(delta))} · pool ${money(entry.pool_balance_after||0)}</b></footer></article>`}).join("")||`<div class="empty">No FEC custody actions have been filed.</div>`}</div></div>
+    <div class="market-fec-ledger"><header><div><span>CHAIN OF CUSTODY</span><h3>FEC asset ledger</h3></div><strong>IMMUTABLE AUDIT HISTORY</strong></header><div>${fecLedger.map(entry=>{const kind=String(entry.event_type||"");const delta=Number(entry.pool_delta||0);const icon=kind==="seizure"?"S":kind==="reinvestment"?"R":kind==="return"?"C":"F";return `<article class="${escapeHtml(kind)}"><i>${icon}</i><div><span><b>${kind==="return"?"Cleared · returned":escapeHtml(humanLabel(kind))}</b><small>${entry.case_reference?escapeHtml(entry.case_reference):"POOL DISPOSITION"}</small></span><strong>${money(entry.amount||0)}</strong></div><p>${escapeHtml(entry.reason||"No rationale recorded")}</p><footer><span>${entry.target_name?`${escapeHtml(entry.target_name)} · CIV ${escapeHtml(entry.target_civ_number||"pending")}`:"FEC custody pool"}</span><span>${entry.created_at?new Date(entry.created_at).toLocaleString():"Time unavailable"} · ${escapeHtml(entry.created_by_name||"Authorized operator")}</span><b class="${delta>=0?"positive":"negative"}">${delta>=0?"+":"−"}${money(Math.abs(delta))} · pool ${money(entry.pool_balance_after||0)}</b></footer></article>`}).join("")||`<div class="empty">No FEC custody actions have been filed.</div>`}</div></div>
   </section>`;
   return `<div class="stack dev-market-view">
     <section class="dev-card market-automation-control"><div class="dev-card-header"><div><span>VOLATILITY ENGINE</span><h2>Continuous market automation</h2><p>Moves every active operating listing, layers the cycle over scheduled programs, and immediately revalues FCXS and FCXV. Gemini can independently read the exchange and apply constrained, audited adjustments on its own cycle.</p></div><strong class="${market.autopilot_enabled ? "green" : "amber"}">${market.autopilot_enabled ? "RUNNING" : "PAUSED"}</strong></div><form id="devMarketAutomationForm" class="form-grid"><label class="dev-certify wide"><input name="autopilot_enabled" type="checkbox" ${market.autopilot_enabled ? "checked" : ""}/> Run recurring volatile market cycles</label><label>Cycle interval<input name="autopilot_interval_minutes" type="number" min="1" max="60" value="${Number(market.autopilot_interval_minutes || 5)}"/><small>Minutes between movement cycles.</small></label><label>Maximum volatility<input name="volatility_percent" type="number" min="0.1" max="15" step="0.1" value="${Number(market.volatility_percent || 3.5)}"/><small>Sets the movement boundary for every operating listing in each cycle.</small></label><label class="dev-certify wide"><input name="gemini_autopilot_enabled" type="checkbox" ${market.gemini_autopilot_enabled ? "checked" : ""} ${market.gemini_configured ? "" : "disabled"}/> Allow Gemini to read the exchange and apply automatic adjustments</label><label>Gemini interval<input name="gemini_interval_minutes" type="number" min="15" max="1440" value="${Number(market.gemini_interval_minutes || 60)}"/><small>Minutes between AI market reviews.</small></label><div class="market-automation-status"><span>LAST VOLATILITY CYCLE<b>${market.autopilot_last_tick ? new Date(market.autopilot_last_tick).toLocaleString() : "Not run"}</b></span><span>LAST GEMINI REVIEW<b>${market.gemini_last_tick ? new Date(market.gemini_last_tick).toLocaleString() : "Not run"}</b></span></div><button class="secondary" type="button" data-market-volatility-cycle>Run volatility cycle now</button><button class="primary">Save automation</button></form></section>
@@ -14919,6 +14939,17 @@ function bindDevWorkspace() {
       toast(error.message);
     }
   });
+  $(`[data-fec-clearance-acknowledge]`)?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      await api("/api/fec-clearance-notice/acknowledge", { method: "POST", body: { notice_id: Number(button.dataset.fecClearanceAcknowledge) } });
+      await loadSession();
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message);
+    }
+  });
   const policySearch = $('[data-policy-search]');
   const policyFilterButtons = $$('[data-policy-filter]');
   const applyPolicyLedgerFilter = () => {
@@ -14975,31 +15006,61 @@ function bindDevWorkspace() {
     }
   });
   const fecDispositionForm = $('#devMarketFecDispositionForm');
+  const fecDispositionSelect = fecDispositionForm?.querySelector('[name="action"]');
+  const fecReturnSelect = fecDispositionForm?.querySelector('[name="account_id"]');
+  const fecDispositionAmount = fecDispositionForm?.querySelector('[name="amount"]');
   const syncFecDisposition = () => {
     if (!fecDispositionForm) return;
-    const action = String(fecDispositionForm.action?.value || 'forfeit').toUpperCase();
-    const confirmation = fecDispositionForm.confirmation;
-    if (confirmation) confirmation.placeholder = `Type ${action}`;
+    const action = String(fecDispositionSelect?.value || 'forfeit').toLowerCase();
+    const authorization = {forfeit: 'FORFEIT', reinvest: 'REINVEST', return: 'RETURN'}[action] || 'FORFEIT';
+    const confirmation = fecDispositionForm.querySelector('[name="confirmation"]');
+    const returnAccount = fecDispositionForm.querySelector('[data-fec-return-account]');
+    const returnSelect = fecReturnSelect;
+    const help = fecDispositionForm.querySelector('[data-fec-disposition-help]');
+    const certify = fecDispositionForm.querySelector('[data-fec-disposition-certify]');
+    const submit = fecDispositionForm.querySelector('[data-fec-disposition-submit]');
+    const isReturn = action === 'return';
+    if (returnAccount) returnAccount.hidden = !isReturn;
+    if (returnSelect) returnSelect.required = isReturn;
+    if (fecDispositionAmount) fecDispositionAmount.readOnly = isReturn;
+    if (isReturn && returnSelect?.selectedOptions?.[0]?.dataset.returnable && fecDispositionAmount) {
+      fecDispositionAmount.value = Number(returnSelect.selectedOptions[0].dataset.returnable).toFixed(2);
+    }
+    if (confirmation) confirmation.placeholder = `Type ${authorization}`;
+    if (help) help.textContent = isReturn
+      ? 'Returns recorded seized assets to the original resident without penalty and issues an official clearance notice.'
+      : action === 'reinvest'
+        ? 'Reinvestment allocates held capital across active operating companies by market capitalization.'
+        : 'Forfeiture permanently removes the held currency while preserving its audit record.';
+    if (certify) certify.textContent = isReturn
+      ? 'I certify the resident has been cleared and these assets should be restored without penalty.'
+      : action === 'reinvest'
+        ? 'I understand this converts custody assets into an audited market-cap reinvestment.'
+        : 'I understand this permanently removes funds from FEC custody.';
+    if (submit) submit.textContent = isReturn ? 'Clear resident & return assets' : action === 'reinvest' ? 'Execute market reinvestment' : 'Execute permanent forfeiture';
   };
-  fecDispositionForm?.action?.addEventListener('change', syncFecDisposition);
+  fecDispositionSelect?.addEventListener('change', syncFecDisposition);
+  fecReturnSelect?.addEventListener('change', syncFecDisposition);
   syncFecDisposition();
   fecDispositionForm?.addEventListener('submit', async event => {
     event.preventDefault();
     const form = event.currentTarget;
     const body = Object.fromEntries(new FormData(form));
     const action = String(body.action || 'forfeit').toLowerCase();
-    const authorization = action === 'reinvest' ? 'REINVEST' : 'FORFEIT';
+    const authorization = {forfeit: 'FORFEIT', reinvest: 'REINVEST', return: 'RETURN'}[action] || 'FORFEIT';
     if (String(body.confirmation || '').trim().toUpperCase() !== authorization) {
       toast(`Type ${authorization} to authorize this disposition`);
       return;
     }
-    const verb = action === 'reinvest' ? 'reinvest across active companies by market cap' : 'permanently remove from circulation';
-    if (!confirm(`${authorization} ${money(Number(body.amount || 0))} from FEC custody and ${verb}? This action cannot be undone here.`)) return;
+    const verb = action === 'return' ? 'return it to the cleared resident without penalty' : action === 'reinvest' ? 'reinvest it across active companies by market cap' : 'permanently remove it from circulation';
+    if (!confirm(`${authorization} ${money(Number(body.amount || 0))} from FEC custody and ${verb}?`)) return;
     const submit = form.querySelector('button[type="submit"], button:not([type])');
     if (submit) submit.disabled = true;
     try {
       const result = await api('/api/dev-tools/market/fec/pool/dispose', { method: 'POST', body });
-      toast(`${money(result.amount || 0)} ${action === 'reinvest' ? 'reinvested by market cap' : 'permanently forfeited'}`);
+      toast(action === 'return'
+        ? `${money(result.amount || 0)} returned to ${result.resident || 'the cleared resident'}`
+        : `${money(result.amount || 0)} ${action === 'reinvest' ? 'reinvested by market cap' : 'permanently forfeited'}`);
       await refreshDevTools();
     } catch (error) {
       if (submit) submit.disabled = false;
