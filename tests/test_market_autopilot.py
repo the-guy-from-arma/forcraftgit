@@ -46,6 +46,21 @@ class MarketAutopilotTests(unittest.TestCase):
         self.assertIn('name="ai_interval_minutes"', FRONTEND_SOURCE)
         self.assertIn('name="ai_cooldown_minutes"', FRONTEND_SOURCE)
 
+    def test_provider_controls_are_mode_aware_and_cycles_are_audited(self) -> None:
+        self.assertIn('def begin_market_automation_cycle', APP_SOURCE)
+        self.assertIn('"market_automation_cycle_number"', APP_SOURCE)
+        self.assertIn("'automation_provider_failed'", APP_SOURCE)
+        self.assertIn('data-automation-mode="local"', FRONTEND_SOURCE)
+        self.assertIn('data-automation-mode="ai"', FRONTEND_SOURCE)
+        self.assertIn('CYCLE COUNTER', FRONTEND_SOURCE)
+        self.assertIn('MARKET CONTROL LOG', FRONTEND_SOURCE)
+
+    def test_cleared_generic_error_does_not_resurrect_legacy_gemini_error(self) -> None:
+        self.assertIn(
+            'raw.get("market_ai_last_error") if "market_ai_last_error" in raw else raw.get("market_gemini_last_error")',
+            APP_SOURCE,
+        )
+
     def test_future_programs_wait_and_capture_the_activation_quote(self) -> None:
         function_source = APP_SOURCE.split("def apply_market_price_programs", 1)[1].split(
             "def execute_ravenhood_order", 1

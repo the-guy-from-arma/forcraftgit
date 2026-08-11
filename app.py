@@ -2251,6 +2251,10 @@ SYSTEM_SETTING_DEFAULTS = {
     "market_ai_last_status": "idle",
     "market_ai_last_error": "",
     "market_ai_last_provider": "",
+    "market_automation_cycle_number": "0",
+    "market_automation_active_cycle": "",
+    "market_automation_cycle_started_at": "",
+    "market_automation_last_cycle_summary": "",
     "market_gemini_cooldown_until": "",
     "market_deepseek_cooldown_until": "",
     "market_gemini_autopilot_enabled": "0",
@@ -5992,11 +5996,15 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "market_ai_local_fallback_enabled": str(raw.get("market_ai_local_fallback_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "market_ai_interval_minutes": max(2, min(1440, int(raw.get("market_ai_interval_minutes") or raw.get("market_gemini_interval_minutes") or 60))),
         "market_ai_cooldown_minutes": max(5, min(1440, int(raw.get("market_ai_cooldown_minutes") or 60))),
-        "market_ai_last_tick": str(raw.get("market_ai_last_tick") or raw.get("market_gemini_last_tick") or "")[:80],
-        "market_ai_last_success_at": str(raw.get("market_ai_last_success_at") or raw.get("market_gemini_last_success_at") or "")[:80],
-        "market_ai_last_status": str(raw.get("market_ai_last_status") or raw.get("market_gemini_last_status") or "idle").strip().lower()[:40],
-        "market_ai_last_error": str(raw.get("market_ai_last_error") or raw.get("market_gemini_last_error") or "")[:500],
+        "market_ai_last_tick": str(raw.get("market_ai_last_tick") if "market_ai_last_tick" in raw else raw.get("market_gemini_last_tick") or "")[:80],
+        "market_ai_last_success_at": str(raw.get("market_ai_last_success_at") if "market_ai_last_success_at" in raw else raw.get("market_gemini_last_success_at") or "")[:80],
+        "market_ai_last_status": str(raw.get("market_ai_last_status") if "market_ai_last_status" in raw else raw.get("market_gemini_last_status") or "idle").strip().lower()[:40],
+        "market_ai_last_error": str(raw.get("market_ai_last_error") if "market_ai_last_error" in raw else raw.get("market_gemini_last_error") or "")[:500],
         "market_ai_last_provider": str(raw.get("market_ai_last_provider") or "").strip().lower()[:40],
+        "market_automation_cycle_number": max(0, int(raw.get("market_automation_cycle_number") or 0)),
+        "market_automation_active_cycle": str(raw.get("market_automation_active_cycle") or "")[:160],
+        "market_automation_cycle_started_at": str(raw.get("market_automation_cycle_started_at") or "")[:80],
+        "market_automation_last_cycle_summary": str(raw.get("market_automation_last_cycle_summary") or "")[:500],
         "market_gemini_cooldown_until": str(raw.get("market_gemini_cooldown_until") or "")[:80],
         "market_deepseek_cooldown_until": str(raw.get("market_deepseek_cooldown_until") or "")[:80],
         "market_gemini_autopilot_enabled": str(raw.get("market_gemini_autopilot_enabled") or "0") in ("1", "true", "True", "yes", "on"),
@@ -7382,7 +7390,40 @@ def market_autopilot_amplitude(settings: dict[str, Any]) -> float:
     return round(minimum + (secrets.randbelow(10001) / 10000.0) * (maximum - minimum), 4)
 
 
-def market_volatility_cycle(db: Database, amplitude: float, source: str = "autopilot", actor_id: int | None = None) -> dict[str, Any]:
+def begin_market_automation_cycle(db: Database, provider: str, profile: str, actor_id: int | None = None) -> int:
+    current = one(db, "SELECT value FROM system_settings WHERE key='market_automation_cycle_number'")
+    try:
+        cycle_number = max(0, int((current or {}).get("value") or 0)) + 1
+    except (TypeError, ValueError):
+        cycle_number = 1
+    provider_label = str(provider or "local").strip().lower()[:40]
+    profile_label = str(profile or "light").strip().lower()[:40]
+    started_at = now_iso()
+    set_system_setting(db, "market_automation_cycle_number", str(cycle_number))
+    set_system_setting(db, "market_automation_active_cycle", f"#{cycle_number} · {provider_label} · {profile_label}")
+    set_system_setting(db, "market_automation_cycle_started_at", started_at)
+    db.execute(
+        "INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('automation_cycle_started',?,?,?,?)",
+        (f"Cycle #{cycle_number} started", f"Primary engine: {provider_label.title()} · posture: {profile_label.title()}.", actor_id, started_at),
+    )
+    return cycle_number
+
+
+def finish_market_automation_cycle(db: Database, cycle_number: int, provider: str, result: dict[str, Any] | None, status: str, detail: str = "") -> None:
+    changed = int((result or {}).get("updated") or 0)
+    provider_label = str(provider or "none").strip().lower()[:40]
+    summary = f"Cycle #{cycle_number} · {provider_label.title()} · {status.replace('_', ' ')} · {changed} quote(s) updated"
+    if detail:
+        summary = f"{summary} · {detail}"[:500]
+    set_system_setting(db, "market_automation_active_cycle", "")
+    set_system_setting(db, "market_automation_last_cycle_summary", summary)
+    db.execute(
+        "INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('automation_cycle_finished',?,?,NULL,?)",
+        (f"Cycle #{cycle_number} {status.replace('_', ' ')}", summary, now_iso()),
+    )
+
+
+def market_volatility_cycle(db: Database, amplitude: float, source: str = "autopilot", actor_id: int | None = None, cycle_number: int | None = None) -> dict[str, Any]:
     amplitude = max(0.1, min(15.0, float(amplitude or 0)))
     securities = all_rows(db, """SELECT id,ticker,price,volatility,security_type FROM market_securities
         WHERE active=1 AND COALESCE(lifecycle_status,'active')='active'
@@ -7425,7 +7466,7 @@ def market_volatility_cycle(db: Database, amplitude: float, source: str = "autop
     index_updated = update_market_index_prices(db, force_history=True)
     db.execute(
         "INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES (?,?,?,?,?)",
-        ("volatility_cycle", "Volatility cycle", f"{len(changes)} operating listings moved and {index_updated} index quotes revalued; exchange average {average:+.2f}%.", actor_id, cycle_time),
+        ("volatility_cycle", f"{'Cycle #' + str(cycle_number) + ' · ' if cycle_number else ''}Local movement", f"Engine {source}: {len(changes)} operating listings moved and {index_updated} index quotes revalued; exchange average {average:+.2f}%.", actor_id, cycle_time),
     )
     return {
         "updated": len(changes) + index_updated,
@@ -7442,6 +7483,7 @@ def market_gemini_adjustment_cycle(
     maximum_percent: float = 8.00,
     profile: str = "light",
     provider: str = "gemini",
+    cycle_number: int | None = None,
 ) -> dict[str, Any]:
     provider = str(provider or "gemini").strip().lower()
     if provider not in ("gemini", "deepseek"):
@@ -7560,7 +7602,7 @@ def market_gemini_adjustment_cycle(
             if apply_adjustment(str(candidate["ticker"]), participation_percent, rationale, True):
                 break
     detail = "; ".join(f"{item['ticker']} {item['percent_change']:+.2f}% — {item['rationale']}" for item in applied)
-    db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('ai_adjustment',?,?,NULL,?)", (f"{provider_name} market adjustment", detail or "No eligible adjustments returned.", now_iso()))
+    db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('ai_adjustment',?,?,NULL,?)", (f"{'Cycle #' + str(cycle_number) + ' · ' if cycle_number else ''}{provider_name} movement", detail or "No eligible adjustments returned.", now_iso()))
     return {"provider": provider, "updated": len(applied), "resident_issuer_updates": sum(1 for item in applied if item.get("resident_controlled")), "adjustments": applied}
 
 
@@ -7984,7 +8026,9 @@ def market_automation_worker() -> None:
                     if not last or (current - last).total_seconds() >= settings["market_autopilot_interval_minutes"] * 60:
                         profile, _minimum, _maximum = market_autopilot_bounds(settings)
                         amplitude = market_autopilot_amplitude(settings)
-                        market_volatility_cycle(db, amplitude, f"autopilot:{profile}")
+                        cycle_number = begin_market_automation_cycle(db, "local", profile)
+                        result = market_volatility_cycle(db, amplitude, f"autopilot:{profile}", cycle_number=cycle_number)
+                        finish_market_automation_cycle(db, cycle_number, "local", result, "completed")
                         set_system_setting(db, "market_autopilot_last_tick", current.isoformat())
                 funds = all_rows(db, "SELECT id,last_rebalanced_at,rebalance_interval_hours FROM market_index_funds WHERE enabled=1")
                 needs_rebalance = any(
@@ -8009,6 +8053,7 @@ def market_gemini_worker() -> None:
     """Run one selected AI provider with bounded alternate-provider and local fallbacks."""
     while True:
         should_run = False
+        cycle_number = 0
         settings: dict[str, Any] = {}
         attempt_at = utcnow()
         try:
@@ -8028,6 +8073,8 @@ def market_gemini_worker() -> None:
                     set_system_setting(db, "market_ai_last_tick", attempt_at.isoformat())
                     set_system_setting(db, "market_ai_last_status", "running")
                     set_system_setting(db, "market_ai_last_error", "")
+                    profile, _minimum, _maximum = market_autopilot_bounds(settings)
+                    cycle_number = begin_market_automation_cycle(db, primary, profile)
             if should_run:
                 profile, minimum, maximum = market_autopilot_bounds(settings)
                 configured = {"gemini": bool(GEMINI_API_KEY), "deepseek": bool(DEEPSEEK_API_KEY)}
@@ -8049,7 +8096,7 @@ def market_gemini_worker() -> None:
                         continue
                     try:
                         with conn() as db:
-                            result = market_gemini_adjustment_cycle(db, minimum, maximum, profile, provider)
+                            result = market_gemini_adjustment_cycle(db, minimum, maximum, profile, provider, cycle_number)
                         successful_provider = provider
                         break
                     except urllib.error.HTTPError as exc:
@@ -8058,16 +8105,18 @@ def market_gemini_worker() -> None:
                         cooldown_until = (utcnow() + dt.timedelta(minutes=settings["market_ai_cooldown_minutes"])).isoformat()
                         with conn() as db:
                             set_system_setting(db, f"market_{provider}_cooldown_until", cooldown_until)
+                            db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('automation_provider_failed',?,?,NULL,?)", (f"Cycle #{cycle_number} · {provider.title()} rate limited", f"{detail}. Provider rests until {cooldown_until}; continuing through the configured fallback chain.", now_iso()))
                     except Exception as exc:
                         detail = f"{provider.title()} {type(exc).__name__}: {exc}"[:300]
                         failures.append(detail)
                         cooldown_until = (utcnow() + dt.timedelta(minutes=settings["market_ai_cooldown_minutes"])).isoformat()
                         with conn() as db:
                             set_system_setting(db, f"market_{provider}_cooldown_until", cooldown_until)
+                            db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('automation_provider_failed',?,?,NULL,?)", (f"Cycle #{cycle_number} · {provider.title()} failed", f"{detail}. Provider rests until {cooldown_until}; continuing through the configured fallback chain.", now_iso()))
                 if result is None and settings["market_ai_local_fallback_enabled"]:
                     with conn() as db:
                         amplitude = market_autopilot_amplitude(settings)
-                        result = market_volatility_cycle(db, amplitude, f"ai-fallback:{profile}")
+                        result = market_volatility_cycle(db, amplitude, f"ai-fallback:{profile}", cycle_number=cycle_number)
                         set_system_setting(db, "market_autopilot_last_tick", now_iso())
                     successful_provider = "local"
                 with conn() as db:
@@ -8077,7 +8126,11 @@ def market_gemini_worker() -> None:
                         set_system_setting(db, "market_ai_last_success_at", completed_at)
                         set_system_setting(db, "market_ai_last_status", status)
                         set_system_setting(db, "market_ai_last_provider", successful_provider)
-                        set_system_setting(db, "market_ai_last_error", "; ".join(failures)[:500])
+                        recovery_notice = "; ".join(failures)
+                        if recovery_notice and successful_provider != primary:
+                            recovery_notice = f"{recovery_notice}; recovered with {successful_provider.title()}"
+                        set_system_setting(db, "market_ai_last_error", recovery_notice[:500])
+                        finish_market_automation_cycle(db, cycle_number, successful_provider, result, status, recovery_notice)
                         if successful_provider == "gemini":
                             set_system_setting(db, "market_gemini_last_success_at", completed_at)
                             set_system_setting(db, "market_gemini_last_status", "completed")
@@ -8086,13 +8139,17 @@ def market_gemini_worker() -> None:
                     else:
                         set_system_setting(db, "market_ai_last_status", "failed")
                         set_system_setting(db, "market_ai_last_provider", "")
-                        set_system_setting(db, "market_ai_last_error", "; ".join(failures)[:500] or "No configured automation provider was available")
+                        failure_detail = "; ".join(failures)[:500] or "No configured automation provider was available"
+                        set_system_setting(db, "market_ai_last_error", failure_detail)
+                        finish_market_automation_cycle(db, cycle_number, primary, None, "failed", failure_detail)
         except Exception as exc:
             detail = f"{type(exc).__name__}: {exc}"[:500]
             try:
                 with conn() as db:
                     set_system_setting(db, "market_ai_last_status", "failed")
                     set_system_setting(db, "market_ai_last_error", detail)
+                    if cycle_number:
+                        finish_market_automation_cycle(db, cycle_number, settings.get("market_automation_provider") or "ai", None, "failed", detail)
             except Exception as status_exc:
                 print(f"Market AI status update failed: {type(status_exc).__name__}: {status_exc}", flush=True)
             print(f"Market AI review failed: {detail}", flush=True)
@@ -24026,6 +24083,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "ai_last_status": settings["market_ai_last_status"],
                 "ai_last_error": settings["market_ai_last_error"],
                 "ai_last_provider": settings["market_ai_last_provider"],
+                "automation_cycle_number": settings["market_automation_cycle_number"],
+                "automation_active_cycle": settings["market_automation_active_cycle"],
+                "automation_cycle_started_at": settings["market_automation_cycle_started_at"],
+                "automation_last_cycle_summary": settings["market_automation_last_cycle_summary"],
+                "gemini_cooldown_until": settings["market_gemini_cooldown_until"],
+                "deepseek_cooldown_until": settings["market_deepseek_cooldown_until"],
                 "gemini_autopilot_enabled": settings["market_gemini_autopilot_enabled"],
                 "gemini_interval_minutes": settings["market_gemini_interval_minutes"],
                 "gemini_last_tick": settings["market_gemini_last_tick"],
@@ -24977,6 +25040,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "ai_last_status": system_settings["market_ai_last_status"],
                     "ai_last_error": system_settings["market_ai_last_error"],
                     "ai_last_provider": system_settings["market_ai_last_provider"],
+                    "automation_cycle_number": system_settings["market_automation_cycle_number"],
+                    "automation_active_cycle": system_settings["market_automation_active_cycle"],
+                    "automation_cycle_started_at": system_settings["market_automation_cycle_started_at"],
+                    "automation_last_cycle_summary": system_settings["market_automation_last_cycle_summary"],
+                    "gemini_cooldown_until": system_settings["market_gemini_cooldown_until"],
+                    "deepseek_cooldown_until": system_settings["market_deepseek_cooldown_until"],
                     "gemini_autopilot_enabled": system_settings["market_gemini_autopilot_enabled"],
                     "gemini_interval_minutes": system_settings["market_gemini_interval_minutes"],
                     "gemini_last_tick": system_settings["market_gemini_last_tick"],
@@ -26412,7 +26481,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403 if user else 401, err); return
         settings = get_system_settings(db)
         profile, _minimum, _maximum = market_autopilot_bounds(settings)
-        result = market_volatility_cycle(db, market_autopilot_amplitude(settings), f"manual:{profile}", int(user["id"]))
+        cycle_number = begin_market_automation_cycle(db, "local-manual", profile, int(user["id"]))
+        result = market_volatility_cycle(db, market_autopilot_amplitude(settings), f"manual:{profile}", int(user["id"]), cycle_number)
+        finish_market_automation_cycle(db, cycle_number, "local-manual", result, "completed")
         set_system_setting(db, "market_autopilot_last_tick", now_iso())
         add_admin_audit(db, int(user["id"]), "market.volatility_cycle", details=result)
         self.send_json(200, {"ok": True, **result})

@@ -24,7 +24,8 @@
         "Added Ravenhood Autopilot profiles for Light, Aggressive, and Extremely Volatile operation with adjustable cycle timing and minimum-to-maximum fluctuation boundaries.",
         "Added independent Gemini market reviews with configurable timing, provider status, last-success reporting, and audited changes layered over the continuous local volatility engine.",
         "Added selectable Local, Gemini, and DeepSeek Ravenhood movement engines with alternate-AI failover, provider cooldowns, and a deterministic local fallback when external AI is unavailable.",
-        "Added separate controls for AI review frequency and failure cooldown so developers can reduce provider rate pressure without slowing exact-time price programs."
+        "Added separate controls for AI review frequency and failure cooldown so developers can reduce provider rate pressure without slowing exact-time price programs.",
+        "Added numbered Ravenhood automation cycles with live provider, posture, cooldown, fallback, quote-count, and completion reporting in the Market Control Log."
       ],
       "changed": [
         "Changed the Business application from an approval-and-license registry into a dedicated Faircroft primary-market and issuer workspace.",
@@ -35,7 +36,8 @@
         "Changed Market Integrity return processing to restore the entire remaining resident-specific custody balance in one audited clearance action.",
         "Changed installed PWA cache identifiers and release metadata to RP OS 0.4.0 so the new issuer and FEC interfaces replace cached 0.3.1 assets.",
         "Changed Ravenhood automation so developers choose one primary movement engine while scheduled movements remain independent and capture their live opening quote only when they activate.",
-        "Changed AI automation to try the configured alternate provider after Gemini or DeepSeek fails, then run one local profiled cycle only when both external providers are unavailable."
+        "Changed AI automation to try the configured alternate provider after Gemini or DeepSeek fails, then run one local profiled cycle only when both external providers are unavailable.",
+        "Changed Ravenhood Autopilot timing controls to show Local movement timing only for the local engine and AI review timing only for Gemini or DeepSeek."
       ],
       "fixed": [
         "Fixed the Business icon opening the retired New Application and licensing interface instead of the new IPO formation workspace.",
@@ -46,7 +48,8 @@
         "Fixed returned FEC assets lacking a resident-facing resolution state by adding targeted clearance delivery and acknowledgement tracking.",
         "Fixed Gemini provider delays and failures pausing Ravenhood's core volatility cycle or causing immediate repeated provider requests.",
         "Fixed future market movements appearing active before their scheduled start or using a stale quote captured when the program was created.",
-        "Fixed provider rate-limit failures immediately repeating by recording each attempt and applying a configurable Gemini or DeepSeek cooldown before another external request."
+        "Fixed provider rate-limit failures immediately repeating by recording each attempt and applying a configurable Gemini or DeepSeek cooldown before another external request.",
+        "Fixed an old legacy Gemini 429 notice reappearing after the active provider error had already been cleared or replaced."
       ],
       "removed": [
         "Removed the retired resident-facing business approval, license-class, inspection, and application workflow from the active Business application.",
