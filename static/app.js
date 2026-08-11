@@ -13690,7 +13690,7 @@ function renderDevMarketSettings(market, users) {
         <label class="dev-certify" data-automation-mode="ai" ${automationProvider === "local" ? "hidden" : ""}><input name="local_fallback_enabled" type="checkbox" ${market.local_fallback_enabled ? "checked" : ""}/> Use one local profiled cycle if both AI providers are unavailable</label>
         <div class="market-automation-status wide"><span>PRIMARY SOURCE<b>${escapeHtml(humanLabel(automationProvider))}</b></span><span>CYCLE COUNTER<b>#${Number(market.automation_cycle_number || 0).toLocaleString()}</b></span><span>CURRENT CYCLE<b class="${activeCycle ? "amber" : "green"}">${escapeHtml(activeCycle || "Idle · awaiting next interval")}</b></span><span>LAST CYCLE RESULT<b>${escapeHtml(market.automation_last_cycle_summary || "No completed cycle yet")}</b></span><span>LAST LOCAL CYCLE<b>${market.autopilot_last_tick ? new Date(market.autopilot_last_tick).toLocaleString() : "No local cycle yet"}</b></span><span>LAST AI SUCCESS<b>${market.ai_last_success_at ? new Date(market.ai_last_success_at).toLocaleString() : "No completed AI review"}</b></span><span>AI STATE<b class="${["completed","fallback_completed","fallback_local"].includes(aiState)?"green":aiState==="failed"?"red":"amber"}">${escapeHtml(humanLabel(aiState))}${market.ai_last_provider?` · ${escapeHtml(humanLabel(market.ai_last_provider))}`:""}</b></span><span>PRIMARY COOLDOWN<b class="${selectedCooldownAt === "Ready now" ? "green" : "amber"}">${escapeHtml(selectedCooldownAt)}</b></span></div>
         ${market.ai_last_error ? `<div class="market-automation-error wide ${["fallback_completed","fallback_local"].includes(aiState) ? "recovered" : ""}"><b>${["fallback_completed","fallback_local"].includes(aiState) ? "FALLBACK COMPLETED" : "LAST PROVIDER NOTICE"}</b><span>${escapeHtml(market.ai_last_error)}</span></div>` : ""}
-        <button class="secondary" type="button" data-market-volatility-cycle>Run one Local cycle now</button><button class="primary">Save & activate autopilot</button>
+        <button class="secondary" type="button" data-market-volatility-cycle data-cycle-provider="${escapeHtml(automationProvider)}">Run one ${escapeHtml(humanLabel(automationProvider))} cycle now</button><button class="primary">Save & activate autopilot</button>
       </form>
     </section>
     <div class="dev-view-intro"><div><span>RAVENHOOD EXCHANGE CONTROL</span><h2>Market operations</h2><p>Control the Faircroft market, authorize in-game cash handoffs, and stage exchange price events.</p></div><strong class="${market.market_open ? "green" : "red"}">${market.market_open ? "MARKET OPEN" : "MARKET CLOSED"}</strong></div>
@@ -15251,19 +15251,26 @@ function bindDevWorkspace() {
     const mode = provider === "local" ? "local" : "ai";
     marketAutomationForm.querySelectorAll(".market-provider-select label").forEach(label => label.classList.toggle("active", Boolean(label.querySelector("input:checked"))));
     marketAutomationForm.querySelectorAll("[data-automation-mode]").forEach(control => { control.hidden = control.dataset.automationMode !== mode; });
+    const cycleButton = marketAutomationForm.querySelector("[data-market-volatility-cycle]");
+    if (cycleButton) {
+      cycleButton.dataset.cycleProvider = provider;
+      cycleButton.textContent = `Run one ${humanLabel(provider)} cycle now`;
+    }
   };
   marketAutomationForm?.querySelectorAll('[name="automation_provider"]').forEach(input => input.addEventListener("change", syncMarketAutomationMode));
   syncMarketAutomationMode();
   marketAutomationForm?.addEventListener("submit", async event => { event.preventDefault(); const form=event.currentTarget; try { await api("/api/dev-tools/market/settings", {method:"PATCH",body:{autopilot_enabled:form.autopilot_enabled.checked,automation_provider:form.automation_provider.value,autopilot_profile:form.autopilot_profile.value,autopilot_interval_minutes:form.autopilot_interval_minutes.value,volatility_min_percent:form.volatility_min_percent.value,volatility_percent:form.volatility_percent.value,ai_interval_minutes:form.ai_interval_minutes.value,ai_cooldown_minutes:form.ai_cooldown_minutes.value,ai_fallback_enabled:form.ai_fallback_enabled.checked,local_fallback_enabled:form.local_fallback_enabled.checked}}); toast(`${humanLabel(form.automation_provider.value)} · ${humanLabel(form.autopilot_profile.value)} autopilot saved`); await refreshDevTools(); } catch(error){toast(error.message);} });
   $("[data-market-volatility-cycle]")?.addEventListener("click", async event => {
-    if(!confirm("Start one Local movement cycle across every active Ravenhood listing?")) return;
     const button = event.currentTarget;
+    const provider = button.dataset.cycleProvider || marketAutomationForm?.querySelector('[name="automation_provider"]:checked')?.value || "local";
+    const providerLabel = humanLabel(provider);
+    if(!confirm(`Start one ${providerLabel} market cycle now? Its progress and result will appear in the Market Control Log.`)) return;
     const originalLabel = button.textContent;
     button.disabled = true;
-    button.textContent = "Starting Local cycle…";
+    button.textContent = `Starting ${providerLabel} cycle…`;
     try {
-      const result = await api("/api/dev-tools/market/volatility-cycle", { method:"POST", body:{}, timeoutMs:15000 });
-      toast(result.message || `Local cycle #${result.cycle_number || ""} started`);
+      const result = await api("/api/dev-tools/market/volatility-cycle", { method:"POST", body:{provider}, timeoutMs:15000 });
+      toast(result.message || `${providerLabel} cycle #${result.cycle_number || ""} started`);
       await refreshDevTools();
     } catch(error) {
       button.disabled = false;

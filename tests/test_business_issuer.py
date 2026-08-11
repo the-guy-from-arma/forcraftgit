@@ -1,7 +1,12 @@
 import math
 import unittest
+from pathlib import Path
 
 from business_issuer import _float, _public_company, _text, _ticker
+
+
+ROOT = Path(__file__).resolve().parents[1]
+APP_SOURCE = (ROOT / "app.py").read_text(encoding="utf-8")
 
 
 class BusinessIssuerHelpersTest(unittest.TestCase):
@@ -29,6 +34,19 @@ class BusinessIssuerHelpersTest(unittest.TestCase):
         self.assertEqual(public["authorized_shares"], 456.123457)
         self.assertIs(public["security_active"], True)
         self.assertEqual(public["company_name"], "Faircroft Industries")
+
+    def test_company_action_routes_read_the_numeric_company_segment(self):
+        route_source = APP_SOURCE.split('elif path == "/api/business/companies"', 1)[1].split(
+            'elif path == "/api/business/applications"', 1
+        )[0]
+        for handler in (
+            "api_business_contribute",
+            "api_business_announcement",
+            "api_business_retry_funding",
+            "api_business_bankruptcy",
+        ):
+            self.assertIn(f"self.{handler}(db, user, self.path_int(path, 3))", route_source)
+        self.assertNotIn("self.path_int(path, 4)", route_source)
 
 
 if __name__ == "__main__":

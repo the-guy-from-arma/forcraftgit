@@ -68,7 +68,23 @@ class MarketAutopilotTests(unittest.TestCase):
         self.assertIn("self.send_json(202", endpoint_source)
         self.assertIn('finish_market_automation_cycle(cycle_db, cycle_number, "local-manual"', worker_source)
         self.assertIn('"market.volatility_cycle.failed"', worker_source)
-        self.assertIn('button.textContent = "Starting Local cycle…"', FRONTEND_SOURCE)
+
+    def test_cycle_counter_uses_the_real_system_settings_columns(self) -> None:
+        cycle_source = APP_SOURCE.split("def begin_market_automation_cycle", 1)[1].split(
+            "def finish_market_automation_cycle", 1
+        )[0]
+        self.assertIn("SELECT setting_value FROM system_settings WHERE setting_key=?", cycle_source)
+        self.assertNotIn("SELECT value FROM system_settings WHERE key=", cycle_source)
+
+    def test_manual_cycle_follows_the_selected_provider(self) -> None:
+        endpoint_source = APP_SOURCE.split("def api_dev_market_volatility_cycle", 1)[1].split(
+            "def api_dev_market_program", 1
+        )[0]
+        self.assertIn('payload.get("provider")', endpoint_source)
+        self.assertIn("target=run_manual_market_ai_cycle", endpoint_source)
+        self.assertIn('body:{provider}', FRONTEND_SOURCE)
+        self.assertIn('data-cycle-provider=', FRONTEND_SOURCE)
+        self.assertIn('button.textContent = `Starting ${providerLabel} cycle', FRONTEND_SOURCE)
 
     def test_cleared_generic_error_does_not_resurrect_legacy_gemini_error(self) -> None:
         self.assertIn(

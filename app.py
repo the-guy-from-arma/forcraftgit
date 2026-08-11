@@ -7392,9 +7392,13 @@ def market_autopilot_amplitude(settings: dict[str, Any]) -> float:
 
 
 def begin_market_automation_cycle(db: Database, provider: str, profile: str, actor_id: int | None = None) -> int:
-    current = one(db, "SELECT value FROM system_settings WHERE key='market_automation_cycle_number'")
+    current = one(
+        db,
+        "SELECT setting_value FROM system_settings WHERE setting_key=?",
+        ("market_automation_cycle_number",),
+    )
     try:
-        cycle_number = max(0, int((current or {}).get("value") or 0)) + 1
+        cycle_number = max(0, int((current or {}).get("setting_value") or 0)) + 1
     except (TypeError, ValueError):
         cycle_number = 1
     provider_label = str(provider or "local").strip().lower()[:40]
@@ -7528,6 +7532,89 @@ def run_manual_market_volatility_cycle(actor_id: int, cycle_number: int, profile
                 flush=True,
             )
         print(f"Manual Ravenhood cycle #{cycle_number} failed: {detail}", flush=True)
+    finally:
+        MARKET_MANUAL_CYCLE_LOCK.release()
+
+
+def run_manual_market_ai_cycle(
+    actor_id: int,
+    cycle_number: int,
+    provider: str,
+    profile: str,
+    minimum_percent: float,
+    maximum_percent: float,
+    cooldown_minutes: int,
+) -> None:
+    """Run one explicitly selected AI cycle without blocking the browser request."""
+    provider = str(provider or "").strip().lower()
+    provider_label = provider.title()
+    try:
+        with conn() as cycle_db:
+            result = market_gemini_adjustment_cycle(
+                cycle_db,
+                minimum_percent,
+                maximum_percent,
+                profile,
+                provider,
+                cycle_number,
+            )
+            completed_at = now_iso()
+            set_system_setting(cycle_db, "market_ai_last_success_at", completed_at)
+            set_system_setting(cycle_db, "market_ai_last_status", "completed")
+            set_system_setting(cycle_db, "market_ai_last_provider", provider)
+            set_system_setting(cycle_db, "market_ai_last_error", "")
+            set_system_setting(cycle_db, f"market_{provider}_cooldown_until", "")
+            if provider == "gemini":
+                set_system_setting(cycle_db, "market_gemini_last_success_at", completed_at)
+                set_system_setting(cycle_db, "market_gemini_last_status", "completed")
+                set_system_setting(cycle_db, "market_gemini_last_error", "")
+            finish_market_automation_cycle(cycle_db, cycle_number, provider, result, "completed")
+            add_admin_audit(
+                cycle_db,
+                actor_id,
+                "market.ai_cycle",
+                details={"cycle_number": cycle_number, "provider": provider, "execution": "background", **result},
+            )
+        print(
+            f"Manual Ravenhood {provider_label} cycle #{cycle_number} completed: "
+            f"{int(result.get('updated') or 0)} listing(s) adjusted",
+            flush=True,
+        )
+    except Exception as exc:
+        detail = f"{provider_label} {type(exc).__name__}: {exc}"[:500]
+        try:
+            with conn() as status_db:
+                cooldown_until = (utcnow() + dt.timedelta(minutes=max(5, cooldown_minutes))).isoformat()
+                set_system_setting(status_db, f"market_{provider}_cooldown_until", cooldown_until)
+                set_system_setting(status_db, "market_ai_last_status", "failed")
+                set_system_setting(status_db, "market_ai_last_provider", provider)
+                set_system_setting(status_db, "market_ai_last_error", detail)
+                if provider == "gemini":
+                    set_system_setting(status_db, "market_gemini_last_status", "failed")
+                    set_system_setting(status_db, "market_gemini_last_error", detail)
+                status_db.execute(
+                    "INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('automation_provider_failed',?,?,?,?)",
+                    (
+                        f"Cycle #{cycle_number} · {provider_label} failed",
+                        f"{detail}. Provider rests until {cooldown_until}.",
+                        actor_id,
+                        now_iso(),
+                    ),
+                )
+                finish_market_automation_cycle(status_db, cycle_number, provider, None, "failed", detail)
+                add_admin_audit(
+                    status_db,
+                    actor_id,
+                    "market.ai_cycle.failed",
+                    details={"cycle_number": cycle_number, "provider": provider, "error": detail},
+                )
+        except Exception as status_exc:
+            print(
+                f"Manual Ravenhood {provider_label} cycle #{cycle_number} status update failed: "
+                f"{type(status_exc).__name__}: {status_exc}",
+                flush=True,
+            )
+        print(f"Manual Ravenhood {provider_label} cycle #{cycle_number} failed: {detail}", flush=True)
     finally:
         MARKET_MANUAL_CYCLE_LOCK.release()
 
@@ -10818,13 +10905,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 elif path == "/api/business/companies" and method == "POST":
                     self.api_business_create_ipo(db, user)
                 elif re.fullmatch(r"/api/business/companies/\d+/contributions", path) and method == "POST":
-                    self.api_business_contribute(db, user, self.path_int(path, 4))
+                    self.api_business_contribute(db, user, self.path_int(path, 3))
                 elif re.fullmatch(r"/api/business/companies/\d+/announcements", path) and method == "POST":
-                    self.api_business_announcement(db, user, self.path_int(path, 4))
+                    self.api_business_announcement(db, user, self.path_int(path, 3))
                 elif re.fullmatch(r"/api/business/companies/\d+/funding/retry", path) and method == "POST":
-                    self.api_business_retry_funding(db, user, self.path_int(path, 4))
+                    self.api_business_retry_funding(db, user, self.path_int(path, 3))
                 elif re.fullmatch(r"/api/business/companies/\d+/bankruptcy", path) and method == "POST":
-                    self.api_business_bankruptcy(db, user, self.path_int(path, 4))
+                    self.api_business_bankruptcy(db, user, self.path_int(path, 3))
                 elif path == "/api/business/applications" and method == "POST":
                     self.error(410, "The resident license registry is retired. Create an FCX issuer from the Business app.")
                 elif path.startswith("/api/business/applications/") and method == "PATCH":
@@ -26534,43 +26621,69 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         err = developer_required(user)
         if err:
             self.error(403 if user else 401, err); return
+        payload = self.read_json()
+        settings = get_system_settings(db)
+        provider = str(payload.get("provider") or settings["market_automation_provider"] or "local").strip().lower()
+        if provider not in ("local", "gemini", "deepseek"):
+            self.error(400, "Cycle provider must be Local, Gemini, or DeepSeek."); return
+        configured = {"gemini": bool(GEMINI_API_KEY), "deepseek": bool(DEEPSEEK_API_KEY)}
+        if provider != "local" and not configured[provider]:
+            self.error(409, f"{provider.title()} is not configured in Railway."); return
+        if provider != "local":
+            cooldown_value = settings.get(f"market_{provider}_cooldown_until") or ""
+            cooldown_until = parse_iso(cooldown_value) if cooldown_value else None
+            if cooldown_until and cooldown_until > utcnow():
+                self.error(409, f"{provider.title()} is cooling down until {cooldown_until.isoformat()} after its last provider failure."); return
         if not MARKET_MANUAL_CYCLE_LOCK.acquire(blocking=False):
-            self.error(409, "A manual Local market cycle is already running. Follow it in the Market Control Log."); return
+            self.error(409, "A manual market cycle is already running. Follow it in the Market Control Log."); return
         actor_id = int(user["id"])
         cycle_number = 0
         try:
-            settings = get_system_settings(db)
-            profile, _minimum, _maximum = market_autopilot_bounds(settings)
-            amplitude = market_autopilot_amplitude(settings)
-            cycle_number = begin_market_automation_cycle(db, "local-manual", profile, actor_id)
+            profile, minimum, maximum = market_autopilot_bounds(settings)
+            provider_key = "local-manual" if provider == "local" else f"{provider}-manual"
+            cycle_number = begin_market_automation_cycle(db, provider_key, profile, actor_id)
+            if provider != "local":
+                set_system_setting(db, "market_ai_last_tick", now_iso())
+                set_system_setting(db, "market_ai_last_status", "running")
+                set_system_setting(db, "market_ai_last_provider", provider)
+                set_system_setting(db, "market_ai_last_error", "")
             # Make the start event visible before the market work begins. The
             # request handler otherwise commits only after the entire cycle,
             # which made a slow cycle look stuck and absent from the live log.
             db.raw.commit()
-            threading.Thread(
-                target=run_manual_market_volatility_cycle,
-                args=(actor_id, cycle_number, profile, amplitude),
-                name=f"ravenhood-manual-cycle-{cycle_number}",
-                daemon=True,
-            ).start()
+            if provider == "local":
+                threading.Thread(
+                    target=run_manual_market_volatility_cycle,
+                    args=(actor_id, cycle_number, profile, market_autopilot_amplitude(settings)),
+                    name=f"ravenhood-manual-local-cycle-{cycle_number}",
+                    daemon=True,
+                ).start()
+            else:
+                threading.Thread(
+                    target=run_manual_market_ai_cycle,
+                    args=(actor_id, cycle_number, provider, profile, minimum, maximum, settings["market_ai_cooldown_minutes"]),
+                    name=f"ravenhood-manual-{provider}-cycle-{cycle_number}",
+                    daemon=True,
+                ).start()
         except Exception as exc:
             MARKET_MANUAL_CYCLE_LOCK.release()
             if cycle_number:
                 finish_market_automation_cycle(
                     db,
                     cycle_number,
-                    "local-manual",
+                    provider,
                     None,
                     "failed",
                     f"Could not start background worker: {type(exc).__name__}: {exc}"[:500],
                 )
-            self.error(500, f"Could not start the Local cycle: {exc}"); return
+            self.error(500, f"Could not start the {provider.title()} cycle: {exc}"); return
         self.send_json(202, {
             "ok": True,
             "queued": True,
             "cycle_number": cycle_number,
+            "provider": provider,
             "profile": profile,
-            "message": f"Local cycle #{cycle_number} started. Progress is now visible in the Market Control Log.",
+            "message": f"{provider.title()} cycle #{cycle_number} started. Progress is now visible in the Market Control Log.",
         })
 
     def api_dev_market_program(self, db: Database, user: DbRow | None) -> None:
