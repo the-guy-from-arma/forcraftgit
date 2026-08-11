@@ -2,11 +2,22 @@ import math
 import unittest
 from pathlib import Path
 
-from business_issuer import _float, _public_company, _text, _ticker
+from business_issuer import (
+    DEFAULT_SECTOR_COMPANY_LIMIT,
+    IPO_SECTORS,
+    _canonical_sector,
+    _float,
+    _public_company,
+    _sector_limits,
+    _text,
+    _ticker,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_SOURCE = (ROOT / "app.py").read_text(encoding="utf-8")
+BUSINESS_SOURCE = (ROOT / "business_issuer.py").read_text(encoding="utf-8")
+APP_JS_SOURCE = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
 
 
 class BusinessIssuerHelpersTest(unittest.TestCase):
@@ -34,6 +45,33 @@ class BusinessIssuerHelpersTest(unittest.TestCase):
         self.assertEqual(public["authorized_shares"], 456.123457)
         self.assertIs(public["security_active"], True)
         self.assertEqual(public["company_name"], "Faircroft Industries")
+
+    def test_sector_names_are_canonical_and_unknown_values_are_rejected(self):
+        self.assertEqual(_canonical_sector(" real estate "), "Real Estate")
+        self.assertEqual(_canonical_sector("Technology"), "Technology")
+        self.assertEqual(_canonical_sector("Unapproved Moon Mining"), "")
+
+    def test_sector_limits_default_clamp_and_ignore_unknown_keys(self):
+        limits = _sector_limits({"Technology": -4, "Financial": 250, "Media": "12", "Unknown": 1})
+        self.assertEqual(limits["Technology"], 0)
+        self.assertEqual(limits["Financial"], 100)
+        self.assertEqual(limits["Media"], 12)
+        self.assertEqual(limits["General"], DEFAULT_SECTOR_COMPANY_LIMIT)
+        self.assertEqual(set(limits), set(IPO_SECTORS))
+
+    def test_ipo_guardrails_are_enforced_by_the_backend(self):
+        create_source = BUSINESS_SOURCE.split("def create_ipo", 1)[1].split("def contribute", 1)[0]
+        self.assertIn("pg_advisory_xact_lock", create_source)
+        self.assertIn("guardrails = ipo_guardrails(db)", create_source)
+        self.assertIn('guardrails["max_public_float_percent"]', create_source)
+        self.assertIn('sector_policy["closed"]', create_source)
+
+    def test_dev_guardrail_route_and_resident_form_share_the_policy(self):
+        self.assertIn('/api/dev-tools/business/ipo-guardrails', APP_SOURCE)
+        self.assertIn("developer_required(user)", APP_SOURCE.split("def api_dev_business_ipo_guardrails", 1)[1].split("\n    def ", 1)[0])
+        self.assertIn("devBusinessGuardrailsForm", APP_JS_SOURCE)
+        self.assertIn("guardrails.max_public_float_percent", APP_JS_SOURCE)
+        self.assertIn("guardrails.sectors", APP_JS_SOURCE)
 
     def test_company_action_routes_read_the_numeric_company_segment(self):
         route_source = APP_SOURCE.split('elif path == "/api/business/companies"', 1)[1].split(

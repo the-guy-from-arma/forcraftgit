@@ -53,6 +53,7 @@ from business_issuer import (
     published_wire as business_published_wire,
     resident_payload as business_resident_payload,
     retry_funding as business_retry_funding,
+    update_ipo_guardrails as business_update_ipo_guardrails,
 )
 
 
@@ -2245,6 +2246,8 @@ SYSTEM_SETTING_DEFAULTS = {
     "market_liquidation_hunt_cooldown_minutes": "60",
     "market_liquidation_hunt_market_hours_only": "1",
     "market_liquidation_hunt_last_tick": "",
+    "business_ipo_max_public_float_percent": "35.00",
+    "business_ipo_sector_limits": "{\"Technology\":5,\"Financial\":5,\"Industrial\":5,\"Consumer\":5,\"Energy\":5,\"Healthcare\":5,\"Real Estate\":5,\"Transportation\":5,\"Media\":5,\"General\":5}",
     "market_ai_enabled": "1",
     "market_autopilot_enabled": "0",
     "market_autopilot_interval_minutes": "5",
@@ -8313,6 +8316,12 @@ def run_ravenhood_liquidation_hunt(
     cooldown_minutes = int(settings.get("market_liquidation_hunt_cooldown_minutes") or 60)
     market_hours_only = bool(settings.get("market_liquidation_hunt_market_hours_only"))
     current = utcnow()
+    qualified_accounts = one(
+        db,
+        "SELECT COUNT(*) AS count FROM market_accounts WHERE status='active' AND cash_balance>=?",
+        (threshold,),
+    )
+    result["qualified_accounts"] = int((qualified_accounts or {}).get("count") or 0)
     positions = all_rows(
         db,
         """SELECT p.*,s.ticker,s.name AS security_name,s.price AS mark_price,
@@ -8330,6 +8339,10 @@ def run_ravenhood_liquidation_hunt(
            ORDER BY a.cash_balance DESC,p.entry_notional DESC,p.id""",
         (threshold,),
     )
+    result["open_leveraged_positions"] = len(positions)
+    result["session_blocked"] = 0
+    result["cooldown_blocked"] = 0
+    result["already_liquidatable"] = 0
     eligible: list[tuple[float, DbRow, dict[str, Any]]] = []
     for position in positions:
         if market_hours_only and not ravenhood_security_session_open(
@@ -8337,9 +8350,11 @@ def run_ravenhood_liquidation_hunt(
             str(position.get("ticker") or ""),
             bool(settings.get("market_fcxv_24h_enabled")),
         ):
+            result["session_blocked"] += 1
             continue
         last_hunt_at = parse_iso(position.get("last_hunt_at")) if position.get("last_hunt_at") else None
         if not force and last_hunt_at and (current - last_hunt_at).total_seconds() < cooldown_minutes * 60:
+            result["cooldown_blocked"] += 1
             continue
         metrics = ravenhood_margin_metrics(
             position["direction"], position["entry_price"], position["mark_price"], position["quantity"],
@@ -8347,6 +8362,7 @@ def run_ravenhood_liquidation_hunt(
             settings["market_margin_maintenance_percent"] / 100.0,
         )
         if metrics["liquidatable"]:
+            result["already_liquidatable"] += 1
             continue
         mark = float(position["mark_price"])
         boundary = float(position["liquidation_price"])
@@ -8354,7 +8370,18 @@ def run_ravenhood_liquidation_hunt(
         eligible.append((risk_distance, position, metrics))
     result["eligible"] = len(eligible)
     if not eligible:
-        result["reason"] = "no_eligible_positions"
+        if result["qualified_accounts"] == 0:
+            result["reason"] = "no_accounts_above_threshold"
+        elif result["open_leveraged_positions"] == 0:
+            result["reason"] = "no_open_leveraged_positions"
+        elif result["session_blocked"] >= result["open_leveraged_positions"]:
+            result["reason"] = "outside_trading_session"
+        elif not force and result["cooldown_blocked"] >= result["open_leveraged_positions"]:
+            result["reason"] = "position_cooldown"
+        elif result["already_liquidatable"] >= result["open_leveraged_positions"]:
+            result["reason"] = "positions_already_liquidatable"
+        else:
+            result["reason"] = "no_eligible_positions"
         return result
 
     eligible.sort(key=lambda item: (item[0], -float(item[1].get("entry_notional") or 0), int(item[1]["id"])))
@@ -11437,6 +11464,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_issue_bank_funds(db, user)
                 elif path == "/api/dev-tools/business/assign" and method == "POST":
                     self.api_dev_business_assign(db, user)
+                elif path == "/api/dev-tools/business/ipo-guardrails" and method == "PATCH":
+                    self.api_dev_business_ipo_guardrails(db, user)
                 elif re.fullmatch(r"/api/dev-tools/business/companies/\d+/transfer", path) and method == "POST":
                     self.api_dev_business_transfer(db, user, self.path_int(path, 5))
                 elif re.fullmatch(r"/api/dev-tools/business/companies/\d+/unassign", path) and method == "POST":
@@ -19213,6 +19242,23 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         add_admin_audit(db, int(user["id"]), "business.security.assigned", int(payload.get("user_id") or 0), result)
         self.send_json(201, {"ok": True, "assignment": result})
 
+    def api_dev_business_ipo_guardrails(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err)
+            return
+        assert user is not None
+        try:
+            guardrails = business_update_ipo_guardrails(db, self.read_json(), now_iso())
+        except ValueError as exc:
+            self.error(400, str(exc))
+            return
+        add_admin_audit(db, int(user["id"]), "business.ipo_guardrails.updated", details={
+            "max_public_float_percent": guardrails["max_public_float_percent"],
+            "sector_limits": guardrails["sector_limits"],
+        })
+        self.send_json(200, {"ok": True, "ipo_guardrails": guardrails})
+
     def api_dev_business_transfer(self, db: Database, user: DbRow | None, company_id: int) -> None:
         if not user:
             self.error(401, "Authentication required")
@@ -24638,6 +24684,29 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "margin_maintenance_percent": settings["market_margin_maintenance_percent"],
                 "margin_max_open_positions": settings["market_margin_max_open_positions"],
                 "margin_max_account_notional": settings["market_margin_max_account_notional"],
+                "liquidation_hunts_enabled": settings["market_liquidation_hunts_enabled"],
+                "liquidation_hunt_threshold": settings["market_liquidation_hunt_threshold"],
+                "liquidation_hunt_probability_percent": settings["market_liquidation_hunt_probability_percent"],
+                "liquidation_hunt_intensity": settings["market_liquidation_hunt_intensity"],
+                "liquidation_hunt_max_move_percent": settings["market_liquidation_hunt_max_move_percent"],
+                "liquidation_hunt_cooldown_minutes": settings["market_liquidation_hunt_cooldown_minutes"],
+                "liquidation_hunt_market_hours_only": settings["market_liquidation_hunt_market_hours_only"],
+                "liquidation_hunt_last_tick": settings["market_liquidation_hunt_last_tick"],
+                "liquidation_hunt_qualified_accounts": int((one(
+                    db,
+                    "SELECT COUNT(*) AS count FROM market_accounts WHERE status='active' AND cash_balance>=?",
+                    (settings["market_liquidation_hunt_threshold"],),
+                ) or {}).get("count") or 0),
+                "liquidation_hunt_open_positions": int((one(
+                    db,
+                    """SELECT COUNT(*) AS count
+                       FROM market_margin_positions p
+                       JOIN market_accounts a ON a.id=p.account_id
+                       JOIN market_securities s ON s.id=p.security_id
+                       WHERE p.status='open' AND a.status='active' AND a.cash_balance>=?
+                         AND s.active=1 AND COALESCE(s.lifecycle_status,'active')='active'""",
+                    (settings["market_liquidation_hunt_threshold"],),
+                ) or {}).get("count") or 0),
                 "ai_enabled": settings["market_ai_enabled"],
                 "autopilot_enabled": settings["market_autopilot_enabled"],
                 "autopilot_interval_minutes": settings["market_autopilot_interval_minutes"],

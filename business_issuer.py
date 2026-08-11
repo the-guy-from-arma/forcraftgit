@@ -18,6 +18,21 @@ from typing import Any
 MAX_CAPITALIZATION = 50_000_000_000.0
 BRIDGE_CHUNK_LIMIT = 10_000_000.0
 MAX_COMPANIES_PER_RESIDENT = 8
+MIN_PUBLIC_FLOAT_PERCENT = 5.0
+DEFAULT_MAX_PUBLIC_FLOAT_PERCENT = 35.0
+IPO_SECTORS = (
+    "Technology",
+    "Financial",
+    "Industrial",
+    "Consumer",
+    "Energy",
+    "Healthcare",
+    "Real Estate",
+    "Transportation",
+    "Media",
+    "General",
+)
+DEFAULT_SECTOR_COMPANY_LIMIT = 5
 
 
 def _one(db: Any, sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:
@@ -42,6 +57,81 @@ def _float(value: Any, default: float = 0.0) -> float:
     except (TypeError, ValueError):
         return default
     return result if math.isfinite(result) else default
+
+
+def _canonical_sector(value: Any) -> str:
+    requested = _text(value or "General", 60).casefold()
+    return next((sector for sector in IPO_SECTORS if sector.casefold() == requested), "")
+
+
+def _sector_limits(value: Any) -> dict[str, int]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            value = {}
+    source = value if isinstance(value, dict) else {}
+    limits: dict[str, int] = {}
+    for sector in IPO_SECTORS:
+        try:
+            raw = int(source.get(sector, DEFAULT_SECTOR_COMPANY_LIMIT))
+        except (TypeError, ValueError):
+            raw = DEFAULT_SECTOR_COMPANY_LIMIT
+        limits[sector] = max(0, min(100, raw))
+    return limits
+
+
+def ipo_guardrails(db: Any) -> dict[str, Any]:
+    rows = _all(db, """SELECT setting_key,setting_value FROM system_settings
+        WHERE setting_key IN ('business_ipo_max_public_float_percent','business_ipo_sector_limits')""")
+    settings = {str(row["setting_key"]): row.get("setting_value") for row in rows}
+    max_public_float = max(
+        MIN_PUBLIC_FLOAT_PERCENT,
+        min(100.0, _float(settings.get("business_ipo_max_public_float_percent"), DEFAULT_MAX_PUBLIC_FLOAT_PERCENT)),
+    )
+    limits = _sector_limits(settings.get("business_ipo_sector_limits"))
+    counts = {sector: 0 for sector in IPO_SECTORS}
+    for row in _all(db, """SELECT sector,COUNT(*) AS total FROM business_issuer_companies
+        WHERE control_source='new_ipo' AND status NOT IN ('bankrupt','bankruptcy_filed','cancelled')
+        GROUP BY sector"""):
+        sector = _canonical_sector(row.get("sector"))
+        if sector:
+            counts[sector] = int(row.get("total") or 0)
+    sectors = [
+        {
+            "sector": sector,
+            "limit": limits[sector],
+            "count": counts[sector],
+            "remaining": max(0, limits[sector] - counts[sector]),
+            "closed": counts[sector] >= limits[sector],
+        }
+        for sector in IPO_SECTORS
+    ]
+    return {
+        "min_public_float_percent": MIN_PUBLIC_FLOAT_PERCENT,
+        "max_public_float_percent": round(max_public_float, 2),
+        "sector_limits": limits,
+        "sector_counts": counts,
+        "sectors": sectors,
+    }
+
+
+def update_ipo_guardrails(db: Any, payload: dict[str, Any], now: str) -> dict[str, Any]:
+    max_public_float = round(_float(payload.get("max_public_float_percent"), DEFAULT_MAX_PUBLIC_FLOAT_PERCENT), 2)
+    if not MIN_PUBLIC_FLOAT_PERCENT <= max_public_float <= 100:
+        raise ValueError("Maximum IPO public float must be between 5% and 100%")
+    requested_limits = payload.get("sector_limits")
+    if not isinstance(requested_limits, dict):
+        raise ValueError("Provide a company limit for every IPO sector")
+    limits = _sector_limits(requested_limits)
+    for key, value in (
+        ("business_ipo_max_public_float_percent", f"{max_public_float:.2f}"),
+        ("business_ipo_sector_limits", json.dumps(limits, separators=(",", ":"))),
+    ):
+        db.execute("""INSERT INTO system_settings (setting_key,setting_value,updated_at) VALUES (?,?,?)
+            ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value,updated_at=excluded.updated_at""",
+            (key, value, now))
+    return ipo_guardrails(db)
 
 
 def _public_company(row: dict[str, Any]) -> dict[str, Any]:
@@ -309,7 +399,7 @@ def activate_due_ipos(db: Any, now: str) -> int:
 def create_ipo(db: Any, user_id: int, payload: dict[str, Any], now: str) -> dict[str, Any]:
     name = _text(payload.get("company_name"), 100)
     ticker = _ticker(payload.get("ticker"))
-    sector = _text(payload.get("sector") or "General", 60)
+    sector = _canonical_sector(payload.get("sector") or "General")
     headquarters = _text(payload.get("headquarters"), 140)
     description = _text(payload.get("description"), 1200)
     market_cap = round(_float(payload.get("target_market_cap")), 2)
@@ -320,12 +410,23 @@ def create_ipo(db: Any, user_id: int, payload: dict[str, Any], now: str) -> dict
         raise ValueError("Enter a company name and a detailed operating description of at least 40 characters")
     if len(ticker) < 2:
         raise ValueError("Ticker must contain 2 to 8 letters or numbers")
+    if not sector:
+        raise ValueError("Choose an approved FCX industry sector")
     if not 1_000 <= market_cap <= MAX_CAPITALIZATION:
         raise ValueError(f"Initial market capitalization must be between $1,000 and ${MAX_CAPITALIZATION:,.0f}")
     if not 0.01 <= share_price <= 1_000_000:
         raise ValueError("Opening share price must be between $0.01 and $1,000,000")
-    if not 5 <= public_float <= 100:
-        raise ValueError("Public float must be between 5% and 100%")
+    db.execute("SELECT pg_advisory_xact_lock(hashtext(?))", (f"business-ipo-sector:{sector.casefold()}",))
+    guardrails = ipo_guardrails(db)
+    max_public_float = float(guardrails["max_public_float_percent"])
+    if not MIN_PUBLIC_FLOAT_PERCENT <= public_float <= max_public_float:
+        raise ValueError(f"Public float must be between {MIN_PUBLIC_FLOAT_PERCENT:.0f}% and the FCX limit of {max_public_float:g}%")
+    sector_policy = next(item for item in guardrails["sectors"] if item["sector"] == sector)
+    if bool(sector_policy["closed"]):
+        raise ValueError(
+            f"The {sector} IPO sector is at its developer-set limit of {int(sector_policy['limit'])} "
+            "active resident issuer files"
+        )
     if _one(db, "SELECT id FROM market_securities WHERE ticker=?", (ticker,)) or _one(db, "SELECT id FROM business_issuer_companies WHERE ticker=?", (ticker,)):
         raise ValueError("That FCX ticker is already in use")
     owned = _one(db, "SELECT COUNT(*) AS total FROM business_issuer_companies WHERE controlling_user_id=? AND status NOT IN ('bankrupt','cancelled')", (user_id,))
@@ -536,6 +637,7 @@ def resident_payload(db: Any, user_id: int, now: str) -> dict[str, Any]:
         ORDER BY COALESCE(a.published_at,a.created_at) DESC LIMIT 60""", (now,))]
     bank = _one(db, """SELECT l.identity_id,b.balance,b.synced_at FROM arma_account_links l
         LEFT JOIN arma_game_bank_balances b ON b.identity_id=l.identity_id WHERE l.user_id=?""", (user_id,))
+    guardrails = ipo_guardrails(db)
     return {
         "issuer_portal": True,
         "companies": companies,
@@ -543,7 +645,12 @@ def resident_payload(db: Any, user_id: int, now: str) -> dict[str, Any]:
         "announcements": announcements,
         "company_wire": wire,
         "bank": {"linked": bool(bank and bank.get("identity_id")), "balance": round(float((bank or {}).get("balance") or 0), 2), "synced_at": (bank or {}).get("synced_at")},
-        "limits": {"max_companies": MAX_COMPANIES_PER_RESIDENT, "max_capitalization": MAX_CAPITALIZATION, "bridge_chunk": BRIDGE_CHUNK_LIMIT},
+        "limits": {
+            "max_companies": MAX_COMPANIES_PER_RESIDENT,
+            "max_capitalization": MAX_CAPITALIZATION,
+            "bridge_chunk": BRIDGE_CHUNK_LIMIT,
+            **guardrails,
+        },
     }
 
 
@@ -571,6 +678,7 @@ def dev_payload(db: Any, now: str) -> dict[str, Any]:
         "companies": companies, "available_securities": securities, "residents": residents,
         "assignments": assignments, "announcements": announcements,
         "legacy_archive": {key: int(value or 0) for key, value in archive.items()},
+        "ipo_guardrails": ipo_guardrails(db),
     }
 
 

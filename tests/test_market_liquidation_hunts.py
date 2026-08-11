@@ -49,6 +49,18 @@ class LiquidationHuntIntegrationTests(unittest.TestCase):
         self.assertIn('id="devMarketLiquidationHuntForm"', FRONTEND_SOURCE)
         self.assertIn("liquidation_hunt_probability_percent", FRONTEND_SOURCE)
 
+    def test_market_settings_returns_saved_hunt_policy(self):
+        market_payload = APP_SOURCE.split('if section == "market-settings":', 1)[1].split('if section == "lottery-settings":', 1)[0]
+        self.assertIn('"liquidation_hunt_threshold": settings["market_liquidation_hunt_threshold"]', market_payload)
+        self.assertIn('"liquidation_hunt_qualified_accounts"', market_payload)
+        self.assertIn('"liquidation_hunt_open_positions"', market_payload)
+
+    def test_no_hunt_reason_distinguishes_cash_from_leverage(self):
+        hunt_source = APP_SOURCE.split("def run_ravenhood_liquidation_hunt", 1)[1].split("def process_queued_ravenhood_orders", 1)[0]
+        self.assertIn('result["reason"] = "no_accounts_above_threshold"', hunt_source)
+        self.assertIn('result["reason"] = "no_open_leveraged_positions"', hunt_source)
+        self.assertIn('result["reason"] = "outside_trading_session"', hunt_source)
+
 
 if __name__ == "__main__":
     unittest.main()
