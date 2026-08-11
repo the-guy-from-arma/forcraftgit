@@ -7661,7 +7661,7 @@ function renderBusiness() {
   `;
 }
 
-function renderBusinessWorkspace() {
+function renderRetiredBusinessWorkspace() {
   const data = state.cache.business || {};
   const staff = Boolean(data.staff_view);
   const tabs = [
@@ -7698,7 +7698,7 @@ function renderBusinessWorkspace() {
     </section>`;
 }
 
-function bindBusinessWorkspace() {
+function bindRetiredBusinessWorkspace() {
   bindBusiness();
   $("[data-close-business-workspace]")?.addEventListener("click", async () => {
     state.activeApp = null;
@@ -7761,7 +7761,7 @@ function renderIssuerWire(data) {
   return `<section class="issuer-wire"><header><span>FCX COMPANY WIRE</span><h1>Direct from the issuers.</h1><p>Public operating announcements from resident-controlled Faircroft companies. Releases are displayed exactly as filed.</p></header><div>${wire.map((item,index) => `<article style="--wire-index:${index}"><aside><b>${escapeHtml(item.ticker)}</b><span>${humanLabel(item.announcement_type)}</span><time>${new Date(item.published_at || item.created_at).toLocaleString()}</time></aside><main><h2>${escapeHtml(item.headline)}</h2><p>${escapeHtml(item.body)}</p><small>${escapeHtml(item.company_name)}</small></main></article>`).join("") || `<div class="issuer-wire-empty"><strong>The wire is quiet.</strong><span>Company releases will appear here as they are published.</span></div>`}</div></section>`;
 }
 
-function renderLegacyBusinessWorkspace() {
+function renderBusinessWorkspace() {
   const data = state.cache.business || {};
   const tabs = [["overview","Issuer desk"],["launch","Create IPO"],["company","My companies"],["wire","Company Wire"]];
   if (!tabs.some(([id]) => id === state.businessTab)) state.businessTab = "overview";
@@ -7769,7 +7769,7 @@ function renderLegacyBusinessWorkspace() {
   return `<section class="issuer-workspace"><header class="issuer-topbar"><button type="button" class="issuer-brand" data-business-tab="overview"><img src="/static/brand/faircroft-emblem.webp" alt=""/><span><b>Faircroft Foundry</b><small>FCX Issuer Network</small></span></button><nav>${tabs.map(([id,label]) => `<button type="button" class="${state.businessTab === id ? "active" : ""}" data-business-tab="${id}">${escapeHtml(label)}</button>`).join("")}</nav><div><span class="issuer-network"><i></i>PRIMARY MARKET ONLINE</span><button type="button" data-refresh-business-workspace>Sync</button><button type="button" data-close-business-workspace>Exit</button></div></header><main class="issuer-main">${content}</main><footer class="issuer-footer"><span>FCX issuer activity uses Faircroft in-game currency only.</span><span>Old Commerce licenses are archived and never converted into securities.</span></footer></section>`;
 }
 
-function bindLegacyBusinessWorkspace() {
+function bindBusinessWorkspace() {
   $$('[data-business-tab]').forEach(button => button.addEventListener("click", () => { state.businessTab = button.dataset.businessTab; render(); }));
   $$('[data-issuer-open]').forEach(button => button.addEventListener("click", () => { state.businessCompanyId=Number(button.dataset.issuerOpen); state.businessTab="company"; render(); }));
   $$('[data-issuer-company]').forEach(button => button.addEventListener("click", () => { state.businessCompanyId=Number(button.dataset.issuerCompany); render(); }));
@@ -13297,12 +13297,12 @@ const ADMIN_TOOL_NAV = [
   ["enforcement", "Cases", "07"], ["warnings", "Internal Notes", "08"],
   ["linking", "Account Linking", "09"], ["campaigns", "Active Campaigns", "10"],
   ["settlement", "Settlement", "11"], ["banking-settings", "Banking Settings", "12"], ["market-settings", "Stock Market", "13"],
-  ["leverage-settings", "Leverage Settings", "14"], ["lottery-settings", "Lottery Settings", "15"], ["sportsbook-settings", "Sportsbook", "16"],
-  ["casino-tools", "Casino Tools", "17"], ["gang-settings", "Gang Settings", "18"], ["dmv-settings", "DMV Settings", "19"],
-  ["mdt-settings", "MDT Settings", "20"], ["court-settings", "Court Settings", "21"], ["ice-settings", "ICE Settings", "22"],
-  ["admin-2fa", "Admin 2FA", "23"], ["autopilot", "Auto Pilot", "24"], ["system-update", "System Update", "25"],
-  ["audit", "Activity Log", "26"], ["policy-settings", "Policy Settings", "27"], ["fnn-settings", "FNN Settings", "28"],
-  ["settings", "Settings", "29"], ["account-deletion", "Account Deletion", "30"],
+  ["business-settings", "Business Settings", "14"], ["leverage-settings", "Leverage Settings", "15"], ["lottery-settings", "Lottery Settings", "16"],
+  ["sportsbook-settings", "Sportsbook", "17"], ["casino-tools", "Casino Tools", "18"], ["gang-settings", "Gang Settings", "19"],
+  ["dmv-settings", "DMV Settings", "20"], ["mdt-settings", "MDT Settings", "21"], ["court-settings", "Court Settings", "22"],
+  ["ice-settings", "ICE Settings", "23"], ["admin-2fa", "Admin 2FA", "24"], ["autopilot", "Auto Pilot", "25"],
+  ["system-update", "System Update", "26"], ["audit", "Activity Log", "27"], ["policy-settings", "Policy Settings", "28"],
+  ["fnn-settings", "FNN Settings", "29"], ["settings", "Settings", "30"], ["account-deletion", "Account Deletion", "31"],
 ];
 
 function adminToolAccess() {
@@ -13342,6 +13342,7 @@ function renderDevWorkspace() {
     "policy-settings": ["Policy Settings", "Monitor required EULA, Terms, acceptable-use, and privacy acceptance"],
     "gang-settings": ["Gang Settings", "Govern organizations, leaders, rosters, and recruitment PINs"],
     "market-settings": ["Stock Market Settings", "Operate Ravenhood pricing, settlement receipts, fees, and RP events"],
+    "business-settings": ["Business Settings", "Assign existing FCX securities and oversee resident-controlled IPO companies"],
     "leverage-settings": ["Leverage Settings", "Control isolated long and short exposure, leverage ceilings, and liquidation policy"],
     "lottery-settings": ["Lottery Settings", "Govern entries, prize funding, role eligibility, fraud review, and weekly drawings"],
     "sportsbook-settings": ["Sportsbook Settings", "Configure the live sports provider and inspect fixture, odds, and wager health"],
