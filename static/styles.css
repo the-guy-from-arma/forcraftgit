@@ -20628,3 +20628,24 @@ textarea:focus {
   .issuer-filing-brief>header{grid-template-columns:70px 1fr;padding-inline:16px}.issuer-filing-brief ol{padding-inline:16px}.issuer-filing-brief>footer{align-items:flex-start;flex-direction:column;padding-inline:16px}
   .issuer-office-landing .issuer-roster{margin-top:38px}
 }
+
+/* Ravenhood desktop rail: keep Company Wire reachable below Market Pulse. */
+@media(min-width:981px){
+  .market-v13-discovery{
+    box-sizing:border-box;
+    height:calc(100vh - 104px);
+    height:calc(100dvh - 104px);
+    min-height:0;
+    overflow-x:hidden;
+    overflow-y:auto;
+    overscroll-behavior:contain;
+    scrollbar-gutter:stable;
+    scrollbar-width:thin;
+    scrollbar-color:rgba(86,228,173,.32) transparent;
+    padding-bottom:54px;
+  }
+  .market-v13-discovery::-webkit-scrollbar{width:5px}
+  .market-v13-discovery::-webkit-scrollbar-track{background:transparent}
+  .market-v13-discovery::-webkit-scrollbar-thumb{border-radius:999px;background:rgba(86,228,173,.28)}
+  .market-v13-discovery::-webkit-scrollbar-thumb:hover{background:rgba(86,228,173,.48)}
+}
