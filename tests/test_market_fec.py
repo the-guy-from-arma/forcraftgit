@@ -48,6 +48,14 @@ class MarketFecInvestigationWorkspaceTests(unittest.TestCase):
         self.assertIn('"withdrawal_flags"', section)
         self.assertIn("t.transaction_type='withdrawal' AND t.amount>=10000000", section)
         self.assertIn("LEFT JOIN bank_bridge_commands", section)
+        self.assertIn('"shareholders"', section)
+        self.assertIn("COALESCE(position.position_count,0) AS position_count", section)
+        self.assertIn("FROM market_holdings h", section)
+
+        market_section = APP_SOURCE.split('if section == "market-settings":', 1)[1].split(
+            'if section == "sportsbook-settings":', 1
+        )[0]
+        self.assertNotIn('"accounts": [dict(row) for row in all_rows(db', market_section)
 
     def test_frontend_has_searchable_sortable_trade_tape_and_custody_tools(self) -> None:
         self.assertIn("function renderDevFecInvestigations", FRONTEND_SOURCE)
@@ -56,11 +64,14 @@ class MarketFecInvestigationWorkspaceTests(unittest.TestCase):
         self.assertIn("applyFecTradeView", FRONTEND_SOURCE)
         self.assertIn('id="devMarketFecSeizureForm"', FRONTEND_SOURCE)
         self.assertIn('id="devMarketFecDispositionForm"', FRONTEND_SOURCE)
+        self.assertIn("data-fec-resident-portfolios", FRONTEND_SOURCE)
+        self.assertIn("FEC FINANCIAL ACCOUNT REGISTRY", FRONTEND_SOURCE)
         market_render = FRONTEND_SOURCE.split("function renderDevMarketSettings", 1)[1].split(
             "function renderDevFecInvestigations", 1
         )[0]
         rendered_output = market_render.split('return `<div class="stack dev-market-view">', 1)[1]
         self.assertNotIn("${fecCustody}", rendered_output)
+        self.assertNotIn("${ravenhoodAccountRegistry}", rendered_output)
 
 
 if __name__ == "__main__":

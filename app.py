@@ -24327,10 +24327,39 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     HAVING COALESCE(SUM(CASE WHEN event_type='seizure' THEN amount
                                              WHEN event_type='return' THEN -amount ELSE 0 END),0) > 0.005
                     ORDER BY target_name,market_account_id""")],
-                "accounts": [dict(row) for row in all_rows(db, """SELECT a.id AS account_id,a.user_id,a.cash_balance,a.status,
-                    u.name,u.civ_number,u.email
-                    FROM market_accounts a JOIN users u ON u.id=a.user_id
-                    ORDER BY u.name,a.id""")],
+                "accounts": [dict(row) for row in all_rows(db, """SELECT a.id AS account_id,u.id AS user_id,u.name,u.civ_number,u.email,
+                    a.status,a.cash_balance,a.created_at,a.updated_at,
+                    COALESCE(position.position_count,0) AS position_count,
+                    COALESCE(position.total_shares,0) AS total_shares,
+                    COALESCE(position.cost_basis,0) AS cost_basis,
+                    COALESCE(position.market_value,0) AS market_value,
+                    COALESCE(position.unrealized_gain_loss,0) AS unrealized_gain_loss,
+                    a.cash_balance+COALESCE(position.market_value,0) AS total_equity
+                    FROM market_accounts a
+                    JOIN users u ON u.id=a.user_id
+                    LEFT JOIN (
+                        SELECT h.account_id,COUNT(*) AS position_count,SUM(h.quantity) AS total_shares,
+                               SUM(h.quantity*h.average_cost) AS cost_basis,
+                               SUM(h.quantity*s.price) AS market_value,
+                               SUM(h.quantity*(s.price-h.average_cost)) AS unrealized_gain_loss
+                        FROM market_holdings h
+                        JOIN market_securities s ON s.id=h.security_id
+                        WHERE h.quantity>0 AND s.active=1
+                        GROUP BY h.account_id
+                    ) position ON position.account_id=a.id
+                    ORDER BY (a.cash_balance+COALESCE(position.market_value,0)) DESC,u.name""")],
+                "shareholders": [dict(row) for row in all_rows(db, """SELECT s.id AS security_id,s.ticker,s.name AS company_name,
+                    s.security_type,s.sector,s.price AS current_price,s.previous_price,
+                    a.id AS account_id,u.id AS user_id,u.name AS shareholder_name,u.civ_number,
+                    h.quantity,h.average_cost,ROUND(h.quantity*h.average_cost,2) AS invested_basis,
+                    ROUND(h.quantity*s.price,2) AS current_value,
+                    ROUND(h.quantity*(s.price-h.average_cost),2) AS unrealized_gain_loss
+                    FROM market_holdings h
+                    JOIN market_securities s ON s.id=h.security_id
+                    JOIN market_accounts a ON a.id=h.account_id
+                    JOIN users u ON u.id=a.user_id
+                    WHERE h.quantity>0 AND s.active=1
+                    ORDER BY u.name,s.ticker""")],
                 "equity_trades": [dict(row) for row in all_rows(db, """SELECT o.id,'equity' AS record_type,
                     o.account_id,a.user_id,u.name,u.civ_number,u.email,s.ticker,s.name AS security_name,
                     s.security_type,o.side AS action,o.quantity,o.unit_price,o.gross_amount,o.fee_amount,
@@ -24416,27 +24445,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "deepseek_model": DEEPSEEK_MODEL,
                 "index_funds": market_index_payload(db),
                 "exchange_market_cap": round(float((one(db, "SELECT COALESCE(SUM(price*issued_shares),0) AS total FROM market_securities WHERE active=1 AND security_type<>'fund'") or {}).get("total") or 0), 2),
-                "accounts": [dict(row) for row in all_rows(db, """SELECT a.id AS account_id,u.id AS user_id,u.name,u.civ_number,u.email,
-                    a.status,a.cash_balance,a.created_at,a.updated_at,
-                    COALESCE(position.position_count,0) AS position_count,
-                    COALESCE(position.total_shares,0) AS total_shares,
-                    COALESCE(position.cost_basis,0) AS cost_basis,
-                    COALESCE(position.market_value,0) AS market_value,
-                    COALESCE(position.unrealized_gain_loss,0) AS unrealized_gain_loss,
-                    a.cash_balance+COALESCE(position.market_value,0) AS total_equity
-                    FROM market_accounts a
-                    JOIN users u ON u.id=a.user_id
-                    LEFT JOIN (
-                        SELECT h.account_id,COUNT(*) AS position_count,SUM(h.quantity) AS total_shares,
-                               SUM(h.quantity*h.average_cost) AS cost_basis,
-                               SUM(h.quantity*s.price) AS market_value,
-                               SUM(h.quantity*(s.price-h.average_cost)) AS unrealized_gain_loss
-                        FROM market_holdings h
-                        JOIN market_securities s ON s.id=h.security_id
-                        WHERE h.quantity>0 AND s.active=1
-                        GROUP BY h.account_id
-                    ) position ON position.account_id=a.id
-                    ORDER BY (a.cash_balance+COALESCE(position.market_value,0)) DESC,u.name""")],
                 "margin_positions": [dict(row) for row in all_rows(db, """SELECT p.*,s.ticker,s.name AS security_name,s.price AS mark_price,
                     u.id AS user_id,u.name AS resident_name,u.civ_number,
                     CASE WHEN p.direction='long' THEN p.quantity*(s.price-p.entry_price)
