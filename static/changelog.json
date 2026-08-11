@@ -1,6 +1,48 @@
 {
-  "version": "0.3.1",
+  "version": "0.4.0",
   "entries": [
+    {
+      "date": "2026-08-11",
+      "version": "0.4.0",
+      "title": "RP OS 0.4.0 - Capital Formation and Market Integrity",
+      "added": [
+        "Added the Faircroft Office of Capital Formation, a resident-facing FCX issuer system that replaces the retired business-license application experience with direct company and IPO creation.",
+        "Added a guided IPO filing workflow for company identity, FCX ticker, sector, headquarters, investor brief, opening market capitalization, opening share price, public float, and scheduled market release.",
+        "Added authoritative IPO capitalization through the linked in-game bank and Bank Bridge, including split funding commands, settlement tracking, retry support, and creation of the FCX security only after capitalization completes.",
+        "Added resident issuer boardrooms with live company value, treasury balance, paid-in capital, authorized shares, funding progress, capital history, and controller-funded revenue contributions.",
+        "Added Company Wire publishing so resident issuers can file immediate or scheduled operating announcements, earnings notices, product releases, leadership updates, and risk notices directly into Ravenhood.",
+        "Added resident-controlled bankruptcy filings that halt issuer operations for review while preserving security, shareholder, transaction, and Company Wire history.",
+        "Added Developer Tools Business Settings for resident issuer oversight, IPO status review, and explicit assignment of an existing FCX security to a resident without reconnecting retired license records.",
+        "Added full market integration for resident-created and developer-assigned companies so scheduled movements, market administration, Gemini activity, capitalization reporting, and Ravenhood discovery recognize their securities.",
+        "Added a live anonymous Ravenhood execution tape for resident and Gemini buy or sell fills alongside the issuer Company Wire feed.",
+        "Added FEC Market Integrity asset custody with resident-specific seizure filings, a protected custody pool, supporting rationale, typed authorization, and a permanent audit ledger.",
+        "Added FEC custody dispositions for permanent forfeiture, market-cap reinvestment, and full return to the original resident without penalty.",
+        "Added a one-time official FEC clearance notice and inbox message when held assets are returned, confirming that the resident was cleared and Ravenhood buying power was restored.",
+        "Added returnable-account intelligence in FEC Market Integrity so staff can select the exact original Ravenhood account and return only its remaining held balance.",
+        "Added persistent FEC return totals and cleared-return entries to the Market Integrity ledger for complete post-disposition accountability."
+      ],
+      "changed": [
+        "Changed the Business application from an approval-and-license registry into a dedicated Faircroft primary-market and issuer workspace.",
+        "Changed retired business records to remain preserved but detached from resident issuer accounts; only an explicit developer assignment can connect an existing FCX security to a resident.",
+        "Changed the issuer landing experience to the Faircroft Office of Capital Formation with a focused filing sequence, verified-capital status, portfolio intelligence, and responsive FCX branding.",
+        "Changed Ravenhood account performance wording from all-time gain or loss to current gain or loss so the label matches the displayed account position.",
+        "Changed Ravenhood market discovery to place anonymous executions and Company Wire releases beneath Market Pulse instead of crowding the horizontal quote tape.",
+        "Changed Market Integrity return processing to restore the entire remaining resident-specific custody balance in one audited clearance action.",
+        "Changed installed PWA cache identifiers and release metadata to RP OS 0.4.0 so the new issuer and FEC interfaces replace cached 0.3.1 assets."
+      ],
+      "fixed": [
+        "Fixed the Business icon opening the retired New Application and licensing interface instead of the new IPO formation workspace.",
+        "Fixed the resident issuer entrance, company portfolio, and IPO filing content appearing off-center or visually detached on large screens.",
+        "Fixed Company Wire content being clipped behind Ravenhood's persistent left market sidebar.",
+        "Fixed low-contrast secondary labels in the Ravenhood Market Pulse, execution tape, and issuer feed.",
+        "Fixed FEC disposition selection colliding with the browser form action property and preventing the intended custody action from being submitted.",
+        "Fixed returned FEC assets lacking a resident-facing resolution state by adding targeted clearance delivery and acknowledgement tracking."
+      ],
+      "removed": [
+        "Removed the retired resident-facing business approval, license-class, inspection, and application workflow from the active Business application.",
+        "Removed automatic conversion or attachment of legacy business-license records to resident FCX issuer companies."
+      ]
+    },
     {
       "date": "2026-08-09",
       "version": "0.3.1",
