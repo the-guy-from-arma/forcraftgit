@@ -38,6 +38,21 @@ from market_math import (
     ravenhood_margin_metrics,
     ravenhood_margin_quote,
 )
+from business_issuer import (
+    activate_due_ipos as activate_due_business_ipos,
+    assign_existing_security as business_assign_existing_security,
+    change_assignment as business_change_assignment,
+    contribute as business_contribute,
+    create_ipo as business_create_ipo,
+    dev_payload as business_dev_payload,
+    ensure_schema as ensure_business_issuer_schema,
+    file_bankruptcy as business_file_bankruptcy,
+    handle_bank_result as business_handle_bank_result,
+    publish_announcement as business_publish_announcement,
+    published_wire as business_published_wire,
+    resident_payload as business_resident_payload,
+    retry_funding as business_retry_funding,
+)
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -2313,6 +2328,7 @@ ADMIN_TOOLS_SECTIONS = (
     ("settlement", "Settlement"),
     ("banking-settings", "Banking Settings"),
     ("market-settings", "Stock Market"),
+    ("business-settings", "Business Settings"),
     ("leverage-settings", "Leverage Settings"),
     ("lottery-settings", "Lottery Settings"),
     ("sportsbook-settings", "Sportsbook Settings"),
@@ -5699,6 +5715,7 @@ def ensure_migrations(db: Database) -> None:
         """
     )
     db.execute("CREATE INDEX IF NOT EXISTS cid_internal_affairs_notes_ia_idx ON cid_internal_affairs_notes (ia_id, created_at)")
+    ensure_business_issuer_schema(db, now_iso())
 
 
 def normalize_market_clock(value: Any, fallback: str) -> str:
@@ -7357,15 +7374,28 @@ def market_volatility_cycle(db: Database, amplitude: float, source: str = "autop
 def market_gemini_adjustment_cycle(db: Database) -> dict[str, Any]:
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not configured")
-    listings = [
-        {"ticker": row["ticker"], "name": row["name"], "sector": row["sector"], "type": row["security_type"], "price": float(row["price"] or 0), "previous_price": float(row["previous_price"] or 0)}
-        for row in all_rows(db, "SELECT ticker,name,sector,security_type,price,previous_price FROM market_securities WHERE active=1 AND security_type<>'fund' ORDER BY ticker")
-    ]
+    listing_rows = all_rows(db, """SELECT s.id,s.ticker,s.name,s.sector,s.security_type,s.price,s.previous_price,
+            issuer.id AS issuer_company_id,issuer.controlling_user_id AS issuer_controller_id,issuer.control_source,
+            (SELECT MAX(trade.created_at) FROM market_system_trades trade
+             WHERE trade.security_id=s.id AND LOWER(trade.source)='gemini') AS last_gemini_trade
+        FROM market_securities s
+        LEFT JOIN business_issuer_companies issuer ON issuer.security_id=s.id
+        WHERE s.active=1 AND s.security_type<>'fund'
+        ORDER BY s.ticker""")
+    listings = [{
+        "ticker": row["ticker"], "name": row["name"], "sector": row["sector"], "type": row["security_type"],
+        "price": float(row["price"] or 0), "previous_price": float(row["previous_price"] or 0),
+        "resident_controlled": bool(row.get("issuer_company_id") and row.get("issuer_controller_id")),
+        "control_source": row.get("control_source") or "exchange",
+        "last_gemini_trade": row.get("last_gemini_trade") or "",
+    } for row in listing_rows]
     recent = [dict(row) for row in all_rows(db, "SELECT event_type,title,detail,created_at FROM market_events ORDER BY id DESC LIMIT 20")]
     prompt = (
         "You operate the fictional Faircroft Ravenhood exchange. Read the current listings and recent market events, then return ONLY valid JSON as an array "
-        "of 1 to 5 adjustments. Each object must contain ticker, percent_change, and rationale. Use both gains and losses when appropriate. "
-        "Keep every percent_change between -8 and +8 and avoid repeating identical moves. No markdown.\n"
+        "of 1 to 8 adjustments. Each object must contain ticker, percent_change, and rationale. Use both gains and losses when appropriate. "
+        "Resident-controlled issuers are ordinary eligible FCX securities and must receive the same market participation as exchange-created listings. "
+        "When at least one resident-controlled issuer is present, include at least one in this review and normally give one a positive, buy-compatible move. "
+        "Rotate participation instead of repeatedly selecting the same issuer. Keep every percent_change between -8 and +8 and avoid repeating identical moves. No markdown.\n"
         f"LISTINGS={json.dumps(listings, separators=(',', ':'))}\nRECENT_EVENTS={json.dumps(recent, separators=(',', ':'), default=str)}"
     )
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.8, "maxOutputTokens": 1600, "responseMimeType": "application/json"}}
@@ -7379,25 +7409,60 @@ def market_gemini_adjustment_cycle(db: Database) -> dict[str, Any]:
     if not isinstance(adjustments, list):
         raise ValueError("Gemini market response was not an adjustment list")
     applied: list[dict[str, Any]] = []
-    for item in adjustments[:5]:
+    applied_tickers: set[str] = set()
+
+    def apply_adjustment(ticker: str, percent: float, rationale: str, issuer_guardrail: bool = False) -> bool:
+        if not ticker or ticker in applied_tickers:
+            return False
+        security = one(db, """SELECT s.id,s.price,issuer.id AS issuer_company_id,issuer.controlling_user_id AS issuer_controller_id
+            FROM market_securities s
+            LEFT JOIN business_issuer_companies issuer ON issuer.security_id=s.id
+            WHERE s.active=1 AND s.security_type<>'fund' AND s.ticker=?
+              AND NOT EXISTS (SELECT 1 FROM market_price_programs p WHERE p.security_id=s.id AND p.status='active')""", (ticker,))
+        if not security:
+            return False
+        old_price = float(security["price"] or 0)
+        new_price = max(0.01, round(old_price * (1 + percent / 100.0), 4))
+        timestamp = now_iso()
+        db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?", (new_price, timestamp, security["id"]))
+        db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], new_price, "gemini", timestamp))
+        flow = record_market_system_trades(db, int(security["id"]), old_price, new_price, "gemini", rationale)
+        applied_tickers.add(ticker)
+        applied.append({
+            "ticker": ticker, "percent_change": round(percent, 2), "rationale": rationale,
+            "order_flow": flow, "resident_controlled": bool(security.get("issuer_company_id") and security.get("issuer_controller_id")),
+            "issuer_participation_guardrail": issuer_guardrail,
+        })
+        return True
+
+    for item in adjustments[:8]:
         if not isinstance(item, dict):
             continue
         ticker = str(item.get("ticker") or "").upper().strip()[:12]
-        security = one(db, """SELECT id,price FROM market_securities s WHERE active=1 AND security_type<>'fund' AND ticker=?
-            AND NOT EXISTS (SELECT 1 FROM market_price_programs p WHERE p.security_id=s.id AND p.status='active')""", (ticker,))
-        if not security:
+        try:
+            percent = max(-8.0, min(8.0, float(item.get("percent_change") or 0)))
+        except (TypeError, ValueError):
             continue
-        percent = max(-8.0, min(8.0, float(item.get("percent_change") or 0)))
-        old_price = float(security["price"] or 0)
-        new_price = max(0.01, round(old_price * (1 + percent / 100.0), 4))
-        db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?", (new_price, now_iso(), security["id"]))
-        db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], new_price, "gemini", now_iso()))
         rationale = str(item.get("rationale") or "Market conditions")[:240]
-        flow = record_market_system_trades(db, int(security["id"]), old_price, new_price, "gemini", rationale)
-        applied.append({"ticker": ticker, "percent_change": round(percent, 2), "rationale": rationale, "order_flow": flow})
+        apply_adjustment(ticker, percent, rationale)
+
+    # Resident-controlled stocks remain in the same Gemini flow as every other listing.
+    # If the model omits all of them, rotate in the least-recently traded eligible issuer.
+    issuer_applied = any(bool(item.get("resident_controlled")) for item in applied)
+    if not issuer_applied:
+        issuer_candidates = sorted(
+            (item for item in listings if item["resident_controlled"] and item["ticker"] not in applied_tickers),
+            key=lambda item: (str(item.get("last_gemini_trade") or ""), str(item["ticker"])),
+        )
+        market_bias = sum(float(item["percent_change"]) for item in applied) / len(applied) if applied else 0.75
+        participation_percent = round(max(0.35, min(2.0, abs(market_bias))), 2)
+        for candidate in issuer_candidates:
+            rationale = "Resident issuer participation aligned with the current Gemini market review."
+            if apply_adjustment(str(candidate["ticker"]), participation_percent, rationale, True):
+                break
     detail = "; ".join(f"{item['ticker']} {item['percent_change']:+.2f}% — {item['rationale']}" for item in applied)
     db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('ai_adjustment','Gemini market adjustment',?,NULL,?)", (detail or "No eligible adjustments returned.", now_iso()))
-    return {"updated": len(applied), "adjustments": applied}
+    return {"updated": len(applied), "resident_issuer_updates": sum(1 for item in applied if item.get("resident_controlled")), "adjustments": applied}
 
 
 def rebase_market_index_quote(db: Database, security_id: int, quote: float, timestamp: str) -> None:
@@ -7797,6 +7862,7 @@ def market_automation_worker() -> None:
                 settings = get_system_settings(db)
                 current = utcnow()
                 clear_legacy_ravenhood_price_freeze(db, settings)
+                activate_due_business_ipos(db, current.isoformat())
                 # FCXV ordinary and leveraged orders may execute continuously
                 # when its dedicated policy is enabled.
                 process_queued_ravenhood_orders(db, settings)
@@ -8854,6 +8920,7 @@ def admin_tools_route_section(path: str) -> str:
         ("/api/dev-tools/admin-2fa", "admin-2fa"),
         ("/api/dev-tools/myfaircroft-payment-codes", "settlement"),
         ("/api/dev-tools/banking/", "banking-settings"),
+        ("/api/dev-tools/business/", "business-settings"),
         ("/api/dev-tools/market/margin-settings", "leverage-settings"),
         ("/api/dev-tools/market/", "market-settings"),
         ("/api/dev-tools/lottery/", "lottery-settings"),
@@ -10441,18 +10508,28 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_submit_contract_proof(db, user, self.path_int(path, 2))
                 elif path == "/api/business" and method == "GET":
                     self.api_business(db, user)
+                elif path == "/api/business/companies" and method == "POST":
+                    self.api_business_create_ipo(db, user)
+                elif re.fullmatch(r"/api/business/companies/\d+/contributions", path) and method == "POST":
+                    self.api_business_contribute(db, user, self.path_int(path, 4))
+                elif re.fullmatch(r"/api/business/companies/\d+/announcements", path) and method == "POST":
+                    self.api_business_announcement(db, user, self.path_int(path, 4))
+                elif re.fullmatch(r"/api/business/companies/\d+/funding/retry", path) and method == "POST":
+                    self.api_business_retry_funding(db, user, self.path_int(path, 4))
+                elif re.fullmatch(r"/api/business/companies/\d+/bankruptcy", path) and method == "POST":
+                    self.api_business_bankruptcy(db, user, self.path_int(path, 4))
                 elif path == "/api/business/applications" and method == "POST":
-                    self.api_create_business_application(db, user)
+                    self.error(410, "The resident license registry is retired. Create an FCX issuer from the Business app.")
                 elif path.startswith("/api/business/applications/") and method == "PATCH":
-                    self.api_review_business_application(db, user, self.path_int(path, 3))
+                    self.error(410, "The resident license registry is archived and read-only.")
                 elif path.startswith("/api/business/licenses/") and path.endswith("/inspections") and method == "POST":
-                    self.api_create_business_inspection(db, user, self.path_int(path, 3))
+                    self.error(410, "The resident license registry is archived and read-only.")
                 elif path.startswith("/api/business/licenses/") and path.endswith("/violations") and method == "POST":
-                    self.api_create_business_violation(db, user, self.path_int(path, 3))
+                    self.error(410, "The resident license registry is archived and read-only.")
                 elif path.startswith("/api/business/licenses/") and path.endswith("/taxes") and method == "POST":
-                    self.api_create_business_tax(db, user, self.path_int(path, 3))
+                    self.error(410, "The resident license registry is archived and read-only.")
                 elif path.startswith("/api/business/licenses/") and method == "PATCH":
-                    self.api_update_business_license(db, user, self.path_int(path, 3))
+                    self.error(410, "The resident license registry is archived and read-only.")
                 elif path == "/api/properties" and method == "GET":
                     self.api_properties(db, user)
                 elif path.startswith("/api/properties/") and path.endswith("/buy") and method == "POST":
@@ -10617,6 +10694,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_generate_myfaircroft_payment_code(db, user)
                 elif path == "/api/dev-tools/banking/issue-funds" and method == "POST":
                     self.api_dev_issue_bank_funds(db, user)
+                elif path == "/api/dev-tools/business/assign" and method == "POST":
+                    self.api_dev_business_assign(db, user)
+                elif re.fullmatch(r"/api/dev-tools/business/companies/\d+/transfer", path) and method == "POST":
+                    self.api_dev_business_transfer(db, user, self.path_int(path, 5))
+                elif re.fullmatch(r"/api/dev-tools/business/companies/\d+/unassign", path) and method == "POST":
+                    self.api_dev_business_unassign(db, user, self.path_int(path, 5))
+                elif re.fullmatch(r"/api/dev-tools/business/companies/\d+/funding/retry", path) and method == "POST":
+                    self.api_dev_business_retry_funding(db, user, self.path_int(path, 5))
                 elif path == "/api/dev-tools/banking/commands/bulk-cancel" and method == "POST":
                     self.api_dev_bulk_cancel_bank_commands(db, user)
                 elif path.startswith("/api/dev-tools/banking/commands/") and path.endswith("/cancel") and method == "POST":
@@ -14421,6 +14506,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 """,
                 (status, now_iso(), json.dumps(result, separators=(",", ":"), default=str)[:4000], command_id),
             )
+        issuer_result = business_handle_bank_result(db, command_id, status, result, now_iso())
+        if issuer_result:
+            add_admin_audit(
+                db,
+                int(row["requested_by"]),
+                "business.funding.command.result",
+                int(row["target_user_id"]),
+                {"command_id": command_id, "bridge_status": status, **issuer_result},
+            )
         # A sportsbook wager is accepted only after the authoritative in-game
         # bank bridge confirms the debit. Keep this transition tied to the
         # bridge result so Railway cash can never be mistaken for game funds.
@@ -16760,6 +16854,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "index_funds": index_funds,
                 "exchange_market_cap": round(exchange_market_cap, 2),
                 "anonymous_trade_tape": anonymous_trade_tape,
+                "company_wire": business_published_wire(db, now_iso()),
                 "price_history": price_history,
                 "market_analytics": market_analytics,
                 "history_ticker": selected_ticker,
@@ -18275,6 +18370,136 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         )
 
     def api_business(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        if not bool(user.get("verified")) and not has_any(user, "owner", "admin", "dev"):
+            self.error(403, "Civilian verification required")
+            return
+        self.send_json(200, business_resident_payload(db, int(user["id"]), now_iso()))
+
+    def api_business_create_ipo(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        if not bool(user.get("verified")) and not has_any(user, "owner", "admin", "dev"):
+            self.error(403, "Civilian verification required")
+            return
+        try:
+            created = business_create_ipo(db, int(user["id"]), self.read_json(), now_iso())
+        except ValueError as exc:
+            self.error(409, str(exc))
+            return
+        add_admin_audit(db, int(user["id"]), "business.ipo.created", int(user["id"]), {
+            "company_id": int(created["company"]["id"]),
+            "ticker": created["company"]["ticker"],
+            "capitalization": created["company"]["target_market_cap"],
+            "funding_chunks": created["chunk_count"],
+        })
+        self.send_json(201, {"ok": True, **created})
+
+    def api_business_contribute(self, db: Database, user: DbRow | None, company_id: int) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        try:
+            funding = business_contribute(db, int(user["id"]), company_id, self.read_json(), now_iso())
+        except ValueError as exc:
+            self.error(409, str(exc))
+            return
+        add_admin_audit(db, int(user["id"]), "business.treasury.contribution", int(user["id"]), {"company_id": company_id, **funding})
+        self.send_json(201, {"ok": True, "funding": funding})
+
+    def api_business_announcement(self, db: Database, user: DbRow | None, company_id: int) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        try:
+            announcement = business_publish_announcement(db, int(user["id"]), company_id, self.read_json(), now_iso())
+        except ValueError as exc:
+            self.error(409, str(exc))
+            return
+        add_admin_audit(db, int(user["id"]), "business.wire.published", int(user["id"]), {"company_id": company_id, "announcement_id": int(announcement["id"])})
+        self.send_json(201, {"ok": True, "announcement": announcement})
+
+    def api_business_retry_funding(self, db: Database, user: DbRow | None, company_id: int) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        try:
+            funding = business_retry_funding(db, int(user["id"]), company_id, now_iso())
+        except ValueError as exc:
+            self.error(409, str(exc))
+            return
+        self.send_json(200, {"ok": True, "funding": funding})
+
+    def api_business_bankruptcy(self, db: Database, user: DbRow | None, company_id: int) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        try:
+            filing = business_file_bankruptcy(db, int(user["id"]), company_id, self.read_json(), now_iso())
+        except ValueError as exc:
+            self.error(409, str(exc))
+            return
+        add_admin_audit(db, int(user["id"]), "business.bankruptcy.filed", int(user["id"]), filing)
+        self.send_json(200, {"ok": True, "filing": filing})
+
+    def api_dev_business_assign(self, db: Database, user: DbRow | None) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        payload = self.read_json()
+        try:
+            result = business_assign_existing_security(
+                db, int(user["id"]), int(payload.get("security_id") or 0), int(payload.get("user_id") or 0),
+                str(payload.get("note") or ""), now_iso(),
+            )
+        except (TypeError, ValueError) as exc:
+            self.error(409, str(exc))
+            return
+        add_admin_audit(db, int(user["id"]), "business.security.assigned", int(payload.get("user_id") or 0), result)
+        self.send_json(201, {"ok": True, "assignment": result})
+
+    def api_dev_business_transfer(self, db: Database, user: DbRow | None, company_id: int) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        payload = self.read_json()
+        try:
+            target_user_id = int(payload.get("user_id") or 0)
+            result = business_change_assignment(db, int(user["id"]), company_id, target_user_id, str(payload.get("note") or ""), now_iso())
+        except (TypeError, ValueError) as exc:
+            self.error(409, str(exc))
+            return
+        add_admin_audit(db, int(user["id"]), "business.security.transferred", target_user_id, result)
+        self.send_json(200, {"ok": True, "assignment": result})
+
+    def api_dev_business_unassign(self, db: Database, user: DbRow | None, company_id: int) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        payload = self.read_json()
+        try:
+            result = business_change_assignment(db, int(user["id"]), company_id, None, str(payload.get("note") or ""), now_iso())
+        except ValueError as exc:
+            self.error(409, str(exc))
+            return
+        add_admin_audit(db, int(user["id"]), "business.security.unassigned", None, result)
+        self.send_json(200, {"ok": True, "assignment": result})
+
+    def api_dev_business_retry_funding(self, db: Database, user: DbRow | None, company_id: int) -> None:
+        if not user:
+            self.error(401, "Authentication required")
+            return
+        try:
+            result = business_retry_funding(db, int(user["id"]), company_id, now_iso(), developer=True)
+        except ValueError as exc:
+            self.error(409, str(exc))
+            return
+        self.send_json(200, {"ok": True, "funding": result})
+
+    def api_legacy_business(self, db: Database, user: DbRow | None) -> None:
         if not user:
             self.error(401, "Authentication required")
             return
@@ -23534,6 +23759,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     ORDER BY CASE WHEN p.status='open' THEN 0 ELSE 1 END,p.opened_at DESC LIMIT 500""")],
             }
 
+        if section == "business-settings":
+            payload["business_settings"] = business_dev_payload(db, now)
+
         if section == "market-settings":
             payload["market_settings"] = {
                 "market_open": settings["market_open"],
@@ -23610,6 +23838,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     COALESCE(position.holder_count,0) AS holder_count,
                     COALESCE(position.outstanding_shares,0) AS outstanding_shares,
                     COALESCE(position.invested_basis,0) AS invested_basis,
+                    issuer.id AS issuer_company_id,issuer.control_source AS issuer_control_source,
+                    issuer.controlling_user_id AS issuer_controller_id,controller.name AS issuer_controller_name,
                     CASE WHEN s.security_type='fund' THEN s.price*COALESCE(position.outstanding_shares,0)
                          ELSE s.price*COALESCE(s.issued_shares,0) END AS market_cap
                     FROM market_securities s
@@ -23618,6 +23848,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                                SUM(quantity*average_cost) AS invested_basis
                         FROM market_holdings WHERE quantity>0 GROUP BY security_id
                     ) position ON position.security_id=s.id
+                    LEFT JOIN business_issuer_companies issuer ON issuer.security_id=s.id
+                    LEFT JOIN users controller ON controller.id=issuer.controlling_user_id
                     ORDER BY CASE WHEN s.active=1 THEN 0 ELSE 1 END,s.security_type,s.ticker""")],
                 "shareholders": [dict(row) for row in all_rows(db, """SELECT s.id AS security_id,s.ticker,s.name AS company_name,
                     s.security_type,s.sector,s.price AS current_price,s.previous_price,
@@ -24510,6 +24742,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                         COALESCE(position.holder_count,0) AS holder_count,
                         COALESCE(position.outstanding_shares,0) AS outstanding_shares,
                         COALESCE(position.invested_basis,0) AS invested_basis,
+                        issuer.id AS issuer_company_id,issuer.control_source AS issuer_control_source,
+                        issuer.controlling_user_id AS issuer_controller_id,controller.name AS issuer_controller_name,
                         CASE WHEN s.security_type='fund' THEN s.price*COALESCE(position.outstanding_shares,0)
                              ELSE s.price*COALESCE(s.issued_shares,0) END AS market_cap
                         FROM market_securities s
@@ -24518,6 +24752,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                                    SUM(quantity*average_cost) AS invested_basis
                             FROM market_holdings WHERE quantity>0 GROUP BY security_id
                         ) position ON position.security_id=s.id
+                        LEFT JOIN business_issuer_companies issuer ON issuer.security_id=s.id
+                        LEFT JOIN users controller ON controller.id=issuer.controlling_user_id
                         ORDER BY CASE WHEN s.active=1 THEN 0 ELSE 1 END,s.security_type,s.ticker""")],
                     "shareholders": [dict(row) for row in all_rows(db, """SELECT s.id AS security_id,s.ticker,s.name AS company_name,
                         a.id AS account_id,u.id AS user_id,u.name AS shareholder_name,u.civ_number,
@@ -25861,12 +26097,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         try: percent = max(-500, min(500, float(payload.get("percent_change") or 0))); duration = max(1, min(10080, int(payload.get("duration_minutes") or 60)))
         except (TypeError, ValueError): self.error(400, "Percent and duration are required."); return
         if tickers == ["ALL"]:
-            targets = all_rows(db, "SELECT id,ticker,price FROM market_securities WHERE active=1 AND security_type<>'fund' ORDER BY ticker")
+            targets = all_rows(db, """SELECT s.id,s.ticker,s.price,issuer.id AS issuer_company_id
+                FROM market_securities s
+                LEFT JOIN business_issuer_companies issuer ON issuer.security_id=s.id
+                WHERE s.active=1 AND s.security_type<>'fund' ORDER BY s.ticker""")
         else:
             targets = []
             missing: list[str] = []
             for ticker in tickers:
-                security = one(db, "SELECT id,ticker,price FROM market_securities WHERE ticker=? AND active=1", (ticker,))
+                security = one(db, """SELECT s.id,s.ticker,s.price,issuer.id AS issuer_company_id
+                    FROM market_securities s
+                    LEFT JOIN business_issuer_companies issuer ON issuer.security_id=s.id
+                    WHERE s.ticker=? AND s.active=1""", (ticker,))
                 if security:
                     targets.append(security)
                 else:
@@ -25880,14 +26122,17 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             db.execute("""INSERT INTO market_price_programs (security_id, event_name, percent_change, duration_minutes, start_price, starts_at, ends_at, status, created_by, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""", (target["id"], name, percent, duration, float(target["price"]), start.isoformat(), end.isoformat(), user["id"], start.isoformat()))
         target_tickers = [str(target["ticker"]) for target in targets]
+        resident_issuer_count = sum(1 for target in targets if target.get("issuer_company_id"))
         target_label = "Entire market" if tickers == ["ALL"] else ", ".join(target_tickers)
         db.execute("INSERT INTO market_events (event_type, title, detail, created_by, created_at) VALUES ('program', ?, ?, ?, ?)", (name, f"{target_label}: {percent:+.2f}% over {duration} minutes", user["id"], start.isoformat()))
         add_admin_audit(db, int(user["id"]), "market.program.created", details={
             "event_name": name, "tickers": target_tickers, "entire_market": tickers == ["ALL"],
-            "target_count": len(targets), "percent_change": percent, "duration_minutes": duration,
+            "target_count": len(targets), "resident_issuer_count": resident_issuer_count,
+            "percent_change": percent, "duration_minutes": duration,
         })
         self.send_json(201, {"ok": True, "example_one_dollar": max(0.01, round(1 * (1 + percent / 100), 4)),
-            "ends_at": end.isoformat(), "tickers": target_tickers, "target_count": len(targets)})
+            "ends_at": end.isoformat(), "tickers": target_tickers, "target_count": len(targets),
+            "resident_issuer_count": resident_issuer_count})
 
     def api_dev_market_program_cancel(self, db: Database, user: DbRow | None, program_id: int | None) -> None:
         err = developer_required(user)

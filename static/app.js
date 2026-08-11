@@ -30,6 +30,7 @@ const DEV_TOOLS_REFRESH_MS = {
   "insurance-claims": 30000,
   "banking-settings": 15000,
   "sportsbook-settings": 120000,
+  "business-settings": 60000,
   "policy-settings": 60000,
 };
 
@@ -181,7 +182,8 @@ const state = {
   insuranceIncludeStockProtection: false,
   insuranceCancelConfirm: false,
   gangSelectedMembership: null,
-  businessTab: "apply",
+  businessTab: "overview",
+  businessCompanyId: null,
   businessReviewFilter: "active",
   businessLicensePage: 1,
   businessRegistryPage: 1,
@@ -6220,6 +6222,8 @@ function renderMarketWorkspace() {
     const side = String(trade.side || "buy").toLowerCase() === "sell" ? "sell" : "buy";
     return `<article class="market-live-execution ${side} ${flowType === "ai" ? "ai" : ""}" style="--execution-index:${index}"><i>${side === "buy" ? "B" : "S"}</i><span><b>${escapeHtml(trade.ticker || "FCX")}</b><small>${escapeHtml(sourceLabel)} · ${escapeHtml(timestamp)}</small></span><strong>${side.toUpperCase()}<small>${quantity} @ ${money(trade.unit_price || 0)}</small></strong></article>`;
   }).join("");
+  const companyWire = (data.company_wire || []).slice(0, 5);
+  const companyWireMarkup = companyWire.map((release, index) => `<article style="--wire-index:${index}"><time>${release.published_at ? new Date(release.published_at).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"}) : "WIRE"}</time><span><b>${escapeHtml(release.ticker || "FCX")}</b><small>${escapeHtml(humanLabel(release.announcement_type || "company_update"))}</small></span><p>${escapeHtml(release.headline || "Issuer update")}</p></article>`).join("");
 
   return `<main class="market-workspace market-terminal-workspace market-v13 market-v13-${state.marketTheme === "light" ? "light" : "dark"}">
     <header class="market-v13-top"><button type="button" class="market-v13-brand" data-market-overview><span>RH</span><div><b>Ravenhood</b><small>Faircroft Exchange / FCX</small></div></button><nav><button type="button" data-market-overview>Trade</button><button type="button" data-market-portfolio>Portfolio</button><button type="button" data-market-margin-desk>Margin${openMarginPositions.length ? `<span>${openMarginPositions.length}</span>` : ""}</button><button type="button" data-market-orders>Orders${upcomingOrders.length ? `<span>${upcomingOrders.length}</span>` : ""}</button><button type="button" data-market-dialog="deposit">Deposit</button><button type="button" data-market-dialog="withdrawal">Withdraw</button><button type="button" data-market-dialog="transfer">Transfer</button><button type="button" data-market-dialog="promo">Rewards</button></nav><div><span class="market-v13-status ${selectedTradeOpen ? "open" : "closed"}"><i></i>${selectedContinuousSession ? "FCXV 24H" : data.market_open ? "Market open" : "Market closed"}</span><button type="button" data-market-theme>${state.marketTheme === "light" ? "Dark" : "Light"}</button><button type="button" data-refresh-market>Sync</button><button type="button" data-close-market>Exit</button></div></header>
@@ -6227,7 +6231,7 @@ function renderMarketWorkspace() {
     <section class="market-v13-account"><div><small>ACCOUNT EQUITY</small><strong>${money(net)}</strong><span class="${profit + Number(marginSummary.unrealized_pnl || 0) >= 0 ? "up" : "down"}">${profit + Number(marginSummary.unrealized_pnl || 0) >= 0 ? "+" : ""}${money(profit + Number(marginSummary.unrealized_pnl || 0))} all-time</span></div><dl><div><dt>Invested</dt><dd>${money(invested)}</dd></div><div><dt>Margin equity</dt><dd>${money(marginEquity)}</dd></div><div><dt>Buying power</dt><dd>${money(cash)}</dd></div><div><dt>Positions</dt><dd>${holdings.length + openMarginPositions.length}</dd></div></dl><nav><button type="button" data-market-dialog="deposit">Add funds</button><button type="button" data-market-dialog="withdrawal">Withdraw to bank</button><button type="button" data-market-margin-desk>Margin desk</button></nav></section>
     <section class="market-v15-indexes"><header><div><small>RAVENHOOD INDEX DESK</small><h2>Buy the market by risk profile.</h2><p>FCXS follows steadier Faircroft companies. FCXV follows the exchange's highest-movement companies. Existing stocks remain unchanged.</p></div><aside><small>FCX MARKET CAP</small><strong>${money(data.exchange_market_cap || 0)}</strong><span>Across active operating companies</span></aside></header><div>${indexFundShelf || `<p class="empty">Index composition is being calculated.</p>`}</div></section>
     <section class="market-v13-grid">
-      <aside class="market-v13-discovery"><header><small>MARKET PULSE</small><h2>Hot right now</h2></header>${movers.slice(0, 7).map((item, index) => `<button type="button" class="${item.ticker === selected.ticker ? "active" : ""}" data-market-ticker="${escapeHtml(item.ticker)}"><i>${String(index + 1).padStart(2, "0")}</i><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}</small></span><strong>${money(item.price)}<em class="${marketChange(item) >= 0 ? "up" : "down"}">${marketChange(item) >= 0 ? "+" : ""}${marketChange(item).toFixed(2)}%</em></strong></button>`).join("")}<section class="market-live-execution-feed" aria-label="Anonymous live Ravenhood buy and sell executions"><header><span><i></i>Live executions</span><small>Anonymous tape</small></header><div>${anonymousTradeMarkup || `<p><b>Waiting for the next fill</b><small>Executed orders will appear here.</small></p>`}</div></section></aside>
+      <aside class="market-v13-discovery"><header><small>MARKET PULSE</small><h2>Hot right now</h2></header>${movers.slice(0, 7).map((item, index) => `<button type="button" class="${item.ticker === selected.ticker ? "active" : ""}" data-market-ticker="${escapeHtml(item.ticker)}"><i>${String(index + 1).padStart(2, "0")}</i><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}</small></span><strong>${money(item.price)}<em class="${marketChange(item) >= 0 ? "up" : "down"}">${marketChange(item) >= 0 ? "+" : ""}${marketChange(item).toFixed(2)}%</em></strong></button>`).join("")}<section class="market-live-execution-feed" aria-label="Anonymous live Ravenhood buy and sell executions"><header><span><i></i>Live executions</span><small>Anonymous tape</small></header><div>${anonymousTradeMarkup || `<p><b>Waiting for the next fill</b><small>Executed orders will appear here.</small></p>`}</div></section><section class="market-company-wire"><header><span>COMPANY WIRE</span><small>Issuer releases</small></header><div>${companyWireMarkup || `<p><b>The wire is quiet</b><small>Resident issuer news will appear here.</small></p>`}</div></section></aside>
       <section class="market-v13-stage">
         <header class="market-v13-instrument"><div><small>${escapeHtml(selected.sector || "FAIRCROFT MARKET")} / ${escapeHtml(humanLabel(selected.security_type || "stock"))}</small><h1>${escapeHtml(selected.ticker || "--")}<span>${escapeHtml(selected.name || "Select a listing")}</span></h1><p>${escapeHtml(selected.description || `${selected.name || selected.ticker} is actively traded through Ravenhood.`)}</p></div><aside><small>LIVE QUOTE</small><strong>${money(currentPrice)}</strong><span class="${change >= 0 ? "up" : "down"}">${change >= 0 ? "+" : ""}${change.toFixed(2)}% / ${range}</span></aside></header>
         <section class="market-v13-chart market-v14-chart"><header><div><small>RECORDED OHLC + VWAP + DYNAMIC EMA</small><h2>${escapeHtml(selected.ticker || "Market")} live price desk</h2><span data-market-live-clock>${range === "LIVE" ? "Live view auto-syncs every 12 seconds" : "Range synchronized"} · hover any visible series for exact data</span></div><nav>${[["LIVE", "Live"], ["15M", "15 min"], ["1H", "1 hour"], ["1D", "1 day"], ["1W", "1 week"], ["1M", "1 month"], ["1Y", "1 year"]].map(([item, label]) => `<button type="button" class="${range === item ? "active" : ""}" data-market-range="${item}">${label}</button>`).join("")}</nav></header>
@@ -7704,6 +7708,81 @@ function bindBusinessWorkspace() {
     await loadAppData("business");
     render();
   });
+}
+
+function issuerCompanyStatus(company) {
+  const status = String(company?.status || "draft");
+  return `<span class="issuer-status ${escapeHtml(status)}"><i></i>${escapeHtml(humanLabel(status))}</span>`;
+}
+
+function renderIssuerOverview(data) {
+  const companies = data.companies || [], bank = data.bank || {};
+  const live = companies.filter(company => ["active", "scheduled"].includes(String(company.status || "")));
+  const marketValue = live.reduce((sum, company) => sum + Number(company.live_market_cap || company.target_market_cap || 0), 0);
+  const pendingCapital = companies.filter(company => ["funding_pending", "funding_failed"].includes(String(company.status || ""))).reduce((sum, company) => sum + Math.max(0, Number(company.funding_total || company.target_market_cap || 0) - Number(company.funding_completed || 0)), 0);
+  return `<section class="issuer-overview">
+    <header><div><span>FAIRCROFT PRIMARY MARKET</span><h1>Build something<br/>the market can own.</h1><p>Launch an FCX company, capitalize it with verified in-game funds, manage its treasury, and speak directly to Ravenhood investors.</p><nav><button type="button" data-business-tab="launch">Create an IPO</button><button type="button" data-business-tab="company" class="secondary">Open company desk</button></nav></div><aside><i>FCX</i><span>RESIDENT ISSUER NETWORK</span></aside></header>
+    <div class="issuer-overview-stats"><article><small>CONTROLLED ISSUERS</small><strong>${companies.length}</strong><span>${live.length} trading or scheduled</span></article><article><small>COMBINED MARKET VALUE</small><strong>${money(marketValue)}</strong><span>Current FCX valuation</span></article><article><small>CAPITAL IN TRANSIT</small><strong>${money(pendingCapital)}</strong><span>Staged through Bank Bridge</span></article><article><small>GAME BANK</small><strong>${bank.linked ? money(bank.balance || 0) : "Not linked"}</strong><span>${bank.synced_at ? "Authoritative snapshot" : "Synchronization required"}</span></article></div>
+    <section class="issuer-roster"><header><div><span>YOUR BOARDROOM</span><h2>Issuer portfolio</h2></div><strong>${companies.length} / ${Number(data.limits?.max_companies || 8)}</strong></header>${companies.map(company => `<button type="button" data-issuer-open="${Number(company.id)}"><span><b>${escapeHtml(company.ticker)}</b><small>${escapeHtml(company.company_name)}</small></span>${issuerCompanyStatus(company)}<strong>${money(company.live_market_cap || company.target_market_cap || 0)}<small>${company.control_source === "existing_security" ? "Assigned FCX security" : "Resident IPO"}</small></strong><i>→</i></button>`).join("") || `<div class="issuer-roster-empty"><b>No companies yet.</b><span>Your first issuer begins with a capitalization plan, not a license application.</span><button type="button" data-business-tab="launch">Start the filing</button></div>`}</section>
+  </section>`;
+}
+
+function renderIssuerLaunch(data) {
+  const bank = data.bank || {};
+  return `<section class="issuer-launch"><header><span>FCX PRIMARY MARKET / FORM S-1</span><h1>Take your company public.</h1><p>Choose the company, capital structure, opening quote, and launch window. Your declared capitalization is debited from the linked in-game bank before an FCX security is created.</p></header>
+    <form id="issuerLaunchForm" class="issuer-launch-form">
+      <div class="issuer-form-step"><b>01</b><div><h2>Company identity</h2><p>How the issuer appears across Ravenhood and Company Wire.</p></div></div>
+      <div class="issuer-form-fields"><label>Company name<input name="company_name" maxlength="100" required placeholder="Faircroft Industries"/></label><label>FCX ticker<input name="ticker" maxlength="8" required placeholder="FCI" autocapitalize="characters"/></label><label>Sector<select name="sector"><option>Technology</option><option>Financial</option><option>Industrial</option><option>Consumer</option><option>Energy</option><option>Healthcare</option><option>Real Estate</option><option>Transportation</option><option>Media</option><option>General</option></select></label><label>Headquarters<input name="headquarters" maxlength="140" placeholder="Faircroft, DC"/></label><label class="wide">Investor brief<textarea name="description" minlength="40" maxlength="1200" required placeholder="Explain what the company operates, how it earns revenue, and why residents may want to own it."></textarea></label></div>
+      <div class="issuer-form-step"><b>02</b><div><h2>Capital structure</h2><p>This becomes the initial value and share structure of the new listing.</p></div></div>
+      <div class="issuer-form-fields"><label>Initial market capitalization<input name="target_market_cap" type="number" min="1000" max="${Number(data.limits?.max_capitalization || 50000000000)}" step="1" required value="100000"/></label><label>Opening share price<input name="opening_share_price" type="number" min="0.01" max="1000000" step="0.01" required value="10"/></label><label>Public float<input name="public_float_percent" type="range" min="5" max="100" step="1" value="25"/><output data-issuer-float>25%</output></label><label>IPO release<input name="scheduled_at" type="datetime-local"/><small>Leave blank to list as soon as capitalization settles.</small></label></div>
+      <div class="issuer-cap-table" aria-live="polite"><span><small>AUTHORIZED SHARES</small><strong data-issuer-authorized>10,000</strong></span><span><small>FOUNDER SHARES</small><strong data-issuer-founder>7,500</strong></span><span><small>PUBLIC INVENTORY</small><strong data-issuer-inventory>2,500</strong></span><span><small>BRIDGE COMMANDS</small><strong data-issuer-chunks>1</strong></span></div>
+      <footer><div><span>AVAILABLE GAME BANK</span><strong>${bank.linked ? money(bank.balance || 0) : "Arma link required"}</strong><small>${bank.synced_at ? `Synced ${escapeHtml(new Date(bank.synced_at).toLocaleString())}` : "Waiting for an authoritative bank snapshot"}</small></div><label class="issuer-certify"><input type="checkbox" name="certify" required/> I authorize this capitalization from my linked in-game bank and understand the security is created only after every Bank Bridge command settles.</label><button type="submit" ${bank.linked ? "" : "disabled"}>Submit FCX issuer</button></footer>
+    </form></section>`;
+}
+
+function renderIssuerCompany(data) {
+  const companies = data.companies || [];
+  if (!state.businessCompanyId || !companies.some(company => Number(company.id) === Number(state.businessCompanyId))) state.businessCompanyId = companies[0]?.id || null;
+  const company = companies.find(item => Number(item.id) === Number(state.businessCompanyId)) || companies[0];
+  if (!company) return `<section class="issuer-company-desk"><div class="issuer-roster-empty"><b>No issuer desk yet.</b><span>Create an IPO to open your operating dashboard.</span><button type="button" data-business-tab="launch">Create IPO</button></div></section>`;
+  const ledger = (data.ledgers || {})[String(company.id)] || [];
+  const releases = (data.announcements || {})[String(company.id)] || [];
+  return `<section class="issuer-company-desk"><nav class="issuer-company-switcher">${companies.map(item => `<button type="button" class="${Number(item.id) === Number(company.id) ? "active" : ""}" data-issuer-company="${Number(item.id)}"><span>${escapeHtml(item.ticker)}</span><b>${escapeHtml(item.company_name)}</b><small>${humanLabel(item.status)}</small></button>`).join("")}</nav>
+    <article class="issuer-company-hero"><div><span>${escapeHtml(company.company_number)} / ${company.control_source === "existing_security" ? "DEVELOPER-ASSIGNED SECURITY" : "RESIDENT IPO"}</span><h1>${escapeHtml(company.ticker)} <small>${escapeHtml(company.company_name)}</small></h1><p>${escapeHtml(company.description || "Existing FCX operating company assigned to this resident controller.")}</p></div><aside><small>LIVE COMPANY VALUE</small><strong>${money(company.live_market_cap || company.target_market_cap || 0)}</strong>${issuerCompanyStatus(company)}</aside></article>
+    <div class="issuer-company-ledger"><section><header><span>COMPANY TREASURY</span><strong>${money(company.treasury_balance || 0)}</strong></header><dl><div><dt>Paid-in capital</dt><dd>${money(company.paid_in_capital || 0)}</dd></div><div><dt>Live FCX quote</dt><dd>${company.live_price != null ? money(company.live_price) : "Pending"}</dd></div><div><dt>Authorized shares</dt><dd>${Number(company.authorized_shares || company.issued_shares || 0).toLocaleString(undefined,{maximumFractionDigits:6})}</dd></div><div><dt>Funding progress</dt><dd>${money(company.funding_completed || 0)} / ${money(company.funding_total || 0)}</dd></div></dl>${["active", "scheduled"].includes(String(company.status)) ? `<form id="issuerContributionForm"><input type="hidden" name="company_id" value="${Number(company.id)}"/><label>Add controller revenue<input name="amount" type="number" min="1" max="10000000" step="1" required placeholder="Amount from game bank"/></label><button type="submit">Fund treasury</button></form>` : ""}${company.status === "funding_failed" ? `<button type="button" data-issuer-retry="${Number(company.id)}">Retry failed bridge command</button><p class="issuer-error">${escapeHtml(company.funding_failure || "Funding command failed")}</p>` : ""}</section>
+    <section><header><span>CAPITAL LEDGER</span><strong>${ledger.length} entries</strong></header><div class="issuer-timeline">${ledger.map(entry => `<article><i class="${escapeHtml(entry.status)}"></i><div><b>${escapeHtml(humanLabel(entry.entry_type))}</b><small>${escapeHtml(entry.description || "Issuer ledger entry")}</small></div><strong>${entry.direction === "outflow" ? "-" : "+"}${money(entry.amount || 0)}<small>${humanLabel(entry.status)}</small></strong></article>`).join("") || `<p>No ledger entries yet.</p>`}</div></section></div>
+    <div class="issuer-company-actions"><section><span>COMPANY WIRE</span><h2>Speak to the market.</h2><form id="issuerAnnouncementForm"><input type="hidden" name="company_id" value="${Number(company.id)}"/><label>Headline<input name="headline" maxlength="140" required/></label><label>Release type<select name="announcement_type"><option value="company_update">Company update</option><option value="earnings">Earnings</option><option value="product">Product</option><option value="leadership">Leadership</option><option value="risk_notice">Risk notice</option></select></label><label class="wide">Announcement<textarea name="body" minlength="20" maxlength="1600" required></textarea></label><label>Publish time<input name="scheduled_at" type="datetime-local"/></label><button type="submit">Publish to Company Wire</button></form></section><section class="issuer-filing-danger"><span>CHAPTER FILING</span><h2>End issuer operations.</h2><p>Filing immediately halts the security for developer review. It never erases FCX history or investor records.</p><form id="issuerBankruptcyForm"><input type="hidden" name="company_id" value="${Number(company.id)}"/><label>Reason<textarea name="reason" minlength="20" required></textarea></label><label>Type ${escapeHtml(company.ticker)} to confirm<input name="confirmation" required autocomplete="off"/></label><button type="submit" ${["active", "scheduled"].includes(String(company.status)) ? "" : "disabled"}>File bankruptcy</button></form></section></div>
+    ${releases.length ? `<section class="issuer-own-wire"><header><span>YOUR RELEASES</span><strong>${releases.length}</strong></header>${releases.map(item => `<article><time>${new Date(item.published_at || item.scheduled_at || item.created_at).toLocaleString()}</time><h3>${escapeHtml(item.headline)}</h3><p>${escapeHtml(item.body)}</p><small>${humanLabel(item.status)}</small></article>`).join("")}</section>` : ""}
+  </section>`;
+}
+
+function renderIssuerWire(data) {
+  const wire = data.company_wire || [];
+  return `<section class="issuer-wire"><header><span>FCX COMPANY WIRE</span><h1>Direct from the issuers.</h1><p>Public operating announcements from resident-controlled Faircroft companies. Releases are displayed exactly as filed.</p></header><div>${wire.map((item,index) => `<article style="--wire-index:${index}"><aside><b>${escapeHtml(item.ticker)}</b><span>${humanLabel(item.announcement_type)}</span><time>${new Date(item.published_at || item.created_at).toLocaleString()}</time></aside><main><h2>${escapeHtml(item.headline)}</h2><p>${escapeHtml(item.body)}</p><small>${escapeHtml(item.company_name)}</small></main></article>`).join("") || `<div class="issuer-wire-empty"><strong>The wire is quiet.</strong><span>Company releases will appear here as they are published.</span></div>`}</div></section>`;
+}
+
+function renderLegacyBusinessWorkspace() {
+  const data = state.cache.business || {};
+  const tabs = [["overview","Issuer desk"],["launch","Create IPO"],["company","My companies"],["wire","Company Wire"]];
+  if (!tabs.some(([id]) => id === state.businessTab)) state.businessTab = "overview";
+  const content = state.businessTab === "launch" ? renderIssuerLaunch(data) : state.businessTab === "company" ? renderIssuerCompany(data) : state.businessTab === "wire" ? renderIssuerWire(data) : renderIssuerOverview(data);
+  return `<section class="issuer-workspace"><header class="issuer-topbar"><button type="button" class="issuer-brand" data-business-tab="overview"><img src="/static/brand/faircroft-emblem.webp" alt=""/><span><b>Faircroft Foundry</b><small>FCX Issuer Network</small></span></button><nav>${tabs.map(([id,label]) => `<button type="button" class="${state.businessTab === id ? "active" : ""}" data-business-tab="${id}">${escapeHtml(label)}</button>`).join("")}</nav><div><span class="issuer-network"><i></i>PRIMARY MARKET ONLINE</span><button type="button" data-refresh-business-workspace>Sync</button><button type="button" data-close-business-workspace>Exit</button></div></header><main class="issuer-main">${content}</main><footer class="issuer-footer"><span>FCX issuer activity uses Faircroft in-game currency only.</span><span>Old Commerce licenses are archived and never converted into securities.</span></footer></section>`;
+}
+
+function bindLegacyBusinessWorkspace() {
+  $$('[data-business-tab]').forEach(button => button.addEventListener("click", () => { state.businessTab = button.dataset.businessTab; render(); }));
+  $$('[data-issuer-open]').forEach(button => button.addEventListener("click", () => { state.businessCompanyId=Number(button.dataset.issuerOpen); state.businessTab="company"; render(); }));
+  $$('[data-issuer-company]').forEach(button => button.addEventListener("click", () => { state.businessCompanyId=Number(button.dataset.issuerCompany); render(); }));
+  $('[data-close-business-workspace]')?.addEventListener("click", async () => { state.activeApp=null; await loadSession(); });
+  $('[data-refresh-business-workspace]')?.addEventListener("click", async () => { await loadAppData("business"); render(); });
+  const launchForm=$('#issuerLaunchForm');
+  const updateCapital=()=>{ if(!launchForm)return; const cap=Math.max(0,Number(launchForm.target_market_cap.value||0)),price=Math.max(.000001,Number(launchForm.opening_share_price.value||0)),pct=Math.max(5,Math.min(100,Number(launchForm.public_float_percent.value||25))),shares=cap/price; if($('[data-issuer-float]')) $('[data-issuer-float]').textContent=`${pct.toFixed(0)}%`; if($('[data-issuer-authorized]')) $('[data-issuer-authorized]').textContent=shares.toLocaleString(undefined,{maximumFractionDigits:6}); if($('[data-issuer-founder]')) $('[data-issuer-founder]').textContent=(shares*(100-pct)/100).toLocaleString(undefined,{maximumFractionDigits:6}); if($('[data-issuer-inventory]')) $('[data-issuer-inventory]').textContent=(shares*pct/100).toLocaleString(undefined,{maximumFractionDigits:6}); if($('[data-issuer-chunks]')) $('[data-issuer-chunks]').textContent=Math.max(1,Math.ceil(cap/10000000)).toLocaleString(); };
+  launchForm?.addEventListener('input',updateCapital); updateCapital();
+  launchForm?.addEventListener('submit',async event=>{event.preventDefault();const body=Object.fromEntries(new FormData(event.currentTarget).entries());delete body.certify;try{const result=await api('/api/business/companies',{method:'POST',body});state.businessCompanyId=result.company?.id;state.businessTab='company';toast('Capitalization staged through Bank Bridge');await loadAppData('business');render();}catch(error){toast(error.message);}});
+  $('#issuerContributionForm')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,id=Number(form.company_id.value);try{await api(`/api/business/companies/${id}/contributions`,{method:'POST',body:{amount:form.amount.value}});toast('Treasury contribution queued');await loadAppData('business');render();}catch(error){toast(error.message);}});
+  $('#issuerAnnouncementForm')?.addEventListener('submit',async event=>{event.preventDefault();const body=Object.fromEntries(new FormData(event.currentTarget).entries()),id=Number(body.company_id);delete body.company_id;try{await api(`/api/business/companies/${id}/announcements`,{method:'POST',body});toast('Company Wire release filed');await loadAppData('business');render();}catch(error){toast(error.message);}});
+  $('#issuerBankruptcyForm')?.addEventListener('submit',async event=>{event.preventDefault();if(!window.confirm('File this issuer for bankruptcy and halt its FCX security?'))return;const body=Object.fromEntries(new FormData(event.currentTarget).entries()),id=Number(body.company_id);delete body.company_id;try{await api(`/api/business/companies/${id}/bankruptcy`,{method:'POST',body});toast('Bankruptcy filing recorded');await loadAppData('business');render();}catch(error){toast(error.message);}});
+  $$('[data-issuer-retry]').forEach(button=>button.addEventListener('click',async()=>{try{await api(`/api/business/companies/${Number(button.dataset.issuerRetry)}/funding/retry`,{method:'POST',body:{}});toast('Funding command re-staged');await loadAppData('business');render();}catch(error){toast(error.message);}}));
 }
 
 function renderBusinessApply(data) {
@@ -13467,6 +13546,8 @@ function renderDevMarketSettings(market, users) {
   const listings = market.securities || [], codes = market.codes || [], programs = market.programs || [], promotions = market.promotions || [];
   const activeListings = listings.filter(item => Number(item.active) === 1 && String(item.lifecycle_status || "active") !== "bankrupt");
   const companyListings = activeListings.filter(item => String(item.security_type || "") !== "fund");
+  const residentIssuerListings = companyListings.filter(item => Number(item.issuer_company_id || 0) > 0 && Number(item.issuer_controller_id || 0) > 0);
+  const operatingCompanyListings = companyListings.filter(item => !residentIssuerListings.includes(item));
   const indexFunds = market.index_funds || [];
   const shareholders = market.shareholders || [];
   const ravenhoodAccounts = market.accounts || [];
@@ -13491,7 +13572,8 @@ function renderDevMarketSettings(market, users) {
   const movementSecurityOptions = [
     `<label class="market-program-option market-wide"><input type="checkbox" name="tickers" value="ALL" data-market-program-all/><i>ALL</i><span><strong>Entire market</strong><small>Every active operating company</small></span></label>`,
     ...(indexFunds.length ? [`<div class="market-program-option-group"><b>FAIRCROFT INDEXES</b>${indexFunds.map(x => `<label class="market-program-option"><input type="checkbox" name="tickers" value="${escapeHtml(x.ticker)}"/><i>${escapeHtml(x.ticker)}</i><span><strong>${escapeHtml(x.display_name || x.name)}</strong><small>Index fund · may be scheduled alone or in a group</small></span></label>`).join("")}</div>`] : []),
-    `<div class="market-program-option-group"><b>OPERATING COMPANIES</b>${companyListings.map(x => `<label class="market-program-option"><input type="checkbox" name="tickers" value="${escapeHtml(x.ticker)}"/><i>${escapeHtml(x.ticker)}</i><span><strong>${escapeHtml(x.name)}</strong><small>${escapeHtml(x.sector || "Operating company")}</small></span></label>`).join("")}</div>`,
+    ...(residentIssuerListings.length ? [`<div class="market-program-option-group"><b>RESIDENT-CONTROLLED ISSUERS</b>${residentIssuerListings.map(x => `<label class="market-program-option"><input type="checkbox" name="tickers" value="${escapeHtml(x.ticker)}"/><i>${escapeHtml(x.ticker)}</i><span><strong>${escapeHtml(x.name)}</strong><small>${escapeHtml(x.issuer_controller_name || "Resident controller")} · ${x.issuer_control_source === "existing_security" ? "assigned FCX stock" : "resident IPO"}</small></span></label>`).join("")}</div>`] : []),
+    ...(operatingCompanyListings.length ? [`<div class="market-program-option-group"><b>OTHER OPERATING COMPANIES</b>${operatingCompanyListings.map(x => `<label class="market-program-option"><input type="checkbox" name="tickers" value="${escapeHtml(x.ticker)}"/><i>${escapeHtml(x.ticker)}</i><span><strong>${escapeHtml(x.name)}</strong><small>${escapeHtml(x.sector || "Operating company")}</small></span></label>`).join("")}</div>`] : []),
   ].join("");
   const ravenhoodAccountRegistry = `<section class="dev-card market-account-registry">
     <header class="market-account-registry-head"><div><span>RAVENHOOD ACCOUNT DIRECTORY</span><h2>Resident portfolios</h2><p>Open an account to inspect its current Ravenhood buying power, equity, and live stock positions. This directory is read only.</p></div><aside><label><i>⌕</i><input data-market-account-search type="search" autocomplete="off" placeholder="Search name, CIV, email, or ticker"/></label><strong data-market-account-count>${ravenhoodAccounts.length} ACCOUNTS</strong></aside></header>
@@ -13859,6 +13941,25 @@ function renderDevPolicySettings(policy) {
   </div>`;
 }
 
+function renderDevBusinessSettings(settings = {}) {
+  const companies = settings.companies || [];
+  const securities = settings.available_securities || [];
+  const residents = settings.residents || [];
+  const assignments = settings.assignments || [];
+  const archive = settings.legacy_archive || {};
+  const controlled = companies.filter(company => company.controlling_user_id);
+  const funding = companies.filter(company => ["funding_pending", "funding_failed"].includes(String(company.status || "")));
+  const combinedValue = companies.reduce((sum, company) => sum + Number(company.live_market_cap || company.target_market_cap || 0), 0);
+  const residentOptions = `<option value="">Select resident account</option>${residents.map(resident => `<option value="${Number(resident.id)}">${escapeHtml(resident.name || resident.email || `Account ${resident.id}`)} · CIV ${escapeHtml(resident.civ_number || "pending")}</option>`).join("")}`;
+  return `<div class="dev-business-control">
+    <header class="dev-business-command"><div><span>FCX ISSUER AUTHORITY</span><h1>Business Settings</h1><p>Assign an existing FCX operating stock to a resident without changing its price, holders, history, index membership, capitalization, or trading state.</p></div><aside><i></i><b>PRIMARY MARKET ONLINE</b><small>Existing Commerce files remain archived</small></aside></header>
+    <section class="dev-business-metrics"><article><span>Resident controlled</span><strong>${controlled.length}</strong><small>${companies.length} issuer files</small></article><article><span>Unassigned FCX stocks</span><strong>${securities.length}</strong><small>Eligible for direct assignment</small></article><article><span>Live issuer value</span><strong>${money(combinedValue)}</strong><small>Preserved exchange valuation</small></article><article><span>Capital in transit</span><strong>${funding.length}</strong><small>Bank Bridge issuer files</small></article></section>
+    <section class="dev-business-assign"><header><span>DIRECT SECURITY ASSIGNMENT</span><h2>Attach an existing stock.</h2><p>This creates controller access only. It does not convert a legacy business, create shares, change the quote, or move resident holdings.</p></header><form id="devBusinessAssignForm"><label>Existing FCX security<select name="security_id" required><option value="">Select an unassigned stock</option>${securities.map(security => `<option value="${Number(security.id)}">${escapeHtml(security.ticker)} · ${escapeHtml(security.name)} · ${money(security.market_cap || 0)} cap</option>`).join("")}</select></label><label>Resident controller<select name="user_id" required>${residentOptions}</select></label><label class="wide">Assignment record<textarea name="note" minlength="8" maxlength="500" required placeholder="Document the authority and reason for this assignment."></textarea></label><label class="dev-business-certify wide"><input type="checkbox" required/> I confirm this attaches the existing FCX security exactly as it trades now and does not migrate a legacy license record.</label><button type="submit" ${securities.length ? "" : "disabled"}>Assign security</button></form></section>
+    <section class="dev-business-registry"><header><div><span>ISSUER CONTROL REGISTER</span><h2>Resident-controlled FCX companies</h2></div><strong>${companies.length}</strong></header><div class="dev-business-registry-head"><span>Issuer</span><span>Controller</span><span>Market state</span><span>Capital</span><span>Authority</span></div><div class="dev-business-registry-body">${companies.map(company => `<article data-dev-business-company="${Number(company.id)}"><div class="issuer"><i>${escapeHtml(String(company.ticker || "FC").slice(0,2))}</i><span><b>${escapeHtml(company.ticker)}</b><small>${escapeHtml(company.company_name)}</small></span></div><div><b>${escapeHtml(company.controller_name || "Unassigned")}</b><small>${company.controller_email ? escapeHtml(company.controller_email) : "No resident controller"}</small></div><div>${issuerCompanyStatus(company)}<small>${company.control_source === "existing_security" ? "Existing FCX security" : "Resident-created IPO"}</small></div><div><b>${money(company.live_market_cap || company.target_market_cap || 0)}</b><small>${company.live_price != null ? `${money(company.live_price)} per share` : humanLabel(company.funding_status || company.status)}</small></div><details><summary>Manage</summary><form data-dev-business-transfer="${Number(company.id)}"><label>Transfer controller<select name="user_id" required>${residentOptions}</select></label><label>Administrative note<textarea name="note" minlength="8" maxlength="500" required></textarea></label><button type="submit">Transfer control</button></form><button type="button" class="danger" data-dev-business-unassign="${Number(company.id)}" ${company.controlling_user_id ? "" : "disabled"}>Remove controller</button>${company.status === "funding_failed" ? `<button type="button" data-dev-business-retry="${Number(company.id)}">Retry funding command</button><small class="issuer-error">${escapeHtml(company.funding_failure || "Funding failed")}</small>` : ""}</details></article>`).join("") || `<div class="empty">No FCX issuer controllers are registered.</div>`}</div></section>
+    <div class="dev-business-lower"><section><header><span>CONTROL HISTORY</span><strong>${assignments.length}</strong></header>${assignments.slice(0,50).map(entry => `<article><time>${new Date(entry.created_at).toLocaleString()}</time><b>${escapeHtml(entry.ticker)} · ${escapeHtml(humanLabel(entry.action))}</b><span>${escapeHtml(entry.resident_name || "Controller removed")}</span><small>${escapeHtml(entry.note || `Recorded by ${entry.actor_name || "developer"}`)}</small></article>`).join("") || `<p class="empty">No controller actions recorded.</p>`}</section><section class="dev-business-archive"><header><span>RETIRED COMMERCE ARCHIVE</span><strong>READ ONLY</strong></header><div><b>${Number(archive.total || 0)}</b><span>preserved legacy records</span></div><dl><div><dt>Applications</dt><dd>${Number(archive.applications || 0)}</dd></div><div><dt>Licenses</dt><dd>${Number(archive.licenses || 0)}</dd></div></dl><p>These records are detached from the issuer portal. They are never treated as securities and cannot be assigned from this workspace.</p></section></div>
+  </div>`;
+}
+
 function renderDevTools() {
   const data = state.cache["dev-tools"] || {};
   const users = data.users || [], sanctions = data.sanctions || [], warnings = data.warnings || [], logs = data.audit_logs || [], codes = data.unlink_codes || [];
@@ -13875,6 +13976,7 @@ function renderDevTools() {
   if (state.devTab === "dmv-settings") return renderDevDmvSettings(data.dmv_settings || {});
   if (state.devTab === "court-settings") return renderDevCourtSettings(data.court_settings || {});
   if (state.devTab === "market-settings") return renderDevMarketSettings(data.market_settings || {}, users);
+  if (state.devTab === "business-settings") return renderDevBusinessSettings(data.business_settings || {});
   if (state.devTab === "leverage-settings") return renderDevLeverageSettings(data.leverage_settings || {});
   if (state.devTab === "lottery-settings") return renderDevLotterySettings(data.lottery_settings || {});
   if (state.devTab === "sportsbook-settings") return renderDevSportsbookSettings(data.sportsbook_settings || {});
@@ -15886,6 +15988,42 @@ function bindFineSettlement() {
 }
 
 function bindDevTools() {
+  $("#devBusinessAssignForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const body = Object.fromEntries(new FormData(form).entries());
+    try {
+      await api("/api/dev-tools/business/assign", {method: "POST", body});
+      toast("Existing FCX security assigned without changing exchange data");
+      await refreshDevTools();
+    } catch (error) { toast(error.message); }
+  });
+  $$('[data-dev-business-transfer]').forEach(form => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const body = Object.fromEntries(new FormData(form).entries());
+    try {
+      await api(`/api/dev-tools/business/companies/${Number(form.dataset.devBusinessTransfer)}/transfer`, {method: "POST", body});
+      toast("Issuer control transferred; FCX security data preserved");
+      await refreshDevTools();
+    } catch (error) { toast(error.message); }
+  }));
+  $$('[data-dev-business-unassign]').forEach(button => button.addEventListener("click", async () => {
+    const article = button.closest('[data-dev-business-company]');
+    const note = article?.querySelector('textarea[name="note"]')?.value?.trim() || "";
+    if (note.length < 8) { toast("Enter an administrative note before removing the controller"); return; }
+    try {
+      await api(`/api/dev-tools/business/companies/${Number(button.dataset.devBusinessUnassign)}/unassign`, {method: "POST", body: {note}});
+      toast("Resident controller removed; the FCX security remains unchanged");
+      await refreshDevTools();
+    } catch (error) { toast(error.message); }
+  }));
+  $$('[data-dev-business-retry]').forEach(button => button.addEventListener("click", async () => {
+    try {
+      await api(`/api/dev-tools/business/companies/${Number(button.dataset.devBusinessRetry)}/funding/retry`, {method: "POST", body: {}});
+      toast("Issuer funding command restaged");
+      await refreshDevTools();
+    } catch (error) { toast(error.message); }
+  }));
   $("[data-dev-generate-fnn]")?.addEventListener("click", async (event) => {
     if (!window.confirm("Replace today’s FNN edition? This will publish a newly generated edition to every reader.")) return;
     const button = event.currentTarget;
