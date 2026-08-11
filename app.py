@@ -34,6 +34,7 @@ from insurance_rules import insurance_claim_filing_error
 from market_math import (
     market_cap_weighted_allocations,
     market_gemini_exposure_shares,
+    ravenhood_liquidation_hunt_quote,
     ravenhood_security_session_open,
     ravenhood_margin_metrics,
     ravenhood_margin_quote,
@@ -2236,6 +2237,14 @@ SYSTEM_SETTING_DEFAULTS = {
     "market_margin_maintenance_percent": "20.00",
     "market_margin_max_open_positions": "5",
     "market_margin_max_account_notional": "10000000.00",
+    "market_liquidation_hunts_enabled": "0",
+    "market_liquidation_hunt_threshold": "100000000.00",
+    "market_liquidation_hunt_probability_percent": "25.00",
+    "market_liquidation_hunt_intensity": "light",
+    "market_liquidation_hunt_max_move_percent": "2.00",
+    "market_liquidation_hunt_cooldown_minutes": "60",
+    "market_liquidation_hunt_market_hours_only": "1",
+    "market_liquidation_hunt_last_tick": "",
     "market_ai_enabled": "1",
     "market_autopilot_enabled": "0",
     "market_autopilot_interval_minutes": "5",
@@ -4410,6 +4419,38 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS market_margin_positions_opened_idx ON market_margin_positions(opened_at DESC)")
     db.execute(
         """
+        CREATE TABLE IF NOT EXISTS market_liquidation_hunt_events (
+            id SERIAL PRIMARY KEY,
+            account_id INTEGER NOT NULL,
+            position_id INTEGER NOT NULL,
+            security_id INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            cycle_number INTEGER,
+            buying_power NUMERIC(18,2) NOT NULL DEFAULT 0,
+            direction TEXT NOT NULL,
+            leverage NUMERIC(6,2) NOT NULL,
+            old_price NUMERIC(14,4) NOT NULL,
+            liquidation_price NUMERIC(14,4) NOT NULL,
+            new_price NUMERIC(14,4) NOT NULL,
+            movement_percent NUMERIC(10,4) NOT NULL,
+            gap_before_percent NUMERIC(10,4) NOT NULL,
+            gap_after_percent NUMERIC(10,4) NOT NULL,
+            intensity TEXT NOT NULL,
+            result_status TEXT NOT NULL DEFAULT 'pressured',
+            created_by INTEGER,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (account_id) REFERENCES market_accounts(id) ON DELETE CASCADE,
+            FOREIGN KEY (position_id) REFERENCES market_margin_positions(id) ON DELETE CASCADE,
+            FOREIGN KEY (security_id) REFERENCES market_securities(id) ON DELETE CASCADE,
+            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS market_liquidation_hunt_events_position_idx ON market_liquidation_hunt_events(position_id,created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS market_liquidation_hunt_events_account_idx ON market_liquidation_hunt_events(account_id,created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS market_liquidation_hunt_events_created_idx ON market_liquidation_hunt_events(created_at DESC)")
+    db.execute(
+        """
         CREATE TABLE IF NOT EXISTS market_margin_order_requests (
             id SERIAL PRIMARY KEY,
             account_id INTEGER NOT NULL,
@@ -5989,6 +6030,14 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "market_margin_maintenance_percent": max(5.0, min(80.0, float(raw.get("market_margin_maintenance_percent") or 20))),
         "market_margin_max_open_positions": max(1, min(25, int(raw.get("market_margin_max_open_positions") or 5))),
         "market_margin_max_account_notional": max(100.0, min(1000000000.0, float(raw.get("market_margin_max_account_notional") or 10000000))),
+        "market_liquidation_hunts_enabled": str(raw.get("market_liquidation_hunts_enabled") or "0") in ("1", "true", "True", "yes", "on"),
+        "market_liquidation_hunt_threshold": max(1000000.0, min(999999999999.99, float(raw.get("market_liquidation_hunt_threshold") or 100000000))),
+        "market_liquidation_hunt_probability_percent": max(0.0, min(100.0, float(raw.get("market_liquidation_hunt_probability_percent") or 25))),
+        "market_liquidation_hunt_intensity": str(raw.get("market_liquidation_hunt_intensity") or "light").strip().lower() if str(raw.get("market_liquidation_hunt_intensity") or "light").strip().lower() in ("light", "aggressive", "extreme") else "light",
+        "market_liquidation_hunt_max_move_percent": max(0.01, min(15.0, float(raw.get("market_liquidation_hunt_max_move_percent") or 2))),
+        "market_liquidation_hunt_cooldown_minutes": max(1, min(10080, int(raw.get("market_liquidation_hunt_cooldown_minutes") or 60))),
+        "market_liquidation_hunt_market_hours_only": str(raw.get("market_liquidation_hunt_market_hours_only") or "1") in ("1", "true", "True", "yes", "on"),
+        "market_liquidation_hunt_last_tick": str(raw.get("market_liquidation_hunt_last_tick") or "")[:80],
         "market_ai_enabled": str(raw.get("market_ai_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "market_autopilot_enabled": str(raw.get("market_autopilot_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "market_autopilot_interval_minutes": max(1, min(60, int(raw.get("market_autopilot_interval_minutes") or 5))),
@@ -7497,6 +7546,10 @@ def run_manual_market_volatility_cycle(actor_id: int, cycle_number: int, profile
                 actor_id,
                 cycle_number,
             )
+            hunt = run_ravenhood_liquidation_hunt(
+                cycle_db, get_system_settings(cycle_db), "local", cycle_number, actor_id,
+            )
+            result["liquidation_hunt"] = hunt
             finish_market_automation_cycle(cycle_db, cycle_number, "local-manual", result, "completed")
             set_system_setting(cycle_db, "market_autopilot_last_tick", now_iso())
             add_admin_audit(
@@ -7562,6 +7615,10 @@ def run_manual_market_ai_cycle(
                 provider,
                 cycle_number,
             )
+            hunt = run_ravenhood_liquidation_hunt(
+                cycle_db, get_system_settings(cycle_db), provider, cycle_number, actor_id,
+            )
+            result["liquidation_hunt"] = hunt
             completed_at = now_iso()
             set_system_setting(cycle_db, "market_ai_last_success_at", completed_at)
             set_system_setting(cycle_db, "market_ai_last_status", "completed")
@@ -8221,6 +8278,153 @@ def process_ravenhood_margin_liquidations(db: Database, settings: dict[str, Any]
     return liquidated
 
 
+def run_ravenhood_liquidation_hunt(
+    db: Database,
+    settings: dict[str, Any],
+    provider: str,
+    cycle_number: int | None = None,
+    actor_id: int | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Apply one bounded, identity-blind market-maker pressure event.
+
+    AI providers never receive resident or position data. After a completed
+    cycle this backend routine selects at most one eligible open position,
+    moves its public quote toward (never through) normal liquidation, and
+    records the full decision for developer audit.
+    """
+    result: dict[str, Any] = {
+        "enabled": bool(settings.get("market_liquidation_hunts_enabled")),
+        "eligible": 0,
+        "selected": False,
+        "moved": False,
+        "provider": str(provider or "local").strip().lower()[:40],
+        "cycle_number": cycle_number,
+    }
+    if not result["enabled"]:
+        result["reason"] = "disabled"
+        return result
+    probability = float(settings.get("market_liquidation_hunt_probability_percent") or 0)
+    if not force and (probability <= 0 or secrets.randbelow(10000) >= int(round(probability * 100))):
+        result["reason"] = "probability_gate"
+        return result
+
+    threshold = float(settings.get("market_liquidation_hunt_threshold") or 100000000)
+    cooldown_minutes = int(settings.get("market_liquidation_hunt_cooldown_minutes") or 60)
+    market_hours_only = bool(settings.get("market_liquidation_hunt_market_hours_only"))
+    current = utcnow()
+    positions = all_rows(
+        db,
+        """SELECT p.*,s.ticker,s.name AS security_name,s.price AS mark_price,
+                  s.active,s.lifecycle_status,a.cash_balance AS buying_power,a.user_id,
+                  u.name AS resident_name,u.civ_number,
+                  (SELECT h.created_at FROM market_liquidation_hunt_events h
+                   WHERE h.position_id=p.id ORDER BY h.created_at DESC,h.id DESC LIMIT 1) AS last_hunt_at
+           FROM market_margin_positions p
+           JOIN market_securities s ON s.id=p.security_id
+           JOIN market_accounts a ON a.id=p.account_id
+           JOIN users u ON u.id=a.user_id
+           WHERE p.status='open' AND a.status='active' AND s.active=1
+             AND COALESCE(s.lifecycle_status,'active')='active'
+             AND a.cash_balance>=?
+           ORDER BY a.cash_balance DESC,p.entry_notional DESC,p.id""",
+        (threshold,),
+    )
+    eligible: list[tuple[float, DbRow, dict[str, Any]]] = []
+    for position in positions:
+        if market_hours_only and not ravenhood_security_session_open(
+            bool(settings.get("market_open")),
+            str(position.get("ticker") or ""),
+            bool(settings.get("market_fcxv_24h_enabled")),
+        ):
+            continue
+        last_hunt_at = parse_iso(position.get("last_hunt_at")) if position.get("last_hunt_at") else None
+        if not force and last_hunt_at and (current - last_hunt_at).total_seconds() < cooldown_minutes * 60:
+            continue
+        metrics = ravenhood_margin_metrics(
+            position["direction"], position["entry_price"], position["mark_price"], position["quantity"],
+            position["collateral"], position["leverage"], settings["market_trade_fee_percent"],
+            settings["market_margin_maintenance_percent"] / 100.0,
+        )
+        if metrics["liquidatable"]:
+            continue
+        mark = float(position["mark_price"])
+        boundary = float(position["liquidation_price"])
+        risk_distance = abs(mark - boundary) / max(0.0001, mark) * 100.0
+        eligible.append((risk_distance, position, metrics))
+    result["eligible"] = len(eligible)
+    if not eligible:
+        result["reason"] = "no_eligible_positions"
+        return result
+
+    eligible.sort(key=lambda item: (item[0], -float(item[1].get("entry_notional") or 0), int(item[1]["id"])))
+    _risk_distance, position, _metrics = eligible[0]
+    quote = ravenhood_liquidation_hunt_quote(
+        position["direction"], position["mark_price"], position["liquidation_price"],
+        settings.get("market_liquidation_hunt_intensity") or "light",
+        settings.get("market_liquidation_hunt_max_move_percent") or 2,
+    )
+    result.update({"selected": True, "position_id": int(position["id"]), "ticker": position["ticker"], **quote})
+    if not quote["moved"]:
+        return result
+
+    event_time = now_iso()
+    old_price = float(quote["old_price"])
+    new_price = float(quote["new_price"])
+    db.execute(
+        "UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?",
+        (new_price, event_time, position["security_id"]),
+    )
+    db.execute(
+        "INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)",
+        (position["security_id"], new_price, f"liquidation_hunt:{result['provider']}"[:40], event_time),
+    )
+    price_factor = new_price / max(0.0001, old_price)
+    for program in all_rows(db, "SELECT id,start_price FROM market_price_programs WHERE status='active' AND security_id=?", (position["security_id"],)):
+        db.execute(
+            "UPDATE market_price_programs SET start_price=? WHERE id=?",
+            (max(0.01, round(float(program.get("start_price") or old_price) * price_factor, 4)), program["id"]),
+        )
+    record_market_system_trades(
+        db, int(position["security_id"]), old_price, new_price,
+        f"liquidation_hunt:{result['provider']}",
+        "Controlled market-maker pressure under developer-configured liquidation-hunt guardrails.",
+    )
+    db.execute(
+        """INSERT INTO market_liquidation_hunt_events
+           (account_id,position_id,security_id,provider,cycle_number,buying_power,direction,leverage,
+            old_price,liquidation_price,new_price,movement_percent,gap_before_percent,gap_after_percent,
+            intensity,result_status,created_by,created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            position["account_id"], position["id"], position["security_id"], result["provider"], cycle_number,
+            round(float(position.get("buying_power") or 0), 2), position["direction"], position["leverage"],
+            old_price, position["liquidation_price"], new_price, quote["movement_percent"],
+            quote["gap_before_percent"], quote["gap_after_percent"],
+            settings.get("market_liquidation_hunt_intensity") or "light", "pressured", actor_id, event_time,
+        ),
+    )
+    db.execute(
+        "INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('liquidation_hunt',?,?,?,?)",
+        (
+            f"{position['ticker']} liquidity pressure",
+            f"{result['provider'].title()} cycle applied {float(quote['movement_percent']):+.2f}% bounded market-maker pressure; no resident identity was exposed to the provider.",
+            actor_id, event_time,
+        ),
+    )
+    set_system_setting(db, "market_liquidation_hunt_last_tick", event_time)
+    update_market_index_prices(db, force_history=True)
+    result["moved"] = True
+    result["resident_name"] = position["resident_name"]
+    result["civ_number"] = position["civ_number"]
+    if actor_id is not None:
+        add_admin_audit(
+            db, actor_id, "market.liquidation_hunt.executed", int(position["user_id"]),
+            {key: value for key, value in result.items() if key not in ("resident_name",)},
+        )
+    return result
+
+
 def process_queued_ravenhood_orders(db: Database, settings: dict[str, Any]) -> int:
     """Execute eligible queued ordinary-share orders for the active session."""
     core_open = bool(settings["market_open"])
@@ -8305,6 +8509,9 @@ def market_automation_worker() -> None:
                         amplitude = market_autopilot_amplitude(settings)
                         cycle_number = begin_market_automation_cycle(db, "local", profile)
                         result = market_volatility_cycle(db, amplitude, f"autopilot:{profile}", cycle_number=cycle_number)
+                        result["liquidation_hunt"] = run_ravenhood_liquidation_hunt(
+                            db, settings, "local", cycle_number,
+                        )
                         finish_market_automation_cycle(db, cycle_number, "local", result, "completed")
                         set_system_setting(db, "market_autopilot_last_tick", current.isoformat())
                 funds = all_rows(db, "SELECT id,last_rebalanced_at,rebalance_interval_hours FROM market_index_funds WHERE enabled=1")
@@ -8401,6 +8608,9 @@ def market_gemini_worker() -> None:
                     completed_at = now_iso()
                     if result is not None:
                         status = "completed" if successful_provider == primary else ("fallback_local" if successful_provider == "local" else "fallback_completed")
+                        result["liquidation_hunt"] = run_ravenhood_liquidation_hunt(
+                            db, get_system_settings(db), successful_provider, cycle_number,
+                        )
                         set_system_setting(db, "market_ai_last_success_at", completed_at)
                         set_system_setting(db, "market_ai_last_status", status)
                         set_system_setting(db, "market_ai_last_provider", successful_provider)
@@ -11269,6 +11479,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_market_preset(db, user)
                 elif path == "/api/dev-tools/market/volatility-cycle" and method == "POST":
                     self.api_dev_market_volatility_cycle(db, user)
+                elif path == "/api/dev-tools/market/liquidation-hunt" and method == "POST":
+                    self.api_dev_market_liquidation_hunt(db, user)
                 elif path == "/api/dev-tools/market/ai-briefing" and method == "POST":
                     self.api_dev_market_ai_briefing(db, user)
                 elif path == "/api/dev-tools/market/promotions" and method == "POST":
@@ -24283,13 +24495,21 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "margin_maintenance_percent": settings["market_margin_maintenance_percent"],
                 "margin_max_open_positions": settings["market_margin_max_open_positions"],
                 "margin_max_account_notional": settings["market_margin_max_account_notional"],
+                "liquidation_hunts_enabled": settings["market_liquidation_hunts_enabled"],
+                "liquidation_hunt_threshold": settings["market_liquidation_hunt_threshold"],
+                "liquidation_hunt_probability_percent": settings["market_liquidation_hunt_probability_percent"],
+                "liquidation_hunt_intensity": settings["market_liquidation_hunt_intensity"],
+                "liquidation_hunt_max_move_percent": settings["market_liquidation_hunt_max_move_percent"],
+                "liquidation_hunt_cooldown_minutes": settings["market_liquidation_hunt_cooldown_minutes"],
+                "liquidation_hunt_market_hours_only": settings["market_liquidation_hunt_market_hours_only"],
+                "liquidation_hunt_last_tick": settings["market_liquidation_hunt_last_tick"],
                 "securities": [dict(row) for row in all_rows(db, """SELECT id,ticker,name,security_type,active,lifecycle_status,
                     margin_enabled,margin_max_leverage,price
                     FROM market_securities
                     WHERE active=1 AND lifecycle_status<>'bankrupt'
                     ORDER BY security_type,ticker""")],
                 "margin_positions": [dict(row) for row in all_rows(db, """SELECT p.*,s.ticker,s.name AS security_name,s.price AS mark_price,
-                    u.id AS user_id,u.name AS resident_name,u.civ_number,
+                    u.id AS user_id,u.name AS resident_name,u.civ_number,a.cash_balance AS buying_power,
                     CASE WHEN p.direction='long' THEN p.quantity*(s.price-p.entry_price)
                          ELSE p.quantity*(p.entry_price-s.price) END AS live_pnl
                     FROM market_margin_positions p
@@ -24297,6 +24517,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     JOIN market_accounts a ON a.id=p.account_id
                     JOIN users u ON u.id=a.user_id
                     ORDER BY CASE WHEN p.status='open' THEN 0 ELSE 1 END,p.opened_at DESC LIMIT 500""")],
+                "liquidation_hunt_events": [dict(row) for row in all_rows(db, """SELECT h.*,s.ticker,s.name AS security_name,
+                    u.id AS user_id,u.name AS resident_name,u.civ_number
+                    FROM market_liquidation_hunt_events h
+                    JOIN market_securities s ON s.id=h.security_id
+                    JOIN market_accounts a ON a.id=h.account_id
+                    JOIN users u ON u.id=a.user_id
+                    ORDER BY h.created_at DESC,h.id DESC LIMIT 100""")],
             }
 
         if section == "business-settings":
@@ -24446,7 +24673,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "index_funds": market_index_payload(db),
                 "exchange_market_cap": round(float((one(db, "SELECT COALESCE(SUM(price*issued_shares),0) AS total FROM market_securities WHERE active=1 AND security_type<>'fund'") or {}).get("total") or 0), 2),
                 "margin_positions": [dict(row) for row in all_rows(db, """SELECT p.*,s.ticker,s.name AS security_name,s.price AS mark_price,
-                    u.id AS user_id,u.name AS resident_name,u.civ_number,
+                    u.id AS user_id,u.name AS resident_name,u.civ_number,a.cash_balance AS buying_power,
                     CASE WHEN p.direction='long' THEN p.quantity*(s.price-p.entry_price)
                          ELSE p.quantity*(p.entry_price-s.price) END AS live_pnl
                     FROM market_margin_positions p
@@ -24454,6 +24681,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     JOIN market_accounts a ON a.id=p.account_id
                     JOIN users u ON u.id=a.user_id
                     ORDER BY CASE WHEN p.status='open' THEN 0 ELSE 1 END,p.opened_at DESC LIMIT 500""")],
+                "liquidation_hunt_events": [dict(row) for row in all_rows(db, """SELECT h.*,s.ticker,s.name AS security_name,
+                    u.id AS user_id,u.name AS resident_name,u.civ_number
+                    FROM market_liquidation_hunt_events h
+                    JOIN market_securities s ON s.id=h.security_id
+                    JOIN market_accounts a ON a.id=h.account_id
+                    JOIN users u ON u.id=a.user_id
+                    ORDER BY h.created_at DESC,h.id DESC LIMIT 100""")],
                 "securities": [dict(row) for row in all_rows(db, """SELECT s.*,
                     COALESCE(position.holder_count,0) AS holder_count,
                     COALESCE(position.outstanding_shares,0) AS outstanding_shares,
@@ -26751,6 +26985,32 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             set_system_setting(db, "market_margin_max_open_positions", str(margin_open_limit))
         if "margin_max_account_notional" in payload:
             set_system_setting(db, "market_margin_max_account_notional", str(margin_notional_limit))
+        hunt_intensity = str(payload.get("liquidation_hunt_intensity") or current_settings["market_liquidation_hunt_intensity"]).strip().lower()
+        if hunt_intensity not in ("light", "aggressive", "extreme"):
+            self.error(400, "Liquidation-hunt intensity must be light, aggressive, or extreme."); return
+        try:
+            hunt_threshold = max(1000000, min(999999999999.99, float(payload.get("liquidation_hunt_threshold", current_settings["market_liquidation_hunt_threshold"]))))
+            hunt_probability = max(0, min(100, float(payload.get("liquidation_hunt_probability_percent", current_settings["market_liquidation_hunt_probability_percent"]))))
+            hunt_max_move = max(0.01, min(15, float(payload.get("liquidation_hunt_max_move_percent", current_settings["market_liquidation_hunt_max_move_percent"]))))
+            hunt_cooldown = max(1, min(10080, int(payload.get("liquidation_hunt_cooldown_minutes", current_settings["market_liquidation_hunt_cooldown_minutes"]))))
+        except (TypeError, ValueError):
+            self.error(400, "Liquidation-hunt threshold, probability, quote limit, and cooldown must be numeric."); return
+        if "liquidation_hunts_enabled" in payload:
+            hunt_enabled = str(payload.get("liquidation_hunts_enabled") or "").strip().lower() in ("1", "true", "yes", "on")
+            set_system_setting(db, "market_liquidation_hunts_enabled", "1" if hunt_enabled else "0")
+        if "liquidation_hunt_threshold" in payload:
+            set_system_setting(db, "market_liquidation_hunt_threshold", str(hunt_threshold))
+        if "liquidation_hunt_probability_percent" in payload:
+            set_system_setting(db, "market_liquidation_hunt_probability_percent", str(hunt_probability))
+        if "liquidation_hunt_intensity" in payload:
+            set_system_setting(db, "market_liquidation_hunt_intensity", hunt_intensity)
+        if "liquidation_hunt_max_move_percent" in payload:
+            set_system_setting(db, "market_liquidation_hunt_max_move_percent", str(hunt_max_move))
+        if "liquidation_hunt_cooldown_minutes" in payload:
+            set_system_setting(db, "market_liquidation_hunt_cooldown_minutes", str(hunt_cooldown))
+        if "liquidation_hunt_market_hours_only" in payload:
+            hours_only = str(payload.get("liquidation_hunt_market_hours_only") or "").strip().lower() in ("1", "true", "yes", "on")
+            set_system_setting(db, "market_liquidation_hunt_market_hours_only", "1" if hours_only else "0")
         if "ai_enabled" in payload:
             set_system_setting(db, "market_ai_enabled", "1" if bool(payload.get("ai_enabled")) else "0")
         autopilot_profile = str(payload.get("autopilot_profile") or current_settings["market_autopilot_profile"]).strip().lower()
@@ -26796,8 +27056,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 set_system_setting(db, "market_ai_last_status", "waiting")
                 set_system_setting(db, "market_ai_last_error", "")
         updated_settings = get_system_settings(db)
-        add_admin_audit(db, int(user["id"]), "market.settings.updated", details={"market_open": updated_settings["market_open"], "manual_override": updated_settings["market_manual_override"], "schedule_open_time": updated_settings["market_schedule_open_time"], "schedule_close_time": updated_settings["market_schedule_close_time"], "schedule_timezone": updated_settings["market_schedule_timezone"], "weekends_enabled": updated_settings["market_weekends_enabled"], "fcxv_24h_enabled": updated_settings["market_fcxv_24h_enabled"], "transfer_fee": transfer_fee, "trade_fee": trade_fee, "automation_provider": updated_settings["market_automation_provider"], "autopilot_profile": updated_settings["market_autopilot_profile"], "volatility_range": [updated_settings["market_volatility_min_percent"], updated_settings["market_volatility_percent"]], "ai_interval_minutes": updated_settings["market_ai_interval_minutes"], "ai_cooldown_minutes": updated_settings["market_ai_cooldown_minutes"], "ai_fallback_enabled": updated_settings["market_ai_fallback_enabled"], "local_fallback_enabled": updated_settings["market_ai_local_fallback_enabled"]})
+        add_admin_audit(db, int(user["id"]), "market.settings.updated", details={"market_open": updated_settings["market_open"], "manual_override": updated_settings["market_manual_override"], "schedule_open_time": updated_settings["market_schedule_open_time"], "schedule_close_time": updated_settings["market_schedule_close_time"], "schedule_timezone": updated_settings["market_schedule_timezone"], "weekends_enabled": updated_settings["market_weekends_enabled"], "fcxv_24h_enabled": updated_settings["market_fcxv_24h_enabled"], "transfer_fee": transfer_fee, "trade_fee": trade_fee, "automation_provider": updated_settings["market_automation_provider"], "autopilot_profile": updated_settings["market_autopilot_profile"], "volatility_range": [updated_settings["market_volatility_min_percent"], updated_settings["market_volatility_percent"]], "ai_interval_minutes": updated_settings["market_ai_interval_minutes"], "ai_cooldown_minutes": updated_settings["market_ai_cooldown_minutes"], "ai_fallback_enabled": updated_settings["market_ai_fallback_enabled"], "local_fallback_enabled": updated_settings["market_ai_local_fallback_enabled"], "liquidation_hunts_enabled": updated_settings["market_liquidation_hunts_enabled"], "liquidation_hunt_threshold": updated_settings["market_liquidation_hunt_threshold"], "liquidation_hunt_probability_percent": updated_settings["market_liquidation_hunt_probability_percent"], "liquidation_hunt_intensity": updated_settings["market_liquidation_hunt_intensity"], "liquidation_hunt_max_move_percent": updated_settings["market_liquidation_hunt_max_move_percent"], "liquidation_hunt_cooldown_minutes": updated_settings["market_liquidation_hunt_cooldown_minutes"], "liquidation_hunt_market_hours_only": updated_settings["market_liquidation_hunt_market_hours_only"]})
         self.send_json(200, {"ok": True, "market_session": {"market_open": updated_settings["market_open"], "fcxv_24h_enabled": updated_settings["market_fcxv_24h_enabled"], "manual_override": updated_settings["market_manual_override"], "session_reason": updated_settings["market_session_reason"], "local_time": updated_settings["market_local_time"], "next_transition_at": updated_settings["market_next_transition_at"]}})
+
+    def api_dev_market_liquidation_hunt(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        settings = get_system_settings(db)
+        if not settings["market_liquidation_hunts_enabled"]:
+            self.error(409, "Enable liquidation hunts in Stock Settings before running a controlled hunt."); return
+        result = run_ravenhood_liquidation_hunt(
+            db, settings, "manual", actor_id=int(user["id"]), force=True,
+        )
+        self.send_json(200, {"ok": True, "hunt": result})
 
     def api_dev_market_volatility_cycle(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)

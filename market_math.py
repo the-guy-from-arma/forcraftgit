@@ -152,3 +152,77 @@ def ravenhood_margin_metrics(
         "estimated_payout": round(payout, 2),
         "liquidatable": equity <= maintenance_equity + 0.0001,
     }
+
+
+def ravenhood_liquidation_hunt_quote(
+    direction: str,
+    mark_price: Any,
+    liquidation_price: Any,
+    intensity: str,
+    max_move_percent: Any,
+) -> dict[str, float | str | bool]:
+    """Move one quote toward, but never through, a liquidation boundary.
+
+    The market engine chooses the eligible position. This helper only applies
+    the configured, deterministic guardrails so Local and hosted AI providers
+    receive identical treatment and cannot directly force a liquidation.
+    """
+    normalized_direction = str(direction or "").strip().lower()
+    if normalized_direction not in {"long", "short"}:
+        raise ValueError("direction_must_be_long_or_short")
+    mark = float(mark_price or 0)
+    boundary = float(liquidation_price or 0)
+    if mark <= 0 or boundary <= 0:
+        raise ValueError("mark_and_liquidation_prices_must_be_positive")
+    normalized_intensity = str(intensity or "light").strip().lower()
+    intensity_factors = {"light": 0.20, "aggressive": 0.45, "extreme": 0.75}
+    if normalized_intensity not in intensity_factors:
+        raise ValueError("intensity_must_be_light_aggressive_or_extreme")
+    move_cap = max(0.01, min(15.0, float(max_move_percent or 0)))
+    safety_buffer = max(0.0001, mark * 0.0005)
+
+    if normalized_direction == "long":
+        usable_gap = mark - boundary - safety_buffer
+        gap_before = max(0.0, (mark - boundary) / mark * 100.0)
+        if usable_gap <= 0:
+            return {
+                "moved": False, "reason": "at_liquidation_boundary", "direction": normalized_direction,
+                "old_price": round(mark, 4), "new_price": round(mark, 4),
+                "liquidation_price": round(boundary, 4), "movement_percent": 0.0,
+                "gap_before_percent": round(gap_before, 4), "gap_after_percent": round(gap_before, 4),
+            }
+        desired = usable_gap * intensity_factors[normalized_intensity]
+        movement = min(desired, mark * move_cap / 100.0)
+        new_price = max(boundary + safety_buffer, mark - movement)
+    else:
+        usable_gap = boundary - mark - safety_buffer
+        gap_before = max(0.0, (boundary - mark) / mark * 100.0)
+        if usable_gap <= 0:
+            return {
+                "moved": False, "reason": "at_liquidation_boundary", "direction": normalized_direction,
+                "old_price": round(mark, 4), "new_price": round(mark, 4),
+                "liquidation_price": round(boundary, 4), "movement_percent": 0.0,
+                "gap_before_percent": round(gap_before, 4), "gap_after_percent": round(gap_before, 4),
+            }
+        desired = usable_gap * intensity_factors[normalized_intensity]
+        movement = min(desired, mark * move_cap / 100.0)
+        new_price = min(boundary - safety_buffer, mark + movement)
+
+    new_price = max(0.0001, round(new_price, 4))
+    movement_percent = (new_price / mark - 1.0) * 100.0
+    gap_after = (
+        (new_price - boundary) / new_price * 100.0
+        if normalized_direction == "long"
+        else (boundary - new_price) / new_price * 100.0
+    )
+    return {
+        "moved": abs(new_price - mark) >= 0.00005,
+        "reason": "pressured",
+        "direction": normalized_direction,
+        "old_price": round(mark, 4),
+        "new_price": new_price,
+        "liquidation_price": round(boundary, 4),
+        "movement_percent": round(movement_percent, 4),
+        "gap_before_percent": round(gap_before, 4),
+        "gap_after_percent": round(max(0.0, gap_after), 4),
+    }

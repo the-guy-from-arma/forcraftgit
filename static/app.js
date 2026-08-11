@@ -13647,6 +13647,10 @@ function renderDevMarketSettings(market, users) {
   const selectedCooldown = automationProvider === "gemini" ? market.gemini_cooldown_until : automationProvider === "deepseek" ? market.deepseek_cooldown_until : "";
   const selectedCooldownAt = selectedCooldown && new Date(selectedCooldown).getTime() > Date.now() ? new Date(selectedCooldown).toLocaleString() : "Ready now";
   const activeCycle = String(market.automation_active_cycle || "");
+  const huntEvents = market.liquidation_hunt_events || [];
+  const huntThreshold = Number(market.liquidation_hunt_threshold || 100000000);
+  const huntEligible = (market.margin_positions || []).filter(position => String(position.status || "").toLowerCase() === "open" && Number(position.buying_power || 0) >= huntThreshold);
+  const huntIntensity = ["light","aggressive","extreme"].includes(String(market.liquidation_hunt_intensity || "")) ? String(market.liquidation_hunt_intensity) : "light";
   const sessionMode = ["open", "closed"].includes(String(market.manual_override || "")) ? String(market.manual_override) : "schedule";
   const sessionReason = ({scheduled_open:"Core session",pre_market:"Pre-market",after_hours:"After hours",weekend:"Weekend closure",manual_open:"Force opened",manual_closed:"Force closed"})[market.session_reason] || "Scheduled session";
   const marketLocalTime = market.local_time ? new Date(market.local_time).toLocaleString(undefined, {weekday:"short", month:"short", day:"numeric", hour:"numeric", minute:"2-digit", timeZone:"America/New_York", timeZoneName:"short"}) : "New York time unavailable";
@@ -13696,6 +13700,21 @@ function renderDevMarketSettings(market, users) {
         <button class="secondary" type="button" data-market-volatility-cycle data-cycle-provider="${escapeHtml(automationProvider)}">Run one ${escapeHtml(humanLabel(automationProvider))} cycle now</button><button class="primary">Save & activate autopilot</button>
         <div class="market-interval-runner wide"><div><span>INTERVAL SEQUENCE</span><h3>Distribute repeated cycles across a timeframe</h3><p>Cycles run one at a time to protect Railway and PostgreSQL. AI sequences stop automatically if the provider enters cooldown.</p></div><label>Number of cycles<input name="sequence_cycle_count" type="number" min="2" max="100" value="20"/></label><label>Total timeframe (minutes)<input name="sequence_timeframe_minutes" type="number" min="0.25" max="1440" step="0.25" value="6"/></label><button class="secondary" type="button" data-market-interval-sequence data-cycle-provider="${escapeHtml(automationProvider)}">Run 20 cycles across 6 minutes</button></div>
       </form>
+    </section>
+    <section class="dev-card market-hunt-control">
+      <div class="dev-card-header"><div><span>CONTROLLED LIQUIDITY PRESSURE</span><h2>Market-maker liquidation hunts</h2><p>After a completed Local, Gemini, or DeepSeek cycle, Faircroft may pressure one eligible leveraged position toward its normal liquidation boundary. The provider never receives resident identity or position data and the hunt cannot cross the boundary directly.</p></div><strong class="${market.liquidation_hunts_enabled ? "red" : "amber"}">${market.liquidation_hunts_enabled ? "HUNTS ARMED" : "HUNTS OFF"}</strong></div>
+      <form id="devMarketLiquidationHuntForm" class="form-grid market-hunt-form">
+        <label class="dev-certify wide"><input name="liquidation_hunts_enabled" type="checkbox" ${market.liquidation_hunts_enabled ? "checked" : ""}/> Enable provider-independent liquidation hunting</label>
+        <label>Buying-power threshold<input name="liquidation_hunt_threshold" type="number" min="1000000" max="999999999999.99" step="1000000" value="${huntThreshold}"/><small>Only accounts at or above this settled Ravenhood buying power are eligible.</small></label>
+        <label>Per-cycle chance<input name="liquidation_hunt_probability_percent" type="number" min="0" max="100" step="0.1" value="${Number(market.liquidation_hunt_probability_percent || 25)}"/><small>Chance that one eligible position is selected after a completed market cycle.</small></label>
+        <label>Pressure intensity<select name="liquidation_hunt_intensity"><option value="light" ${huntIntensity==="light"?"selected":""}>Light Â· 20% of remaining gap</option><option value="aggressive" ${huntIntensity==="aggressive"?"selected":""}>Aggressive Â· 45% of remaining gap</option><option value="extreme" ${huntIntensity==="extreme"?"selected":""}>Extreme Â· 75% of remaining gap</option></select></label>
+        <label>Maximum quote movement<input name="liquidation_hunt_max_move_percent" type="number" min="0.01" max="15" step="0.01" value="${Number(market.liquidation_hunt_max_move_percent || 2)}"/><small>Hard percent cap on the additional quote movement caused by a hunt.</small></label>
+        <label>Position cooldown<input name="liquidation_hunt_cooldown_minutes" type="number" min="1" max="10080" value="${Number(market.liquidation_hunt_cooldown_minutes || 60)}"/><small>Minutes before the same leveraged position may be pressured again.</small></label>
+        <label class="dev-certify"><input name="liquidation_hunt_market_hours_only" type="checkbox" ${market.liquidation_hunt_market_hours_only ? "checked" : ""}/> Respect each security's trading session</label>
+        <div class="market-hunt-policy wide"><span><small>ELIGIBLE NOW</small><b>${huntEligible.length}</b></span><span><small>THRESHOLD</small><b>${money(huntThreshold)}</b></span><span><small>LAST PRESSURE</small><b>${market.liquidation_hunt_last_tick ? new Date(market.liquidation_hunt_last_tick).toLocaleString() : "Never"}</b></span><p>Selection is deterministic: nearest normal liquidation boundary first, then largest exposure. At most one quote is pressured per completed cycle.</p></div>
+        <button class="secondary" type="button" data-market-run-hunt>Run one controlled hunt</button><button class="primary">Save hunt policy</button>
+      </form>
+      <div class="market-hunt-ledger"><header><span>DEVELOPER AUDIT</span><strong>${huntEvents.length} RECENT EVENT${huntEvents.length===1?"":"S"}</strong></header>${huntEvents.length ? huntEvents.slice(0,30).map(event=>`<article><i>${escapeHtml(event.ticker || "â€”")}</i><div><b>${escapeHtml(event.resident_name || "Resident")} Â· CIV ${escapeHtml(event.civ_number || "â€”")}</b><small>${escapeHtml(String(event.direction || "").toUpperCase())} / ${Number(event.leverage || 0)}x Â· ${money(event.buying_power || 0)} buying power</small></div><span><b>${money(event.old_price || 0)} â†’ ${money(event.new_price || 0)}</b><small>${Number(event.movement_percent || 0).toFixed(2)}% Â· gap ${Number(event.gap_before_percent || 0).toFixed(2)}% â†’ ${Number(event.gap_after_percent || 0).toFixed(2)}%</small></span><em>${escapeHtml(humanLabel(event.provider || "local"))}<small>${new Date(event.created_at).toLocaleString()}</small></em></article>`).join("") : `<div class="empty compact">No controlled hunt has executed.</div>`}</div>
     </section>
     <div class="dev-view-intro"><div><span>RAVENHOOD EXCHANGE CONTROL</span><h2>Market operations</h2><p>Control the Faircroft market, authorize in-game cash handoffs, and stage exchange price events.</p></div><strong class="${market.market_open ? "green" : "red"}">${market.market_open ? "MARKET OPEN" : "MARKET CLOSED"}</strong></div>
     <section class="dev-card market-index-control"><div class="dev-card-header"><div><span>INDEX OPERATIONS</span><h2>FCXS + FCXV fund desk</h2><p>Existing companies are ranked from recorded volatility, history depth, liquidity, holders, and market capitalization. Resident holdings and Gemini-generated constituent positions are accounted for separately.</p></div><aside><small>OPERATING COMPANY CAP</small><strong>${money(market.exchange_market_cap || 0)}</strong><button class="primary" type="button" data-market-index-rebalance>Rebalance both funds</button></aside></div><div class="market-index-control-grid">${indexFunds.map(fund=>`<article class="${escapeHtml(fund.risk_profile || "index")}"><header><span><i>${fund.risk_profile==="stability"?"S":"V"}</i><small>${escapeHtml(String(fund.risk_profile||"index").toUpperCase())}</small></span><div><h3>${escapeHtml(fund.ticker)}</h3><p>${escapeHtml(fund.display_name||fund.name)}</p></div><strong>${money(fund.price)}</strong></header><dl class="market-index-cap-ledger"><div><dt>Constituents</dt><dd>${Number(fund.constituents?.length||0)}</dd></div><div><dt>Fund holders</dt><dd>${Number(fund.holder_count||0)}<small>Resident accounts</small></dd></div><div><dt>Resident shares</dt><dd>${Number(fund.resident_units||0).toLocaleString(undefined,{maximumFractionDigits:4})}</dd></div><div><dt>Gemini shares</dt><dd>${Number(fund.gemini_shares||0).toLocaleString(undefined,{maximumFractionDigits:4})}<small>Fund-equivalent units from ${Number(fund.gemini_position_constituents||0)} positioned constituent${Number(fund.gemini_position_constituents||0)===1?"":"s"}</small></dd></div><div><dt>Total fund shares</dt><dd>${Number(fund.total_capitalized_units||0).toLocaleString(undefined,{maximumFractionDigits:4})}</dd></div><div><dt>Fund capitalization</dt><dd>${money(fund.market_cap||0)}<small>${money(fund.gemini_capitalization||0)} from Gemini constituent positions</small></dd></div><div><dt>Last rebalance</dt><dd>${fund.last_rebalanced_at?new Date(fund.last_rebalanced_at).toLocaleString():"Awaiting first cycle"}</dd></div></dl><div>${(fund.constituents||[]).map(item=>`<p><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}${Number(item.gemini_net_shares||0)>0?` · ${Number(item.gemini_net_shares).toLocaleString(undefined,{maximumFractionDigits:2})} Gemini shares`:""}</small></span><i><em style="width:${Math.max(2,Number(item.weight||0)*100).toFixed(2)}%"></em></i><strong>${(Number(item.weight||0)*100).toFixed(1)}%</strong></p>`).join("")||`<p class="empty">Composition will populate on the next rebalance.</p>`}</div></article>`).join("")}</div></section>
@@ -15334,6 +15353,41 @@ function bindDevWorkspace() {
   marketAutomationForm?.querySelectorAll('[name="automation_provider"]').forEach(input => input.addEventListener("change", syncMarketAutomationMode));
   syncMarketAutomationMode();
   marketAutomationForm?.addEventListener("submit", async event => { event.preventDefault(); const form=event.currentTarget; try { await api("/api/dev-tools/market/settings", {method:"PATCH",body:{autopilot_enabled:form.autopilot_enabled.checked,automation_provider:form.automation_provider.value,autopilot_profile:form.autopilot_profile.value,autopilot_interval_minutes:form.autopilot_interval_minutes.value,volatility_min_percent:form.volatility_min_percent.value,volatility_percent:form.volatility_percent.value,ai_interval_minutes:form.ai_interval_minutes.value,ai_cooldown_minutes:form.ai_cooldown_minutes.value,ai_fallback_enabled:form.ai_fallback_enabled.checked,local_fallback_enabled:form.local_fallback_enabled.checked}}); toast(`${humanLabel(form.automation_provider.value)} · ${humanLabel(form.autopilot_profile.value)} autopilot saved`); await refreshDevTools(); } catch(error){toast(error.message);} });
+  const marketHuntForm = $("#devMarketLiquidationHuntForm");
+  marketHuntForm?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    try {
+      await api("/api/dev-tools/market/settings", {method:"PATCH", body:{
+        liquidation_hunts_enabled:form.liquidation_hunts_enabled.checked,
+        liquidation_hunt_threshold:form.liquidation_hunt_threshold.value,
+        liquidation_hunt_probability_percent:form.liquidation_hunt_probability_percent.value,
+        liquidation_hunt_intensity:form.liquidation_hunt_intensity.value,
+        liquidation_hunt_max_move_percent:form.liquidation_hunt_max_move_percent.value,
+        liquidation_hunt_cooldown_minutes:form.liquidation_hunt_cooldown_minutes.value,
+        liquidation_hunt_market_hours_only:form.liquidation_hunt_market_hours_only.checked,
+      }});
+      toast("Liquidation-hunt policy saved");
+      await refreshDevTools();
+    } catch(error) { toast(error.message); }
+  });
+  marketHuntForm?.querySelector("[data-market-run-hunt]")?.addEventListener("click", async event => {
+    if (!confirm("Run one controlled hunt now? The backend will select at most one eligible position and cannot cross its liquidation boundary directly.")) return;
+    const button = event.currentTarget;
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = "Running controlled hunt...";
+    try {
+      const result = await api("/api/dev-tools/market/liquidation-hunt", {method:"POST", body:{}});
+      const hunt = result.hunt || {};
+      toast(hunt.moved ? `${hunt.ticker} pressured ${Number(hunt.movement_percent || 0).toFixed(2)}%` : `No hunt executed: ${humanLabel(hunt.reason || "no eligible positions")}`);
+      await refreshDevTools();
+    } catch(error) {
+      button.disabled = false;
+      button.textContent = original;
+      toast(error.message);
+    }
+  });
   $("[data-market-volatility-cycle]")?.addEventListener("click", async event => {
     const button = event.currentTarget;
     const provider = button.dataset.cycleProvider || marketAutomationForm?.querySelector('[name="automation_provider"]:checked')?.value || "local";

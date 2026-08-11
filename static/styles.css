@@ -20714,3 +20714,26 @@ textarea:focus {
   .market-interval-runner>div,.market-interval-runner button{grid-column:auto}
   .market-interval-runner button{white-space:normal}
 }
+
+/* Ravenhood controlled liquidation-hunt policy */
+.market-hunt-control{position:relative;overflow:hidden;border-color:rgba(255,94,122,.24)!important;background:linear-gradient(135deg,rgba(20,31,30,.98),rgba(24,16,22,.96))!important}
+.market-hunt-control:after{content:"";position:absolute;right:-130px;top:-190px;width:430px;height:430px;border:1px solid rgba(255,94,122,.15);border-radius:50%;box-shadow:0 0 0 58px rgba(255,94,122,.025),0 0 0 116px rgba(82,226,178,.02);pointer-events:none}
+.market-hunt-control>.dev-card-header,.market-hunt-form,.market-hunt-ledger{position:relative;z-index:1}
+.market-hunt-form{margin-top:18px}
+.market-hunt-policy{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;border-block:1px solid rgba(128,158,148,.2)}
+.market-hunt-policy>span{display:grid;gap:6px;padding:16px 18px;border-right:1px solid rgba(128,158,148,.17)}
+.market-hunt-policy>span:nth-child(3){border-right:0}
+.market-hunt-policy small,.market-hunt-ledger header span{color:#7e948c;font:800 .58rem ui-monospace,monospace;letter-spacing:.13em}
+.market-hunt-policy b{color:#eef7f3;font-size:.9rem}
+.market-hunt-policy p{grid-column:1/-1;margin:0;padding:13px 18px;color:#9aada6;font-size:.69rem;line-height:1.55;border-top:1px solid rgba(128,158,148,.14)}
+.market-hunt-ledger{margin-top:24px;border-top:1px solid rgba(128,158,148,.22)}
+.market-hunt-ledger header{display:flex;justify-content:space-between;gap:18px;padding:16px 0 10px}
+.market-hunt-ledger header strong{color:#dce9e4;font:800 .62rem ui-monospace,monospace;letter-spacing:.08em}
+.market-hunt-ledger article{display:grid;grid-template-columns:64px minmax(230px,1.3fr) minmax(230px,1fr) minmax(130px,.5fr);align-items:center;gap:16px;padding:14px 0;border-top:1px solid rgba(128,158,148,.14)}
+.market-hunt-ledger article>i{display:grid;place-items:center;width:52px;height:30px;border:1px solid rgba(255,94,122,.35);border-radius:999px;color:#ff8298;font:900 .67rem ui-monospace,monospace;font-style:normal}
+.market-hunt-ledger article>div,.market-hunt-ledger article>span,.market-hunt-ledger article>em{display:grid;gap:4px;min-width:0}
+.market-hunt-ledger article b{color:#edf5f2;font-size:.76rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.market-hunt-ledger article small{color:#91a59d;font-size:.62rem;line-height:1.4}
+.market-hunt-ledger article>em{color:#55ddb2;font:800 .63rem ui-monospace,monospace;font-style:normal;text-align:right}
+@media(max-width:900px){.market-hunt-policy{grid-template-columns:1fr}.market-hunt-policy>span{border-right:0;border-bottom:1px solid rgba(128,158,148,.14)}.market-hunt-ledger article{grid-template-columns:52px 1fr}.market-hunt-ledger article>span,.market-hunt-ledger article>em{grid-column:2;text-align:left}}
+@media(max-width:560px){.market-hunt-ledger article{grid-template-columns:1fr}.market-hunt-ledger article>i,.market-hunt-ledger article>div,.market-hunt-ledger article>span,.market-hunt-ledger article>em{grid-column:auto}.market-hunt-ledger article>em{text-align:left}}
