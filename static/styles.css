@@ -20507,3 +20507,124 @@ textarea:focus {
   .issuer-overview .issuer-market-seal{width:250px}
   .issuer-seal-core img{width:36px;height:36px}
 }
+
+/* Faircroft Issuer Services — centered capital-formation office. */
+#app:has(>.issuer-workspace){
+  display:block!important;
+  width:100%!important;
+  max-width:100vw!important;
+  min-width:0!important;
+  padding:0!important;
+  overflow-x:hidden!important;
+}
+.issuer-workspace{
+  width:100%;
+  max-width:100vw;
+  min-width:0;
+  overflow-x:hidden;
+  background:linear-gradient(145deg,#04090b,#07110f 62%,#05090b);
+}
+.issuer-brand:after{content:none}
+.issuer-main{
+  box-sizing:border-box;
+  width:100%!important;
+  max-width:1380px!important;
+  min-width:0;
+  margin-inline:auto!important;
+  padding:32px 28px 84px!important;
+}
+.issuer-office-landing{width:100%;min-width:0;margin:0 auto}
+.issuer-overview>header.issuer-office-header{
+  position:relative;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  min-height:0;
+  gap:28px;
+  padding:20px 0;
+  border:0;
+  border-bottom:1px solid rgba(116,189,164,.22);
+  border-radius:0;
+  background:transparent;
+  overflow:visible;
+}
+.issuer-overview>header.issuer-office-header:before{content:none}
+.issuer-office-wordmark{display:flex;align-items:center;gap:14px;min-width:0}
+.issuer-office-wordmark img{width:46px;height:46px;border:1px solid rgba(99,229,187,.23);border-radius:11px;object-fit:cover;box-shadow:0 9px 28px rgba(0,0,0,.3)}
+.issuer-office-wordmark>span{display:grid;gap:2px;min-width:0}
+.issuer-office-wordmark small,.issuer-office-state small,.issuer-office-copy>span,.issuer-filing-brief small,.issuer-office-landing .issuer-overview-stats small{
+  color:#6ba38f;
+  font:850 7px/1.25 ui-monospace,SFMono-Regular,monospace;
+  letter-spacing:.15em;
+  text-transform:uppercase;
+}
+.issuer-office-wordmark strong{font-size:15px;letter-spacing:-.015em}
+.issuer-office-wordmark em{color:#70867d;font:750 8px/1.2 ui-monospace,SFMono-Regular,monospace;font-style:normal;letter-spacing:.08em;text-transform:uppercase}
+.issuer-office-state{display:flex;align-items:center;gap:10px;flex:0 0 auto;padding-left:22px;border-left:1px solid rgba(116,189,164,.2)}
+.issuer-office-state>i{width:7px;height:7px;border-radius:50%;background:#60e6b4;box-shadow:0 0 12px rgba(96,230,180,.65);animation:rv13pulse 2s ease-in-out infinite}
+.issuer-office-state>span{display:grid;gap:4px}.issuer-office-state b{font-size:10px}
+.issuer-office-intro{
+  display:grid;
+  grid-template-columns:minmax(0,1.1fr) minmax(360px,.62fr);
+  gap:clamp(48px,7vw,100px);
+  align-items:center;
+  min-height:480px;
+  padding:64px clamp(18px,4vw,56px);
+  border-bottom:1px solid rgba(116,189,164,.2);
+  background:linear-gradient(110deg,rgba(13,31,27,.28),transparent 58%);
+  animation:issuerOfficeEnter .45s cubic-bezier(.2,.75,.25,1) both;
+}
+.issuer-office-copy{min-width:0}
+.issuer-overview .issuer-office-copy h1{
+  max-width:760px;
+  margin:16px 0 20px;
+  color:#f2f7f3;
+  font-size:clamp(54px,6.2vw,92px);
+  line-height:.94;
+  letter-spacing:-.072em;
+  text-wrap:balance;
+}
+.issuer-overview .issuer-office-copy p{max-width:670px;margin:0;color:#9aafa6;font-size:14px;line-height:1.75}
+.issuer-overview .issuer-office-copy nav{display:flex;align-items:center;gap:10px;margin-top:30px}
+.issuer-overview .issuer-office-copy nav button{display:inline-flex;align-items:center;justify-content:center;gap:22px;min-height:48px;padding:0 20px;border:1px solid #61dfb4;border-radius:5px;background:#61dfb4;color:#06110e;font-size:10px;font-weight:900;transition:transform .18s ease,background .18s ease}
+.issuer-overview .issuer-office-copy nav button:hover{transform:translateY(-2px);background:#78ecc5}
+.issuer-overview .issuer-office-copy nav button.secondary{border-color:rgba(131,185,166,.3);background:transparent;color:#d9e7e0}
+.issuer-overview .issuer-office-copy nav i{font-size:14px;font-style:normal}
+.issuer-office-copy>small{display:block;margin-top:16px;color:#647b71;font-size:8px;line-height:1.5}
+.issuer-filing-brief{align-self:center;border:1px solid rgba(126,188,166,.28);background:#081310;box-shadow:0 25px 60px rgba(0,0,0,.24)}
+.issuer-filing-brief>header{display:grid;grid-template-columns:82px 1fr;gap:18px;align-items:center;padding:21px 22px;border-bottom:1px solid rgba(126,188,166,.2)}
+.issuer-filing-brief>header>span{display:grid;gap:4px;padding-right:18px;border-right:1px solid rgba(126,188,166,.2)}
+.issuer-filing-brief>header b{font-size:22px;letter-spacing:-.04em}.issuer-filing-brief>header>div{display:grid;gap:5px}.issuer-filing-brief>header strong{font-size:12px}
+.issuer-filing-brief ol{display:grid;margin:0;padding:0 22px;list-style:none}
+.issuer-filing-brief li{display:grid;grid-template-columns:34px 1fr;gap:12px;align-items:center;padding:20px 0;border-bottom:1px solid rgba(126,188,166,.14)}
+.issuer-filing-brief li>b{color:#60e3b5;font:900 8px ui-monospace,SFMono-Regular,monospace}
+.issuer-filing-brief li>span{display:grid;gap:5px}.issuer-filing-brief li strong{font-size:11px}.issuer-filing-brief li small{color:#6f827a;font-family:inherit;font-size:8px;font-weight:500;letter-spacing:0;text-transform:none}
+.issuer-filing-brief>footer{display:flex;justify-content:space-between;gap:15px;padding:16px 22px;color:#6d8379;font:850 7px ui-monospace,SFMono-Regular,monospace;letter-spacing:.1em}
+.issuer-filing-brief>footer span{display:flex;align-items:center;gap:7px}.issuer-filing-brief>footer i{width:5px;height:5px;border-radius:50%;background:#60e3b5}.issuer-filing-brief>footer b{color:#a1b6ad}
+.issuer-office-flow{position:relative;display:grid;grid-template-columns:auto minmax(50px,1fr) auto minmax(50px,1fr) auto;align-items:center;gap:16px;padding:20px clamp(18px,4vw,56px);border-bottom:1px solid rgba(116,189,164,.18)}
+.issuer-office-flow>span{display:flex;align-items:center;gap:9px;color:#8da198;font:850 8px ui-monospace,SFMono-Regular,monospace;letter-spacing:.09em;text-transform:uppercase}.issuer-office-flow>span b{display:grid;place-items:center;width:22px;height:22px;border:1px solid rgba(96,227,181,.36);border-radius:50%;color:#5fe0b2;font-size:8px}.issuer-office-flow>i{height:1px;background:linear-gradient(90deg,rgba(96,227,181,.55),rgba(96,227,181,.1));transform-origin:left;animation:issuerOfficeProgress .75s .22s ease both}
+.issuer-office-landing .issuer-overview-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:0;border-bottom:1px solid rgba(116,189,164,.2);background:transparent}
+.issuer-office-landing .issuer-overview-stats article{display:grid;align-content:center;gap:7px;min-width:0;padding:27px 25px;overflow:hidden;background:transparent;animation:none}
+.issuer-office-landing .issuer-overview-stats article+article{border-left:1px solid rgba(116,189,164,.18)}
+.issuer-office-landing .issuer-overview-stats article:after{content:none}
+.issuer-office-landing .issuer-overview-stats strong{overflow:hidden;color:#f0f6f2;font-size:clamp(18px,2vw,27px);font-variant-numeric:tabular-nums;text-overflow:ellipsis;white-space:nowrap}
+.issuer-office-landing .issuer-overview-stats span{color:#687d74;font-size:8px}
+.issuer-office-landing .issuer-roster{width:100%;max-width:1180px;margin:56px auto 0;padding:0}
+.issuer-office-landing .issuer-roster>header{padding-inline:0}
+@keyframes issuerOfficeEnter{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+@keyframes issuerOfficeProgress{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@media(max-width:900px){
+  .issuer-main{padding-inline:20px!important}
+  .issuer-office-intro{grid-template-columns:1fr;min-height:0;padding-block:52px}.issuer-filing-brief{width:100%;max-width:620px}
+  .issuer-office-landing .issuer-overview-stats{grid-template-columns:1fr 1fr}.issuer-office-landing .issuer-overview-stats article:nth-child(3){border-left:0;border-top:1px solid rgba(116,189,164,.18)}.issuer-office-landing .issuer-overview-stats article:nth-child(4){border-top:1px solid rgba(116,189,164,.18)}
+}
+@media(max-width:620px){
+  .issuer-main{padding:14px 14px 70px!important}
+  .issuer-overview>header.issuer-office-header{align-items:flex-start;flex-direction:column}.issuer-office-state{padding:0;border:0}
+  .issuer-office-intro{gap:35px;padding:42px 6px 38px;background:transparent}.issuer-overview .issuer-office-copy h1{font-size:clamp(48px,14vw,67px)}
+  .issuer-overview .issuer-office-copy nav{align-items:stretch;flex-direction:column}.issuer-overview .issuer-office-copy nav button{width:100%}
+  .issuer-office-flow{grid-template-columns:1fr;gap:10px;padding-inline:6px}.issuer-office-flow>i{width:1px;height:18px;margin-left:11px;background:linear-gradient(rgba(96,227,181,.55),rgba(96,227,181,.1));transform-origin:top}
+  .issuer-office-landing .issuer-overview-stats{grid-template-columns:1fr}.issuer-office-landing .issuer-overview-stats article+article{border-left:0;border-top:1px solid rgba(116,189,164,.18)}
+  .issuer-filing-brief>header{grid-template-columns:70px 1fr;padding-inline:16px}.issuer-filing-brief ol{padding-inline:16px}.issuer-filing-brief>footer{align-items:flex-start;flex-direction:column;padding-inline:16px}
+  .issuer-office-landing .issuer-roster{margin-top:38px}
+}

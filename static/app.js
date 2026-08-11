@@ -7720,6 +7720,31 @@ function renderIssuerOverview(data) {
   const live = companies.filter(company => ["active", "scheduled"].includes(String(company.status || "")));
   const marketValue = live.reduce((sum, company) => sum + Number(company.live_market_cap || company.target_market_cap || 0), 0);
   const pendingCapital = companies.filter(company => ["funding_pending", "funding_failed"].includes(String(company.status || ""))).reduce((sum, company) => sum + Math.max(0, Number(company.funding_total || company.target_market_cap || 0) - Number(company.funding_completed || 0)), 0);
+  return `<section class="issuer-overview issuer-office-landing">
+    <header class="issuer-office-header">
+      <div class="issuer-office-wordmark"><img src="/static/brand/faircroft-emblem.webp" alt="Faircroft emblem"/><span><small>STATE OF FAIRCROFT</small><strong>Office of Capital Formation</strong><em>FCX Primary Issuance</em></span></div>
+      <div class="issuer-office-state"><i></i><span><small>FILING STATUS</small><b>Accepting issuer filings</b></span></div>
+    </header>
+    <section class="issuer-office-intro">
+      <div class="issuer-office-copy">
+        <span>RESIDENT BUSINESS ISSUANCE</span>
+        <h1>Take your company public.</h1>
+        <p>Form an FCX issuer, establish its opening capitalization, and manage the company after it enters the Ravenhood market.</p>
+        <nav><button type="button" data-business-tab="launch">Start an IPO filing <i>&rarr;</i></button><button type="button" data-business-tab="company" class="secondary">Manage my companies</button></nav>
+        <small>Capitalization uses your verified in-game bank. Every filing and transfer is recorded.</small>
+      </div>
+      <aside class="issuer-filing-brief" aria-label="FCX listing process">
+        <header><span><small>FORM</small><b>FCX-01</b></span><div><small>PRIMARY LISTING</small><strong>Issuer formation brief</strong></div></header>
+        <ol><li><b>01</b><span><strong>Company record</strong><small>Name the issuer and define its purpose.</small></span></li><li><b>02</b><span><strong>Capital structure</strong><small>Set market value, share price, and public float.</small></span></li><li><b>03</b><span><strong>Market admission</strong><small>Fund the listing and select its FCX opening.</small></span></li></ol>
+        <footer><span><i></i>FCX PRIMARY MARKET</span><b>${bank.linked ? "BANK VERIFIED" : "ARMA LINK REQUIRED"}</b></footer>
+      </aside>
+    </section>
+    <div class="issuer-office-flow" aria-label="IPO filing sequence"><span><b>1</b>File</span><i></i><span><b>2</b>Capitalize</span><i></i><span><b>3</b>List on FCX</span></div>
+    <div class="issuer-overview-stats"><article><small>CONTROLLED ISSUERS</small><strong>${companies.length}</strong><span>${live.length} trading or scheduled</span></article><article><small>COMBINED MARKET VALUE</small><strong>${money(marketValue)}</strong><span>Current FCX valuation</span></article><article><small>CAPITAL IN TRANSIT</small><strong>${money(pendingCapital)}</strong><span>Staged through Bank Bridge</span></article><article><small>VERIFIED GAME BANK</small><strong>${bank.linked ? money(bank.balance || 0) : "Not linked"}</strong><span>${bank.synced_at ? "Authoritative snapshot" : "Synchronization required"}</span></article></div>
+    <section class="issuer-roster"><header><div><span>MY COMPANIES</span><h2>Issuer portfolio</h2></div><strong>${companies.length} / ${Number(data.limits?.max_companies || 8)}</strong></header>${companies.map(company => `<button type="button" data-issuer-open="${Number(company.id)}"><span><b>${escapeHtml(company.ticker)}</b><small>${escapeHtml(company.company_name)}</small></span>${issuerCompanyStatus(company)}<strong>${money(company.live_market_cap || company.target_market_cap || 0)}<small>${company.control_source === "existing_security" ? "Assigned FCX security" : "Resident IPO"}</small></strong><i>&rarr;</i></button>`).join("") || `<div class="issuer-roster-empty"><b>No companies on file.</b><span>Begin an IPO filing to establish your first FCX issuer.</span><button type="button" data-business-tab="launch">Start an IPO filing</button></div>`}</section>
+  </section>`;
+  /* The previous Foundry entrance is intentionally left unreachable for this release so
+     existing compiled references remain stable while the resident interface is replaced. */
   const tape = live.length ? live.slice(0, 8).map(company => ({
     ticker: company.ticker,
     label: company.company_name,
@@ -7793,7 +7818,7 @@ function renderBusinessWorkspace() {
   const tabs = [["overview","Issuer desk"],["launch","Create IPO"],["company","My companies"],["wire","Company Wire"]];
   if (!tabs.some(([id]) => id === state.businessTab)) state.businessTab = "overview";
   const content = state.businessTab === "launch" ? renderIssuerLaunch(data) : state.businessTab === "company" ? renderIssuerCompany(data) : state.businessTab === "wire" ? renderIssuerWire(data) : renderIssuerOverview(data);
-  return `<section class="issuer-workspace"><header class="issuer-topbar"><button type="button" class="issuer-brand" data-business-tab="overview"><img src="/static/brand/faircroft-emblem.webp" alt=""/><span><b>Faircroft Foundry</b><small>FCX Issuer Network</small></span></button><nav>${tabs.map(([id,label]) => `<button type="button" class="${state.businessTab === id ? "active" : ""}" data-business-tab="${id}">${escapeHtml(label)}</button>`).join("")}</nav><div><span class="issuer-network"><i></i>PRIMARY MARKET ONLINE</span><button type="button" data-refresh-business-workspace>Sync</button><button type="button" data-close-business-workspace>Exit</button></div></header><main class="issuer-main">${content}</main><footer class="issuer-footer"><span>FCX issuer activity uses Faircroft in-game currency only.</span><span>Old Commerce licenses are archived and never converted into securities.</span></footer></section>`;
+  return `<section class="issuer-workspace"><header class="issuer-topbar"><button type="button" class="issuer-brand" data-business-tab="overview"><img src="/static/brand/faircroft-emblem.webp" alt=""/><span><b>Faircroft Issuer Services</b><small>FCX Primary Market</small></span></button><nav>${tabs.map(([id,label]) => `<button type="button" class="${state.businessTab === id ? "active" : ""}" data-business-tab="${id}">${escapeHtml(label)}</button>`).join("")}</nav><div><span class="issuer-network"><i></i>PRIMARY MARKET ONLINE</span><button type="button" data-refresh-business-workspace>Sync</button><button type="button" data-close-business-workspace>Exit</button></div></header><main class="issuer-main">${content}</main><footer class="issuer-footer"><span>Faircroft Issuer Services / FCX Primary Market</span><span>Capitalization uses verified in-game currency.</span></footer></section>`;
 }
 
 function bindBusinessWorkspace() {
