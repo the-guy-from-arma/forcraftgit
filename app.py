@@ -25807,18 +25807,53 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         err = developer_required(user)
         if err:
             self.error(403 if user else 401, err); return
-        payload = self.read_json(); ticker = str(payload.get("ticker") or "ALL").upper().strip(); name = str(payload.get("event_name") or "Market adjustment").strip()[:100]
+        payload = self.read_json()
+        raw_tickers = payload.get("tickers")
+        if isinstance(raw_tickers, list):
+            requested_tickers = [str(value or "").upper().strip() for value in raw_tickers]
+        else:
+            requested_tickers = [str(payload.get("ticker") or "ALL").upper().strip()]
+        tickers: list[str] = []
+        for ticker in requested_tickers:
+            if ticker and ticker not in tickers:
+                tickers.append(ticker)
+        if not tickers:
+            self.error(400, "Select at least one security, index, or the entire market."); return
+        if len(tickers) > 100:
+            self.error(400, "A scheduled movement may include at most 100 securities."); return
+        if "ALL" in tickers and len(tickers) != 1:
+            self.error(400, "Entire market cannot be combined with individual securities or indexes."); return
+        name = str(payload.get("event_name") or "Market adjustment").strip()[:100]
         try: percent = max(-500, min(500, float(payload.get("percent_change") or 0))); duration = max(1, min(10080, int(payload.get("duration_minutes") or 60)))
         except (TypeError, ValueError): self.error(400, "Percent and duration are required."); return
-        security = None if ticker == "ALL" else one(db, "SELECT * FROM market_securities WHERE ticker=? AND active=1", (ticker,))
-        if ticker != "ALL" and not security: self.error(404, "Ticker not found."); return
+        if tickers == ["ALL"]:
+            targets = all_rows(db, "SELECT id,ticker,price FROM market_securities WHERE active=1 AND security_type<>'fund' ORDER BY ticker")
+        else:
+            targets = []
+            missing: list[str] = []
+            for ticker in tickers:
+                security = one(db, "SELECT id,ticker,price FROM market_securities WHERE ticker=? AND active=1", (ticker,))
+                if security:
+                    targets.append(security)
+                else:
+                    missing.append(ticker)
+            if missing:
+                self.error(404, f"Active security not found: {', '.join(missing)}"); return
+        if not targets:
+            self.error(409, "No active securities are available for this movement."); return
         start = utcnow(); end = start + dt.timedelta(minutes=duration)
-        targets = [security] if security else all_rows(db, "SELECT id,price FROM market_securities WHERE active=1 AND security_type<>'fund'")
         for target in targets:
             db.execute("""INSERT INTO market_price_programs (security_id, event_name, percent_change, duration_minutes, start_price, starts_at, ends_at, status, created_by, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""", (target["id"], name, percent, duration, float(target["price"]), start.isoformat(), end.isoformat(), user["id"], start.isoformat()))
-        db.execute("INSERT INTO market_events (event_type, title, detail, created_by, created_at) VALUES ('program', ?, ?, ?, ?)", (name, f"{ticker}: {percent:+.2f}% over {duration} minutes", user["id"], start.isoformat()))
-        self.send_json(201, {"ok": True, "example_one_dollar": max(0.01, round(1 * (1 + percent / 100), 4)), "ends_at": end.isoformat()})
+        target_tickers = [str(target["ticker"]) for target in targets]
+        target_label = "Entire market" if tickers == ["ALL"] else ", ".join(target_tickers)
+        db.execute("INSERT INTO market_events (event_type, title, detail, created_by, created_at) VALUES ('program', ?, ?, ?, ?)", (name, f"{target_label}: {percent:+.2f}% over {duration} minutes", user["id"], start.isoformat()))
+        add_admin_audit(db, int(user["id"]), "market.program.created", details={
+            "event_name": name, "tickers": target_tickers, "entire_market": tickers == ["ALL"],
+            "target_count": len(targets), "percent_change": percent, "duration_minutes": duration,
+        })
+        self.send_json(201, {"ok": True, "example_one_dollar": max(0.01, round(1 * (1 + percent / 100), 4)),
+            "ends_at": end.isoformat(), "tickers": target_tickers, "target_count": len(targets)})
 
     def api_dev_market_program_cancel(self, db: Database, user: DbRow | None, program_id: int | None) -> None:
         err = developer_required(user)
