@@ -31,6 +31,7 @@ const DEV_TOOLS_REFRESH_MS = {
   "banking-settings": 15000,
   "sportsbook-settings": 120000,
   "business-settings": 60000,
+  "fec-investigations": 60000,
   "policy-settings": 60000,
 };
 
@@ -13368,12 +13369,13 @@ const ADMIN_TOOL_NAV = [
   ["enforcement", "Cases", "07"], ["warnings", "Internal Notes", "08"],
   ["linking", "Account Linking", "09"], ["campaigns", "Active Campaigns", "10"],
   ["settlement", "Settlement", "11"], ["banking-settings", "Banking Settings", "12"], ["market-settings", "Stock Market", "13"],
-  ["business-settings", "Business Settings", "14"], ["leverage-settings", "Leverage Settings", "15"], ["lottery-settings", "Lottery Settings", "16"],
-  ["sportsbook-settings", "Sportsbook", "17"], ["casino-tools", "Casino Tools", "18"], ["gang-settings", "Gang Settings", "19"],
-  ["dmv-settings", "DMV Settings", "20"], ["mdt-settings", "MDT Settings", "21"], ["court-settings", "Court Settings", "22"],
-  ["ice-settings", "ICE Settings", "23"], ["admin-2fa", "Admin 2FA", "24"], ["autopilot", "Auto Pilot", "25"],
-  ["system-update", "System Update", "26"], ["audit", "Activity Log", "27"], ["policy-settings", "Policy Settings", "28"],
-  ["fnn-settings", "FNN Settings", "29"], ["settings", "Settings", "30"], ["account-deletion", "Account Deletion", "31"],
+  ["business-settings", "Business Settings", "14"], ["leverage-settings", "Leverage Settings", "15"], ["fec-investigations", "FEC Investigations", "16"],
+  ["lottery-settings", "Lottery Settings", "17"], ["sportsbook-settings", "Sportsbook", "18"], ["casino-tools", "Casino Tools", "19"],
+  ["gang-settings", "Gang Settings", "20"], ["dmv-settings", "DMV Settings", "21"], ["mdt-settings", "MDT Settings", "22"],
+  ["court-settings", "Court Settings", "23"], ["ice-settings", "ICE Settings", "24"], ["admin-2fa", "Admin 2FA", "25"],
+  ["autopilot", "Auto Pilot", "26"], ["system-update", "System Update", "27"], ["audit", "Activity Log", "28"],
+  ["policy-settings", "Policy Settings", "29"], ["fnn-settings", "FNN Settings", "30"], ["settings", "Settings", "31"],
+  ["account-deletion", "Account Deletion", "32"],
 ];
 
 function adminToolAccess() {
@@ -13415,6 +13417,7 @@ function renderDevWorkspace() {
     "market-settings": ["Stock Market Settings", "Operate Ravenhood pricing, settlement receipts, fees, and RP events"],
     "business-settings": ["Business Settings", "Assign existing FCX securities and oversee resident-controlled IPO companies"],
     "leverage-settings": ["Leverage Settings", "Control isolated long and short exposure, leverage ceilings, and liquidation policy"],
+    "fec-investigations": ["FEC Investigations", "Review resident trading, high-value withdrawals, asset custody, and market-integrity filings"],
     "lottery-settings": ["Lottery Settings", "Govern entries, prize funding, role eligibility, fraud review, and weekly drawings"],
     "sportsbook-settings": ["Sportsbook Settings", "Configure the live sports provider and inspect fixture, odds, and wager health"],
     "casino-tools": ["Casino Tools", "Operate Faircroft tables, published odds, Bank Bridge settlement, and audited balance automation"],
@@ -13691,12 +13694,12 @@ function renderDevMarketSettings(market, users) {
         <div class="market-automation-status wide"><span>PRIMARY SOURCE<b>${escapeHtml(humanLabel(automationProvider))}</b></span><span>CYCLE COUNTER<b>#${Number(market.automation_cycle_number || 0).toLocaleString()}</b></span><span>CURRENT CYCLE<b class="${activeCycle ? "amber" : "green"}">${escapeHtml(activeCycle || "Idle · awaiting next interval")}</b></span><span>LAST CYCLE RESULT<b>${escapeHtml(market.automation_last_cycle_summary || "No completed cycle yet")}</b></span><span>LAST LOCAL CYCLE<b>${market.autopilot_last_tick ? new Date(market.autopilot_last_tick).toLocaleString() : "No local cycle yet"}</b></span><span>LAST AI SUCCESS<b>${market.ai_last_success_at ? new Date(market.ai_last_success_at).toLocaleString() : "No completed AI review"}</b></span><span>AI STATE<b class="${["completed","fallback_completed","fallback_local"].includes(aiState)?"green":aiState==="failed"?"red":"amber"}">${escapeHtml(humanLabel(aiState))}${market.ai_last_provider?` · ${escapeHtml(humanLabel(market.ai_last_provider))}`:""}</b></span><span>PRIMARY COOLDOWN<b class="${selectedCooldownAt === "Ready now" ? "green" : "amber"}">${escapeHtml(selectedCooldownAt)}</b></span></div>
         ${market.ai_last_error ? `<div class="market-automation-error wide ${["fallback_completed","fallback_local"].includes(aiState) ? "recovered" : ""}"><b>${["fallback_completed","fallback_local"].includes(aiState) ? "FALLBACK COMPLETED" : "LAST PROVIDER NOTICE"}</b><span>${escapeHtml(market.ai_last_error)}</span></div>` : ""}
         <button class="secondary" type="button" data-market-volatility-cycle data-cycle-provider="${escapeHtml(automationProvider)}">Run one ${escapeHtml(humanLabel(automationProvider))} cycle now</button><button class="primary">Save & activate autopilot</button>
+        <div class="market-interval-runner wide"><div><span>INTERVAL SEQUENCE</span><h3>Distribute repeated cycles across a timeframe</h3><p>Cycles run one at a time to protect Railway and PostgreSQL. AI sequences stop automatically if the provider enters cooldown.</p></div><label>Number of cycles<input name="sequence_cycle_count" type="number" min="2" max="100" value="20"/></label><label>Total timeframe (minutes)<input name="sequence_timeframe_minutes" type="number" min="0.25" max="1440" step="0.25" value="6"/></label><button class="secondary" type="button" data-market-interval-sequence data-cycle-provider="${escapeHtml(automationProvider)}">Run 20 cycles across 6 minutes</button></div>
       </form>
     </section>
     <div class="dev-view-intro"><div><span>RAVENHOOD EXCHANGE CONTROL</span><h2>Market operations</h2><p>Control the Faircroft market, authorize in-game cash handoffs, and stage exchange price events.</p></div><strong class="${market.market_open ? "green" : "red"}">${market.market_open ? "MARKET OPEN" : "MARKET CLOSED"}</strong></div>
     <section class="dev-card market-index-control"><div class="dev-card-header"><div><span>INDEX OPERATIONS</span><h2>FCXS + FCXV fund desk</h2><p>Existing companies are ranked from recorded volatility, history depth, liquidity, holders, and market capitalization. Resident holdings and Gemini-generated constituent positions are accounted for separately.</p></div><aside><small>OPERATING COMPANY CAP</small><strong>${money(market.exchange_market_cap || 0)}</strong><button class="primary" type="button" data-market-index-rebalance>Rebalance both funds</button></aside></div><div class="market-index-control-grid">${indexFunds.map(fund=>`<article class="${escapeHtml(fund.risk_profile || "index")}"><header><span><i>${fund.risk_profile==="stability"?"S":"V"}</i><small>${escapeHtml(String(fund.risk_profile||"index").toUpperCase())}</small></span><div><h3>${escapeHtml(fund.ticker)}</h3><p>${escapeHtml(fund.display_name||fund.name)}</p></div><strong>${money(fund.price)}</strong></header><dl class="market-index-cap-ledger"><div><dt>Constituents</dt><dd>${Number(fund.constituents?.length||0)}</dd></div><div><dt>Fund holders</dt><dd>${Number(fund.holder_count||0)}<small>Resident accounts</small></dd></div><div><dt>Resident shares</dt><dd>${Number(fund.resident_units||0).toLocaleString(undefined,{maximumFractionDigits:4})}</dd></div><div><dt>Gemini shares</dt><dd>${Number(fund.gemini_shares||0).toLocaleString(undefined,{maximumFractionDigits:4})}<small>Fund-equivalent units from ${Number(fund.gemini_position_constituents||0)} positioned constituent${Number(fund.gemini_position_constituents||0)===1?"":"s"}</small></dd></div><div><dt>Total fund shares</dt><dd>${Number(fund.total_capitalized_units||0).toLocaleString(undefined,{maximumFractionDigits:4})}</dd></div><div><dt>Fund capitalization</dt><dd>${money(fund.market_cap||0)}<small>${money(fund.gemini_capitalization||0)} from Gemini constituent positions</small></dd></div><div><dt>Last rebalance</dt><dd>${fund.last_rebalanced_at?new Date(fund.last_rebalanced_at).toLocaleString():"Awaiting first cycle"}</dd></div></dl><div>${(fund.constituents||[]).map(item=>`<p><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}${Number(item.gemini_net_shares||0)>0?` · ${Number(item.gemini_net_shares).toLocaleString(undefined,{maximumFractionDigits:2})} Gemini shares`:""}</small></span><i><em style="width:${Math.max(2,Number(item.weight||0)*100).toFixed(2)}%"></em></i><strong>${(Number(item.weight||0)*100).toFixed(1)}%</strong></p>`).join("")||`<p class="empty">Composition will populate on the next rebalance.</p>`}</div></article>`).join("")}</div></section>
     ${ravenhoodAccountRegistry}
-    ${fecCustody}
     <section class="market-dev-terminal"><header><span></span><b>RAVENHOOD / MARKET CONTROL LOG</b><em>${activeCycle ? escapeHtml(activeCycle) : "LIVE EXCHANGE"}</em></header><div>${(market.events || []).slice(0,12).map(x => `<p class="${escapeHtml(String(x.event_type || "event").replace(/[^a-z0-9_-]/gi,"-"))}"><time>${escapeHtml(String(x.created_at || "").slice(11,19))}</time><b>${escapeHtml(humanLabel(x.event_type || "market event"))}</b><strong>${escapeHtml(x.title)}</strong><span>${escapeHtml(x.detail)}</span></p>`).join("") || `<p><time>--:--:--</time><b>STATUS</b><strong>Exchange ready</strong><span>No market events have been staged.</span></p>`}</div></section>
     <div class="dev-grid-2">
     <section class="dev-card market-session-control"><div class="dev-card-header"><div><span>TRADING SESSION</span><h2>Exchange clock</h2><p>Ravenhood follows New York core hours, with weekend trading retained for the RP community by default.</p></div><strong class="${market.market_open ? "green" : "red"}">${market.market_open ? "TRADING" : "CLOSED"}</strong></div><div class="market-session-readout"><div><small>SESSION STATE</small><strong>${escapeHtml(sessionReason)}</strong><span>${escapeHtml(marketLocalTime)}</span></div><div><small>AUTOMATIC WINDOW</small><strong>${escapeHtml(market.schedule_open_time || "09:30")} &ndash; ${escapeHtml(market.schedule_close_time || "16:00")}</strong><span>${market.weekends_enabled ? "Every day" : "Monday&ndash;Friday"} &middot; America/New_York</span></div><div><small>NEXT SCHEDULED CHANGE</small><strong>${sessionMode === "schedule" ? (market.market_open ? "Market closes" : "Market opens") : "Manual control active"}</strong><span>${escapeHtml(nextTransition)}</span></div></div><div class="market-session-actions" role="group" aria-label="Market session control"><button type="button" data-market-session-override="open" class="${sessionMode === "open" ? "active open" : ""}" aria-pressed="${sessionMode === "open"}"><b>Force open</b><span>Allow resident orders now</span></button><button type="button" data-market-session-override="closed" class="${sessionMode === "closed" ? "active closed" : ""}" aria-pressed="${sessionMode === "closed"}"><b>Force closed</b><span>Block new resident orders</span></button><button type="button" data-market-session-override="schedule" class="${sessionMode === "schedule" ? "active schedule" : ""}" aria-pressed="${sessionMode === "schedule"}"><b>Use schedule</b><span>Resume automatic hours</span></button></div><form id="devMarketSettingsForm" class="form-grid market-session-form"><label>Daily open<input name="schedule_open_time" type="time" value="${escapeHtml(market.schedule_open_time || "09:30")}" required/><small>New York local time.</small></label><label>Daily close<input name="schedule_close_time" type="time" value="${escapeHtml(market.schedule_close_time || "16:00")}" required/><small>New York local time.</small></label><label>Trade fee %<input name="trade_fee_percent" type="number" min="0" max="10" step="0.01" value="${Number(market.trade_fee_percent || 0)}"/></label><label>Transfer fee %<input name="transfer_fee_percent" type="number" min="0" max="25" step="0.01" value="${Number(market.transfer_fee_percent || 0)}"/></label><label class="dev-certify wide"><input name="weekends_enabled" type="checkbox" ${market.weekends_enabled ? "checked" : ""}/> Keep the same trading hours on Saturday and Sunday</label><label class="dev-certify wide"><input name="fcxv_24h_enabled" type="checkbox" ${market.fcxv_24h_enabled ? "checked" : ""}/> Keep all FCXV trading open 24 hours<small>FCXV share orders and leveraged long/short positions open and close immediately outside core hours. Other securities remain tied to the exchange schedule.</small></label><label class="dev-certify wide"><input name="ai_enabled" type="checkbox" ${market.ai_enabled ? "checked" : ""}/> Allow Gemini market briefing support</label><button class="primary wide">Save schedule and exchange policy</button></form><p class="muted small">Manual controls stay in effect until Use schedule is selected. Collected fees remain outside the active RP economy.</p></section>
@@ -13718,6 +13721,35 @@ function renderDevMarketSettings(market, users) {
     <div class="dev-grid-2"><section class="dev-card"><div class="dev-card-header"><div><span>AUTOMATION LEDGER</span><h2>Price programs</h2></div><strong>${programs.filter(x=>x.status==="active").length} ACTIVE · ${programs.filter(x=>x.status==="scheduled").length} SCHEDULED</strong></div><div class="dev-detail-list">${programs.map(x => `<div><strong>${escapeHtml(x.ticker || "ALL")} Â· ${escapeHtml(x.event_name)}</strong><small>${Number(x.percent_change)>=0?"+":""}${Number(x.percent_change).toFixed(2)}% over ${Number(x.duration_minutes)} minutes Â· ${escapeHtml(x.status)}${x.starts_at?` · ${new Date(x.starts_at).toLocaleString()}`:""}</small></div>`).join("") || `<div class="empty">No programs</div>`}</div></section><section class="dev-card"><div class="dev-card-header"><div><span>GEMINI ANALYST</span><h2>Generate market briefing</h2><p>Gemini reads current listings and your market scenario, then recommends optional programs. Nothing is applied automatically.</p></div><span class="pill ${market.ai_enabled ? "green" : ""}">${market.ai_enabled ? "enabled" : "disabled"}</span></div><form id="devMarketAiForm" class="form-grid"><label class="wide">Market scenario or operational inputs<textarea name="context" maxlength="2000" required placeholder="New mining permit, severe storm, major public contract, political uncertaintyâ€¦"></textarea></label><button class="primary wide" ${market.ai_enabled ? "" : "disabled"}>Generate analyst briefing</button></form>${state.marketAiBriefing ? `<pre class="market-ai-briefing">${escapeHtml(state.marketAiBriefing)}</pre>` : ""}</section></div>
     <section class="dev-card market-scratch-code-ledger"><div class="dev-card-header"><div><span>FAIRCROFT INSTANT SCRATCH</span><h2>Generated reward codes</h2><p>Every revealed lottery scratch card is issued as a traceable, single-use Ravenhood cash or stock promotion.</p></div><strong>${scratchPromotions.length} ISSUED</strong></div><div class="dev-promo-ledger"><div class="dev-promo-ledger-head"><span>Reward code</span><span>Prize</span><span>Claim status</span><span>Issued</span></div>${scratchPromotions.map(p=>`<article><span><strong><code>${escapeHtml(p.code_plain || `••••-${p.code_hint}`)}</code></strong><small>${escapeHtml(p.campaign_name)}</small></span><span>${p.reward_type==="cash"?money(p.cash_amount):`${Number(p.share_quantity)} ${escapeHtml(p.ticker||"stock share")}`}</span><span><strong>${Number(p.redemption_count) ? "REDEEMED" : p.active ? "READY" : "INACTIVE"}</strong><small>${Number(p.redemption_count)}/${Number(p.max_redemptions)} claims</small></span><span><strong>${escapeHtml(p.created_by_name || "System issue")}</strong><small>${escapeHtml(String(p.created_at || "").slice(0,19).replace("T"," "))}</small></span></article>`).join("")||`<div class="empty">No scratch reward codes have been generated.</div>`}</div></section>
     <section class="dev-card market-active-movements"><div class="dev-card-header"><div><span>LIVE PRICE AUTOMATION</span><h2>Movement timeline</h2><p>Monitor future programs and live movement, then cancel or preserve the current quote from one control surface.</p></div><strong>${activeMovements.filter(x=>x.status==="active").length} ACTIVE · ${activeMovements.filter(x=>x.status==="scheduled").length} SCHEDULED</strong></div><div>${activeMovements.map(program=>{const related=activePrograms.filter(item=>item.event_name===program.event_name&&item.created_at===program.created_at);const tickers=related.map(item=>item.ticker).filter(Boolean);const start=new Date(program.starts_at),end=new Date(program.ends_at),isScheduled=program.status==="scheduled"||start.getTime()>Date.now(),progress=isScheduled?0:Math.max(0,Math.min(100,(Date.now()-start.getTime())/Math.max(1,end.getTime()-start.getTime())*100));return `<article class="${isScheduled?"scheduled":"active"}"><div class="market-movement-status"><i></i><span>${isScheduled?"SCHEDULED":"ACTIVE MOVEMENT"}</span></div><div><strong>${escapeHtml(program.event_name)}</strong><small>${tickers.length>8?`ENTIRE MARKET · ${tickers.length} securities`:escapeHtml(tickers.join(", ")||"Market-wide")}</small></div><div class="market-movement-change ${Number(program.percent_change)>=0?"positive":"negative"}"><strong>${Number(program.percent_change)>=0?"+":""}${Number(program.percent_change).toFixed(2)}%</strong><small>${isScheduled?"Begins ":"Running since "}${start.toLocaleString()} · ends ${end.toLocaleString()}</small></div><div class="market-movement-progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="market-movement-actions"><button class="secondary" type="button" data-market-stop-program="${program.id}" data-market-program-name="${escapeHtml(program.event_name)}">${isScheduled?"Cancel scheduled movement":"Stop · keep current price"}</button><button class="danger" type="button" data-market-cancel-program="${program.id}" data-market-program-name="${escapeHtml(program.event_name)}">${isScheduled?"Cancel program":"Stop & restore baseline"}</button></div></article>`}).join("")||`<div class="market-normal-state"><i></i><div><strong>Normal market operation</strong><span>No future or active price movements are currently registered.</span></div></div>`}</div></section>
+  </div>`;
+}
+
+function renderDevFecInvestigations(fec = {}) {
+  const accounts = fec.accounts || [];
+  const ledger = fec.ledger || [];
+  const totals = fec.totals || {};
+  const returnAccounts = fec.return_accounts || [];
+  const threshold = Number(fec.high_value_threshold || 10000000);
+  const withdrawals = fec.withdrawal_flags || [];
+  const trades = [...(fec.equity_trades || []), ...(fec.margin_trades || [])]
+    .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+  const investigatedResidents = new Set(trades.map(trade => Number(trade.user_id || 0)).filter(Boolean)).size;
+  const poolBalance = Number(fec.pool_balance || 0);
+  const custody = `<section class="dev-card market-fec-custody fec-investigation-custody">
+    <header class="market-fec-head"><div><span>FEC MARKET INTEGRITY DIVISION</span><h2>Asset custody & forfeiture</h2><p>Controlled evidentiary custody for documented securities-fraud investigations.</p></div><aside><small>ASSETS HELD IN CUSTODY</small><strong>${money(poolBalance)}</strong><em>FEC CONTROLLED POOL</em></aside></header>
+    <div class="market-fec-totals"><span><small>SEIZED TO DATE</small><strong>${money(totals.seized || 0)}</strong></span><span><small>RETURNED · CLEARED</small><strong>${money(totals.returned || 0)}</strong></span><span><small>PERMANENTLY FORFEITED</small><strong>${money(totals.forfeited || 0)}</strong></span><span><small>MARKET-CAP REINVESTMENT</small><strong>${money(totals.reinvested || 0)}</strong></span><span><small>AUDIT FILINGS</small><strong>${ledger.length}</strong></span></div>
+    <div class="market-fec-workbench">
+      <form id="devMarketFecSeizureForm" class="market-fec-form seizure"><div class="market-fec-form-title"><i>01</i><span><small>NEW CUSTODY ACTION</small><h3>Seize settled buying power</h3></span></div><label>Ravenhood equity account<select name="account_id" required><option value="">Select resident account</option>${accounts.map(account=>`<option value="${Number(account.account_id)}">${escapeHtml(account.name || "Resident")} · CIV ${escapeHtml(account.civ_number || "pending")} · ${money(account.cash_balance || 0)} settled</option>`).join("")}</select><small>Only the displayed settled cash balance may be seized.</small></label><div class="market-fec-fields"><label>Seizure amount<input name="amount" type="number" min="0.01" max="50000000000" step="0.01" placeholder="0.00" required/><small>Maximum single filing: $50,000,000,000.</small></label><label>FEC case reference<input name="case_reference" maxlength="80" placeholder="FEC-2026-0001" required/></label></div><label>Probable securities-fraud basis<textarea name="reason" minlength="10" maxlength="2000" placeholder="Document the conduct, evidence, and custody basis." required></textarea></label><label>Typed authorization<input name="confirmation" maxlength="10" autocomplete="off" placeholder="Type SEIZE" required/></label><label class="market-fec-certify"><input name="certify" type="checkbox" required/><span>I certify this is an authorized roleplay enforcement action.</span></label><button class="danger">Place assets in FEC custody</button></form>
+      <form id="devMarketFecDispositionForm" class="market-fec-form disposition"><div class="market-fec-form-title"><i>02</i><span><small>POOL DISPOSITION</small><h3>Resolve held assets</h3></span></div><label>Disposition<select name="action" required><option value="forfeit">Permanent forfeiture · remove from circulation</option><option value="reinvest">Reinvest · distribute by company market cap</option><option value="return">Return to resident · cleared without penalty</option></select><small data-fec-disposition-help>Forfeiture destroys the held currency but preserves its audit record.</small></label><label data-fec-return-account hidden>Cleared resident account<select name="account_id"><option value="">Select original seized account</option>${returnAccounts.map(account=>`<option value="${Number(account.account_id)}" data-returnable="${Number(account.returnable_amount||0)}">${escapeHtml(account.name||"Resident")} · CIV ${escapeHtml(account.civ_number||"pending")} · ${money(account.returnable_amount||0)} returnable</option>`).join("")}</select><small>A clearance returns this account's full remaining custody balance.</small></label><label>Amount from custody pool<input name="amount" type="number" min="0.01" max="${Math.max(0.01,poolBalance)}" step="0.01" placeholder="0.00" required/></label><label>Disposition order & rationale<textarea name="reason" minlength="10" maxlength="2000" placeholder="Document the final order authorizing this disposition." required></textarea></label><label>Typed authorization<input name="confirmation" maxlength="12" autocomplete="off" placeholder="Type FORFEIT" required/></label><label class="market-fec-certify"><input name="certify" type="checkbox" required/><span data-fec-disposition-certify>I understand this permanently removes funds from FEC custody.</span></label><button class="primary" data-fec-disposition-submit ${poolBalance>0?"":"disabled"}>Execute permanent forfeiture</button></form>
+    </div>
+    <div class="market-fec-ledger"><header><div><span>CHAIN OF CUSTODY</span><h3>FEC asset ledger</h3></div><strong>IMMUTABLE AUDIT HISTORY</strong></header><div>${ledger.map(entry=>{const kind=String(entry.event_type||"");const delta=Number(entry.pool_delta||0);const icon=kind==="seizure"?"S":kind==="reinvestment"?"R":kind==="return"?"C":"F";return `<article class="${escapeHtml(kind)}"><i>${icon}</i><div><span><b>${kind==="return"?"Cleared · returned":escapeHtml(humanLabel(kind))}</b><small>${entry.case_reference?escapeHtml(entry.case_reference):"POOL DISPOSITION"}</small></span><strong>${money(entry.amount||0)}</strong></div><p>${escapeHtml(entry.reason||"No rationale recorded")}</p><footer><span>${entry.target_name?`${escapeHtml(entry.target_name)} · CIV ${escapeHtml(entry.target_civ_number||"pending")}`:"FEC custody pool"}</span><span>${entry.created_at?new Date(entry.created_at).toLocaleString():"Time unavailable"} · ${escapeHtml(entry.created_by_name||"Authorized operator")}</span><b class="${delta>=0?"positive":"negative"}">${delta>=0?"+":"−"}${money(Math.abs(delta))} · pool ${money(entry.pool_balance_after||0)}</b></footer></article>`}).join("")||`<div class="empty">No FEC custody actions have been filed.</div>`}</div></div>
+  </section>`;
+  return `<div class="stack dev-fec-view">
+    <section class="fec-command-header"><div><span>FAIRCROFT EXCHANGE COMMISSION</span><h2>Market Integrity Desk</h2><p>Executed trade surveillance, resident financial review, and evidentiary custody.</p></div><aside><i></i><span><small>INVESTIGATION RECORDS</small><strong>${trades.length.toLocaleString()}</strong></span></aside></section>
+    <section class="fec-signal-strip"><span><small>TRADE RECORDS</small><strong>${trades.length.toLocaleString()}</strong></span><span><small>RESIDENTS ON TAPE</small><strong>${investigatedResidents.toLocaleString()}</strong></span><span class="${withdrawals.length?"alert":""}"><small>FC$${(threshold/1000000).toFixed(0)}M+ WITHDRAWALS</small><strong>${withdrawals.length}</strong></span><span><small>CUSTODY POOL</small><strong>${money(poolBalance)}</strong></span></section>
+    <section class="dev-card fec-withdrawal-watch"><header><div><span>HIGH-VALUE CASH WATCH</span><h2>Flagged withdrawals</h2></div><strong class="${withdrawals.length?"red":"green"}">${withdrawals.length} FLAGGED</strong></header><div>${withdrawals.map(item=>`<article><i>!</i><span><b>${escapeHtml(item.name||"Resident")}</b><small>CIV ${escapeHtml(item.civ_number||"pending")} · ${escapeHtml(item.email||"No email")}</small></span><strong>${money(item.amount||0)}</strong><span><b>${escapeHtml(humanLabel(item.bridge_status||item.transaction_status||"pending"))}</b><small>${item.created_at?new Date(item.created_at).toLocaleString():"Time unavailable"}</small></span><code>${escapeHtml(item.command_id||"NO BRIDGE COMMAND")}</code></article>`).join("")||`<div class="fec-clear-state"><i>✓</i><span><strong>No high-value withdrawal flags</strong><small>FC$${(threshold/1000000).toFixed(0)}M boundary monitoring is active.</small></span></div>`}</div></section>
+    <section class="dev-card fec-trade-surveillance"><header><div><span>CONSOLIDATED TRADE TAPE</span><h2>All resident executions</h2><p>Cash equity and leveraged positions are shown together.</p></div><div class="fec-trade-controls"><label><span>⌕</span><input data-fec-trade-search type="search" autocomplete="off" placeholder="Search resident, CIV, ticker, or email"/></label><select data-fec-trade-sort><option value="newest">Newest first</option><option value="name-asc">Resident A–Z</option><option value="name-desc">Resident Z–A</option><option value="value-desc">Largest value</option><option value="oldest">Oldest first</option></select></div></header><div class="fec-trade-columns"><span>Resident</span><span>Security</span><span>Execution</span><span>Quantity</span><span>Value / fee</span><span>Time</span></div><div class="fec-trade-tape" data-fec-trade-tape>${trades.map(trade=>{const value=Number(trade.gross_amount||0);const search=`${trade.name||""} ${trade.civ_number||""} ${trade.email||""} ${trade.ticker||""} ${trade.security_name||""} ${trade.action||""}`.toLowerCase();const action=String(trade.action||"").toLowerCase();return `<article data-fec-trade-row data-name="${escapeHtml(String(trade.name||"").toLowerCase())}" data-time="${escapeHtml(String(trade.created_at||""))}" data-value="${value}" data-search="${escapeHtml(search)}"><span><b>${escapeHtml(trade.name||"Resident")}</b><small>CIV ${escapeHtml(trade.civ_number||"pending")} · ${escapeHtml(trade.email||"No email")}</small></span><span><b>${escapeHtml(trade.ticker||"—")}</b><small>${escapeHtml(trade.security_name||"Security")} · ${escapeHtml(humanLabel(trade.record_type||"equity"))}</small></span><span><b class="${["buy","long"].includes(action)?"positive":"negative"}">${escapeHtml(action.toUpperCase()||"TRADE")}${trade.leverage?` · ${Number(trade.leverage)}x`:""}</b><small>${escapeHtml(humanLabel(trade.status||"executed"))} · ${money(trade.unit_price||0)}/share</small></span><strong>${Number(trade.quantity||0).toLocaleString(undefined,{maximumFractionDigits:6})}</strong><span><b>${money(value)}</b><small>${money(trade.fee_amount||0)} fee</small></span><time>${trade.created_at?new Date(trade.created_at).toLocaleString():"Unavailable"}</time></article>`}).join("")||`<div class="empty">No resident trades have executed.</div>`}</div><footer><strong data-fec-trade-visible>${trades.length.toLocaleString()} records shown</strong><small>The tape is read-only and includes the complete recorded exchange history.</small></footer></section>
+    ${custody}
   </div>`;
 }
 
@@ -14079,6 +14111,7 @@ function renderDevTools() {
   if (state.devTab === "market-settings") return renderDevMarketSettings(data.market_settings || {}, users);
   if (state.devTab === "business-settings") return renderDevBusinessSettings(data.business_settings || {});
   if (state.devTab === "leverage-settings") return renderDevLeverageSettings(data.leverage_settings || {});
+  if (state.devTab === "fec-investigations") return renderDevFecInvestigations(data.fec_investigations || {});
   if (state.devTab === "lottery-settings") return renderDevLotterySettings(data.lottery_settings || {});
   if (state.devTab === "sportsbook-settings") return renderDevSportsbookSettings(data.sportsbook_settings || {});
   if (state.devTab === "casino-tools") return renderDevCasinoTools(data.casino_tools || {});
@@ -15012,6 +15045,32 @@ function bindDevWorkspace() {
     if (count) count.textContent = `${visible} ACCOUNT${visible === 1 ? '' : 'S'}`;
     if (visibleCount) visibleCount.textContent = `${visible} account${visible === 1 ? '' : 's'} shown`;
   });
+  const fecTradeSearch = $('[data-fec-trade-search]');
+  const fecTradeSort = $('[data-fec-trade-sort]');
+  const fecTradeTape = $('[data-fec-trade-tape]');
+  const applyFecTradeView = () => {
+    if (!fecTradeTape) return;
+    const query = String(fecTradeSearch?.value || '').trim().toLowerCase();
+    const sort = String(fecTradeSort?.value || 'newest');
+    const rows = $$('[data-fec-trade-row]', fecTradeTape);
+    rows.sort((left, right) => {
+      if (sort === 'name-asc') return String(left.dataset.name || '').localeCompare(String(right.dataset.name || ''));
+      if (sort === 'name-desc') return String(right.dataset.name || '').localeCompare(String(left.dataset.name || ''));
+      if (sort === 'value-desc') return Number(right.dataset.value || 0) - Number(left.dataset.value || 0);
+      if (sort === 'oldest') return String(left.dataset.time || '').localeCompare(String(right.dataset.time || ''));
+      return String(right.dataset.time || '').localeCompare(String(left.dataset.time || ''));
+    });
+    let visible = 0;
+    rows.forEach(row => {
+      row.hidden = Boolean(query) && !String(row.dataset.search || '').includes(query);
+      if (!row.hidden) visible += 1;
+      fecTradeTape.append(row);
+    });
+    const count = $('[data-fec-trade-visible]');
+    if (count) count.textContent = `${visible.toLocaleString()} record${visible === 1 ? '' : 's'} shown`;
+  };
+  fecTradeSearch?.addEventListener('input', applyFecTradeView);
+  fecTradeSort?.addEventListener('change', applyFecTradeView);
   $('#devMarketFecSeizureForm')?.addEventListener('submit', async event => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -15256,6 +15315,8 @@ function bindDevWorkspace() {
       cycleButton.dataset.cycleProvider = provider;
       cycleButton.textContent = `Run one ${humanLabel(provider)} cycle now`;
     }
+    const sequenceButton = marketAutomationForm.querySelector("[data-market-interval-sequence]");
+    if (sequenceButton) sequenceButton.dataset.cycleProvider = provider;
   };
   marketAutomationForm?.querySelectorAll('[name="automation_provider"]').forEach(input => input.addEventListener("change", syncMarketAutomationMode));
   syncMarketAutomationMode();
@@ -15271,6 +15332,43 @@ function bindDevWorkspace() {
     try {
       const result = await api("/api/dev-tools/market/volatility-cycle", { method:"POST", body:{provider}, timeoutMs:15000 });
       toast(result.message || `${providerLabel} cycle #${result.cycle_number || ""} started`);
+      await refreshDevTools();
+    } catch(error) {
+      button.disabled = false;
+      button.textContent = originalLabel;
+      toast(error.message);
+    }
+  });
+  const sequenceCountInput = marketAutomationForm?.querySelector('[name="sequence_cycle_count"]');
+  const sequenceTimeInput = marketAutomationForm?.querySelector('[name="sequence_timeframe_minutes"]');
+  const sequenceButton = marketAutomationForm?.querySelector("[data-market-interval-sequence]");
+  const syncMarketSequenceLabel = () => {
+    if (!sequenceButton) return;
+    const count = Math.max(2, Number(sequenceCountInput?.value || 2));
+    const minutes = Math.max(0.25, Number(sequenceTimeInput?.value || 1));
+    const minutesLabel = Number.isInteger(minutes)
+      ? String(minutes)
+      : minutes.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+    const intervalSeconds = minutes * 60 / count;
+    sequenceButton.textContent = `Run ${count} cycles across ${minutesLabel} minutes`;
+    sequenceButton.title = `One serialized cycle approximately every ${intervalSeconds.toFixed(1)} seconds`;
+  };
+  sequenceCountInput?.addEventListener("input", syncMarketSequenceLabel);
+  sequenceTimeInput?.addEventListener("input", syncMarketSequenceLabel);
+  syncMarketSequenceLabel();
+  sequenceButton?.addEventListener("click", async event => {
+    const button = event.currentTarget;
+    const provider = button.dataset.cycleProvider || marketAutomationForm?.querySelector('[name="automation_provider"]:checked')?.value || "local";
+    const cycleCount = Math.max(2, Math.min(100, Number(sequenceCountInput?.value || 2)));
+    const timeframeMinutes = Math.max(0.25, Math.min(1440, Number(sequenceTimeInput?.value || 1)));
+    const intervalSeconds = timeframeMinutes * 60 / cycleCount;
+    if(!confirm(`Run ${cycleCount} ${humanLabel(provider)} cycles across ${timeframeMinutes} minutes (about every ${intervalSeconds.toFixed(1)} seconds)?`)) return;
+    const originalLabel = button.textContent;
+    button.disabled = true;
+    button.textContent = "Starting interval sequence…";
+    try {
+      const result = await api("/api/dev-tools/market/volatility-cycle", {method:"POST", body:{provider,cycle_count:cycleCount,timeframe_minutes:timeframeMinutes}, timeoutMs:15000});
+      toast(result.message || `${result.sequence_id || "Interval sequence"} started`);
       await refreshDevTools();
     } catch(error) {
       button.disabled = false;
@@ -17377,7 +17475,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.4.0-foundry-fec-v69").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.4.0-foundry-fec-v70").catch(() => {}));
 }
 
 legalFooterLink?.addEventListener("click", () => {

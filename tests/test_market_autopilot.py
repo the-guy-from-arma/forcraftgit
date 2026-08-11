@@ -86,6 +86,24 @@ class MarketAutopilotTests(unittest.TestCase):
         self.assertIn('data-cycle-provider=', FRONTEND_SOURCE)
         self.assertIn('button.textContent = `Starting ${providerLabel} cycle', FRONTEND_SOURCE)
 
+    def test_interval_sequences_are_serialized_and_audited(self) -> None:
+        endpoint_source = APP_SOURCE.split("def api_dev_market_volatility_cycle", 1)[1].split(
+            "def api_dev_market_program", 1
+        )[0]
+        sequence_source = APP_SOURCE.split("def run_market_automation_sequence", 1)[1].split(
+            "def market_gemini_adjustment_cycle", 1
+        )[0]
+        self.assertIn("MARKET_AUTOMATION_SEQUENCE_LOCK.acquire(blocking=False)", endpoint_source)
+        self.assertIn('payload.get("cycle_count")', endpoint_source)
+        self.assertIn('payload.get("timeframe_minutes")', endpoint_source)
+        self.assertIn("interval_seconds < 3.0", endpoint_source)
+        self.assertIn("MARKET_MANUAL_CYCLE_LOCK.acquire()", sequence_source)
+        self.assertIn("automation_sequence_finished", sequence_source)
+        self.assertGreaterEqual(APP_SOURCE.count("not MARKET_AUTOMATION_SEQUENCE_LOCK.locked()"), 2)
+        self.assertIn('name="sequence_cycle_count"', FRONTEND_SOURCE)
+        self.assertIn('name="sequence_timeframe_minutes"', FRONTEND_SOURCE)
+        self.assertIn("data-market-interval-sequence", FRONTEND_SOURCE)
+
     def test_cleared_generic_error_does_not_resurrect_legacy_gemini_error(self) -> None:
         self.assertIn(
             'raw.get("market_ai_last_error") if "market_ai_last_error" in raw else raw.get("market_gemini_last_error")',

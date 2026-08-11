@@ -227,6 +227,7 @@ LOTTERY_MAX_OPEN_TICKETS = 50
 CASINO_WAGER_REQUEST_TIMES: dict[str, float] = {}
 CASINO_WAGER_REQUEST_LOCK = threading.Lock()
 MARKET_MANUAL_CYCLE_LOCK = threading.Lock()
+MARKET_AUTOMATION_SEQUENCE_LOCK = threading.Lock()
 
 
 def now_iso() -> str:
@@ -2355,6 +2356,7 @@ ADMIN_TOOLS_SECTIONS = (
     ("market-settings", "Stock Market"),
     ("business-settings", "Business Settings"),
     ("leverage-settings", "Leverage Settings"),
+    ("fec-investigations", "FEC Investigations"),
     ("lottery-settings", "Lottery Settings"),
     ("sportsbook-settings", "Sportsbook Settings"),
     ("casino-tools", "Casino Tools"),
@@ -4405,6 +4407,7 @@ def ensure_migrations(db: Database) -> None:
     )
     db.execute("CREATE INDEX IF NOT EXISTS market_margin_positions_account_status_idx ON market_margin_positions(account_id,status,opened_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS market_margin_positions_open_idx ON market_margin_positions(status,security_id) WHERE status='open'")
+    db.execute("CREATE INDEX IF NOT EXISTS market_margin_positions_opened_idx ON market_margin_positions(opened_at DESC)")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS market_margin_order_requests (
@@ -4558,6 +4561,7 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE market_cash_transactions ADD COLUMN IF NOT EXISTS command_id TEXT")
     db.execute("ALTER TABLE market_cash_transactions ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'completed'")
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS market_cash_transactions_command_idx ON market_cash_transactions(command_id) WHERE command_id IS NOT NULL")
+    db.execute("CREATE INDEX IF NOT EXISTS market_cash_transactions_withdrawal_amount_idx ON market_cash_transactions(amount DESC,created_at DESC) WHERE transaction_type='withdrawal'")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS market_transfers (
@@ -7619,6 +7623,133 @@ def run_manual_market_ai_cycle(
         MARKET_MANUAL_CYCLE_LOCK.release()
 
 
+def run_market_automation_sequence(
+    actor_id: int,
+    sequence_id: str,
+    provider: str,
+    profile: str,
+    minimum_percent: float,
+    maximum_percent: float,
+    amplitude: float,
+    cycle_count: int,
+    timeframe_minutes: float,
+    cooldown_minutes: int,
+) -> None:
+    """Run a bounded number of serialized cycles distributed across a timeframe."""
+    provider = str(provider or "local").strip().lower()
+    spacing_seconds = max(1.0, timeframe_minutes * 60.0 / max(1, cycle_count))
+    sequence_started = time.monotonic()
+    attempted = 0
+    stopped_reason = ""
+    try:
+        for index in range(cycle_count):
+            scheduled_offset = index * spacing_seconds
+            wait_seconds = sequence_started + scheduled_offset - time.monotonic()
+            if wait_seconds > 0:
+                time.sleep(wait_seconds)
+
+            if provider != "local":
+                with conn() as status_db:
+                    current_settings = get_system_settings(status_db)
+                    cooldown_value = current_settings.get(f"market_{provider}_cooldown_until") or ""
+                cooldown_until = parse_iso(cooldown_value) if cooldown_value else None
+                if cooldown_until and cooldown_until > utcnow():
+                    stopped_reason = f"{provider.title()} entered cooldown until {cooldown_until.isoformat()}"
+                    break
+
+            MARKET_MANUAL_CYCLE_LOCK.acquire()
+            cycle_number = 0
+            try:
+                with conn() as start_db:
+                    cycle_number = begin_market_automation_cycle(
+                        start_db,
+                        f"{provider}-sequence",
+                        profile,
+                        actor_id,
+                    )
+                    start_db.execute(
+                        "INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('automation_sequence_step',?,?,?,?)",
+                        (
+                            f"{sequence_id} · interval {index + 1}/{cycle_count}",
+                            f"Cycle #{cycle_number} started with {provider.title()} at the scheduled sequence interval.",
+                            actor_id,
+                            now_iso(),
+                        ),
+                    )
+                    if provider != "local":
+                        set_system_setting(start_db, "market_ai_last_tick", now_iso())
+                        set_system_setting(start_db, "market_ai_last_status", "running")
+                        set_system_setting(start_db, "market_ai_last_provider", provider)
+                        set_system_setting(start_db, "market_ai_last_error", "")
+                attempted += 1
+                if provider == "local":
+                    run_manual_market_volatility_cycle(actor_id, cycle_number, profile, amplitude)
+                else:
+                    run_manual_market_ai_cycle(
+                        actor_id,
+                        cycle_number,
+                        provider,
+                        profile,
+                        minimum_percent,
+                        maximum_percent,
+                        cooldown_minutes,
+                    )
+            except Exception as exc:
+                if MARKET_MANUAL_CYCLE_LOCK.locked():
+                    MARKET_MANUAL_CYCLE_LOCK.release()
+                stopped_reason = f"Could not start interval {index + 1}: {type(exc).__name__}: {exc}"[:500]
+                if cycle_number:
+                    try:
+                        with conn() as failure_db:
+                            finish_market_automation_cycle(
+                                failure_db,
+                                cycle_number,
+                                provider,
+                                None,
+                                "failed",
+                                stopped_reason,
+                            )
+                    except Exception:
+                        pass
+                break
+
+        with conn() as finished_db:
+            status = "stopped" if stopped_reason else "completed"
+            detail = (
+                f"{attempted} of {cycle_count} {provider.title()} cycle(s) attempted across "
+                f"{timeframe_minutes:g} minute(s)."
+            )
+            if stopped_reason:
+                detail = f"{detail} Sequence stopped: {stopped_reason}."
+            finished_db.execute(
+                "INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('automation_sequence_finished',?,?,?,?)",
+                (f"{sequence_id} {status}", detail, actor_id, now_iso()),
+            )
+            add_admin_audit(
+                finished_db,
+                actor_id,
+                "market.automation_sequence.finished",
+                details={
+                    "sequence_id": sequence_id,
+                    "provider": provider,
+                    "requested_cycles": cycle_count,
+                    "attempted_cycles": attempted,
+                    "timeframe_minutes": timeframe_minutes,
+                    "status": status,
+                    "reason": stopped_reason,
+                },
+            )
+        print(
+            f"Ravenhood automation sequence {sequence_id} finished: "
+            f"{attempted}/{cycle_count} {provider} cycle(s) attempted",
+            flush=True,
+        )
+    except Exception as exc:
+        print(f"Ravenhood automation sequence {sequence_id} failed: {type(exc).__name__}: {exc}", flush=True)
+    finally:
+        MARKET_AUTOMATION_SEQUENCE_LOCK.release()
+
+
 def market_gemini_adjustment_cycle(
     db: Database,
     minimum_percent: float = 0.10,
@@ -8163,7 +8294,11 @@ def market_automation_worker() -> None:
                 process_queued_ravenhood_orders(db, settings)
                 process_queued_ravenhood_margin_orders(db, settings)
                 apply_market_price_programs(db)
-                if settings["market_autopilot_enabled"] and settings["market_automation_provider"] == "local":
+                if (
+                    not MARKET_AUTOMATION_SEQUENCE_LOCK.locked()
+                    and settings["market_autopilot_enabled"]
+                    and settings["market_automation_provider"] == "local"
+                ):
                     last = parse_iso(settings["market_autopilot_last_tick"]) if settings["market_autopilot_last_tick"] else None
                     if not last or (current - last).total_seconds() >= settings["market_autopilot_interval_minutes"] * 60:
                         profile, _minimum, _maximum = market_autopilot_bounds(settings)
@@ -8204,7 +8339,8 @@ def market_gemini_worker() -> None:
                 primary = settings["market_automation_provider"]
                 last_ai = parse_iso(settings["market_ai_last_tick"]) if settings["market_ai_last_tick"] else None
                 should_run = bool(
-                    settings["market_autopilot_enabled"]
+                    not MARKET_AUTOMATION_SEQUENCE_LOCK.locked()
+                    and settings["market_autopilot_enabled"]
                     and settings["market_ai_enabled"]
                     and primary in ("gemini", "deepseek")
                     and (not last_ai or (attempt_at - last_ai).total_seconds() >= settings["market_ai_interval_minutes"] * 60)
@@ -9314,6 +9450,7 @@ def admin_tools_route_section(path: str) -> str:
         ("/api/dev-tools/banking/", "banking-settings"),
         ("/api/dev-tools/business/", "business-settings"),
         ("/api/dev-tools/market/margin-settings", "leverage-settings"),
+        ("/api/dev-tools/market/fec/", "fec-investigations"),
         ("/api/dev-tools/market/", "market-settings"),
         ("/api/dev-tools/lottery/", "lottery-settings"),
         ("/api/dev-tools/casino/", "casino-tools"),
@@ -24165,6 +24302,65 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if section == "business-settings":
             payload["business_settings"] = business_dev_payload(db, now)
 
+        if section == "fec-investigations":
+            payload["fec_investigations"] = {
+                "high_value_threshold": 10_000_000,
+                "pool_balance": float((one(db, "SELECT balance FROM market_fec_asset_pool WHERE id=1") or {}).get("balance") or 0),
+                "totals": dict(one(db, """SELECT
+                    COALESCE(SUM(CASE WHEN event_type='seizure' THEN amount ELSE 0 END),0) AS seized,
+                    COALESCE(SUM(CASE WHEN event_type='return' THEN amount ELSE 0 END),0) AS returned,
+                    COALESCE(SUM(CASE WHEN event_type='forfeiture' THEN amount ELSE 0 END),0) AS forfeited,
+                    COALESCE(SUM(CASE WHEN event_type='reinvestment' THEN amount ELSE 0 END),0) AS reinvested
+                    FROM market_fec_asset_ledger""") or {}),
+                "ledger": [dict(row) for row in all_rows(db, """SELECT id,event_type,amount,pool_delta,pool_balance_after,
+                    market_account_id,target_user_id,target_name,target_civ_number,case_reference,reason,
+                    allocation_json,created_by,created_by_name,created_at
+                    FROM market_fec_asset_ledger ORDER BY created_at DESC,id DESC LIMIT 250""")],
+                "return_accounts": [dict(row) for row in all_rows(db, """SELECT
+                    market_account_id AS account_id,target_user_id AS user_id,target_name AS name,
+                    target_civ_number AS civ_number,
+                    COALESCE(SUM(CASE WHEN event_type='seizure' THEN amount
+                                      WHEN event_type='return' THEN -amount ELSE 0 END),0) AS returnable_amount
+                    FROM market_fec_asset_ledger
+                    WHERE market_account_id IS NOT NULL AND event_type IN ('seizure','return')
+                    GROUP BY market_account_id,target_user_id,target_name,target_civ_number
+                    HAVING COALESCE(SUM(CASE WHEN event_type='seizure' THEN amount
+                                             WHEN event_type='return' THEN -amount ELSE 0 END),0) > 0.005
+                    ORDER BY target_name,market_account_id""")],
+                "accounts": [dict(row) for row in all_rows(db, """SELECT a.id AS account_id,a.user_id,a.cash_balance,a.status,
+                    u.name,u.civ_number,u.email
+                    FROM market_accounts a JOIN users u ON u.id=a.user_id
+                    ORDER BY u.name,a.id""")],
+                "equity_trades": [dict(row) for row in all_rows(db, """SELECT o.id,'equity' AS record_type,
+                    o.account_id,a.user_id,u.name,u.civ_number,u.email,s.ticker,s.name AS security_name,
+                    s.security_type,o.side AS action,o.quantity,o.unit_price,o.gross_amount,o.fee_amount,
+                    'executed' AS status,o.created_at
+                    FROM market_orders o
+                    JOIN market_accounts a ON a.id=o.account_id
+                    JOIN users u ON u.id=a.user_id
+                    JOIN market_securities s ON s.id=o.security_id
+                    ORDER BY o.created_at DESC,o.id DESC""")],
+                "margin_trades": [dict(row) for row in all_rows(db, """SELECT p.id,'margin' AS record_type,
+                    p.account_id,a.user_id,u.name,u.civ_number,u.email,s.ticker,s.name AS security_name,
+                    s.security_type,p.direction AS action,p.quantity,p.entry_price AS unit_price,
+                    p.entry_notional AS gross_amount,p.open_fee AS fee_amount,p.leverage,p.collateral,
+                    p.status,p.opened_at AS created_at,p.closed_at,p.close_price,p.realized_pnl,p.close_reason
+                    FROM market_margin_positions p
+                    JOIN market_accounts a ON a.id=p.account_id
+                    JOIN users u ON u.id=a.user_id
+                    JOIN market_securities s ON s.id=p.security_id
+                    ORDER BY p.opened_at DESC,p.id DESC""")],
+                "withdrawal_flags": [dict(row) for row in all_rows(db, """SELECT t.id,t.account_id,a.user_id,u.name,u.civ_number,u.email,
+                    t.amount,t.command_id,t.status AS transaction_status,t.created_at,
+                    COALESCE(c.status,t.status) AS bridge_status,c.claimed_at,c.completed_at,c.result_json
+                    FROM market_cash_transactions t
+                    JOIN market_accounts a ON a.id=t.account_id
+                    JOIN users u ON u.id=a.user_id
+                    LEFT JOIN bank_bridge_commands c ON c.command_id=t.command_id
+                    WHERE t.transaction_type='withdrawal' AND t.amount>=10000000
+                    ORDER BY t.created_at DESC,t.id DESC""")],
+            }
+
         if section == "market-settings":
             payload["market_settings"] = {
                 "market_open": settings["market_open"],
@@ -24182,28 +24378,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "transfer_fee_percent": settings["market_transfer_fee_percent"],
                 "trade_fee_percent": settings["market_trade_fee_percent"],
                 "holding_balance": settings["market_holding_balance"],
-                "fec_pool_balance": float((one(db, "SELECT balance FROM market_fec_asset_pool WHERE id=1") or {}).get("balance") or 0),
-                "fec_totals": dict(one(db, """SELECT
-                    COALESCE(SUM(CASE WHEN event_type='seizure' THEN amount ELSE 0 END),0) AS seized,
-                    COALESCE(SUM(CASE WHEN event_type='return' THEN amount ELSE 0 END),0) AS returned,
-                    COALESCE(SUM(CASE WHEN event_type='forfeiture' THEN amount ELSE 0 END),0) AS forfeited,
-                    COALESCE(SUM(CASE WHEN event_type='reinvestment' THEN amount ELSE 0 END),0) AS reinvested
-                    FROM market_fec_asset_ledger""") or {}),
-                "fec_ledger": [dict(row) for row in all_rows(db, """SELECT id,event_type,amount,pool_delta,pool_balance_after,
-                    market_account_id,target_user_id,target_name,target_civ_number,case_reference,reason,
-                    allocation_json,created_by,created_by_name,created_at
-                    FROM market_fec_asset_ledger ORDER BY created_at DESC,id DESC LIMIT 250""")],
-                "fec_return_accounts": [dict(row) for row in all_rows(db, """SELECT
-                    market_account_id AS account_id,target_user_id AS user_id,target_name AS name,
-                    target_civ_number AS civ_number,
-                    COALESCE(SUM(CASE WHEN event_type='seizure' THEN amount
-                                      WHEN event_type='return' THEN -amount ELSE 0 END),0) AS returnable_amount
-                    FROM market_fec_asset_ledger
-                    WHERE market_account_id IS NOT NULL AND event_type IN ('seizure','return')
-                    GROUP BY market_account_id,target_user_id,target_name,target_civ_number
-                    HAVING COALESCE(SUM(CASE WHEN event_type='seizure' THEN amount
-                                             WHEN event_type='return' THEN -amount ELSE 0 END),0) > 0.005
-                    ORDER BY target_name,market_account_id""")],
                 "margin_enabled": settings["market_margin_enabled"],
                 "margin_maintenance_percent": settings["market_margin_maintenance_percent"],
                 "margin_max_open_positions": settings["market_margin_max_open_positions"],
@@ -26634,6 +26808,75 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             cooldown_until = parse_iso(cooldown_value) if cooldown_value else None
             if cooldown_until and cooldown_until > utcnow():
                 self.error(409, f"{provider.title()} is cooling down until {cooldown_until.isoformat()} after its last provider failure."); return
+        try:
+            cycle_count = max(1, min(100, int(payload.get("cycle_count") or 1)))
+            timeframe_minutes = max(0.25, min(1440.0, float(payload.get("timeframe_minutes") or 1)))
+        except (TypeError, ValueError):
+            self.error(400, "Cycle count and timeframe must be valid numbers."); return
+        if cycle_count > 1:
+            interval_seconds = timeframe_minutes * 60.0 / cycle_count
+            if interval_seconds < 3.0:
+                self.error(400, "Interval sequences require at least 3 seconds between cycles. Increase the timeframe or reduce the cycle count."); return
+            if not MARKET_AUTOMATION_SEQUENCE_LOCK.acquire(blocking=False):
+                self.error(409, "An interval sequence is already running. Follow it in the Market Control Log."); return
+            if MARKET_MANUAL_CYCLE_LOCK.locked():
+                MARKET_AUTOMATION_SEQUENCE_LOCK.release()
+                self.error(409, "A manual market cycle is already running. Wait for it to finish before starting a sequence."); return
+            actor_id = int(user["id"])
+            profile, minimum, maximum = market_autopilot_bounds(settings)
+            amplitude = market_autopilot_amplitude(settings)
+            sequence_id = f"SEQ-{secrets.token_hex(3).upper()}"
+            try:
+                db.execute(
+                    "INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('automation_sequence_started',?,?,?,?)",
+                    (
+                        f"{sequence_id} started",
+                        f"{cycle_count} {provider.title()} cycles scheduled across {timeframe_minutes:g} minute(s), approximately one every {interval_seconds:.1f} seconds.",
+                        actor_id,
+                        now_iso(),
+                    ),
+                )
+                add_admin_audit(db, actor_id, "market.automation_sequence.started", details={
+                    "sequence_id": sequence_id,
+                    "provider": provider,
+                    "cycle_count": cycle_count,
+                    "timeframe_minutes": timeframe_minutes,
+                    "interval_seconds": round(interval_seconds, 2),
+                })
+                db.raw.commit()
+                threading.Thread(
+                    target=run_market_automation_sequence,
+                    args=(
+                        actor_id,
+                        sequence_id,
+                        provider,
+                        profile,
+                        minimum,
+                        maximum,
+                        amplitude,
+                        cycle_count,
+                        timeframe_minutes,
+                        settings["market_ai_cooldown_minutes"],
+                    ),
+                    name=f"ravenhood-automation-sequence-{sequence_id.lower()}",
+                    daemon=True,
+                ).start()
+            except Exception as exc:
+                MARKET_AUTOMATION_SEQUENCE_LOCK.release()
+                self.error(500, f"Could not start the interval sequence: {exc}"); return
+            self.send_json(202, {
+                "ok": True,
+                "queued": True,
+                "sequence_id": sequence_id,
+                "provider": provider,
+                "cycle_count": cycle_count,
+                "timeframe_minutes": timeframe_minutes,
+                "interval_seconds": round(interval_seconds, 2),
+                "message": f"{sequence_id} started: {cycle_count} {provider.title()} cycles across {timeframe_minutes:g} minutes.",
+            })
+            return
+        if MARKET_AUTOMATION_SEQUENCE_LOCK.locked():
+            self.error(409, "An interval sequence is already running. Follow it in the Market Control Log."); return
         if not MARKET_MANUAL_CYCLE_LOCK.acquire(blocking=False):
             self.error(409, "A manual market cycle is already running. Follow it in the Market Control Log."); return
         actor_id = int(user["id"])

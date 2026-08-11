@@ -1,11 +1,11 @@
-const CACHE = "faircroft-rp-v040-foundry-fec-v68";
+const CACHE = "faircroft-rp-v040-foundry-fec-v70";
 const ASSETS = [
   "/",
-  "/static/styles.css?v=0.4.0-foundry-fec-v69",
-  "/static/ravenhood-mobile.css?v=0.4.0-foundry-fec-v69",
-  "/static/insurance-v7.css?v=0.4.0-foundry-fec-v69",
+  "/static/styles.css?v=0.4.0-foundry-fec-v70",
+  "/static/ravenhood-mobile.css?v=0.4.0-foundry-fec-v70",
+  "/static/insurance-v7.css?v=0.4.0-foundry-fec-v70",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.4.0-foundry-fec-v69",
+  "/static/app.js?v=0.4.0-foundry-fec-v70",
   "/static/thunderlink-eula-v1.0.txt",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
