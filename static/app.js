@@ -13643,7 +13643,27 @@ function renderDevInsuranceClaimsLegacy(data){
 function renderDevInsuranceClaims(data){
   const settings=data.settings||{};
   const tiers=settings.tiers||{};
-  return `<div class="stack insurance-claims-workspace"><section class="dev-card insurance-auto-review-settings"><header><div><span>MANUAL CLAIM AUTHORITY</span><h2>Insurance Command controls</h2><p>The emergency switch establishes an exclusive filing mode. While enabled, only continuity claims may be submitted; Everyday, stock-loss, and other non-emergency forms remain paused.</p></div><strong>${settings.state_of_emergency?'EMERGENCY CLAIMS ONLY':'STANDARD CLAIM MODE'}</strong></header><form id="devInsuranceSettingsForm"><label class="dev-certify wide"><input name="state_of_emergency" type="checkbox" ${settings.state_of_emergency?'checked':''}/> State of Emergency declared <small>Open continuity reset/wipe claim filing and pause every non-emergency claim form while enabled.</small></label><div class="dev-certify wide"><strong>Filing windows do not overlap</strong><small>Lifting the declaration immediately closes new emergency claims and restores eligible Everyday, stock-loss, and other non-emergency filing.</small></div><div class="dev-certify wide"><strong>Manual review is enforced</strong><small>Approve & queue payout is the only way to authorize compensation. Existing claims remain in the ledger when filing modes change.</small></div><div class="form-grid"><label>Essential coverage %<input name="essential_coverage_percent" type="number" min="1" max="100" step="0.01" value="${Number(tiers.essential?.coverage_percent||50)}"/></label><label>Essential premium<input name="essential_premium" type="number" min="0.01" step="0.01" value="${Number(tiers.essential?.premium||3500)}"/></label><label>Preferred coverage %<input name="preferred_coverage_percent" type="number" min="1" max="100" step="0.01" value="${Number(tiers.preferred?.coverage_percent||70)}"/></label><label>Preferred premium<input name="preferred_premium" type="number" min="0.01" step="0.01" value="${Number(tiers.preferred?.premium||4250)}"/></label><label>Premier coverage %<input name="premier_coverage_percent" type="number" min="1" max="100" step="0.01" value="${Number(tiers.premier?.coverage_percent||90)}"/></label><label>Premier premium<input name="premier_premium" type="number" min="0.01" step="0.01" value="${Number(tiers.premier?.premium||5000)}"/></label></div><button class="primary">Save insurance settings</button></form></section>${renderDevInsuranceClaimsLegacy(data)}</div>`;
+  const policies=data.policies||[];
+  const view=state.devInsuranceSettingsView||'policies';
+  const active=policies.filter(policy=>policy.status==='active').length;
+  const paymentPending=policies.filter(policy=>policy.status==='pending_payment').length;
+  const premiumBook=policies.filter(policy=>policy.status==='active').reduce((total,policy)=>total+(Number(policy.monthly_premium_rate||0)||Number(policy.premium_amount||0)/Math.max(1,Number(policy.term_months||1))),0);
+  const dateLabel=value=>{const date=new Date(value);return value&&!Number.isNaN(date.getTime())?date.toLocaleDateString([], {month:'short',day:'numeric',year:'numeric'}):'Not recorded';};
+  const policyRows=policies.map(policy=>{
+    const monthlyRate=Number(policy.monthly_premium_rate||0)||Number(policy.premium_amount||0)/Math.max(1,Number(policy.term_months||1));
+    const extras=[];
+    if(Number(policy.everyday_protection_count||0)>0)extras.push('Everyday');
+    if(Number(policy.stock_protection_count||0)>0)extras.push('Stock');
+    if(Number(policy.property_protection_count||0)>0)extras.push(`${Number(policy.property_protection_count)} propert${Number(policy.property_protection_count)===1?'y':'ies'}`);
+    const cancellable=policy.status==='active'||policy.status==='pending_payment';
+    const searchValue=`${policy.resident_name||''} ${policy.civ_number||''} ${policy.email||''} ${policy.character_name||''} ${policy.policy_number||''}`.toLowerCase();
+    return `<article class="insurance-policy-ledger-row" data-insurance-policy-row data-insurance-policy-status="${escapeHtml(policy.status||'unknown')}" data-insurance-policy-search-value="${escapeHtml(searchValue)}"><div class="insurance-policy-person"><i>${escapeHtml(String(policy.resident_name||'?').slice(0,1).toUpperCase())}</i><span><strong>${escapeHtml(policy.resident_name||'Resident')}</strong><small>CIV ${escapeHtml(policy.civ_number||'pending')} · ${escapeHtml(policy.character_name||'No character')}</small></span></div><div class="insurance-policy-number"><small>POLICY</small><strong>${escapeHtml(policy.policy_number||'Not assigned')}</strong><span>${escapeHtml(humanLabel(policy.coverage_tier||'coverage'))} · ${Number(policy.coverage_percent||0)}%</span></div><div><small>EFFECTIVE</small><strong>${escapeHtml(dateLabel(policy.issued_at))}</strong><span>${Number(policy.term_months||1)} month rate lock</span></div><div><small>ENDS</small><strong>${escapeHtml(dateLabel(policy.expires_at))}</strong><span>Rate through ${escapeHtml(dateLabel(policy.rate_locked_until||policy.expires_at))}</span></div><div class="insurance-policy-rate"><small>LOCKED RATE</small><strong>${money(monthlyRate)}</strong><span>per month · ${money(policy.premium_amount||0)} term · ${escapeHtml(humanLabel(policy.payment_status||'recorded'))}</span></div><div class="insurance-policy-extras"><small>PROTECTION</small><strong>${money(policy.coverage_amount||0)}</strong><span>${escapeHtml(extras.join(' · ')||'Main plan only')} · ${Number(policy.claim_count||0)} claim${Number(policy.claim_count||0)===1?'':'s'}</span></div><div class="insurance-policy-action"><b class="insurance-policy-status ${escapeHtml(policy.status||'unknown')}">${escapeHtml(humanLabel(policy.status||'unknown'))}</b>${cancellable?`<button type="button" class="danger" data-open-insurance-policy-cancel="${Number(policy.id)}">Cancel policy</button>`:`<span>Coverage closed</span>`}</div></article>`;
+  }).join('');
+  const selectedPolicy=policies.find(policy=>Number(policy.id)===Number(state.devInsuranceCancelPolicyId));
+  const cancelDialog=selectedPolicy?`<div class="insurance-policy-cancel-modal" data-close-insurance-policy-cancel><form id="devInsurancePolicyCancelForm" data-policy-id="${Number(selectedPolicy.id)}" role="dialog" aria-modal="true"><header><div><span>CONTROLLED CANCELLATION</span><h2>Cancel ${escapeHtml(selectedPolicy.policy_number)}</h2><p>${escapeHtml(selectedPolicy.resident_name)} · CIV ${escapeHtml(selectedPolicy.civ_number||'pending')}</p></div><button type="button" data-close-insurance-policy-cancel aria-label="Close">×</button></header><div class="insurance-policy-cancel-warning"><strong>Coverage ends immediately.</strong><p>Completed premiums are not refunded. Pending premium commands will be cancelled when safe, optional protections will close, and the resident will receive the documented reason.</p></div><label>Staff cancellation record<textarea name="reason" minlength="10" maxlength="1000" required placeholder="Document why Insurance Command is cancelling this policy."></textarea></label><label class="dev-certify"><input type="checkbox" required/> I reviewed the policy and authorize this cancellation.</label><footer><button type="button" class="secondary" data-close-insurance-policy-cancel>Keep policy</button><button type="submit" class="danger">Cancel coverage</button></footer></form></div>`:'';
+  const controls=`<section class="dev-card insurance-auto-review-settings"><header><div><span>MANUAL CLAIM AUTHORITY</span><h2>Insurance Command controls</h2><p>The emergency switch establishes an exclusive filing mode. While enabled, only continuity claims may be submitted; Everyday, stock-loss, and other non-emergency forms remain paused.</p></div><strong>${settings.state_of_emergency?'EMERGENCY CLAIMS ONLY':'STANDARD CLAIM MODE'}</strong></header><form id="devInsuranceSettingsForm"><label class="dev-certify wide"><input name="state_of_emergency" type="checkbox" ${settings.state_of_emergency?'checked':''}/> State of Emergency declared <small>Open continuity reset/wipe claim filing and pause every non-emergency claim form while enabled.</small></label><div class="dev-certify wide"><strong>Filing windows do not overlap</strong><small>Lifting the declaration immediately closes new emergency claims and restores eligible Everyday, stock-loss, and other non-emergency filing.</small></div><div class="dev-certify wide"><strong>Manual review is enforced</strong><small>Approve & queue payout is the only way to authorize compensation. Existing claims remain in the ledger when filing modes change.</small></div><div class="form-grid"><label>Essential coverage %<input name="essential_coverage_percent" type="number" min="1" max="100" step="0.01" value="${Number(tiers.essential?.coverage_percent||50)}"/></label><label>Essential premium<input name="essential_premium" type="number" min="0.01" step="0.01" value="${Number(tiers.essential?.premium||3500)}"/></label><label>Preferred coverage %<input name="preferred_coverage_percent" type="number" min="1" max="100" step="0.01" value="${Number(tiers.preferred?.coverage_percent||70)}"/></label><label>Preferred premium<input name="preferred_premium" type="number" min="0.01" step="0.01" value="${Number(tiers.preferred?.premium||4250)}"/></label><label>Premier coverage %<input name="premier_coverage_percent" type="number" min="1" max="100" step="0.01" value="${Number(tiers.premier?.coverage_percent||90)}"/></label><label>Premier premium<input name="premier_premium" type="number" min="0.01" step="0.01" value="${Number(tiers.premier?.premium||5000)}"/></label></div><button class="primary">Save insurance settings</button></form></section>${renderDevInsuranceClaimsLegacy(data)}`;
+  const ledger=`<section class="insurance-policy-ledger"><header><div><span>POLICY ADMINISTRATION</span><h2>Resident policy ledger</h2><p>Current terms, locked rates, protection dates, and cancellation authority in one operational register.</p></div><strong>${policies.length} POLICIES</strong></header><div class="insurance-policy-metrics"><article><small>ACTIVE COVERAGE</small><strong>${active}</strong><span>resident policies</span></article><article><small>PAYMENT PENDING</small><strong>${paymentPending}</strong><span>awaiting Bank Bridge</span></article><article><small>LOCKED MONTHLY BOOK</small><strong>${money(premiumBook)}</strong><span>active scheduled rate</span></article><article><small>CLAIM RECORDS</small><strong>${policies.reduce((total,policy)=>total+Number(policy.claim_count||0),0)}</strong><span>linked to policies</span></article></div><div class="insurance-policy-toolbar"><label><span>SEARCH POLICIES</span><input data-insurance-policy-search placeholder="Resident, CIV, character, email, or policy number"/></label><div role="group" aria-label="Filter policies">${[['all','All'],['active','Active'],['pending_payment','Pending'],['expired','Expired'],['cancelled','Cancelled']].map(([key,label])=>`<button type="button" class="${key==='all'?'active':''}" data-insurance-policy-filter="${key}">${label}</button>`).join('')}</div><strong data-insurance-policy-visible-count>${policies.length} account${policies.length===1?'':'s'} shown</strong></div><div class="insurance-policy-ledger-head"><span>RESIDENT</span><span>POLICY</span><span>START DATE</span><span>END DATE</span><span>RATE</span><span>COVERAGE</span><span>AUTHORITY</span></div><div class="insurance-policy-ledger-body">${policyRows||'<div class="insurance-policy-empty">No resident insurance policies are on file.</div>'}</div></section>${cancelDialog}`;
+  return `<div class="stack insurance-claims-workspace insurance-command-center"><nav class="insurance-settings-tabs"><button type="button" data-dev-insurance-settings-view="policies" class="${view==='policies'?'active':''}"><span>01</span>Policy ledger <b>${policies.length}</b></button><button type="button" data-dev-insurance-settings-view="claims" class="${view==='claims'?'active':''}"><span>02</span>Claims &amp; controls <b>${Number(data.stats?.pending||0)}</b></button></nav>${view==='claims'?controls:ledger}</div>`;
 }
 
 function renderDevAccountDeletion(data, users) {
@@ -14680,6 +14700,58 @@ function bindDevWorkspace() {
       ? `Coverage is frozen to the latest synchronized balance${lockedAt && !Number.isNaN(lockedAt.getTime()) ? ` captured ${lockedAt.toLocaleString()}` : ''}. Only continuity claims may be filed until the declaration closes.`
       : 'Declaring an emergency freezes active policy balances, opens continuity filing, and pauses all non-emergency claim forms.';
   }
+  $$('[data-dev-insurance-settings-view]').forEach(button => button.addEventListener('click', () => {
+    state.devInsuranceSettingsView = button.dataset.devInsuranceSettingsView || 'policies';
+    state.devInsuranceCancelPolicyId = null;
+    render();
+  }));
+  const insurancePolicySearch = $('[data-insurance-policy-search]');
+  const insurancePolicyFilters = $$('[data-insurance-policy-filter]');
+  const applyInsurancePolicyFilter = () => {
+    const query = String(insurancePolicySearch?.value || '').trim().toLowerCase();
+    const filter = insurancePolicyFilters.find(button => button.classList.contains('active'))?.dataset.insurancePolicyFilter || 'all';
+    let visible = 0;
+    $$('[data-insurance-policy-row]').forEach(row => {
+      const statusMatch = filter === 'all' || row.dataset.insurancePolicyStatus === filter;
+      const searchMatch = !query || String(row.dataset.insurancePolicySearchValue || '').includes(query);
+      row.hidden = !(statusMatch && searchMatch);
+      if (!row.hidden) visible += 1;
+    });
+    const count = $('[data-insurance-policy-visible-count]');
+    if (count) count.textContent = `${visible} account${visible === 1 ? '' : 's'} shown`;
+  };
+  insurancePolicySearch?.addEventListener('input', applyInsurancePolicyFilter);
+  insurancePolicyFilters.forEach(button => button.addEventListener('click', () => {
+    insurancePolicyFilters.forEach(item => item.classList.toggle('active', item === button));
+    applyInsurancePolicyFilter();
+  }));
+  $$('[data-open-insurance-policy-cancel]').forEach(button => button.addEventListener('click', () => {
+    state.devInsuranceCancelPolicyId = Number(button.dataset.openInsurancePolicyCancel);
+    render();
+  }));
+  $$('[data-close-insurance-policy-cancel]').forEach(element => element.addEventListener('click', event => {
+    if (element.matches('.insurance-policy-cancel-modal') && event.target !== element) return;
+    state.devInsuranceCancelPolicyId = null;
+    render();
+  }));
+  $('#devInsurancePolicyCancelForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const submit = form.querySelector('button[type="submit"]');
+    if (submit) submit.disabled = true;
+    try {
+      const result = await api(`/api/dev-tools/insurance-policies/${form.dataset.policyId}/cancel`, {
+        method: 'POST',
+        body: { reason: form.reason.value },
+      });
+      state.devInsuranceCancelPolicyId = null;
+      toast(`${result.policy_number} cancelled for ${result.resident_name}`);
+      await refreshDevTools();
+    } catch (error) {
+      if (submit) submit.disabled = false;
+      toast(error.message);
+    }
+  });
   const policySearch = $('[data-policy-search]');
   const policyFilterButtons = $$('[data-policy-filter]');
   const applyPolicyLedgerFilter = () => {

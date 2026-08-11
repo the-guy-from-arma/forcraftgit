@@ -6043,6 +6043,49 @@ def refresh_active_insurance_balances(db: Database, tracked_at: str | None = Non
     return len(cursor.fetchall())
 
 
+def insurance_policy_ledger(db: Database, limit: int = 1000) -> list[dict[str, Any]]:
+    """Return the staff policy register without loading claim or bank-command history."""
+    rows = all_rows(
+        db,
+        """
+        SELECT p.id,p.user_id,p.character_id,p.policy_number,p.policy_type,p.coverage_tier,
+               p.subject_label,p.coverage_amount,p.coverage_percent,p.protected_bank_balance,
+               p.premium_amount,p.monthly_premium_rate,p.term_months,p.rate_locked_until,
+               p.deductible_amount,p.status,p.payment_status,p.issued_at,p.expires_at,
+               p.created_at,p.updated_at,p.bank_command_id,
+               u.name AS resident_name,u.civ_number,u.email,c.character_name,
+               COALESCE((
+                   SELECT COUNT(*) FROM insurance_property_protections property
+                   WHERE property.policy_id=p.id AND property.status IN ('active','pending_payment')
+               ),0) AS property_protection_count,
+               COALESCE((
+                   SELECT COUNT(*) FROM insurance_everyday_protections everyday
+                   WHERE everyday.policy_id=p.id AND everyday.status IN ('active','pending_payment')
+               ),0) AS everyday_protection_count,
+               COALESCE((
+                   SELECT COUNT(*) FROM insurance_stock_protections stock
+                   WHERE stock.policy_id=p.id AND stock.status IN ('active','pending_payment')
+               ),0) AS stock_protection_count,
+               COALESCE((SELECT COUNT(*) FROM insurance_claims claim WHERE claim.policy_id=p.id),0) AS claim_count
+        FROM insurance_policies p
+        JOIN users u ON u.id=p.user_id
+        JOIN user_characters c ON c.id=p.character_id
+        WHERE p.policy_type='compensation'
+        ORDER BY CASE p.status
+                     WHEN 'active' THEN 0
+                     WHEN 'pending_payment' THEN 1
+                     WHEN 'expired' THEN 2
+                     WHEN 'cancelled' THEN 3
+                     ELSE 4
+                 END,
+                 p.issued_at DESC,p.id DESC
+        LIMIT ?
+        """,
+        (max(1, min(int(limit), 5000)),),
+    )
+    return [dict(row) for row in rows]
+
+
 def initialize_insurance_balance_tracking() -> None:
     """Reconcile existing policies after deployment without recapturing an established emergency lock."""
     with conn() as db:
@@ -8797,6 +8840,7 @@ def admin_tools_route_section(path: str) -> str:
         ("/api/dev-tools/account-deletion/", "account-deletion"),
         ("/api/dev-tools/accounts/", "accounts"),
         ("/api/dev-tools/anticheat/", "anticheat"),
+        ("/api/dev-tools/insurance-policies/", "insurance-claims"),
         ("/api/dev-tools/insurance-claims/", "insurance-claims"),
         ("/api/dev-tools/insurance/settings", "insurance-claims"),
         ("/api/dev-tools/experience", "campaigns"),
@@ -10537,6 +10581,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_account_deletion_preview(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/dev-tools/account-deletion/") and method == "DELETE":
                     self.api_dev_delete_account(db, user, self.path_int(path, 3))
+                elif path.startswith("/api/dev-tools/insurance-policies/") and path.endswith("/cancel") and method == "POST":
+                    self.api_dev_insurance_policy_cancel(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/dev-tools/insurance-claims/") and method == "PATCH":
                     self.api_dev_insurance_claim(db, user, self.path_int(path, 3))
                 elif path.startswith("/api/dev-tools/anticheat/") and path.endswith("/review") and method == "POST":
@@ -23128,6 +23174,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             }
 
         if section == "insurance-claims":
+            policies = insurance_policy_ledger(db)
             claims = all_rows(
                 db,
                 """
@@ -23165,6 +23212,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 """,
             ) or {}
             payload["insurance_claims"] = {
+                "policies": policies,
                 "claims": [dict(row) for row in claims],
                 "settings": {
                     "review_mode": "manual",
@@ -24111,6 +24159,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             FROM gang_invite_codes i JOIN gangs g ON g.id=i.gang_id JOIN users issuer ON issuer.id=i.issued_by_user_id
             JOIN user_characters ic ON ic.id=i.issued_by_character_id LEFT JOIN users redeemer ON redeemer.id=i.redeemed_by_user_id
             LEFT JOIN user_characters rc ON rc.id=i.redeemed_character_id ORDER BY i.created_at DESC LIMIT 500""")
+        insurance_policies = insurance_policy_ledger(db)
         insurance_claims = all_rows(db, """SELECT ic.*,p.policy_number,p.coverage_tier,p.premium_amount,p.subject_label,
             u.name AS resident_name,u.civ_number,c.character_name,reviewer.name AS reviewed_by_name,
             COALESCE(batch.payout_chunk_count,0) AS payout_chunk_count,
@@ -24306,6 +24355,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     },
                 },
                 "insurance_claims": {
+                    "policies": insurance_policies,
                     "claims": [dict(row) for row in insurance_claims],
                     "settings": {"review_mode": "manual", "state_of_emergency": system_settings["insurance_state_of_emergency"], "emergency_declared_at": system_settings["insurance_emergency_declared_at"], "tiers": system_settings["insurance_tiers"]},
                     "stats": {key: float(value or 0) if key in {"exposure","paid_total"} else int(value or 0)
@@ -24795,6 +24845,113 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         })
         self.send_json(200, {"ok": True, "review_mode": "manual", "state_of_emergency": state_of_emergency,
             "emergency_declared_at": declared_at, "updated_policy_count": changed_policy_count, "tiers": tiers})
+
+    def api_dev_insurance_policy_cancel(self, db: Database, user: DbRow | None, policy_id: int) -> None:
+        """Cancel resident coverage from Insurance Command using the resident-safe settlement rules."""
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        payload = self.read_json()
+        reason = str(payload.get("reason") or "").strip()[:1000]
+        if len(reason) < 10:
+            self.error(400, "Document a cancellation reason of at least 10 characters."); return
+        policy = one(
+            db,
+            """SELECT p.*,u.name AS resident_name,u.civ_number
+               FROM insurance_policies p JOIN users u ON u.id=p.user_id
+               WHERE p.id=? AND p.policy_type='compensation' FOR UPDATE""",
+            (policy_id,),
+        )
+        if not policy:
+            self.error(404, "Insurance policy was not found."); return
+        if policy["status"] not in ("active", "pending_payment"):
+            self.error(409, f"This policy is already {str(policy['status']).replace('_', ' ')}."); return
+        protection_rows = all_rows(
+            db,
+            """SELECT bank_command_id FROM insurance_property_protections
+                   WHERE policy_id=? AND status IN ('active','pending_payment')
+               UNION SELECT bank_command_id FROM insurance_everyday_protections
+                   WHERE policy_id=? AND status IN ('active','pending_payment')
+               UNION SELECT bank_command_id FROM insurance_stock_protections
+                   WHERE policy_id=? AND status IN ('active','pending_payment')""",
+            (policy_id, policy_id, policy_id),
+        )
+        command_ids = list(dict.fromkeys(
+            str(value).strip()
+            for value in [policy.get("bank_command_id"), *(row.get("bank_command_id") for row in protection_rows)]
+            if value and str(value).strip()
+        ))
+        commands = []
+        for command_id in command_ids:
+            command = one(db, "SELECT command_id,status FROM bank_bridge_commands WHERE command_id=? FOR UPDATE", (command_id,))
+            if command:
+                commands.append(command)
+        if any(command["status"] == "claimed" for command in commands):
+            self.error(409, "Bank Bridge is currently processing this policy payment. Cancel after the command finishes."); return
+        cancelled_at = now_iso()
+        cancelled_commands: list[str] = []
+        for command in commands:
+            if command["status"] != "pending":
+                continue
+            command_result = {
+                "message": "Insurance policy cancelled by Insurance Command before Bank Bridge delivery.",
+                "policy_id": policy_id,
+                "cancelled_at": cancelled_at,
+                "cancelled_by": int(user["id"]),
+                "reason": reason,
+                "cancellation_fee": 0,
+            }
+            db.execute(
+                """UPDATE bank_bridge_commands SET status='cancelled',completed_at=?,claimed_at=NULL,result_json=?
+                   WHERE command_id=? AND status='pending'""",
+                (cancelled_at, json.dumps(command_result, separators=(",", ":")), command["command_id"]),
+            )
+            cancelled_commands.append(str(command["command_id"]))
+        db.execute(
+            """UPDATE insurance_policies SET status='cancelled',
+               payment_status=CASE WHEN payment_status='pending' THEN 'cancelled' ELSE payment_status END,
+               updated_at=? WHERE id=?""",
+            (cancelled_at, policy_id),
+        )
+        db.execute(
+            """UPDATE insurance_property_protections SET status='cancelled',
+               payment_status=CASE WHEN payment_status='pending' THEN 'cancelled' ELSE payment_status END,
+               updated_at=? WHERE policy_id=? AND status IN ('active','pending_payment')""",
+            (cancelled_at, policy_id),
+        )
+        db.execute(
+            """UPDATE insurance_everyday_protections SET status='cancelled',
+               payment_status=CASE WHEN payment_status='pending' THEN 'cancelled' ELSE payment_status END,
+               updated_at=? WHERE policy_id=? AND status IN ('active','pending_payment')""",
+            (cancelled_at, policy_id),
+        )
+        db.execute(
+            """UPDATE insurance_stock_protections SET status='cancelled',
+               payment_status=CASE WHEN payment_status='pending' THEN 'cancelled' ELSE payment_status END,
+               updated_at=? WHERE policy_id=? AND status IN ('active','pending_payment')""",
+            (cancelled_at, policy_id),
+        )
+        add_admin_audit(db, int(user["id"]), "insurance.policy.cancelled_by_developer", int(policy["user_id"]), {
+            "policy_id": policy_id,
+            "policy_number": policy["policy_number"],
+            "reason": reason,
+            "cancellation_fee": 0,
+            "cancelled_commands": cancelled_commands,
+        })
+        add_message(
+            db,
+            int(policy["user_id"]),
+            "Insurance policy cancelled by Insurance Command",
+            f"Policy {policy['policy_number']} and its optional protections were cancelled by insurance staff. Reason: {reason} No cancellation fee was charged, completed premiums were not refunded, and you may purchase a new policy.",
+        )
+        self.send_json(200, {
+            "ok": True,
+            "policy_id": policy_id,
+            "policy_number": policy["policy_number"],
+            "resident_name": policy["resident_name"],
+            "status": "cancelled",
+            "cancelled_commands": cancelled_commands,
+        })
 
     def api_dev_insurance_claim(self, db: Database, user: DbRow | None, claim_id: int) -> None:
         err = developer_required(user)
