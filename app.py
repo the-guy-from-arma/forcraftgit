@@ -4411,6 +4411,8 @@ def ensure_migrations(db: Database) -> None:
         """
     )
     db.execute("CREATE INDEX IF NOT EXISTS market_system_trades_security_time_idx ON market_system_trades(security_id, created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS market_orders_created_idx ON market_orders(created_at DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS market_system_trades_created_idx ON market_system_trades(created_at DESC)")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS market_fec_asset_pool (
@@ -16444,6 +16446,36 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             settled += 1
         return settled
 
+    def market_anonymous_trade_tape(self, db: Database, limit: int = 36) -> list[dict[str, Any]]:
+        """Return recent executions without exposing a resident identity."""
+        safe_limit = max(12, min(60, int(limit or 36)))
+        cutoff = (utcnow() - dt.timedelta(days=7)).isoformat()
+        rows = all_rows(db, """SELECT ticker,side,quantity,unit_price,flow_type,created_at
+            FROM (
+                SELECT s.ticker,o.side,o.quantity,o.unit_price,'anonymous' AS flow_type,o.created_at
+                FROM market_orders o JOIN market_securities s ON s.id=o.security_id
+                WHERE o.created_at>=?
+                UNION ALL
+                SELECT s.ticker,'buy' AS side,t.buy_volume AS quantity,t.reference_price AS unit_price,
+                       CASE WHEN LOWER(t.source)='gemini' THEN 'ai' ELSE 'market' END AS flow_type,t.created_at
+                FROM market_system_trades t JOIN market_securities s ON s.id=t.security_id
+                WHERE t.created_at>=? AND t.buy_volume>0
+                UNION ALL
+                SELECT s.ticker,'sell' AS side,t.sell_volume AS quantity,t.reference_price AS unit_price,
+                       CASE WHEN LOWER(t.source)='gemini' THEN 'ai' ELSE 'market' END AS flow_type,t.created_at
+                FROM market_system_trades t JOIN market_securities s ON s.id=t.security_id
+                WHERE t.created_at>=? AND t.sell_volume>0
+            ) anonymous_flow
+            WHERE quantity>0 ORDER BY created_at DESC LIMIT ?""", (cutoff, cutoff, cutoff, safe_limit))
+        return [{
+            "ticker": str(row.get("ticker") or "").upper()[:12],
+            "side": "sell" if str(row.get("side") or "").lower() == "sell" else "buy",
+            "quantity": round(max(0.0, float(row.get("quantity") or 0)), 6),
+            "unit_price": round(max(0.0, float(row.get("unit_price") or 0)), 4),
+            "flow_type": str(row.get("flow_type") or "anonymous"),
+            "created_at": row.get("created_at"),
+        } for row in rows]
+
     def market_payload(self, db: Database, user: DbRow, history_ticker: str = "", history_range: str = "LIVE") -> dict[str, Any]:
         settings = get_system_settings(db)
         account = one(db, "SELECT * FROM market_accounts WHERE user_id = ?", (user["id"],))
@@ -16715,6 +16747,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             security["gemini_capitalization"] = fund["gemini_capitalization"]
             security["market_cap"] = fund["market_cap"]
         exchange_market_cap = sum(float(row.get("market_cap") or 0) for row in securities if str(row.get("security_type") or "") != "fund")
+        anonymous_trade_tape = self.market_anonymous_trade_tape(db)
         return {"account": dict(account) if account else None, "securities": [dict(x) for x in securities], "holdings": [dict(x) for x in holdings],
                 "orders": [dict(x) for x in orders], "order_requests": [dict(x) for x in order_requests],
                 "cash_transactions": [dict(x) for x in cash_log], "transfers": [dict(x) for x in transfers],
@@ -16726,6 +16759,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "open_notional": round(margin_notional, 2)},
                 "index_funds": index_funds,
                 "exchange_market_cap": round(exchange_market_cap, 2),
+                "anonymous_trade_tape": anonymous_trade_tape,
                 "price_history": price_history,
                 "market_analytics": market_analytics,
                 "history_ticker": selected_ticker,
