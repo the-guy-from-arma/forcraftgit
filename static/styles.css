@@ -20388,3 +20388,122 @@ textarea:focus {
 @media(max-width:760px){.issuer-main{width:100%;padding-top:18px}.issuer-topbar{grid-template-columns:1fr auto;padding:10px 14px}.issuer-topbar>div button:first-of-type{display:none}.issuer-topbar>nav{gap:0}.issuer-topbar>nav button{flex:0 0 auto;padding-inline:12px}.issuer-footer{display:grid;padding:16px}.issuer-overview>header{grid-template-columns:1fr;min-height:auto;padding:50px 20px}.issuer-overview>header>aside{display:none}.issuer-overview h1{font-size:clamp(50px,17vw,76px)}.issuer-overview>header nav{align-items:stretch;flex-direction:column}.issuer-overview-stats{grid-template-columns:1fr 1fr}.issuer-overview-stats article{padding:18px 14px}.issuer-overview-stats strong{font-size:16px}.issuer-roster{margin:44px 16px 0}.issuer-roster>button{grid-template-columns:1fr auto;gap:12px}.issuer-roster>button>.issuer-status{grid-column:2}.issuer-roster>button>strong{grid-column:1;grid-row:2;text-align:left}.issuer-roster>button>i{grid-column:2;grid-row:2}.issuer-launch{padding:0 18px}.issuer-form-step{grid-template-columns:40px 1fr}.issuer-form-fields{grid-template-columns:1fr;padding-left:0}.issuer-form-fields .wide{grid-column:auto}.issuer-cap-table{grid-template-columns:1fr 1fr;margin-left:0}.issuer-cap-table>span:nth-child(3){border-top:1px solid var(--iw-line);border-left:0}.issuer-cap-table>span:nth-child(4){border-top:1px solid var(--iw-line)}.issuer-launch-form>footer{grid-template-columns:1fr;padding:20px}.issuer-company-desk,.issuer-wire{padding:0 16px}.issuer-company-hero{grid-template-columns:1fr}.issuer-company-hero>aside{padding:16px 0 0;border-top:1px solid var(--iw-line);border-left:0}.issuer-company-ledger>section,.issuer-company-actions>section{padding:24px 8px}.issuer-company-ledger form,.issuer-company-actions form{grid-template-columns:1fr}.issuer-own-wire{padding:35px 8px}.issuer-own-wire article{grid-template-columns:1fr}.issuer-wire article{grid-template-columns:1fr;gap:14px}.dev-business-command{grid-template-columns:1fr;padding:26px 20px}.dev-business-command>aside{padding:15px 0 0;border-top:1px solid var(--db-line);border-left:0}.dev-business-metrics{grid-template-columns:1fr 1fr}.dev-business-metrics article:nth-child(3){border-top:1px solid var(--db-line);border-left:0}.dev-business-metrics article:nth-child(4){border-top:1px solid var(--db-line)}.dev-business-assign{grid-template-columns:1fr;padding:22px 16px}.dev-business-assign form{grid-template-columns:1fr}.dev-business-assign .wide,.dev-business-assign form>button{grid-column:auto}.dev-business-registry{padding:20px 12px}.dev-business-registry-body>article{grid-template-columns:1fr 1fr}.dev-business-registry-body>article>div:nth-child(3),.dev-business-registry-body>article>div:nth-child(4){border-top:1px solid rgba(93,143,126,.15);padding-top:10px}.dev-business-registry details{grid-column:1/-1;justify-self:stretch}.dev-business-registry details form{position:static;width:100%;margin-top:8px}.dev-business-lower>section:first-child>article{grid-template-columns:1fr}.dev-business-lower article small{grid-column:auto}}
 @media(max-width:430px){.issuer-brand span{display:none}.issuer-topbar>div{gap:3px}.issuer-topbar>div button{padding-inline:10px}.issuer-overview-stats,.issuer-cap-table,.dev-business-metrics{grid-template-columns:1fr}.issuer-overview-stats article+article,.issuer-cap-table>span+span,.dev-business-metrics article+article{border-top:1px solid var(--iw-line);border-left:0}.dev-business-registry-body>article{grid-template-columns:1fr}.dev-business-registry-body>article>div:nth-child(2){padding-top:8px;border-top:1px solid rgba(93,143,126,.15)}}
 @media(prefers-reduced-motion:reduce){.issuer-workspace *,.dev-business-control *{animation-duration:.001ms!important;animation-iteration-count:1!important}}
+
+/* Faircroft Foundry cinematic primary-market entrance. */
+.issuer-workspace{
+  --foundry-glow:rgba(88,232,185,.2);
+  background:
+    radial-gradient(1000px 640px at 100% 5%,rgba(33,213,174,.11),transparent 68%),
+    radial-gradient(900px 600px at -5% 40%,rgba(234,57,166,.075),transparent 70%),
+    linear-gradient(145deg,#030708 0%,#06100f 48%,#04080a 100%);
+}
+.issuer-topbar{min-height:78px;border-bottom-color:rgba(112,213,177,.18);box-shadow:0 18px 55px rgba(0,0,0,.24)}
+.issuer-brand{position:relative}
+.issuer-brand:after{content:"STATE OF FAIRCROFT";position:absolute;left:50px;top:-11px;color:rgba(109,231,191,.55);font:800 6px ui-monospace,monospace;letter-spacing:.18em;white-space:nowrap}
+.issuer-brand img{border:1px solid rgba(104,230,191,.18);box-shadow:0 0 0 4px rgba(89,220,181,.025),0 0 34px rgba(87,220,215,.18)}
+.issuer-main{width:min(1540px,calc(100% - 56px));padding-top:28px}
+.issuer-overview .issuer-hero{
+  position:relative;
+  isolation:isolate;
+  display:grid;
+  grid-template-columns:minmax(0,1.35fr) minmax(340px,.65fr);
+  min-height:610px;
+  align-items:center;
+  padding:64px clamp(38px,6vw,94px);
+  border:1px solid rgba(112,213,177,.16);
+  border-radius:28px 28px 0 0;
+  background:
+    linear-gradient(105deg,rgba(4,10,11,.98) 0%,rgba(4,11,12,.9) 53%,rgba(6,20,18,.72) 100%),
+    repeating-linear-gradient(90deg,transparent 0 95px,rgba(101,227,184,.04) 96px),
+    repeating-linear-gradient(0deg,transparent 0 95px,rgba(101,227,184,.035) 96px);
+  box-shadow:0 40px 120px rgba(0,0,0,.32),inset 0 1px rgba(255,255,255,.025);
+  overflow:hidden;
+}
+.issuer-overview .issuer-hero:before{background:linear-gradient(90deg,rgba(3,8,9,.15),rgba(3,8,9,.46)),repeating-linear-gradient(90deg,transparent 0 95px,rgba(106,194,163,.035) 96px),repeating-linear-gradient(0deg,transparent 0 95px,rgba(106,194,163,.035) 96px)}
+.issuer-hero:after{content:"FAIRCROFT";position:absolute;z-index:-1;right:-2.5%;bottom:-9%;color:rgba(133,255,215,.018);font:950 clamp(120px,19vw,300px)/.72 Inter,sans-serif;letter-spacing:-.11em;pointer-events:none}
+.issuer-hero-atmosphere{position:absolute!important;inset:0;z-index:-1;overflow:hidden;pointer-events:none}
+.issuer-hero-atmosphere:before{content:"";position:absolute;inset:-80% -25%;background:conic-gradient(from 210deg,transparent 0 38%,rgba(92,231,188,.07) 44%,transparent 51% 80%,rgba(233,63,166,.055) 87%,transparent 94%);animation:issuerAtmosphere 26s linear infinite}
+.issuer-hero-atmosphere>i{position:absolute;width:2px;height:2px;border-radius:50%;background:#66f0c2;box-shadow:0 0 15px 3px rgba(101,240,194,.4);animation:issuerSignal 4s ease-in-out infinite}
+.issuer-hero-atmosphere>i:nth-child(1){left:9%;top:19%}.issuer-hero-atmosphere>i:nth-child(2){left:57%;top:73%;animation-delay:-1.4s}.issuer-hero-atmosphere>i:nth-child(3){right:6%;top:29%;animation-delay:-2.8s}
+.issuer-hero-copy{position:relative;z-index:2;animation:issuerHeroCopy .72s cubic-bezier(.2,.75,.25,1) both}
+.issuer-hero-kicker{display:flex;align-items:center;gap:14px;color:#6df0c1;font:900 8px ui-monospace,monospace;letter-spacing:.18em}
+.issuer-hero-kicker:before{content:"";width:28px;height:1px;background:linear-gradient(90deg,#65edbe,transparent)}
+.issuer-hero-kicker b{padding:7px 9px;border-left:1px solid rgba(109,240,193,.28);color:#6f887e;font-size:7px;letter-spacing:.12em}
+.issuer-overview .issuer-hero h1{max-width:920px;margin:24px 0 24px;font-size:clamp(64px,7.1vw,116px);line-height:.82;letter-spacing:-.085em;text-wrap:balance}
+.issuer-overview .issuer-hero h1 em{position:relative;color:#eef7f2;font-style:normal;background:linear-gradient(95deg,#f4faf7 5%,#72efc4 48%,#61d9f1 73%,#ed69b8);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.issuer-overview .issuer-hero h1 em:after{content:"";position:absolute;left:3px;right:0;bottom:-8px;height:2px;background:linear-gradient(90deg,#5ee6b3,#5ad9f4 58%,#ee5fb4,transparent);transform-origin:left;animation:issuerUnderline 1.1s .45s cubic-bezier(.2,.8,.2,1) both}
+.issuer-overview .issuer-hero p{max-width:760px;margin:0;color:#a4b8af;font-size:15px;line-height:1.8;text-wrap:pretty}
+.issuer-overview .issuer-hero nav{display:flex;gap:11px;margin-top:34px}
+.issuer-overview .issuer-hero nav button{position:relative;display:flex;align-items:center;justify-content:space-between;gap:28px;min-width:188px;min-height:52px;padding:0 10px 0 21px;border-radius:7px;overflow:hidden;transition:transform .2s ease,box-shadow .2s ease}
+.issuer-overview .issuer-hero nav button:before{content:"";position:absolute;inset:0;background:linear-gradient(110deg,transparent 15%,rgba(255,255,255,.38),transparent 55%);transform:translateX(-120%);transition:transform .65s ease}
+.issuer-overview .issuer-hero nav button:hover{transform:translateY(-2px);box-shadow:0 16px 36px rgba(65,221,178,.16)}
+.issuer-overview .issuer-hero nav button:hover:before{transform:translateX(120%)}
+.issuer-overview .issuer-hero nav button i{display:grid;place-items:center;width:32px;height:32px;border-radius:5px;background:rgba(3,15,12,.12);font-size:14px;font-style:normal}
+.issuer-overview .issuer-hero nav .secondary{border-color:rgba(130,190,169,.28);background:rgba(8,18,17,.56);backdrop-filter:blur(12px)}
+.issuer-overview .issuer-hero nav .secondary i{background:rgba(102,229,187,.08);color:#6be7bc}
+.issuer-hero-assurance{display:grid;grid-template-columns:repeat(3,max-content);gap:22px;margin-top:42px;padding-top:18px;border-top:1px solid rgba(117,182,159,.16)}
+.issuer-hero-assurance span{display:flex;align-items:center;gap:8px;color:#789087;font:850 7px ui-monospace,monospace;letter-spacing:.11em}
+.issuer-hero-assurance b{color:#5ee6b3;font-size:7px}
+.issuer-overview .issuer-market-seal{position:relative;display:grid;place-items:center;justify-self:center;width:min(32vw,430px);aspect-ratio:1;border:0;border-radius:50%;background:radial-gradient(circle,rgba(91,231,186,.11),rgba(3,10,10,.3) 45%,transparent 68%);filter:drop-shadow(0 34px 70px rgba(0,0,0,.38));animation:issuerSealArrive .9s .15s cubic-bezier(.15,.8,.2,1) both}
+.issuer-overview .issuer-market-seal:before,.issuer-overview .issuer-market-seal:after{content:none}
+.issuer-seal-orbit{position:absolute;inset:6%;border:1px solid rgba(98,232,187,.22);border-radius:50%;animation:issuerOrbit 28s linear infinite}
+.issuer-seal-orbit:before,.issuer-seal-orbit:after{content:"";position:absolute;width:8px;height:8px;border:1px solid #5de7b8;border-radius:50%;background:#07120f;box-shadow:0 0 18px rgba(93,231,184,.65)}
+.issuer-seal-orbit:before{left:13%;top:12%}.issuer-seal-orbit:after{right:5%;bottom:26%;border-color:#ed68b8;box-shadow:0 0 18px rgba(237,104,184,.58)}
+.issuer-overview .issuer-seal-orbit>span{position:absolute;bottom:auto;color:#668278;font:850 6px ui-monospace,monospace;letter-spacing:.16em;animation:issuerOrbitReverse 28s linear infinite}
+.issuer-overview .issuer-seal-orbit>span:nth-child(1){left:47%;top:-5px}.issuer-overview .issuer-seal-orbit>span:nth-child(2){right:-12px;top:51%}.issuer-overview .issuer-seal-orbit>span:nth-child(3){left:8%;bottom:12px}
+.issuer-seal-orbit.orbit-two{inset:19%;border-color:rgba(92,211,239,.2);animation-duration:19s;animation-direction:reverse}
+.issuer-seal-orbit.orbit-two:before{left:auto;right:13%;top:8%;border-color:#5bd8ef;box-shadow:0 0 16px rgba(91,216,239,.55)}.issuer-seal-orbit.orbit-two:after{display:none}
+.issuer-seal-core{position:relative;display:grid;place-items:center;width:52%;aspect-ratio:1;border:1px solid rgba(113,232,194,.27);border-radius:50%;background:radial-gradient(circle at 38% 32%,rgba(91,221,190,.15),rgba(4,12,12,.94) 62%);box-shadow:inset 0 0 48px rgba(77,225,184,.055),0 0 70px rgba(60,216,179,.07);animation:issuerCoreFloat 5s ease-in-out infinite}
+.issuer-seal-core img{position:absolute;width:54px;height:54px;top:15%;border-radius:13px;object-fit:cover;opacity:.9;filter:saturate(1.15);box-shadow:0 12px 28px rgba(0,0,0,.3)}
+.issuer-seal-core b{margin-top:21%;font:950 clamp(54px,6.8vw,96px)/1 Inter,sans-serif;letter-spacing:-.12em;background:linear-gradient(135deg,#6ceec0,#61d9ef 57%,#ea66b4);-webkit-background-clip:text;background-clip:text;color:transparent}
+.issuer-seal-core small{margin-top:-13%;color:#7b978b;font:850 6px ui-monospace,monospace;letter-spacing:.14em}
+.issuer-overview .issuer-seal-status{position:absolute;bottom:0;display:flex;align-items:center;gap:8px;padding:9px 13px;border:1px solid rgba(101,230,187,.2);border-radius:999px;background:rgba(5,14,13,.82);color:#93aa9f;font:850 7px ui-monospace,monospace;letter-spacing:.12em;backdrop-filter:blur(10px)}
+.issuer-overview .issuer-seal-status i{width:6px;height:6px;border-radius:50%;background:#60e8b9;box-shadow:0 0 13px #60e8b9;animation:rv13pulse 1.8s infinite}
+.issuer-market-tape{position:relative;overflow:hidden;border-inline:1px solid rgba(112,213,177,.16);border-bottom:1px solid rgba(112,213,177,.16);background:rgba(7,17,16,.84)}
+.issuer-market-tape:before,.issuer-market-tape:after{content:"";position:absolute;z-index:2;top:0;bottom:0;width:80px;pointer-events:none}.issuer-market-tape:before{left:0;background:linear-gradient(90deg,#071110,transparent)}.issuer-market-tape:after{right:0;background:linear-gradient(-90deg,#071110,transparent)}
+.issuer-market-tape>div{display:flex;width:max-content;min-width:100%;animation:issuerTape 32s linear infinite}
+.issuer-market-tape:hover>div{animation-play-state:paused}
+.issuer-market-tape span{display:grid;grid-template-columns:auto minmax(115px,1fr) auto auto;gap:10px;align-items:center;min-width:285px;padding:13px 22px;border-right:1px solid rgba(112,213,177,.14)}
+.issuer-market-tape b{color:#65eabc;font:950 10px ui-monospace,monospace}.issuer-market-tape small{overflow:hidden;color:#789188;font-size:8px;text-overflow:ellipsis;white-space:nowrap}.issuer-market-tape strong{color:#dce9e3;font:850 8px ui-monospace,monospace}.issuer-market-tape i{width:4px;height:4px;border-radius:50%;background:#ed65b5;box-shadow:0 0 9px rgba(237,101,181,.7)}
+.issuer-overview .issuer-overview-stats{border-inline:1px solid rgba(112,213,177,.16);background:linear-gradient(90deg,rgba(7,17,15,.94),rgba(8,18,19,.8))}
+.issuer-overview .issuer-overview-stats article{position:relative;overflow:hidden;padding:28px 30px;animation:issuerMetricIn .55s calc(var(--metric-index,0)*.08s) both}
+.issuer-overview .issuer-overview-stats article:nth-child(1){--metric-index:1}.issuer-overview .issuer-overview-stats article:nth-child(2){--metric-index:2}.issuer-overview .issuer-overview-stats article:nth-child(3){--metric-index:3}.issuer-overview .issuer-overview-stats article:nth-child(4){--metric-index:4}
+.issuer-overview .issuer-overview-stats article:after{content:"";position:absolute;right:0;bottom:0;width:34%;height:1px;background:linear-gradient(90deg,transparent,#5ee6b3)}
+.issuer-overview .issuer-overview-stats small{color:#77aa98}.issuer-overview .issuer-overview-stats strong{font-variant-numeric:tabular-nums;letter-spacing:-.04em}
+.issuer-overview .issuer-roster{padding:0 clamp(16px,2.3vw,34px)}
+
+@keyframes issuerAtmosphere{to{transform:rotate(360deg)}}
+@keyframes issuerSignal{0%,100%{opacity:.25;transform:scale(.7)}50%{opacity:1;transform:scale(1.4)}}
+@keyframes issuerHeroCopy{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:none}}
+@keyframes issuerUnderline{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes issuerSealArrive{from{opacity:0;transform:scale(.78) rotate(-8deg)}to{opacity:1;transform:none}}
+@keyframes issuerOrbit{to{transform:rotate(360deg)}}
+@keyframes issuerOrbitReverse{to{transform:rotate(-360deg)}}
+@keyframes issuerCoreFloat{0%,100%{transform:translateY(-4px)}50%{transform:translateY(8px)}}
+@keyframes issuerTape{to{transform:translateX(-50%)}}
+@keyframes issuerMetricIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+
+@media(max-width:1100px){
+  .issuer-overview .issuer-hero{grid-template-columns:minmax(0,1fr) minmax(280px,.48fr);min-height:560px;padding:52px 38px}
+  .issuer-overview .issuer-market-seal{width:min(34vw,330px)}
+  .issuer-seal-core img{width:42px;height:42px}
+  .issuer-hero-assurance{gap:13px}
+}
+@media(max-width:760px){
+  .issuer-brand:after{display:none}
+  .issuer-main{padding-top:10px}
+  .issuer-overview .issuer-hero{grid-template-columns:1fr;gap:36px;padding:44px 20px 32px;border-radius:0}
+  .issuer-overview .issuer-hero h1{font-size:clamp(53px,16vw,76px);line-height:.86}
+  .issuer-overview .issuer-hero p{font-size:13px}
+  .issuer-hero-kicker{align-items:flex-start;flex-direction:column;gap:8px}.issuer-hero-kicker:before{display:none}.issuer-hero-kicker b{padding:0;border:0}
+  .issuer-hero-assurance{grid-template-columns:1fr;gap:9px;margin-top:28px}
+  .issuer-overview .issuer-market-seal{display:grid;width:min(78vw,300px);margin:0 auto}
+  .issuer-overview .issuer-seal-status{bottom:-6px}
+  .issuer-market-tape span{min-width:240px;padding-inline:16px}
+}
+@media(max-width:430px){
+  .issuer-overview .issuer-hero nav{flex-direction:column}
+  .issuer-overview .issuer-hero nav button{width:100%}
+  .issuer-overview .issuer-market-seal{width:250px}
+  .issuer-seal-core img{width:36px;height:36px}
+}

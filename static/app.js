@@ -7720,9 +7720,36 @@ function renderIssuerOverview(data) {
   const live = companies.filter(company => ["active", "scheduled"].includes(String(company.status || "")));
   const marketValue = live.reduce((sum, company) => sum + Number(company.live_market_cap || company.target_market_cap || 0), 0);
   const pendingCapital = companies.filter(company => ["funding_pending", "funding_failed"].includes(String(company.status || ""))).reduce((sum, company) => sum + Math.max(0, Number(company.funding_total || company.target_market_cap || 0) - Number(company.funding_completed || 0)), 0);
+  const tape = live.length ? live.slice(0, 8).map(company => ({
+    ticker: company.ticker,
+    label: company.company_name,
+    value: company.live_price != null ? money(company.live_price) : humanLabel(company.status),
+  })) : [
+    {ticker: "FCX", label: "Faircroft Exchange", value: "ONLINE"},
+    {ticker: "IPO", label: "Primary listings", value: "OPEN"},
+    {ticker: "BANK", label: "Verified capitalization", value: bank.linked ? "SYNCED" : "LINK"},
+    {ticker: "WIRE", label: "Issuer releases", value: "LIVE"},
+  ];
+  const tapeMarkup = tape.map(item => `<span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.label)}</small><strong>${escapeHtml(item.value)}</strong><i></i></span>`).join("");
   return `<section class="issuer-overview">
-    <header><div><span>FAIRCROFT PRIMARY MARKET</span><h1>Build something<br/>the market can own.</h1><p>Launch an FCX company, capitalize it with verified in-game funds, manage its treasury, and speak directly to Ravenhood investors.</p><nav><button type="button" data-business-tab="launch">Create an IPO</button><button type="button" data-business-tab="company" class="secondary">Open company desk</button></nav></div><aside><i>FCX</i><span>RESIDENT ISSUER NETWORK</span></aside></header>
-    <div class="issuer-overview-stats"><article><small>CONTROLLED ISSUERS</small><strong>${companies.length}</strong><span>${live.length} trading or scheduled</span></article><article><small>COMBINED MARKET VALUE</small><strong>${money(marketValue)}</strong><span>Current FCX valuation</span></article><article><small>CAPITAL IN TRANSIT</small><strong>${money(pendingCapital)}</strong><span>Staged through Bank Bridge</span></article><article><small>GAME BANK</small><strong>${bank.linked ? money(bank.balance || 0) : "Not linked"}</strong><span>${bank.synced_at ? "Authoritative snapshot" : "Synchronization required"}</span></article></div>
+    <header class="issuer-hero">
+      <div class="issuer-hero-atmosphere" aria-hidden="true"><i></i><i></i><i></i></div>
+      <div class="issuer-hero-copy">
+        <div class="issuer-hero-kicker"><span>STATE OF FAIRCROFT / PRIMARY MARKET</span><b>FOUNDRY AUTHORITY 01</b></div>
+        <h1>Build Faircroft.<br/><em>List on FCX.</em></h1>
+        <p>Turn a resident company into a public Faircroft institution. Set the opening value, capitalize it from your verified in-game bank, and lead it from first filing through the live Ravenhood market.</p>
+        <nav><button type="button" data-business-tab="launch"><span>Begin an IPO</span><i>→</i></button><button type="button" data-business-tab="company" class="secondary"><span>Enter your boardroom</span><i>↗</i></button></nav>
+        <div class="issuer-hero-assurance"><span><b>01</b>FILE THE ISSUER</span><span><b>02</b>VERIFY CAPITAL</span><span><b>03</b>OPEN ON FCX</span></div>
+      </div>
+      <aside class="issuer-market-seal" aria-label="Faircroft resident issuer network">
+        <div class="issuer-seal-orbit orbit-one"><span>FILE</span><span>FUND</span><span>LIST</span></div>
+        <div class="issuer-seal-orbit orbit-two"></div>
+        <div class="issuer-seal-core"><img src="/static/brand/faircroft-emblem.webp" alt="Faircroft"/><b>FCX</b><small>RESIDENT ISSUER NETWORK</small></div>
+        <span class="issuer-seal-status"><i></i>PRIMARY MARKET ONLINE</span>
+      </aside>
+    </header>
+    <div class="issuer-market-tape" aria-label="Live issuer tape"><div>${tapeMarkup}${tapeMarkup}</div></div>
+    <div class="issuer-overview-stats"><article><small>01 / CONTROLLED ISSUERS</small><strong>${companies.length}</strong><span>${live.length} trading or scheduled</span></article><article><small>02 / COMBINED MARKET VALUE</small><strong>${money(marketValue)}</strong><span>Current FCX valuation</span></article><article><small>03 / CAPITAL IN TRANSIT</small><strong>${money(pendingCapital)}</strong><span>Staged through Bank Bridge</span></article><article><small>04 / VERIFIED GAME BANK</small><strong>${bank.linked ? money(bank.balance || 0) : "Not linked"}</strong><span>${bank.synced_at ? "Authoritative snapshot" : "Synchronization required"}</span></article></div>
     <section class="issuer-roster"><header><div><span>YOUR BOARDROOM</span><h2>Issuer portfolio</h2></div><strong>${companies.length} / ${Number(data.limits?.max_companies || 8)}</strong></header>${companies.map(company => `<button type="button" data-issuer-open="${Number(company.id)}"><span><b>${escapeHtml(company.ticker)}</b><small>${escapeHtml(company.company_name)}</small></span>${issuerCompanyStatus(company)}<strong>${money(company.live_market_cap || company.target_market_cap || 0)}<small>${company.control_source === "existing_security" ? "Assigned FCX security" : "Resident IPO"}</small></strong><i>→</i></button>`).join("") || `<div class="issuer-roster-empty"><b>No companies yet.</b><span>Your first issuer begins with a capitalization plan, not a license application.</span><button type="button" data-business-tab="launch">Start the filing</button></div>`}</section>
   </section>`;
 }
