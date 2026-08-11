@@ -2234,11 +2234,16 @@ SYSTEM_SETTING_DEFAULTS = {
     "market_ai_enabled": "1",
     "market_autopilot_enabled": "0",
     "market_autopilot_interval_minutes": "5",
+    "market_autopilot_profile": "light",
+    "market_volatility_min_percent": "0.10",
     "market_volatility_percent": "3.50",
     "market_autopilot_last_tick": "",
     "market_gemini_autopilot_enabled": "0",
-    "market_gemini_interval_minutes": "60",
+    "market_gemini_interval_minutes": "5",
     "market_gemini_last_tick": "",
+    "market_gemini_last_success_at": "",
+    "market_gemini_last_status": "idle",
+    "market_gemini_last_error": "",
     "lottery_enabled": "1",
     "lottery_daily_entries": "3",
     "lottery_daily_credit": "0.00",
@@ -5963,11 +5968,16 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "market_ai_enabled": str(raw.get("market_ai_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "market_autopilot_enabled": str(raw.get("market_autopilot_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "market_autopilot_interval_minutes": max(1, min(60, int(raw.get("market_autopilot_interval_minutes") or 5))),
+        "market_autopilot_profile": str(raw.get("market_autopilot_profile") or "light").strip().lower() if str(raw.get("market_autopilot_profile") or "light").strip().lower() in ("light", "aggressive", "extreme") else "light",
+        "market_volatility_min_percent": max(0.01, min(15.0, float(raw.get("market_volatility_min_percent") or 0.1))),
         "market_volatility_percent": max(0.1, min(15.0, float(raw.get("market_volatility_percent") or 3.5))),
         "market_autopilot_last_tick": str(raw.get("market_autopilot_last_tick") or "")[:80],
         "market_gemini_autopilot_enabled": str(raw.get("market_gemini_autopilot_enabled") or "0") in ("1", "true", "True", "yes", "on"),
-        "market_gemini_interval_minutes": max(15, min(1440, int(raw.get("market_gemini_interval_minutes") or 60))),
+        "market_gemini_interval_minutes": max(2, min(1440, int(raw.get("market_gemini_interval_minutes") or 5))),
         "market_gemini_last_tick": str(raw.get("market_gemini_last_tick") or "")[:80],
+        "market_gemini_last_success_at": str(raw.get("market_gemini_last_success_at") or "")[:80],
+        "market_gemini_last_status": str(raw.get("market_gemini_last_status") or "idle").strip().lower()[:40],
+        "market_gemini_last_error": str(raw.get("market_gemini_last_error") or "")[:500],
         "lottery_enabled": str(raw.get("lottery_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "lottery_daily_entries": max(1, min(20, int(raw.get("lottery_daily_entries") or 3))),
         "lottery_daily_credit": 0.0,
@@ -7319,6 +7329,32 @@ def record_market_system_trades(
     }
 
 
+MARKET_AUTOPILOT_PROFILES: dict[str, dict[str, float | str]] = {
+    "light": {"label": "Light", "minimum": 0.10, "maximum": 1.50},
+    "aggressive": {"label": "Aggressive", "minimum": 0.75, "maximum": 6.00},
+    "extreme": {"label": "Extremely volatile", "minimum": 3.00, "maximum": 15.00},
+}
+
+
+def market_autopilot_bounds(settings: dict[str, Any]) -> tuple[str, float, float]:
+    profile = str(settings.get("market_autopilot_profile") or "light").strip().lower()
+    if profile not in MARKET_AUTOPILOT_PROFILES:
+        profile = "light"
+    defaults = MARKET_AUTOPILOT_PROFILES[profile]
+    minimum = max(0.01, min(15.0, float(settings.get("market_volatility_min_percent") or defaults["minimum"])))
+    maximum = max(0.10, min(15.0, float(settings.get("market_volatility_percent") or defaults["maximum"])))
+    if minimum > maximum:
+        minimum = maximum
+    return profile, minimum, maximum
+
+
+def market_autopilot_amplitude(settings: dict[str, Any]) -> float:
+    _profile, minimum, maximum = market_autopilot_bounds(settings)
+    if maximum <= minimum:
+        return maximum
+    return round(minimum + (secrets.randbelow(10001) / 10000.0) * (maximum - minimum), 4)
+
+
 def market_volatility_cycle(db: Database, amplitude: float, source: str = "autopilot", actor_id: int | None = None) -> dict[str, Any]:
     amplitude = max(0.1, min(15.0, float(amplitude or 0)))
     securities = all_rows(db, """SELECT id,ticker,price,volatility,security_type FROM market_securities
@@ -7373,9 +7409,17 @@ def market_volatility_cycle(db: Database, amplitude: float, source: str = "autop
     }
 
 
-def market_gemini_adjustment_cycle(db: Database) -> dict[str, Any]:
+def market_gemini_adjustment_cycle(
+    db: Database,
+    minimum_percent: float = 0.10,
+    maximum_percent: float = 8.00,
+    profile: str = "light",
+) -> dict[str, Any]:
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not configured")
+    minimum_percent = max(0.01, min(15.0, float(minimum_percent or 0.1)))
+    maximum_percent = max(minimum_percent, min(15.0, float(maximum_percent or 8)))
+    profile = profile if profile in MARKET_AUTOPILOT_PROFILES else "light"
     listing_rows = all_rows(db, """SELECT s.id,s.ticker,s.name,s.sector,s.security_type,s.price,s.previous_price,
             issuer.id AS issuer_company_id,issuer.controlling_user_id AS issuer_controller_id,issuer.control_source,
             (SELECT MAX(trade.created_at) FROM market_system_trades trade
@@ -7397,7 +7441,8 @@ def market_gemini_adjustment_cycle(db: Database) -> dict[str, Any]:
         "of 1 to 8 adjustments. Each object must contain ticker, percent_change, and rationale. Use both gains and losses when appropriate. "
         "Resident-controlled issuers are ordinary eligible FCX securities and must receive the same market participation as exchange-created listings. "
         "When at least one resident-controlled issuer is present, include at least one in this review and normally give one a positive, buy-compatible move. "
-        "Rotate participation instead of repeatedly selecting the same issuer. Keep every percent_change between -8 and +8 and avoid repeating identical moves. No markdown.\n"
+        f"The selected autopilot posture is {profile}. Keep the absolute size of each meaningful move between {minimum_percent:.2f}% and {maximum_percent:.2f}%, "
+        "use both gains and losses, and avoid repeating identical moves. A zero move is allowed only when the evidence strongly supports holding a quote. No markdown.\n"
         f"LISTINGS={json.dumps(listings, separators=(',', ':'))}\nRECENT_EVENTS={json.dumps(recent, separators=(',', ':'), default=str)}"
     )
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.8, "maxOutputTokens": 1600, "responseMimeType": "application/json"}}
@@ -7442,9 +7487,11 @@ def market_gemini_adjustment_cycle(db: Database) -> dict[str, Any]:
             continue
         ticker = str(item.get("ticker") or "").upper().strip()[:12]
         try:
-            percent = max(-8.0, min(8.0, float(item.get("percent_change") or 0)))
+            percent = max(-maximum_percent, min(maximum_percent, float(item.get("percent_change") or 0)))
         except (TypeError, ValueError):
             continue
+        if 0 < abs(percent) < minimum_percent:
+            percent = minimum_percent if percent > 0 else -minimum_percent
         rationale = str(item.get("rationale") or "Market conditions")[:240]
         apply_adjustment(ticker, percent, rationale)
 
@@ -7489,7 +7536,7 @@ def rebase_market_index_quote(db: Database, security_id: int, quote: float, time
 def apply_market_price_programs(db: Database) -> int:
     """Advance scheduled price programs outside resident-facing read requests."""
     current = utcnow()
-    programs = all_rows(db, "SELECT * FROM market_price_programs WHERE status = 'active' ORDER BY id")
+    programs = all_rows(db, "SELECT * FROM market_price_programs WHERE status IN ('active','scheduled') ORDER BY id")
     updated = 0
     for program in programs:
         try:
@@ -7500,6 +7547,18 @@ def apply_market_price_programs(db: Database) -> int:
             continue
         if current < starts:
             continue
+        if str(program.get("status") or "active") == "scheduled":
+            if program.get("security_id"):
+                live_security = one(db, "SELECT price FROM market_securities WHERE active=1 AND id=?", (program["security_id"],))
+                if not live_security:
+                    db.execute("UPDATE market_price_programs SET status='cancelled' WHERE id=?", (program["id"],))
+                    continue
+                program["start_price"] = float(live_security["price"] or 0.01)
+            db.execute(
+                "UPDATE market_price_programs SET status='active',start_price=? WHERE id=?",
+                (program.get("start_price"), program["id"]),
+            )
+            program["status"] = "active"
         progress = 1.0 if current >= ends else max(0.0, min(1.0, (current - starts).total_seconds() / max(1, (ends - starts).total_seconds())))
         if program.get("security_id"):
             targets = all_rows(db, "SELECT id,price,security_type FROM market_securities WHERE active=1 AND id=?", (program["security_id"],))
@@ -7873,22 +7932,10 @@ def market_automation_worker() -> None:
                 if settings["market_autopilot_enabled"]:
                     last = parse_iso(settings["market_autopilot_last_tick"]) if settings["market_autopilot_last_tick"] else None
                     if not last or (current - last).total_seconds() >= settings["market_autopilot_interval_minutes"] * 60:
-                        market_volatility_cycle(db, settings["market_volatility_percent"])
+                        profile, _minimum, _maximum = market_autopilot_bounds(settings)
+                        amplitude = market_autopilot_amplitude(settings)
+                        market_volatility_cycle(db, amplitude, f"autopilot:{profile}")
                         set_system_setting(db, "market_autopilot_last_tick", current.isoformat())
-                if settings["market_gemini_autopilot_enabled"] and settings["market_ai_enabled"] and GEMINI_API_KEY:
-                    last_ai = parse_iso(settings["market_gemini_last_tick"]) if settings["market_gemini_last_tick"] else None
-                    if not last_ai or (current - last_ai).total_seconds() >= settings["market_gemini_interval_minutes"] * 60:
-                        try:
-                            market_gemini_adjustment_cycle(db)
-                            set_system_setting(db, "market_gemini_last_tick", current.isoformat())
-                        except urllib.error.HTTPError as exc:
-                            # A quota response should not be retried every 15 seconds.
-                            # Advance the scheduler and wait for the configured interval.
-                            if exc.code == 429:
-                                set_system_setting(db, "market_gemini_last_tick", current.isoformat())
-                                print(f"Market automation paused after Gemini rate limit; next review in {settings['market_gemini_interval_minutes']} minute(s)")
-                            else:
-                                raise
                 funds = all_rows(db, "SELECT id,last_rebalanced_at,rebalance_interval_hours FROM market_index_funds WHERE enabled=1")
                 needs_rebalance = any(
                     not fund.get("last_rebalanced_at")
@@ -7905,6 +7952,61 @@ def market_automation_worker() -> None:
                 process_ravenhood_margin_liquidations(db, settings)
         except Exception as exc:
             print(f"Market automation error: {type(exc).__name__}: {exc}")
+        time.sleep(15)
+
+
+def market_gemini_worker() -> None:
+    """Run AI reviews independently so a slow provider never pauses quote cycles."""
+    while True:
+        should_run = False
+        settings: dict[str, Any] = {}
+        attempt_at = utcnow()
+        try:
+            with conn() as db:
+                settings = get_system_settings(db)
+                last_ai = parse_iso(settings["market_gemini_last_tick"]) if settings["market_gemini_last_tick"] else None
+                should_run = bool(
+                    settings["market_gemini_autopilot_enabled"]
+                    and settings["market_ai_enabled"]
+                    and GEMINI_API_KEY
+                    and (not last_ai or (attempt_at - last_ai).total_seconds() >= settings["market_gemini_interval_minutes"] * 60)
+                )
+                if should_run:
+                    # Commit the attempt before calling Gemini. Provider failures then
+                    # honor the configured interval instead of hot-looping every 15 seconds.
+                    set_system_setting(db, "market_gemini_last_tick", attempt_at.isoformat())
+                    set_system_setting(db, "market_gemini_last_status", "running")
+                    set_system_setting(db, "market_gemini_last_error", "")
+            if should_run:
+                profile, minimum, maximum = market_autopilot_bounds(settings)
+                with conn() as db:
+                    result = market_gemini_adjustment_cycle(db, minimum, maximum, profile)
+                    completed_at = now_iso()
+                    set_system_setting(db, "market_gemini_last_success_at", completed_at)
+                    set_system_setting(db, "market_gemini_last_status", "completed")
+                    set_system_setting(db, "market_gemini_last_error", "")
+                    print(
+                        f"Gemini market review completed: {int(result.get('updated') or 0)} listing(s) adjusted under {profile} autopilot",
+                        flush=True,
+                    )
+        except urllib.error.HTTPError as exc:
+            detail = f"HTTP {exc.code}: {exc.reason}"[:500]
+            try:
+                with conn() as db:
+                    set_system_setting(db, "market_gemini_last_status", "rate_limited" if exc.code == 429 else "failed")
+                    set_system_setting(db, "market_gemini_last_error", detail)
+            except Exception as status_exc:
+                print(f"Gemini market status update failed: {type(status_exc).__name__}: {status_exc}", flush=True)
+            print(f"Gemini market review failed: {detail}", flush=True)
+        except Exception as exc:
+            detail = f"{type(exc).__name__}: {exc}"[:500]
+            try:
+                with conn() as db:
+                    set_system_setting(db, "market_gemini_last_status", "failed")
+                    set_system_setting(db, "market_gemini_last_error", detail)
+            except Exception as status_exc:
+                print(f"Gemini market status update failed: {type(status_exc).__name__}: {status_exc}", flush=True)
+            print(f"Gemini market review failed: {detail}", flush=True)
         time.sleep(15)
 
 
@@ -23821,11 +23923,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "ai_enabled": settings["market_ai_enabled"],
                 "autopilot_enabled": settings["market_autopilot_enabled"],
                 "autopilot_interval_minutes": settings["market_autopilot_interval_minutes"],
+                "autopilot_profile": settings["market_autopilot_profile"],
+                "volatility_min_percent": settings["market_volatility_min_percent"],
                 "volatility_percent": settings["market_volatility_percent"],
                 "autopilot_last_tick": settings["market_autopilot_last_tick"],
                 "gemini_autopilot_enabled": settings["market_gemini_autopilot_enabled"],
                 "gemini_interval_minutes": settings["market_gemini_interval_minutes"],
                 "gemini_last_tick": settings["market_gemini_last_tick"],
+                "gemini_last_success_at": settings["market_gemini_last_success_at"],
+                "gemini_last_status": settings["market_gemini_last_status"],
+                "gemini_last_error": settings["market_gemini_last_error"],
                 "gemini_configured": bool(GEMINI_API_KEY),
                 "index_funds": market_index_payload(db),
                 "exchange_market_cap": round(float((one(db, "SELECT COALESCE(SUM(price*issued_shares),0) AS total FROM market_securities WHERE active=1 AND security_type<>'fund'") or {}).get("total") or 0), 2),
@@ -24755,11 +24862,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "ai_enabled": system_settings["market_ai_enabled"],
                     "autopilot_enabled": system_settings["market_autopilot_enabled"],
                     "autopilot_interval_minutes": system_settings["market_autopilot_interval_minutes"],
+                    "autopilot_profile": system_settings["market_autopilot_profile"],
+                    "volatility_min_percent": system_settings["market_volatility_min_percent"],
                     "volatility_percent": system_settings["market_volatility_percent"],
                     "autopilot_last_tick": system_settings["market_autopilot_last_tick"],
                     "gemini_autopilot_enabled": system_settings["market_gemini_autopilot_enabled"],
                     "gemini_interval_minutes": system_settings["market_gemini_interval_minutes"],
                     "gemini_last_tick": system_settings["market_gemini_last_tick"],
+                    "gemini_last_success_at": system_settings["market_gemini_last_success_at"],
+                    "gemini_last_status": system_settings["market_gemini_last_status"],
+                    "gemini_last_error": system_settings["market_gemini_last_error"],
                     "gemini_configured": bool(GEMINI_API_KEY),
                     "index_funds": market_index_payload(db),
                     "exchange_market_cap": round(float((one(db, "SELECT COALESCE(SUM(price*issued_shares),0) AS total FROM market_securities WHERE active=1 AND security_type<>'fund'") or {}).get("total") or 0), 2),
@@ -26135,21 +26247,37 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             set_system_setting(db, "market_margin_max_account_notional", str(margin_notional_limit))
         if "ai_enabled" in payload:
             set_system_setting(db, "market_ai_enabled", "1" if bool(payload.get("ai_enabled")) else "0")
+        autopilot_profile = str(payload.get("autopilot_profile") or current_settings["market_autopilot_profile"]).strip().lower()
+        if autopilot_profile not in MARKET_AUTOPILOT_PROFILES:
+            self.error(400, "Autopilot profile must be light, aggressive, or extreme."); return
         try:
             automation_interval = max(1, min(60, int(payload.get("autopilot_interval_minutes") or 5)))
+            volatility_minimum = max(0.01, min(15.0, float(payload.get("volatility_min_percent") or current_settings["market_volatility_min_percent"])))
             volatility = max(0.1, min(15.0, float(payload.get("volatility_percent") or 3.5)))
-            gemini_interval = max(15, min(1440, int(payload.get("gemini_interval_minutes") or 60)))
+            gemini_interval = max(2, min(1440, int(payload.get("gemini_interval_minutes") or 5)))
         except (TypeError, ValueError):
             self.error(400, "Automation intervals and volatility must be numeric."); return
+        if volatility_minimum > volatility:
+            self.error(400, "Minimum fluctuation cannot be greater than the maximum fluctuation."); return
         if "autopilot_enabled" in payload:
-            set_system_setting(db, "market_autopilot_enabled", "1" if bool(payload.get("autopilot_enabled")) else "0")
+            autopilot_enabled = bool(payload.get("autopilot_enabled"))
+            set_system_setting(db, "market_autopilot_enabled", "1" if autopilot_enabled else "0")
             set_system_setting(db, "market_autopilot_interval_minutes", str(automation_interval))
+            set_system_setting(db, "market_autopilot_profile", autopilot_profile)
+            set_system_setting(db, "market_volatility_min_percent", str(volatility_minimum))
             set_system_setting(db, "market_volatility_percent", str(volatility))
+            if autopilot_enabled and not current_settings["market_autopilot_enabled"]:
+                set_system_setting(db, "market_autopilot_last_tick", "")
         if "gemini_autopilot_enabled" in payload:
-            set_system_setting(db, "market_gemini_autopilot_enabled", "1" if bool(payload.get("gemini_autopilot_enabled")) else "0")
+            gemini_enabled = bool(payload.get("gemini_autopilot_enabled"))
+            set_system_setting(db, "market_gemini_autopilot_enabled", "1" if gemini_enabled else "0")
             set_system_setting(db, "market_gemini_interval_minutes", str(gemini_interval))
+            if gemini_enabled and not current_settings["market_gemini_autopilot_enabled"]:
+                set_system_setting(db, "market_gemini_last_tick", "")
+                set_system_setting(db, "market_gemini_last_status", "waiting")
+                set_system_setting(db, "market_gemini_last_error", "")
         updated_settings = get_system_settings(db)
-        add_admin_audit(db, int(user["id"]), "market.settings.updated", details={"market_open": updated_settings["market_open"], "manual_override": updated_settings["market_manual_override"], "schedule_open_time": updated_settings["market_schedule_open_time"], "schedule_close_time": updated_settings["market_schedule_close_time"], "schedule_timezone": updated_settings["market_schedule_timezone"], "weekends_enabled": updated_settings["market_weekends_enabled"], "fcxv_24h_enabled": updated_settings["market_fcxv_24h_enabled"], "transfer_fee": transfer_fee, "trade_fee": trade_fee})
+        add_admin_audit(db, int(user["id"]), "market.settings.updated", details={"market_open": updated_settings["market_open"], "manual_override": updated_settings["market_manual_override"], "schedule_open_time": updated_settings["market_schedule_open_time"], "schedule_close_time": updated_settings["market_schedule_close_time"], "schedule_timezone": updated_settings["market_schedule_timezone"], "weekends_enabled": updated_settings["market_weekends_enabled"], "fcxv_24h_enabled": updated_settings["market_fcxv_24h_enabled"], "transfer_fee": transfer_fee, "trade_fee": trade_fee, "autopilot_profile": updated_settings["market_autopilot_profile"], "volatility_range": [updated_settings["market_volatility_min_percent"], updated_settings["market_volatility_percent"]], "gemini_interval_minutes": updated_settings["market_gemini_interval_minutes"]})
         self.send_json(200, {"ok": True, "market_session": {"market_open": updated_settings["market_open"], "fcxv_24h_enabled": updated_settings["market_fcxv_24h_enabled"], "manual_override": updated_settings["market_manual_override"], "session_reason": updated_settings["market_session_reason"], "local_time": updated_settings["market_local_time"], "next_transition_at": updated_settings["market_next_transition_at"]}})
 
     def api_dev_market_volatility_cycle(self, db: Database, user: DbRow | None) -> None:
@@ -26157,7 +26285,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err); return
         settings = get_system_settings(db)
-        result = market_volatility_cycle(db, settings["market_volatility_percent"], "manual", int(user["id"]))
+        profile, _minimum, _maximum = market_autopilot_bounds(settings)
+        result = market_volatility_cycle(db, market_autopilot_amplitude(settings), f"manual:{profile}", int(user["id"]))
         set_system_setting(db, "market_autopilot_last_tick", now_iso())
         add_admin_audit(db, int(user["id"]), "market.volatility_cycle", details=result)
         self.send_json(200, {"ok": True, **result})
@@ -26206,21 +26335,38 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 self.error(404, f"Active security not found: {', '.join(missing)}"); return
         if not targets:
             self.error(409, "No active securities are available for this movement."); return
-        start = utcnow(); end = start + dt.timedelta(minutes=duration)
+        created_at = utcnow()
+        requested_start = str(payload.get("starts_at") or "").strip()
+        start = created_at
+        if requested_start:
+            try:
+                start = dt.datetime.fromisoformat(requested_start.replace("Z", "+00:00"))
+                if start.tzinfo is None:
+                    start = start.replace(tzinfo=ZoneInfo("America/New_York"))
+                start = start.astimezone(dt.timezone.utc)
+            except (TypeError, ValueError):
+                self.error(400, "Scheduled start must be a valid date and time."); return
+            if start < created_at - dt.timedelta(minutes=1):
+                self.error(400, "Scheduled start cannot be in the past."); return
+            if start <= created_at + dt.timedelta(seconds=15):
+                start = created_at
+        status = "scheduled" if start > created_at else "active"
+        end = start + dt.timedelta(minutes=duration)
         for target in targets:
             db.execute("""INSERT INTO market_price_programs (security_id, event_name, percent_change, duration_minutes, start_price, starts_at, ends_at, status, created_by, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""", (target["id"], name, percent, duration, float(target["price"]), start.isoformat(), end.isoformat(), user["id"], start.isoformat()))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (target["id"], name, percent, duration, float(target["price"]), start.isoformat(), end.isoformat(), status, user["id"], created_at.isoformat()))
         target_tickers = [str(target["ticker"]) for target in targets]
         resident_issuer_count = sum(1 for target in targets if target.get("issuer_company_id"))
         target_label = "Entire market" if tickers == ["ALL"] else ", ".join(target_tickers)
-        db.execute("INSERT INTO market_events (event_type, title, detail, created_by, created_at) VALUES ('program', ?, ?, ?, ?)", (name, f"{target_label}: {percent:+.2f}% over {duration} minutes", user["id"], start.isoformat()))
+        timing_detail = f" beginning {start.astimezone(ZoneInfo('America/New_York')).strftime('%b %d, %Y at %I:%M %p %Z')}" if status == "scheduled" else " beginning now"
+        db.execute("INSERT INTO market_events (event_type, title, detail, created_by, created_at) VALUES ('program', ?, ?, ?, ?)", (name, f"{target_label}: {percent:+.2f}% over {duration} minutes{timing_detail}", user["id"], created_at.isoformat()))
         add_admin_audit(db, int(user["id"]), "market.program.created", details={
             "event_name": name, "tickers": target_tickers, "entire_market": tickers == ["ALL"],
             "target_count": len(targets), "resident_issuer_count": resident_issuer_count,
-            "percent_change": percent, "duration_minutes": duration,
+            "percent_change": percent, "duration_minutes": duration, "starts_at": start.isoformat(), "status": status,
         })
         self.send_json(201, {"ok": True, "example_one_dollar": max(0.01, round(1 * (1 + percent / 100), 4)),
-            "ends_at": end.isoformat(), "tickers": target_tickers, "target_count": len(targets),
+            "starts_at": start.isoformat(), "ends_at": end.isoformat(), "status": status, "tickers": target_tickers, "target_count": len(targets),
             "resident_issuer_count": resident_issuer_count})
 
     def api_dev_market_program_cancel(self, db: Database, user: DbRow | None, program_id: int | None) -> None:
@@ -26230,12 +26376,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         program = one(db, "SELECT * FROM market_price_programs WHERE id=?", (program_id,)) if program_id else None
         if not program:
             self.error(404, "Market movement not found."); return
-        if program["status"] != "active":
-            self.error(409, "That market movement is no longer active."); return
-        related = all_rows(db, "SELECT * FROM market_price_programs WHERE status='active' AND event_name=? AND created_at=? ORDER BY id", (program["event_name"], program["created_at"]))
+        if program["status"] not in ("active", "scheduled"):
+            self.error(409, "That market movement is no longer active or scheduled."); return
+        related = all_rows(db, "SELECT * FROM market_price_programs WHERE status IN ('active','scheduled') AND event_name=? AND created_at=? ORDER BY id", (program["event_name"], program["created_at"]))
         restored = 0
         for item in related:
-            if item.get("security_id"):
+            if item.get("security_id") and item.get("status") == "active":
                 security = one(db, "SELECT price FROM market_securities WHERE id=?", (item["security_id"],))
                 if security:
                     prior_price = max(0.01, float(security["price"] or 0.01))
@@ -26266,14 +26412,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         program = one(db, "SELECT * FROM market_price_programs WHERE id=?", (program_id,)) if program_id else None
         if not program:
             self.error(404, "Market movement not found."); return
-        if program["status"] != "active":
-            self.error(409, "That market movement is no longer active."); return
-        related = all_rows(db, "SELECT * FROM market_price_programs WHERE status='active' AND event_name=? AND created_at=? ORDER BY id", (program["event_name"], program["created_at"]))
+        if program["status"] not in ("active", "scheduled"):
+            self.error(409, "That market movement is no longer active or scheduled."); return
+        related = all_rows(db, "SELECT * FROM market_price_programs WHERE status IN ('active','scheduled') AND event_name=? AND created_at=? ORDER BY id", (program["event_name"], program["created_at"]))
         stopped_at = now_iso()
         held = 0
         held_quotes: list[dict[str, Any]] = []
         for item in related:
-            if item.get("security_id"):
+            if item.get("security_id") and item.get("status") == "active":
                 security = one(db, "SELECT ticker,price FROM market_securities WHERE id=?", (item["security_id"],))
                 if security:
                     held_price = max(0.01, float(security["price"] or 0.01))
@@ -26282,7 +26428,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     held_quotes.append({"ticker": security["ticker"], "price": round(held_price, 4)})
                     held += 1
             db.execute("UPDATE market_price_programs SET status='stopped' WHERE id=?", (item["id"],))
-        detail = f"Stopped {len(related)} scheduled movement(s) without restoring baseline prices; held {held} current market quote(s)."
+        detail = f"Stopped {len(related)} scheduled movement(s) without restoring baseline prices; held {held} active market quote(s)."
         db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('program_stopped',?,?,?,?)", (f"Held: {program['event_name']}", detail, user["id"], stopped_at))
         add_admin_audit(db, int(user["id"]), "market.program.stopped", details={"program_id": program_id, "event_name": program["event_name"], "stopped": len(related), "held_quotes": held_quotes})
         self.send_json(200, {"ok": True, "stopped": len(related), "held": held, "held_quotes": held_quotes})
@@ -29359,6 +29505,7 @@ def initialize_application() -> None:
         ).start()
         threading.Thread(target=lottery_worker, name="faircroft-lottery", daemon=True).start()
         threading.Thread(target=market_automation_worker, name="ravenhood-market-automation", daemon=True).start()
+        threading.Thread(target=market_gemini_worker, name="ravenhood-gemini-autopilot", daemon=True).start()
         threading.Thread(target=sportsbook_sync_worker, name="faircroft-sportsbook-sync", daemon=True).start()
         threading.Thread(target=casino_balance_worker, name="faircroft-casino-balance", daemon=True).start()
         APPLICATION_READY.set()
