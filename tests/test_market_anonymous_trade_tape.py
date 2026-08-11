@@ -30,6 +30,26 @@ class MarketAnonymousTradeTapeTests(unittest.TestCase):
         source = (ROOT / "app.py").read_text(encoding="utf-8")
         self.assertIn('"anonymous_trade_tape": anonymous_trade_tape', source)
 
+    def test_anonymous_flow_renders_below_market_movers_not_header_tape(self):
+        source = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        discovery_start = source.index('<aside class="market-v13-discovery">')
+        discovery_end = source.index('</aside>', discovery_start)
+        discovery = source[discovery_start:discovery_end]
+        self.assertIn('market-live-execution-feed', discovery)
+        self.assertIn('Hot right now', discovery)
+        self.assertNotIn('market-live-order-tape', source)
+
+    def test_live_feed_keeps_user_activity_anonymous(self):
+        source = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        feed_start = source.index('const anonymousTradeTape')
+        feed_end = source.index('return `<main', feed_start)
+        feed = source[feed_start:feed_end]
+        self.assertIn('ANONYMOUS', feed)
+        self.assertIn('GEMINI', feed)
+        self.assertNotIn('account_id', feed)
+        self.assertNotIn('user_id', feed)
+        self.assertNotIn('civ_number', feed)
+
 
 if __name__ == "__main__":
     unittest.main()
