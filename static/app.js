@@ -15255,7 +15255,22 @@ function bindDevWorkspace() {
   marketAutomationForm?.querySelectorAll('[name="automation_provider"]').forEach(input => input.addEventListener("change", syncMarketAutomationMode));
   syncMarketAutomationMode();
   marketAutomationForm?.addEventListener("submit", async event => { event.preventDefault(); const form=event.currentTarget; try { await api("/api/dev-tools/market/settings", {method:"PATCH",body:{autopilot_enabled:form.autopilot_enabled.checked,automation_provider:form.automation_provider.value,autopilot_profile:form.autopilot_profile.value,autopilot_interval_minutes:form.autopilot_interval_minutes.value,volatility_min_percent:form.volatility_min_percent.value,volatility_percent:form.volatility_percent.value,ai_interval_minutes:form.ai_interval_minutes.value,ai_cooldown_minutes:form.ai_cooldown_minutes.value,ai_fallback_enabled:form.ai_fallback_enabled.checked,local_fallback_enabled:form.local_fallback_enabled.checked}}); toast(`${humanLabel(form.automation_provider.value)} · ${humanLabel(form.autopilot_profile.value)} autopilot saved`); await refreshDevTools(); } catch(error){toast(error.message);} });
-  $("[data-market-volatility-cycle]")?.addEventListener("click", async event => { if(!confirm("Run a mixed volatility cycle across every active Ravenhood listing now?")) return; event.currentTarget.disabled=true; try { const result=await api("/api/dev-tools/market/volatility-cycle",{method:"POST",body:"{}"}); toast(`Volatility cycle complete · ${result.operating_updated ?? result.updated} listings moved · ${result.index_updated ?? 0} indexes revalued · ${Number(result.average_change || 0) >= 0 ? "+" : ""}${Number(result.average_change || 0).toFixed(2)}% average`); await refreshDevTools(); } catch(error){event.currentTarget.disabled=false;toast(error.message);} });
+  $("[data-market-volatility-cycle]")?.addEventListener("click", async event => {
+    if(!confirm("Start one Local movement cycle across every active Ravenhood listing?")) return;
+    const button = event.currentTarget;
+    const originalLabel = button.textContent;
+    button.disabled = true;
+    button.textContent = "Starting Local cycle…";
+    try {
+      const result = await api("/api/dev-tools/market/volatility-cycle", { method:"POST", body:{}, timeoutMs:15000 });
+      toast(result.message || `Local cycle #${result.cycle_number || ""} started`);
+      await refreshDevTools();
+    } catch(error) {
+      button.disabled = false;
+      button.textContent = originalLabel;
+      toast(error.message);
+    }
+  });
   const marketProgramForm = $("#devMarketProgramForm");
   const marketProgramChecks = marketProgramForm ? Array.from(marketProgramForm.querySelectorAll('[name="tickers"]')) : [];
   const updateMarketProgramSelection = () => {

@@ -226,6 +226,7 @@ CASINO_MAX_QUEUED_ROUNDS = 5
 LOTTERY_MAX_OPEN_TICKETS = 50
 CASINO_WAGER_REQUEST_TIMES: dict[str, float] = {}
 CASINO_WAGER_REQUEST_LOCK = threading.Lock()
+MARKET_MANUAL_CYCLE_LOCK = threading.Lock()
 
 
 def now_iso() -> str:
@@ -7475,6 +7476,60 @@ def market_volatility_cycle(db: Database, amplitude: float, source: str = "autop
         "average_change": round(average, 2),
         "changes": listing_changes,
     }
+
+
+def run_manual_market_volatility_cycle(actor_id: int, cycle_number: int, profile: str, amplitude: float) -> None:
+    """Finish a manually requested Local cycle without holding the browser request open."""
+    try:
+        with conn() as cycle_db:
+            result = market_volatility_cycle(
+                cycle_db,
+                amplitude,
+                f"manual:{profile}",
+                actor_id,
+                cycle_number,
+            )
+            finish_market_automation_cycle(cycle_db, cycle_number, "local-manual", result, "completed")
+            set_system_setting(cycle_db, "market_autopilot_last_tick", now_iso())
+            add_admin_audit(
+                cycle_db,
+                actor_id,
+                "market.volatility_cycle",
+                details={"cycle_number": cycle_number, "execution": "background", **result},
+            )
+        print(
+            f"Manual Ravenhood cycle #{cycle_number} completed: "
+            f"{int(result.get('operating_updated') or 0)} listing(s), "
+            f"{int(result.get('index_updated') or 0)} index quote(s)",
+            flush=True,
+        )
+    except Exception as exc:
+        detail = f"{type(exc).__name__}: {exc}"[:500]
+        try:
+            with conn() as status_db:
+                finish_market_automation_cycle(
+                    status_db,
+                    cycle_number,
+                    "local-manual",
+                    None,
+                    "failed",
+                    detail,
+                )
+                add_admin_audit(
+                    status_db,
+                    actor_id,
+                    "market.volatility_cycle.failed",
+                    details={"cycle_number": cycle_number, "error": detail},
+                )
+        except Exception as status_exc:
+            print(
+                f"Manual Ravenhood cycle #{cycle_number} status update failed: "
+                f"{type(status_exc).__name__}: {status_exc}",
+                flush=True,
+            )
+        print(f"Manual Ravenhood cycle #{cycle_number} failed: {detail}", flush=True)
+    finally:
+        MARKET_MANUAL_CYCLE_LOCK.release()
 
 
 def market_gemini_adjustment_cycle(
@@ -26479,14 +26534,44 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         err = developer_required(user)
         if err:
             self.error(403 if user else 401, err); return
-        settings = get_system_settings(db)
-        profile, _minimum, _maximum = market_autopilot_bounds(settings)
-        cycle_number = begin_market_automation_cycle(db, "local-manual", profile, int(user["id"]))
-        result = market_volatility_cycle(db, market_autopilot_amplitude(settings), f"manual:{profile}", int(user["id"]), cycle_number)
-        finish_market_automation_cycle(db, cycle_number, "local-manual", result, "completed")
-        set_system_setting(db, "market_autopilot_last_tick", now_iso())
-        add_admin_audit(db, int(user["id"]), "market.volatility_cycle", details=result)
-        self.send_json(200, {"ok": True, **result})
+        if not MARKET_MANUAL_CYCLE_LOCK.acquire(blocking=False):
+            self.error(409, "A manual Local market cycle is already running. Follow it in the Market Control Log."); return
+        actor_id = int(user["id"])
+        cycle_number = 0
+        try:
+            settings = get_system_settings(db)
+            profile, _minimum, _maximum = market_autopilot_bounds(settings)
+            amplitude = market_autopilot_amplitude(settings)
+            cycle_number = begin_market_automation_cycle(db, "local-manual", profile, actor_id)
+            # Make the start event visible before the market work begins. The
+            # request handler otherwise commits only after the entire cycle,
+            # which made a slow cycle look stuck and absent from the live log.
+            db.raw.commit()
+            threading.Thread(
+                target=run_manual_market_volatility_cycle,
+                args=(actor_id, cycle_number, profile, amplitude),
+                name=f"ravenhood-manual-cycle-{cycle_number}",
+                daemon=True,
+            ).start()
+        except Exception as exc:
+            MARKET_MANUAL_CYCLE_LOCK.release()
+            if cycle_number:
+                finish_market_automation_cycle(
+                    db,
+                    cycle_number,
+                    "local-manual",
+                    None,
+                    "failed",
+                    f"Could not start background worker: {type(exc).__name__}: {exc}"[:500],
+                )
+            self.error(500, f"Could not start the Local cycle: {exc}"); return
+        self.send_json(202, {
+            "ok": True,
+            "queued": True,
+            "cycle_number": cycle_number,
+            "profile": profile,
+            "message": f"Local cycle #{cycle_number} started. Progress is now visible in the Market Control Log.",
+        })
 
     def api_dev_market_program(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)

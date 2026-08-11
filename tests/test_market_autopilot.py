@@ -55,6 +55,21 @@ class MarketAutopilotTests(unittest.TestCase):
         self.assertIn('CYCLE COUNTER', FRONTEND_SOURCE)
         self.assertIn('MARKET CONTROL LOG', FRONTEND_SOURCE)
 
+    def test_manual_local_cycle_is_non_blocking_and_visible_before_work_starts(self) -> None:
+        endpoint_source = APP_SOURCE.split("def api_dev_market_volatility_cycle", 1)[1].split(
+            "def api_dev_market_program", 1
+        )[0]
+        worker_source = APP_SOURCE.split("def run_manual_market_volatility_cycle", 1)[1].split(
+            "def market_gemini_adjustment_cycle", 1
+        )[0]
+        self.assertIn("MARKET_MANUAL_CYCLE_LOCK.acquire(blocking=False)", endpoint_source)
+        self.assertIn("db.raw.commit()", endpoint_source)
+        self.assertIn("target=run_manual_market_volatility_cycle", endpoint_source)
+        self.assertIn("self.send_json(202", endpoint_source)
+        self.assertIn('finish_market_automation_cycle(cycle_db, cycle_number, "local-manual"', worker_source)
+        self.assertIn('"market.volatility_cycle.failed"', worker_source)
+        self.assertIn('button.textContent = "Starting Local cycle…"', FRONTEND_SOURCE)
+
     def test_cleared_generic_error_does_not_resurrect_legacy_gemini_error(self) -> None:
         self.assertIn(
             'raw.get("market_ai_last_error") if "market_ai_last_error" in raw else raw.get("market_gemini_last_error")',
