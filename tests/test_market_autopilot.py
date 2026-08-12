@@ -1,3 +1,4 @@
+import ast
 import unittest
 from pathlib import Path
 
@@ -24,7 +25,70 @@ class MarketAutopilotTests(unittest.TestCase):
         self.assertIn('set_system_setting(db, "market_volatility_min_percent"', APP_SOURCE)
         self.assertIn('set_system_setting(db, "market_volatility_percent"', APP_SOURCE)
         self.assertIn('name="autopilot_profile"', FRONTEND_SOURCE)
+        self.assertIn('name="autopilot_direction"', FRONTEND_SOURCE)
         self.assertIn('name="volatility_min_percent"', FRONTEND_SOURCE)
+
+    def test_autopilot_direction_is_enforced_and_audited(self) -> None:
+        self.assertIn('"market_autopilot_direction": "bearish"', APP_SOURCE)
+        self.assertIn("def direct_market_move", APP_SOURCE)
+        self.assertIn('direction == "bearish"', APP_SOURCE)
+        self.assertIn('"declining": declining', APP_SOURCE)
+        self.assertIn('set_system_setting(db, "market_autopilot_direction"', APP_SOURCE)
+        self.assertIn('autopilot_direction:form.autopilot_direction.value', FRONTEND_SOURCE)
+
+    def test_direction_transform_has_deterministic_signs(self) -> None:
+        tree = ast.parse(APP_SOURCE)
+        function = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "direct_market_move"
+        )
+        namespace = {}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "direct_market_move", "exec"), namespace)
+        transform = namespace["direct_market_move"]
+        self.assertEqual(-3.0, transform(3.0, "bearish", 0.75))
+        self.assertEqual(-0.75, transform(0.0, "bearish", 0.75))
+        self.assertEqual(3.0, transform(-3.0, "bullish", 0.75))
+        self.assertEqual(0.75, transform(0.0, "bullish", 0.75))
+
+    def test_directional_path_has_pullbacks_and_exact_terminal_quote(self) -> None:
+        tree = ast.parse(APP_SOURCE)
+        function = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "directional_market_price_path"
+        )
+        namespace = {}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "directional_path", "exec"), namespace)
+        path_builder = namespace["directional_market_price_path"]
+        for target in (110.0, 90.0):
+            path = path_builder(100.0, target, 1)
+            changes = [current - previous for previous, current in zip([100.0] + path[:-1], path)]
+            self.assertEqual(target, path[-1])
+            self.assertTrue(any(change > 0 for change in changes))
+            self.assertTrue(any(change < 0 for change in changes))
+
+    def test_directional_cycles_use_hard_target_and_multi_tick_history(self) -> None:
+        local_source = APP_SOURCE.split("def market_volatility_cycle", 1)[1].split(
+            "def run_manual_market_volatility_cycle", 1
+        )[0]
+        ai_source = APP_SOURCE.split("def market_gemini_adjustment_cycle", 1)[1].split(
+            "def rebase_market_index_quote", 1
+        )[0]
+        self.assertIn('hard_target_percent = -amplitude if direction == "bearish"', local_source)
+        self.assertIn("record_directional_market_path", local_source)
+        self.assertIn('hard_target_percent = -maximum_percent if direction == "bearish"', ai_source)
+        self.assertIn("record_directional_market_path", ai_source)
+        self.assertIn('"target_percent"', local_source)
+        self.assertIn('"target_percent"', ai_source)
+        self.assertIn("finish exactly at the configured target", FRONTEND_SOURCE)
+
+    def test_directional_ai_cycle_completes_market_breadth_and_indexes(self) -> None:
+        function_source = APP_SOURCE.split("def market_gemini_adjustment_cycle", 1)[1].split(
+            "def rebase_market_index_quote", 1
+        )[0]
+        self.assertIn('if direction != "mixed"', function_source)
+        self.assertIn("for candidate in listings", function_source)
+        self.assertIn("index_updated = update_market_index_prices", function_source)
+        self.assertIn("AI cycle safety check failed", function_source)
 
     def test_local_gemini_and_deepseek_engines_have_ordered_fallback(self) -> None:
         self.assertIn('DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY"', APP_SOURCE)

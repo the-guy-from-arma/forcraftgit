@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime as dt
+from collections import defaultdict
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from typing import Any
 
@@ -77,6 +79,201 @@ def market_gemini_exposure_shares(buy_shares: Any, sell_shares: Any) -> float:
     bought = max(0.0, float(buy_shares or 0))
     sold = max(0.0, float(sell_shares or 0))
     return abs(bought - sold)
+
+
+def ravenhood_residential_pnl_windows(
+    equity_trades: list[dict[str, Any]],
+    current_holdings: list[dict[str, Any]],
+    margin_positions: list[dict[str, Any]],
+    cutoff_prices: dict[str, dict[int, Any]],
+    windows: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Build resident P&L surveillance summaries for several lookback windows.
+
+    Cash-equity P&L uses the quote at the beginning of each window as the
+    baseline for shares already held, then applies actual execution prices and
+    fees to buys and sells inside the window. Open leveraged positions are
+    marked to the current quote; closed positions use their recorded close.
+    The function never includes system-market-maker rows because every input
+    record is expected to belong to a resident Ravenhood account.
+    """
+
+    def number(value: Any) -> float:
+        try:
+            return float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def timestamp(value: Any) -> dt.datetime:
+        if isinstance(value, dt.datetime):
+            parsed = value
+        else:
+            text = str(value or "").strip().replace("Z", "+00:00")
+            try:
+                parsed = dt.datetime.fromisoformat(text)
+            except ValueError:
+                parsed = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=dt.timezone.utc)
+        return parsed.astimezone(dt.timezone.utc)
+
+    holding_by_key: dict[tuple[int, int], dict[str, Any]] = {}
+    identity_by_account: dict[int, dict[str, Any]] = {}
+    for raw in current_holdings:
+        row = dict(raw)
+        account_id = int(number(row.get("account_id")))
+        security_id = int(number(row.get("security_id")))
+        if account_id <= 0 or security_id <= 0:
+            continue
+        holding_by_key[(account_id, security_id)] = row
+        identity_by_account[account_id] = row
+
+    equity_by_key: dict[tuple[int, int], list[dict[str, Any]]] = defaultdict(list)
+    for raw in equity_trades:
+        row = dict(raw)
+        account_id = int(number(row.get("account_id")))
+        security_id = int(number(row.get("security_id")))
+        if account_id <= 0 or security_id <= 0:
+            continue
+        equity_by_key[(account_id, security_id)].append(row)
+        identity_by_account[account_id] = row
+    for rows in equity_by_key.values():
+        rows.sort(key=lambda row: timestamp(row.get("created_at")))
+
+    for raw in margin_positions:
+        row = dict(raw)
+        account_id = int(number(row.get("account_id")))
+        if account_id > 0:
+            identity_by_account[account_id] = row
+
+    results: dict[str, dict[str, Any]] = {}
+    all_equity_keys = set(holding_by_key) | set(equity_by_key)
+    for window_key, cutoff_value in windows.items():
+        cutoff = timestamp(cutoff_value)
+        window_prices = cutoff_prices.get(window_key, {})
+        residents: dict[int, dict[str, Any]] = {}
+
+        def resident(account_id: int) -> dict[str, Any]:
+            if account_id not in residents:
+                identity = identity_by_account.get(account_id, {})
+                residents[account_id] = {
+                    "account_id": account_id,
+                    "user_id": int(number(identity.get("user_id"))),
+                    "name": str(identity.get("name") or identity.get("resident_name") or "Resident"),
+                    "civ_number": str(identity.get("civ_number") or "pending"),
+                    "equity_realized": 0.0,
+                    "equity_unrealized": 0.0,
+                    "margin_realized": 0.0,
+                    "margin_unrealized": 0.0,
+                }
+            return residents[account_id]
+
+        for account_id, security_id in all_equity_keys:
+            holding = holding_by_key.get((account_id, security_id), {})
+            current_quantity = max(0.0, number(holding.get("quantity")))
+            mark_price = max(
+                0.0,
+                number(holding.get("current_price") or holding.get("mark_price")),
+            )
+            trades = [
+                row for row in equity_by_key.get((account_id, security_id), [])
+                if timestamp(row.get("created_at")) >= cutoff
+            ]
+            if not trades and current_quantity <= 0:
+                continue
+
+            cutoff_price = number(window_prices.get(security_id))
+            if cutoff_price <= 0:
+                cutoff_price = number(trades[0].get("unit_price")) if trades else mark_price
+            if cutoff_price <= 0:
+                cutoff_price = mark_price
+
+            buys = sum(number(row.get("quantity")) for row in trades if str(row.get("action") or row.get("side") or "").lower() == "buy")
+            sells = sum(number(row.get("quantity")) for row in trades if str(row.get("action") or row.get("side") or "").lower() == "sell")
+            opening_quantity = max(0.0, current_quantity - buys + sells)
+            tracked_quantity = opening_quantity
+            tracked_basis = opening_quantity * cutoff_price
+            equity_realized = 0.0
+
+            for row in trades:
+                side = str(row.get("action") or row.get("side") or "").lower()
+                quantity = max(0.0, number(row.get("quantity")))
+                unit_price = max(0.0, number(row.get("unit_price")))
+                fee = max(0.0, number(row.get("fee_amount")))
+                gross = max(0.0, number(row.get("gross_amount"))) or quantity * unit_price
+                if side == "buy":
+                    tracked_quantity += quantity
+                    tracked_basis += gross + fee
+                elif side == "sell" and quantity > 0:
+                    average_basis = tracked_basis / tracked_quantity if tracked_quantity > 0 else cutoff_price
+                    equity_realized += gross - fee - (average_basis * quantity)
+                    removed = min(quantity, tracked_quantity)
+                    tracked_basis = max(0.0, tracked_basis - average_basis * removed)
+                    tracked_quantity = max(0.0, tracked_quantity - removed)
+
+            if abs(tracked_quantity - current_quantity) > 0.000001:
+                average_basis = tracked_basis / tracked_quantity if tracked_quantity > 0 else cutoff_price
+                tracked_quantity = current_quantity
+                tracked_basis = max(0.0, average_basis * current_quantity)
+            equity_unrealized = current_quantity * mark_price - tracked_basis
+            account = resident(account_id)
+            account["equity_realized"] += equity_realized
+            account["equity_unrealized"] += equity_unrealized
+
+        for raw in margin_positions:
+            row = dict(raw)
+            account_id = int(number(row.get("account_id")))
+            security_id = int(number(row.get("security_id")))
+            if account_id <= 0 or security_id <= 0:
+                continue
+            opened_at = timestamp(row.get("opened_at") or row.get("created_at"))
+            status = str(row.get("status") or "open").lower()
+            closed_at = timestamp(row.get("closed_at")) if row.get("closed_at") else None
+            if status != "open" and (closed_at is None or closed_at < cutoff):
+                continue
+            direction = str(row.get("direction") or row.get("action") or "long").lower()
+            quantity = max(0.0, number(row.get("quantity")))
+            entry_price = max(0.0, number(row.get("entry_price") or row.get("unit_price")))
+            mark_price = max(0.0, number(row.get("mark_price")))
+            cutoff_price = number(window_prices.get(security_id))
+            baseline = entry_price if opened_at >= cutoff else (cutoff_price if cutoff_price > 0 else entry_price)
+            open_fee = max(0.0, number(row.get("open_fee") or row.get("fee_amount"))) if opened_at >= cutoff else 0.0
+            account = resident(account_id)
+            if status == "open":
+                raw_pnl = quantity * (mark_price - baseline) if direction == "long" else quantity * (baseline - mark_price)
+                account["margin_unrealized"] += raw_pnl - open_fee
+            else:
+                close_price = max(0.0, number(row.get("close_price")))
+                raw_pnl = quantity * (close_price - baseline) if direction == "long" else quantity * (baseline - close_price)
+                account["margin_realized"] += raw_pnl - open_fee - max(0.0, number(row.get("close_fee")))
+
+        resident_rows: list[dict[str, Any]] = []
+        for account in residents.values():
+            account["realized_pnl"] = round(account["equity_realized"] + account["margin_realized"], 2)
+            account["unrealized_pnl"] = round(account["equity_unrealized"] + account["margin_unrealized"], 2)
+            account["net_pnl"] = round(account["realized_pnl"] + account["unrealized_pnl"], 2)
+            for field in ("equity_realized", "equity_unrealized", "margin_realized", "margin_unrealized"):
+                account[field] = round(account[field], 2)
+            resident_rows.append(account)
+        resident_rows.sort(key=lambda row: abs(number(row.get("net_pnl"))), reverse=True)
+
+        realized = round(sum(number(row.get("realized_pnl")) for row in resident_rows), 2)
+        unrealized = round(sum(number(row.get("unrealized_pnl")) for row in resident_rows), 2)
+        net = round(realized + unrealized, 2)
+        results[window_key] = {
+            "cutoff_at": cutoff.isoformat(),
+            "realized_pnl": realized,
+            "unrealized_pnl": unrealized,
+            "net_pnl": net,
+            "equity_pnl": round(sum(number(row.get("equity_realized")) + number(row.get("equity_unrealized")) for row in resident_rows), 2),
+            "margin_pnl": round(sum(number(row.get("margin_realized")) + number(row.get("margin_unrealized")) for row in resident_rows), 2),
+            "resident_count": len(resident_rows),
+            "profitable_residents": sum(1 for row in resident_rows if number(row.get("net_pnl")) > 0.005),
+            "losing_residents": sum(1 for row in resident_rows if number(row.get("net_pnl")) < -0.005),
+            "flat_residents": sum(1 for row in resident_rows if abs(number(row.get("net_pnl"))) <= 0.005),
+            "residents": resident_rows,
+        }
+    return results
 
 
 def ravenhood_margin_quote(

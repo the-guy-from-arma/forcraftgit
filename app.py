@@ -35,6 +35,7 @@ from market_math import (
     market_cap_weighted_allocations,
     market_gemini_exposure_shares,
     ravenhood_liquidation_hunt_quote,
+    ravenhood_residential_pnl_windows,
     ravenhood_security_session_open,
     ravenhood_margin_metrics,
     ravenhood_margin_quote,
@@ -2298,6 +2299,7 @@ SYSTEM_SETTING_DEFAULTS = {
     "market_autopilot_enabled": "0",
     "market_autopilot_interval_minutes": "5",
     "market_autopilot_profile": "light",
+    "market_autopilot_direction": "bearish",
     "market_volatility_min_percent": "0.10",
     "market_volatility_percent": "3.50",
     "market_autopilot_last_tick": "",
@@ -6124,6 +6126,7 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "market_autopilot_enabled": str(raw.get("market_autopilot_enabled") or "0") in ("1", "true", "True", "yes", "on"),
         "market_autopilot_interval_minutes": max(1, min(60, int(raw.get("market_autopilot_interval_minutes") or 5))),
         "market_autopilot_profile": str(raw.get("market_autopilot_profile") or "light").strip().lower() if str(raw.get("market_autopilot_profile") or "light").strip().lower() in ("light", "aggressive", "extreme") else "light",
+        "market_autopilot_direction": str(raw.get("market_autopilot_direction") or "bearish").strip().lower() if str(raw.get("market_autopilot_direction") or "bearish").strip().lower() in ("bearish", "mixed", "bullish") else "bearish",
         "market_volatility_min_percent": max(0.01, min(15.0, float(raw.get("market_volatility_min_percent") or 0.1))),
         "market_volatility_percent": max(0.1, min(15.0, float(raw.get("market_volatility_percent") or 3.5))),
         "market_autopilot_last_tick": str(raw.get("market_autopilot_last_tick") or "")[:80],
@@ -7344,7 +7347,7 @@ def rebalance_market_index_funds(db: Database, force: bool = False, actor_id: in
     return {"rebalanced": len(outcomes), "funds": outcomes}
 
 
-def update_market_index_prices(db: Database, force_history: bool = False) -> int:
+def update_market_index_prices(db: Database, force_history: bool = False, directional_path: bool = False) -> int:
     funds = all_rows(db, """SELECT f.*,s.price,s.previous_price,s.ticker FROM market_index_funds f
         JOIN market_securities s ON s.id=f.security_id WHERE f.enabled=1 AND s.active=1
         AND NOT EXISTS (SELECT 1 FROM market_price_programs p WHERE p.security_id=s.id AND p.status='active')
@@ -7371,7 +7374,12 @@ def update_market_index_prices(db: Database, force_history: bool = False) -> int
         last_history = one(db, "SELECT price,recorded_at FROM market_price_history WHERE security_id=? ORDER BY id DESC LIMIT 1", (fund["security_id"],))
         last_time = parse_iso(last_history["recorded_at"]) if last_history and last_history.get("recorded_at") else None
         if force_history or not last_history or abs(float(last_history["price"] or 0) - new_nav) >= 0.0001 or not last_time or (utcnow() - last_time).total_seconds() >= 300:
-            db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,'index_nav',?)", (fund["security_id"], new_nav, timestamp))
+            if directional_path and abs(new_nav - old_nav) >= 0.0001:
+                record_directional_market_path(
+                    db, int(fund["security_id"]), old_nav, new_nav, "index_nav", timestamp,
+                )
+            else:
+                db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,'index_nav',?)", (fund["security_id"], new_nav, timestamp))
         db.execute("UPDATE market_index_funds SET last_valued_at=?,updated_at=? WHERE id=?", (timestamp, timestamp, fund["id"]))
     return updated
 
@@ -7507,6 +7515,81 @@ MARKET_AUTOPILOT_PROFILES: dict[str, dict[str, float | str]] = {
     "extreme": {"label": "Extremely volatile", "minimum": 3.00, "maximum": 15.00},
 }
 
+MARKET_AUTOPILOT_DIRECTIONS = {"bearish", "mixed", "bullish"}
+
+
+def market_autopilot_direction(settings: dict[str, Any] | None = None) -> str:
+    direction = str((settings or {}).get("market_autopilot_direction") or "bearish").strip().lower()
+    return direction if direction in MARKET_AUTOPILOT_DIRECTIONS else "bearish"
+
+
+def direct_market_move(percent: float, direction: str, minimum_move: float) -> float:
+    """Apply the selected market-wide direction after an engine proposes a move."""
+    minimum_move = max(0.01, float(minimum_move or 0.01))
+    percent = float(percent or 0)
+    if direction == "bearish":
+        return -max(minimum_move, abs(percent))
+    if direction == "bullish":
+        return max(minimum_move, abs(percent))
+    if abs(percent) < minimum_move:
+        return minimum_move if percent >= 0 else -minimum_move
+    return percent
+
+
+def directional_market_price_path(old_price: float, target_price: float, variant: int = 0) -> list[float]:
+    """Build a live-looking path that still finishes on the exact directed quote."""
+    templates = (
+        (0.14, 0.08, 0.34, 0.23, 0.57, 0.46, 0.78, 0.68, 0.91, 1.0),
+        (0.11, 0.05, 0.29, 0.20, 0.51, 0.41, 0.73, 0.61, 0.87, 1.0),
+        (0.18, 0.10, 0.38, 0.27, 0.62, 0.50, 0.81, 0.70, 0.93, 1.0),
+    )
+    start = max(0.01, float(old_price or 0.01))
+    target = max(0.01, float(target_price or 0.01))
+    distance = target - start
+    if abs(distance) < 0.0000001:
+        return [round(target, 4)]
+    points: list[float] = []
+    for progress in templates[abs(int(variant or 0)) % len(templates)]:
+        point = max(0.01, round(start + distance * progress, 4))
+        if not points or point != points[-1]:
+            points.append(point)
+    if not points or points[-1] != round(target, 4):
+        points.append(round(target, 4))
+    return points
+
+
+def record_directional_market_path(
+    db: Database,
+    security_id: int,
+    old_price: float,
+    target_price: float,
+    source: str,
+    final_timestamp: str | None = None,
+) -> int:
+    """Persist alternating market ticks ending at the hard directional target."""
+    points = directional_market_price_path(old_price, target_price, security_id)
+    final_time = parse_iso(final_timestamp or now_iso())
+    latest = one(
+        db,
+        "SELECT recorded_at FROM market_price_history WHERE security_id=? ORDER BY recorded_at DESC,id DESC LIMIT 1",
+        (security_id,),
+    )
+    start_time = final_time - dt.timedelta(seconds=max(8.0, len(points) * 1.25))
+    if latest and latest.get("recorded_at"):
+        latest_time = parse_iso(str(latest["recorded_at"]))
+        if latest_time >= start_time:
+            start_time = latest_time + dt.timedelta(microseconds=1)
+    if start_time >= final_time:
+        final_time = start_time + dt.timedelta(milliseconds=max(1, len(points)))
+    spacing = (final_time - start_time) / max(1, len(points))
+    for index, price in enumerate(points, start=1):
+        recorded_at = (start_time + spacing * index).isoformat()
+        db.execute(
+            "INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)",
+            (security_id, price, str(source or "autopilot")[:40], recorded_at),
+        )
+    return len(points)
+
 
 def market_autopilot_bounds(settings: dict[str, Any]) -> tuple[str, float, float]:
     profile = str(settings.get("market_autopilot_profile") or "light").strip().lower()
@@ -7522,6 +7605,8 @@ def market_autopilot_bounds(settings: dict[str, Any]) -> tuple[str, float, float
 
 def market_autopilot_amplitude(settings: dict[str, Any]) -> float:
     _profile, minimum, maximum = market_autopilot_bounds(settings)
+    if market_autopilot_direction(settings) != "mixed":
+        return maximum
     if maximum <= minimum:
         return maximum
     return round(minimum + (secrets.randbelow(10001) / 10000.0) * (maximum - minimum), 4)
@@ -7554,6 +7639,16 @@ def finish_market_automation_cycle(db: Database, cycle_number: int, provider: st
     changed = int((result or {}).get("updated") or 0)
     provider_label = str(provider or "none").strip().lower()[:40]
     summary = f"Cycle #{cycle_number} · {provider_label.title()} · {status.replace('_', ' ')} · {changed} quote(s) updated"
+    result_direction = str((result or {}).get("direction") or "").strip().lower()
+    if result_direction in MARKET_AUTOPILOT_DIRECTIONS:
+        summary += f" · {result_direction.title()} direction"
+    if result_direction != "mixed" and (result or {}).get("target_percent") is not None:
+        summary += f" · hard close {float((result or {}).get('target_percent') or 0):+.2f}%"
+    if result and any(key in result for key in ("declining", "advancing", "unchanged")):
+        summary += (
+            f" · {int(result.get('declining') or 0)} down / "
+            f"{int(result.get('advancing') or 0)} up / {int(result.get('unchanged') or 0)} flat"
+        )
     if detail:
         summary = f"{summary} · {detail}"[:500]
     set_system_setting(db, "market_automation_active_cycle", "")
@@ -7564,18 +7659,25 @@ def finish_market_automation_cycle(db: Database, cycle_number: int, provider: st
     )
 
 
-def market_volatility_cycle(db: Database, amplitude: float, source: str = "autopilot", actor_id: int | None = None, cycle_number: int | None = None) -> dict[str, Any]:
+def market_volatility_cycle(db: Database, amplitude: float, source: str = "autopilot", actor_id: int | None = None, cycle_number: int | None = None, direction: str | None = None) -> dict[str, Any]:
     amplitude = max(0.1, min(15.0, float(amplitude or 0)))
+    cycle_settings = get_system_settings(db)
+    direction = market_autopilot_direction(
+        {"market_autopilot_direction": direction} if direction else cycle_settings
+    )
+    _profile, configured_minimum, configured_maximum = market_autopilot_bounds(cycle_settings)
+    amplitude = min(amplitude, configured_maximum)
     securities = all_rows(db, """SELECT id,ticker,price,volatility,security_type FROM market_securities
         WHERE active=1 AND COALESCE(lifecycle_status,'active')='active'
         AND not exists (SELECT 1 FROM market_security_halts h WHERE h.security_id=market_securities.id AND h.status='active')
         AND COALESCE(security_type,'stock')<>'fund' ORDER BY ticker""")
     if not securities:
-        return {"updated": 0, "operating_updated": 0, "index_updated": 0, "average_change": 0.0, "changes": []}
+        return {"updated": 0, "operating_updated": 0, "index_updated": 0, "average_change": 0.0, "direction": direction, "declining": 0, "advancing": 0, "unchanged": 0, "changes": []}
     active_programs: dict[int, list[DbRow]] = {}
     for program in all_rows(db, """SELECT id,security_id,start_price FROM market_price_programs
         WHERE status='active' AND security_id IS NOT NULL"""):
         active_programs.setdefault(int(program["security_id"]), []).append(program)
+    hard_target_percent = -amplitude if direction == "bearish" else amplitude if direction == "bullish" else None
     broad_bias = ((secrets.randbelow(20001) - 10000) / 10000.0) * amplitude * 0.35
     changes: list[float] = []
     listing_changes: list[dict[str, Any]] = []
@@ -7584,37 +7686,67 @@ def market_volatility_cycle(db: Database, amplitude: float, source: str = "autop
         security_factor = max(0.45, min(1.8, float(security.get("volatility") or 1.0)))
         if str(security.get("security_type") or "").lower() == "bond":
             security_factor *= 0.28
-        independent = ((secrets.randbelow(20001) - 10000) / 10000.0) * amplitude * security_factor
-        percent = max(-15.0, min(15.0, broad_bias + independent))
-        minimum_move = min(amplitude, max(0.05, amplitude * 0.03))
-        if abs(percent) < minimum_move:
-            direction = 1.0 if percent > 0 or (percent == 0 and int(security["id"]) % 2 == 0) else -1.0
-            percent = direction * minimum_move
+        minimum_move = min(amplitude, configured_minimum)
+        if hard_target_percent is None:
+            independent = ((secrets.randbelow(20001) - 10000) / 10000.0) * amplitude * security_factor
+            percent = max(-amplitude, min(amplitude, broad_bias + independent))
+            percent = direct_market_move(percent, direction, minimum_move)
+        else:
+            percent = hard_target_percent
         old_price = float(security.get("price") or 0)
         new_price = max(0.01, round(old_price * (1 + percent / 100.0), 4))
+        if direction == "bearish" and old_price > 0.01 and new_price >= old_price:
+            new_price = max(0.01, round(old_price - max(0.0001, old_price * minimum_move / 100.0), 4))
+        elif direction == "bullish" and new_price <= old_price:
+            new_price = round(old_price + max(0.0001, old_price * minimum_move / 100.0), 4)
+        actual_percent = ((new_price / old_price) - 1) * 100.0 if old_price > 0 else 0.0
         db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?", (new_price, cycle_time, security["id"]))
-        db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], new_price, source[:40], now_iso()))
+        if hard_target_percent is None:
+            db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], new_price, source[:40], cycle_time))
+        else:
+            record_directional_market_path(
+                db, int(security["id"]), old_price, new_price, source, cycle_time,
+            )
         price_factor = new_price / max(0.01, old_price)
         for program in active_programs.get(int(security["id"]), []):
             rebased_start = max(0.01, round(float(program.get("start_price") or old_price) * price_factor, 4))
             db.execute("UPDATE market_price_programs SET start_price=? WHERE id=?", (rebased_start, program["id"]))
         record_market_system_trades(
             db, int(security["id"]), old_price, new_price, source,
-            f"Automated volatility cycle moved the quote {percent:+.2f}%.",
+            f"Automated {direction} volatility cycle moved the quote {actual_percent:+.2f}%.",
         )
-        changes.append(percent)
-        listing_changes.append({"ticker": security["ticker"], "percent_change": round(percent, 2), "price": new_price})
+        changes.append(actual_percent)
+        listing_changes.append({"ticker": security["ticker"], "percent_change": round(actual_percent, 2), "price": new_price})
     average = sum(changes) / len(changes)
-    index_updated = update_market_index_prices(db, force_history=True)
+    declining = sum(1 for change in changes if change < -0.000001)
+    advancing = sum(1 for change in changes if change > 0.000001)
+    unchanged = len(changes) - declining - advancing
+    if direction == "bearish" and advancing:
+        raise RuntimeError(f"Bearish cycle safety check failed: {advancing} quote(s) advanced")
+    if direction == "bullish" and declining:
+        raise RuntimeError(f"Bullish cycle safety check failed: {declining} quote(s) declined")
+    index_updated = update_market_index_prices(
+        db, force_history=True, directional_path=hard_target_percent is not None,
+    )
+    movement_summary = (
+        f"hard target {hard_target_percent:+.2f}% reached through live pullback ticks"
+        if hard_target_percent is not None
+        else f"exchange average {average:+.2f}%"
+    )
     db.execute(
         "INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES (?,?,?,?,?)",
-        ("volatility_cycle", f"{'Cycle #' + str(cycle_number) + ' · ' if cycle_number else ''}Local movement", f"Engine {source}: {len(changes)} operating listings moved and {index_updated} index quotes revalued; exchange average {average:+.2f}%.", actor_id, cycle_time),
+        ("volatility_cycle", f"{'Cycle #' + str(cycle_number) + ' · ' if cycle_number else ''}Local movement", f"Engine {source} [{direction}]: {len(changes)} operating listings moved and {index_updated} index quotes revalued; {declining} down, {advancing} up, {unchanged} flat; {movement_summary}.", actor_id, cycle_time),
     )
     return {
         "updated": len(changes) + index_updated,
         "operating_updated": len(changes),
         "index_updated": index_updated,
         "average_change": round(average, 2),
+        "target_percent": round(hard_target_percent, 2) if hard_target_percent is not None else None,
+        "direction": direction,
+        "declining": declining,
+        "advancing": advancing,
+        "unchanged": unchanged,
         "changes": listing_changes,
     }
 
@@ -8003,6 +8135,7 @@ def market_gemini_adjustment_cycle(
     profile: str = "light",
     provider: str = "gemini",
     cycle_number: int | None = None,
+    direction: str | None = None,
 ) -> dict[str, Any]:
     provider = str(provider or "gemini").strip().lower()
     if provider not in ("gemini", "deepseek"):
@@ -8015,6 +8148,10 @@ def market_gemini_adjustment_cycle(
     minimum_percent = max(0.01, min(15.0, float(minimum_percent or 0.1)))
     maximum_percent = max(minimum_percent, min(15.0, float(maximum_percent or 8)))
     profile = profile if profile in MARKET_AUTOPILOT_PROFILES else "light"
+    direction = market_autopilot_direction(
+        {"market_autopilot_direction": direction} if direction else get_system_settings(db)
+    )
+    hard_target_percent = -maximum_percent if direction == "bearish" else maximum_percent if direction == "bullish" else None
     listing_rows = all_rows(db, """SELECT s.id,s.ticker,s.name,s.sector,s.security_type,s.price,s.previous_price,
             issuer.id AS issuer_company_id,issuer.controlling_user_id AS issuer_controller_id,issuer.control_source,
             (SELECT MAX(trade.created_at) FROM market_system_trades trade
@@ -8032,13 +8169,19 @@ def market_gemini_adjustment_cycle(
         "last_provider_trade": row.get("last_provider_trade") or "",
     } for row in listing_rows]
     recent = [dict(row) for row in all_rows(db, "SELECT event_type,title,detail,created_at FROM market_events ORDER BY id DESC LIMIT 20")]
+    direction_instruction = {
+        "bearish": f"This is a mandatory bearish cycle with a hard terminal target of {-maximum_percent:.2f}% for every eligible quote. Focus on distinct rationales; the exchange enforces the exact closing target.",
+        "bullish": f"This is a mandatory bullish cycle with a hard terminal target of {maximum_percent:.2f}% for every eligible quote. Focus on distinct rationales; the exchange enforces the exact closing target.",
+        "mixed": "This is a mixed cycle. Use both gains and losses when the evidence supports them.",
+    }[direction]
     prompt = (
         "You operate the fictional Faircroft Ravenhood exchange. Read the current listings and recent market events, then return ONLY valid JSON as an object "
-        "with an adjustments array containing 1 to 8 objects. Each object must contain ticker, percent_change, and rationale. Use both gains and losses when appropriate. "
+        "with an adjustments array containing 1 to 8 objects. Each object must contain ticker, percent_change, and rationale. "
         "Resident-controlled issuers are ordinary eligible FCX securities and must receive the same market participation as exchange-created listings. "
-        "When at least one resident-controlled issuer is present, include at least one in this review and normally give one a positive, buy-compatible move. "
+        "When at least one resident-controlled issuer is present, include at least one in this review and apply the mandatory cycle direction to it. "
         f"The selected autopilot posture is {profile}. Keep the absolute size of each meaningful move between {minimum_percent:.2f}% and {maximum_percent:.2f}%, "
-        "use both gains and losses, and avoid repeating identical moves. A zero move is allowed only when the evidence strongly supports holding a quote. No markdown.\n"
+        f"{direction_instruction} "
+        f"{'Avoid repeating identical move sizes. ' if direction == 'mixed' else ''}No markdown.\n"
         f"LISTINGS={json.dumps(listings, separators=(',', ':'))}\nRECENT_EVENTS={json.dumps(recent, separators=(',', ':'), default=str)}"
     )
     if provider == "gemini":
@@ -8081,15 +8224,27 @@ def market_gemini_adjustment_cycle(
               AND NOT EXISTS (SELECT 1 FROM market_security_halts h WHERE h.security_id=s.id AND h.status='active')""", (ticker,))
         if not security:
             return False
+        if hard_target_percent is not None:
+            percent = hard_target_percent
         old_price = float(security["price"] or 0)
         new_price = max(0.01, round(old_price * (1 + percent / 100.0), 4))
+        if direction == "bearish" and old_price > 0.01 and new_price >= old_price:
+            new_price = max(0.01, round(old_price - max(0.0001, old_price * minimum_percent / 100.0), 4))
+        elif direction == "bullish" and new_price <= old_price:
+            new_price = round(old_price + max(0.0001, old_price * minimum_percent / 100.0), 4)
+        actual_percent = ((new_price / old_price) - 1) * 100.0 if old_price > 0 else 0.0
         timestamp = now_iso()
         db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?", (new_price, timestamp, security["id"]))
-        db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], new_price, provider, timestamp))
+        if hard_target_percent is None:
+            db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], new_price, provider, timestamp))
+        else:
+            record_directional_market_path(
+                db, int(security["id"]), old_price, new_price, provider, timestamp,
+            )
         flow = record_market_system_trades(db, int(security["id"]), old_price, new_price, provider, rationale)
         applied_tickers.add(ticker)
         applied.append({
-            "ticker": ticker, "percent_change": round(percent, 2), "rationale": rationale,
+            "ticker": ticker, "percent_change": round(actual_percent, 2), "rationale": rationale,
             "order_flow": flow, "resident_controlled": bool(security.get("issuer_company_id") and security.get("issuer_controller_id")),
             "issuer_participation_guardrail": issuer_guardrail,
         })
@@ -8103,8 +8258,7 @@ def market_gemini_adjustment_cycle(
             percent = max(-maximum_percent, min(maximum_percent, float(item.get("percent_change") or 0)))
         except (TypeError, ValueError):
             continue
-        if 0 < abs(percent) < minimum_percent:
-            percent = minimum_percent if percent > 0 else -minimum_percent
+        percent = hard_target_percent if hard_target_percent is not None else direct_market_move(percent, direction, minimum_percent)
         rationale = str(item.get("rationale") or "Market conditions")[:240]
         apply_adjustment(ticker, percent, rationale)
 
@@ -8117,14 +8271,38 @@ def market_gemini_adjustment_cycle(
             key=lambda item: (str(item.get("last_provider_trade") or ""), str(item["ticker"])),
         )
         market_bias = sum(float(item["percent_change"]) for item in applied) / len(applied) if applied else 0.75
-        participation_percent = round(max(0.35, min(2.0, abs(market_bias))), 2)
+        participation_percent = hard_target_percent if hard_target_percent is not None else direct_market_move(round(max(0.35, min(2.0, abs(market_bias))), 2), direction, minimum_percent)
         for candidate in issuer_candidates:
             rationale = f"Resident issuer participation aligned with the current {provider_name} market review."
             if apply_adjustment(str(candidate["ticker"]), participation_percent, rationale, True):
                 break
+    if direction != "mixed":
+        # A directional run is a market-wide instruction, not merely an AI
+        # suggestion. Complete any eligible listings the provider omitted so a
+        # bearish/bullish cycle cannot finish with stale opposite-side quotes.
+        participation_percent = float(hard_target_percent)
+        for candidate in listings:
+            if str(candidate["ticker"]) in applied_tickers:
+                continue
+            apply_adjustment(
+                str(candidate["ticker"]),
+                participation_percent,
+                f"{provider_name} {direction} market-wide breadth guardrail.",
+            )
     detail = "; ".join(f"{item['ticker']} {item['percent_change']:+.2f}% — {item['rationale']}" for item in applied)
     db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('ai_adjustment',?,?,NULL,?)", (f"{'Cycle #' + str(cycle_number) + ' · ' if cycle_number else ''}{provider_name} movement", detail or "No eligible adjustments returned.", now_iso()))
-    return {"provider": provider, "updated": len(applied), "resident_issuer_updates": sum(1 for item in applied if item.get("resident_controlled")), "adjustments": applied}
+    declining = sum(1 for item in applied if float(item.get("percent_change") or 0) < -0.000001)
+    advancing = sum(1 for item in applied if float(item.get("percent_change") or 0) > 0.000001)
+    unchanged = len(applied) - declining - advancing
+    if direction == "bearish" and advancing:
+        raise RuntimeError(f"Bearish AI cycle safety check failed: {advancing} quote(s) advanced")
+    if direction == "bullish" and declining:
+        raise RuntimeError(f"Bullish AI cycle safety check failed: {declining} quote(s) declined")
+    index_updated = update_market_index_prices(
+        db, force_history=True, directional_path=hard_target_percent is not None,
+    )
+    average = sum(float(item.get("percent_change") or 0) for item in applied) / len(applied) if applied else 0.0
+    return {"provider": provider, "updated": len(applied) + index_updated, "operating_updated": len(applied), "index_updated": index_updated, "average_change": round(average, 2), "target_percent": round(hard_target_percent, 2) if hard_target_percent is not None else None, "resident_issuer_updates": sum(1 for item in applied if item.get("resident_controlled")), "direction": direction, "declining": declining, "advancing": advancing, "unchanged": unchanged, "adjustments": applied}
 
 
 def rebase_market_index_quote(db: Database, security_id: int, quote: float, timestamp: str) -> None:
@@ -24903,9 +25081,59 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             payload["business_settings"] = business_dev_payload(db, now)
 
         if section == "fec-investigations":
+            pnl_now = utcnow()
+            pnl_windows = {
+                "12h": pnl_now - dt.timedelta(hours=12),
+                "1d": pnl_now - dt.timedelta(days=1),
+                "1w": pnl_now - dt.timedelta(days=7),
+            }
+            pnl_cutoff_prices: dict[str, dict[int, float]] = {}
+            for pnl_key, pnl_cutoff in pnl_windows.items():
+                pnl_cutoff_prices[pnl_key] = {
+                    int(row["security_id"]): float(row["price"] or 0)
+                    for row in all_rows(
+                        db,
+                        """SELECT s.id AS security_id,COALESCE((
+                               SELECT h.price FROM market_price_history h
+                               WHERE h.security_id=s.id AND h.recorded_at<=?
+                               ORDER BY h.recorded_at DESC,h.id DESC LIMIT 1
+                           ),(
+                               SELECT h.price FROM market_price_history h
+                               WHERE h.security_id=s.id
+                               ORDER BY h.recorded_at ASC,h.id ASC LIMIT 1
+                           ),s.price) AS price
+                           FROM market_securities s""",
+                        (pnl_cutoff.isoformat(),),
+                    )
+                }
+            pnl_equity_trades = [dict(row) for row in all_rows(db, """SELECT o.id,o.account_id,a.user_id,
+                u.name,u.civ_number,o.security_id,o.side AS action,o.quantity,o.unit_price,o.gross_amount,
+                o.fee_amount,o.created_at
+                FROM market_orders o
+                JOIN market_accounts a ON a.id=o.account_id
+                JOIN users u ON u.id=a.user_id
+                WHERE o.created_at>=? ORDER BY o.created_at,o.id""", (pnl_windows["1w"].isoformat(),))]
+            pnl_holdings = [dict(row) for row in all_rows(db, """SELECT h.account_id,a.user_id,u.name,u.civ_number,
+                h.security_id,h.quantity,h.average_cost,s.price AS current_price
+                FROM market_holdings h JOIN market_accounts a ON a.id=h.account_id
+                JOIN users u ON u.id=a.user_id JOIN market_securities s ON s.id=h.security_id
+                WHERE h.quantity>0""")]
+            pnl_margin_positions = [dict(row) for row in all_rows(db, """SELECT p.account_id,a.user_id,u.name,u.civ_number,
+                p.security_id,p.direction,p.quantity,p.entry_price,p.open_fee,p.status,p.opened_at,p.closed_at,
+                p.close_price,p.close_fee,p.realized_pnl,s.price AS mark_price
+                FROM market_margin_positions p JOIN market_accounts a ON a.id=p.account_id
+                JOIN users u ON u.id=a.user_id JOIN market_securities s ON s.id=p.security_id
+                WHERE p.status='open' OR p.closed_at>=?""", (pnl_windows["1w"].isoformat(),))]
             payload["fec_investigations"] = {
                 "ipo_reviews": business_fec_review_payload(db, now_iso()),
                 "high_value_threshold": 10_000_000,
+                "residential_pnl": ravenhood_residential_pnl_windows(
+                    pnl_equity_trades,
+                    pnl_holdings,
+                    pnl_margin_positions,
+                    pnl_cutoff_prices,
+                    pnl_windows,
+                ),
                 "pool_balance": float((one(db, "SELECT balance FROM market_fec_asset_pool WHERE id=1") or {}).get("balance") or 0),
                 "totals": dict(one(db, """SELECT
                     COALESCE(SUM(CASE WHEN event_type='seizure' THEN amount ELSE 0 END),0) AS seized,
@@ -25061,6 +25289,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "autopilot_enabled": settings["market_autopilot_enabled"],
                 "autopilot_interval_minutes": settings["market_autopilot_interval_minutes"],
                 "autopilot_profile": settings["market_autopilot_profile"],
+                "autopilot_direction": settings["market_autopilot_direction"],
                 "volatility_min_percent": settings["market_volatility_min_percent"],
                 "volatility_percent": settings["market_volatility_percent"],
                 "autopilot_last_tick": settings["market_autopilot_last_tick"],
@@ -26005,6 +26234,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     "autopilot_enabled": system_settings["market_autopilot_enabled"],
                     "autopilot_interval_minutes": system_settings["market_autopilot_interval_minutes"],
                     "autopilot_profile": system_settings["market_autopilot_profile"],
+                    "autopilot_direction": system_settings["market_autopilot_direction"],
                     "volatility_min_percent": system_settings["market_volatility_min_percent"],
                     "volatility_percent": system_settings["market_volatility_percent"],
                     "autopilot_last_tick": system_settings["market_autopilot_last_tick"],
@@ -27545,6 +27775,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         autopilot_profile = str(payload.get("autopilot_profile") or current_settings["market_autopilot_profile"]).strip().lower()
         if autopilot_profile not in MARKET_AUTOPILOT_PROFILES:
             self.error(400, "Autopilot profile must be light, aggressive, or extreme."); return
+        autopilot_direction = str(payload.get("autopilot_direction") or current_settings["market_autopilot_direction"]).strip().lower()
+        if autopilot_direction not in MARKET_AUTOPILOT_DIRECTIONS:
+            self.error(400, "Market direction must be bearish, mixed, or bullish."); return
         automation_provider = str(payload.get("automation_provider") or current_settings["market_automation_provider"]).strip().lower()
         if automation_provider not in ("local", "gemini", "deepseek"):
             self.error(400, "Automation provider must be Local, Gemini, or DeepSeek."); return
@@ -27563,6 +27796,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             set_system_setting(db, "market_autopilot_enabled", "1" if autopilot_enabled else "0")
             set_system_setting(db, "market_autopilot_interval_minutes", str(automation_interval))
             set_system_setting(db, "market_autopilot_profile", autopilot_profile)
+            set_system_setting(db, "market_autopilot_direction", autopilot_direction)
             set_system_setting(db, "market_volatility_min_percent", str(volatility_minimum))
             set_system_setting(db, "market_volatility_percent", str(volatility))
             set_system_setting(db, "market_automation_provider", automation_provider)
@@ -27585,7 +27819,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 set_system_setting(db, "market_ai_last_status", "waiting")
                 set_system_setting(db, "market_ai_last_error", "")
         updated_settings = get_system_settings(db)
-        add_admin_audit(db, int(user["id"]), "market.settings.updated", details={"market_open": updated_settings["market_open"], "manual_override": updated_settings["market_manual_override"], "schedule_open_time": updated_settings["market_schedule_open_time"], "schedule_close_time": updated_settings["market_schedule_close_time"], "schedule_timezone": updated_settings["market_schedule_timezone"], "weekends_enabled": updated_settings["market_weekends_enabled"], "fcxv_24h_enabled": updated_settings["market_fcxv_24h_enabled"], "transfer_fee": transfer_fee, "trade_fee": trade_fee, "automation_provider": updated_settings["market_automation_provider"], "autopilot_profile": updated_settings["market_autopilot_profile"], "volatility_range": [updated_settings["market_volatility_min_percent"], updated_settings["market_volatility_percent"]], "ai_interval_minutes": updated_settings["market_ai_interval_minutes"], "ai_cooldown_minutes": updated_settings["market_ai_cooldown_minutes"], "ai_fallback_enabled": updated_settings["market_ai_fallback_enabled"], "local_fallback_enabled": updated_settings["market_ai_local_fallback_enabled"], "liquidation_hunts_enabled": updated_settings["market_liquidation_hunts_enabled"], "liquidation_hunt_threshold": updated_settings["market_liquidation_hunt_threshold"], "liquidation_hunt_probability_percent": updated_settings["market_liquidation_hunt_probability_percent"], "liquidation_hunt_intensity": updated_settings["market_liquidation_hunt_intensity"], "liquidation_hunt_max_move_percent": updated_settings["market_liquidation_hunt_max_move_percent"], "liquidation_hunt_cooldown_minutes": updated_settings["market_liquidation_hunt_cooldown_minutes"], "liquidation_hunt_market_hours_only": updated_settings["market_liquidation_hunt_market_hours_only"]})
+        add_admin_audit(db, int(user["id"]), "market.settings.updated", details={"market_open": updated_settings["market_open"], "manual_override": updated_settings["market_manual_override"], "schedule_open_time": updated_settings["market_schedule_open_time"], "schedule_close_time": updated_settings["market_schedule_close_time"], "schedule_timezone": updated_settings["market_schedule_timezone"], "weekends_enabled": updated_settings["market_weekends_enabled"], "fcxv_24h_enabled": updated_settings["market_fcxv_24h_enabled"], "transfer_fee": transfer_fee, "trade_fee": trade_fee, "automation_provider": updated_settings["market_automation_provider"], "autopilot_profile": updated_settings["market_autopilot_profile"], "autopilot_direction": updated_settings["market_autopilot_direction"], "volatility_range": [updated_settings["market_volatility_min_percent"], updated_settings["market_volatility_percent"]], "ai_interval_minutes": updated_settings["market_ai_interval_minutes"], "ai_cooldown_minutes": updated_settings["market_ai_cooldown_minutes"], "ai_fallback_enabled": updated_settings["market_ai_fallback_enabled"], "local_fallback_enabled": updated_settings["market_ai_local_fallback_enabled"], "liquidation_hunts_enabled": updated_settings["market_liquidation_hunts_enabled"], "liquidation_hunt_threshold": updated_settings["market_liquidation_hunt_threshold"], "liquidation_hunt_probability_percent": updated_settings["market_liquidation_hunt_probability_percent"], "liquidation_hunt_intensity": updated_settings["market_liquidation_hunt_intensity"], "liquidation_hunt_max_move_percent": updated_settings["market_liquidation_hunt_max_move_percent"], "liquidation_hunt_cooldown_minutes": updated_settings["market_liquidation_hunt_cooldown_minutes"], "liquidation_hunt_market_hours_only": updated_settings["market_liquidation_hunt_market_hours_only"]})
         self.send_json(200, {"ok": True, "market_session": {"market_open": updated_settings["market_open"], "fcxv_24h_enabled": updated_settings["market_fcxv_24h_enabled"], "manual_override": updated_settings["market_manual_override"], "session_reason": updated_settings["market_session_reason"], "local_time": updated_settings["market_local_time"], "next_transition_at": updated_settings["market_next_transition_at"]}})
 
     def api_dev_market_liquidation_hunt(self, db: Database, user: DbRow | None) -> None:

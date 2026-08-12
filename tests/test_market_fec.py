@@ -1,7 +1,8 @@
 import unittest
+import datetime as dt
 from pathlib import Path
 
-from market_math import market_cap_weighted_allocations
+from market_math import market_cap_weighted_allocations, ravenhood_residential_pnl_windows
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +21,64 @@ class MarketFecAllocationTests(unittest.TestCase):
         allocations = market_cap_weighted_allocations([(1, 0), (2, -5), (3, 25)], 50)
 
         self.assertEqual(allocations, [{"security_id": 3, "amount": 50.0, "weight": 1.0}])
+
+    def test_residential_pnl_combines_equity_and_margin_per_resident(self) -> None:
+        cutoff = dt.datetime(2026, 8, 11, tzinfo=dt.timezone.utc)
+        result = ravenhood_residential_pnl_windows(
+            equity_trades=[
+                {"account_id": 1, "user_id": 10, "name": "Alpha", "civ_number": "100",
+                 "security_id": 11, "action": "buy", "quantity": 10, "unit_price": 10,
+                 "gross_amount": 100, "fee_amount": 1, "created_at": cutoff + dt.timedelta(hours=1)},
+                {"account_id": 1, "user_id": 10, "name": "Alpha", "civ_number": "100",
+                 "security_id": 11, "action": "sell", "quantity": 5, "unit_price": 14,
+                 "gross_amount": 70, "fee_amount": 1, "created_at": cutoff + dt.timedelta(hours=2)},
+            ],
+            current_holdings=[
+                {"account_id": 1, "user_id": 10, "name": "Alpha", "civ_number": "100",
+                 "security_id": 11, "quantity": 5, "average_cost": 10.1, "current_price": 15},
+            ],
+            margin_positions=[
+                {"account_id": 1, "user_id": 10, "name": "Alpha", "civ_number": "100",
+                 "security_id": 12, "direction": "long", "quantity": 2, "entry_price": 20,
+                 "mark_price": 30, "open_fee": 2, "status": "open",
+                 "opened_at": cutoff + dt.timedelta(hours=1)},
+                {"account_id": 2, "user_id": 20, "name": "Bravo", "civ_number": "200",
+                 "security_id": 13, "direction": "short", "quantity": 10, "entry_price": 30,
+                 "close_price": 25, "mark_price": 25, "open_fee": 2, "close_fee": 3,
+                 "status": "closed", "opened_at": cutoff + dt.timedelta(hours=1),
+                 "closed_at": cutoff + dt.timedelta(hours=3)},
+            ],
+            cutoff_prices={"1d": {11: 10, 12: 20, 13: 30}},
+            windows={"1d": cutoff},
+        )["1d"]
+
+        self.assertEqual(result["realized_pnl"], 63.5)
+        self.assertEqual(result["unrealized_pnl"], 42.5)
+        self.assertEqual(result["net_pnl"], 106.0)
+        self.assertEqual(result["equity_pnl"], 43.0)
+        self.assertEqual(result["margin_pnl"], 63.0)
+        self.assertEqual(result["resident_count"], 2)
+        self.assertEqual(result["profitable_residents"], 2)
+        residents = {row["name"]: row for row in result["residents"]}
+        self.assertEqual(residents["Alpha"]["net_pnl"], 61.0)
+        self.assertEqual(residents["Bravo"]["net_pnl"], 45.0)
+
+    def test_residential_pnl_marks_pre_window_holdings_from_cutoff_quote(self) -> None:
+        cutoff = dt.datetime(2026, 8, 11, tzinfo=dt.timezone.utc)
+        result = ravenhood_residential_pnl_windows(
+            equity_trades=[],
+            current_holdings=[
+                {"account_id": 1, "user_id": 10, "name": "Alpha", "security_id": 11,
+                 "quantity": 4, "average_cost": 2, "current_price": 15},
+            ],
+            margin_positions=[],
+            cutoff_prices={"12h": {11: 12}},
+            windows={"12h": cutoff},
+        )["12h"]
+
+        self.assertEqual(result["realized_pnl"], 0.0)
+        self.assertEqual(result["unrealized_pnl"], 12.0)
+        self.assertEqual(result["net_pnl"], 12.0)
 
 
 class MarketFecInvestigationWorkspaceTests(unittest.TestCase):
@@ -51,6 +110,11 @@ class MarketFecInvestigationWorkspaceTests(unittest.TestCase):
         self.assertIn('"shareholders"', section)
         self.assertIn("COALESCE(position.position_count,0) AS position_count", section)
         self.assertIn("FROM market_holdings h", section)
+        self.assertIn('"residential_pnl"', section)
+        self.assertIn("ravenhood_residential_pnl_windows", section)
+        self.assertIn('"12h"', section)
+        self.assertIn('"1d"', section)
+        self.assertIn('"1w"', section)
 
         market_section = APP_SOURCE.split('if section == "market-settings":', 1)[1].split(
             'if section == "sportsbook-settings":', 1
@@ -66,6 +130,10 @@ class MarketFecInvestigationWorkspaceTests(unittest.TestCase):
         self.assertIn('id="devMarketFecDispositionForm"', FRONTEND_SOURCE)
         self.assertIn("data-fec-resident-portfolios", FRONTEND_SOURCE)
         self.assertIn("FEC FINANCIAL ACCOUNT REGISTRY", FRONTEND_SOURCE)
+        self.assertIn("Net residential P&amp;L", FRONTEND_SOURCE)
+        self.assertIn("data-fec-pnl-window", FRONTEND_SOURCE)
+        self.assertIn("LARGEST GAINS", FRONTEND_SOURCE)
+        self.assertIn("LARGEST LOSSES", FRONTEND_SOURCE)
         market_render = FRONTEND_SOURCE.split("function renderDevMarketSettings", 1)[1].split(
             "function renderDevFecInvestigations", 1
         )[0]
