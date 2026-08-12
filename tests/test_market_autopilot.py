@@ -121,6 +121,24 @@ class MarketAutopilotTests(unittest.TestCase):
         self.assertIn('name="starts_at" type="datetime-local"', FRONTEND_SOURCE)
         self.assertIn('America/New_York', APP_SOURCE)
 
+    def test_newest_overlapping_program_owns_quote_and_completion_is_durable(self) -> None:
+        function_source = APP_SOURCE.split("def apply_market_price_programs", 1)[1].split(
+            "def execute_ravenhood_order", 1
+        )[0]
+        self.assertIn("latest_due_by_security", function_source)
+        self.assertIn("status='superseded'", function_source)
+        self.assertIn('"scheduled_program_completed"', function_source)
+        self.assertIn("rebase_market_index_quote", function_source)
+
+    def test_scheduled_program_is_final_market_writer_for_worker_tick(self) -> None:
+        worker_source = APP_SOURCE.split("def market_automation_worker", 1)[1].split(
+            "def market_gemini_worker", 1
+        )[0]
+        self.assertLess(
+            worker_source.index("market_volatility_cycle"),
+            worker_source.index("apply_market_price_programs(db)"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

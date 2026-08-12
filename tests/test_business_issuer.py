@@ -3,11 +3,13 @@ import unittest
 from pathlib import Path
 
 from business_issuer import (
+    DEFAULT_MIN_IPO_CAPITALIZATION,
     DEFAULT_SECTOR_COMPANY_LIMIT,
     IPO_SECTORS,
     _canonical_sector,
     _float,
     _public_company,
+    _revenue_market_repricing,
     _sector_limits,
     _text,
     _ticker,
@@ -46,6 +48,14 @@ class BusinessIssuerHelpersTest(unittest.TestCase):
         self.assertIs(public["security_active"], True)
         self.assertEqual(public["company_name"], "Faircroft Industries")
 
+    def test_reported_revenue_reprices_without_changing_issued_shares(self):
+        repricing = _revenue_market_repricing(10, 100_000, 250_000)
+        self.assertEqual(repricing["price_before"], 10)
+        self.assertEqual(repricing["price_after"], 12.5)
+        self.assertEqual(repricing["market_cap_before"], 1_000_000)
+        self.assertEqual(repricing["market_cap_after"], 1_250_000)
+        self.assertEqual(repricing["market_cap_change"], 250_000)
+
     def test_sector_names_are_canonical_and_unknown_values_are_rejected(self):
         self.assertEqual(_canonical_sector(" real estate "), "Real Estate")
         self.assertEqual(_canonical_sector("Technology"), "Technology")
@@ -63,6 +73,7 @@ class BusinessIssuerHelpersTest(unittest.TestCase):
         create_source = BUSINESS_SOURCE.split("def create_ipo", 1)[1].split("def contribute", 1)[0]
         self.assertIn("pg_advisory_xact_lock", create_source)
         self.assertIn("guardrails = ipo_guardrails(db)", create_source)
+        self.assertIn('guardrails["min_capitalization"]', create_source)
         self.assertIn('guardrails["max_public_float_percent"]', create_source)
         self.assertIn('sector_policy["closed"]', create_source)
 
@@ -70,8 +81,15 @@ class BusinessIssuerHelpersTest(unittest.TestCase):
         self.assertIn('/api/dev-tools/business/ipo-guardrails', APP_SOURCE)
         self.assertIn("developer_required(user)", APP_SOURCE.split("def api_dev_business_ipo_guardrails", 1)[1].split("\n    def ", 1)[0])
         self.assertIn("devBusinessGuardrailsForm", APP_JS_SOURCE)
+        self.assertIn("guardrails.min_capitalization", APP_JS_SOURCE)
         self.assertIn("guardrails.max_public_float_percent", APP_JS_SOURCE)
         self.assertIn("guardrails.sectors", APP_JS_SOURCE)
+
+    def test_default_ipo_minimum_is_three_million_and_is_developer_adjustable(self):
+        self.assertEqual(DEFAULT_MIN_IPO_CAPITALIZATION, 3_000_000.0)
+        self.assertIn('business_ipo_min_capitalization', BUSINESS_SOURCE)
+        self.assertIn('name="min_capitalization"', APP_JS_SOURCE)
+        self.assertIn('min="${minCapitalization}"', APP_JS_SOURCE)
 
     def test_company_action_routes_read_the_numeric_company_segment(self):
         route_source = APP_SOURCE.split('elif path == "/api/business/companies"', 1)[1].split(
@@ -100,6 +118,45 @@ class BusinessIssuerHelpersTest(unittest.TestCase):
         )[0]
         self.assertIn("Report revenue", company_source)
         self.assertNotIn(">Fund treasury<", company_source)
+
+    def test_revenue_audit_and_investor_intelligence_are_present(self):
+        self.assertIn("business_issuer_market_cap_history", BUSINESS_SOURCE)
+        self.assertIn("_company_intelligence", BUSINESS_SOURCE)
+        self.assertIn("Northstar Market Making", BUSINESS_SOURCE)
+        self.assertIn("NPC broker / automated liquidity", BUSINESS_SOURCE)
+        self.assertIn('"market_makers": market_makers', BUSINESS_SOURCE)
+        self.assertIn('"market_maker_inventory_shares"', BUSINESS_SOURCE)
+        self.assertIn('"total_recorded_notional"', BUSINESS_SOURCE)
+        self.assertIn('"valuation_adjustment"', BUSINESS_SOURCE)
+        company_source = APP_JS_SOURCE.split("function renderIssuerCompany", 1)[1].split(
+            "function renderIssuerWire", 1
+        )[0]
+        self.assertIn("REVENUE / VALUATION AUDIT", company_source)
+        self.assertIn("RESIDENT INVESTOR REGISTER", company_source)
+        self.assertIn("NPC BROKER REGISTER", company_source)
+        self.assertIn("RECENT COMPANY TRADES", company_source)
+        self.assertIn("PUBLIC FLOAT", company_source)
+        self.assertIn("RECORDED NOTIONAL", company_source)
+        self.assertIn("VALUATION ADDED", company_source)
+
+    def test_ai_market_makers_are_aggregated_as_fictional_company_only_brokers(self):
+        intelligence_source = BUSINESS_SOURCE.split("def _company_intelligence", 1)[1].split(
+            "def resident_payload", 1
+        )[0]
+        self.assertIn("GROUP BY source", intelligence_source)
+        self.assertIn("NPC brokerage / automated market maker", intelligence_source)
+        self.assertIn('"inventory_side"', intelligence_source)
+        self.assertIn('"inventory_value"', intelligence_source)
+        self.assertIn("WHERE security_id=?", intelligence_source)
+
+    def test_revenue_is_recognized_only_from_completed_bridge_callback(self):
+        callback = BUSINESS_SOURCE.split("def handle_bank_result", 1)[1].split(
+            "def publish_announcement", 1
+        )[0]
+        self.assertIn('if batch["purpose"] == "initial_capitalization"', callback)
+        self.assertIn("_revenue_market_repricing", callback)
+        self.assertIn("issuer_revenue", callback)
+        self.assertIn("funding_batch_id", callback)
 
 
 if __name__ == "__main__":

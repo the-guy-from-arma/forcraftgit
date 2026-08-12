@@ -8077,15 +8077,34 @@ def apply_market_price_programs(db: Database) -> int:
     """Advance scheduled price programs outside resident-facing read requests."""
     current = utcnow()
     programs = all_rows(db, "SELECT * FROM market_price_programs WHERE status IN ('active','scheduled') ORDER BY id")
-    updated = 0
+    program_times: dict[int, tuple[dt.datetime, dt.datetime]] = {}
+    latest_due_by_security: dict[int, int] = {}
     for program in programs:
+        program_id = int(program["id"])
         try:
             starts = parse_iso(program["starts_at"])
             ends = parse_iso(program["ends_at"])
         except (TypeError, ValueError):
-            db.execute("UPDATE market_price_programs SET status = 'cancelled' WHERE id = ?", (program["id"],))
+            db.execute("UPDATE market_price_programs SET status = 'cancelled' WHERE id = ?", (program_id,))
             continue
+        program_times[program_id] = (starts, ends)
+        if current >= starts and program.get("security_id"):
+            # A newer due program owns this quote.  Retiring the older program
+            # prevents its original baseline from overwriting the new path on
+            # the next worker pass.
+            latest_due_by_security[int(program["security_id"])] = program_id
+    updated = 0
+    for program in programs:
+        program_id = int(program["id"])
+        timing = program_times.get(program_id)
+        if not timing:
+            continue
+        starts, ends = timing
         if current < starts:
+            continue
+        security_id = int(program["security_id"]) if program.get("security_id") else 0
+        if security_id and latest_due_by_security.get(security_id) != program_id:
+            db.execute("UPDATE market_price_programs SET status='superseded' WHERE id=?", (program_id,))
             continue
         if str(program.get("status") or "active") == "scheduled":
             if program.get("security_id"):
@@ -8131,9 +8150,10 @@ def apply_market_price_programs(db: Database) -> int:
             last_history = one(db, "SELECT price,recorded_at FROM market_price_history WHERE security_id=? ORDER BY id DESC LIMIT 1", (security["id"],))
             last_time = parse_iso(last_history["recorded_at"]) if last_history and last_history.get("recorded_at") else None
             if not last_history or abs(float(last_history["price"]) - rounded_price) >= 0.0001 or not last_time or (current - last_time).total_seconds() >= 300:
-                db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], rounded_price, "scheduled_program", current.isoformat()))
+                history_source = "scheduled_program_completed" if progress >= 1 else "scheduled_program"
+                db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,?,?)", (security["id"], rounded_price, history_source, current.isoformat()))
             updated += 1
-            if progress >= 1 and str(security.get("security_type") or "") == "fund":
+            if progress >= 1:
                 rebase_market_index_quote(db, int(security["id"]), rounded_price, current.isoformat())
         if progress >= 1:
             db.execute("UPDATE market_price_programs SET status = 'completed' WHERE id = ?", (program["id"],))
@@ -8657,7 +8677,6 @@ def market_automation_worker() -> None:
                 # when its dedicated policy is enabled.
                 process_queued_ravenhood_orders(db, settings)
                 process_queued_ravenhood_margin_orders(db, settings)
-                apply_market_price_programs(db)
                 if (
                     not MARKET_AUTOMATION_SEQUENCE_LOCK.locked()
                     and settings["market_autopilot_enabled"]
@@ -8674,6 +8693,10 @@ def market_automation_worker() -> None:
                         )
                         finish_market_automation_cycle(db, cycle_number, "local", result, "completed")
                         set_system_setting(db, "market_autopilot_last_tick", current.isoformat())
+                # Price programs are deliberately the final quote writer for
+                # this worker tick.  Local volatility may rebase their path,
+                # but it cannot immediately overwrite the scheduled quote.
+                apply_market_price_programs(db)
                 funds = all_rows(db, "SELECT id,last_rebalanced_at,rebalance_interval_hours FROM market_index_funds WHERE enabled=1")
                 needs_rebalance = any(
                     not fund.get("last_rebalanced_at")
@@ -19404,6 +19427,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(400, str(exc))
             return
         add_admin_audit(db, int(user["id"]), "business.ipo_guardrails.updated", details={
+            "min_capitalization": guardrails["min_capitalization"],
             "max_public_float_percent": guardrails["max_public_float_percent"],
             "sector_limits": guardrails["sector_limits"],
         })

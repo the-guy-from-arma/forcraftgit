@@ -16,6 +16,8 @@ from typing import Any
 
 
 MAX_CAPITALIZATION = 50_000_000_000.0
+MIN_CONFIGURABLE_CAPITALIZATION = 1_000.0
+DEFAULT_MIN_IPO_CAPITALIZATION = 3_000_000.0
 BRIDGE_CHUNK_LIMIT = 10_000_000.0
 MAX_COMPANIES_PER_RESIDENT = 8
 MIN_PUBLIC_FLOAT_PERCENT = 5.0
@@ -59,6 +61,36 @@ def _float(value: Any, default: float = 0.0) -> float:
     return result if math.isfinite(result) else default
 
 
+def _revenue_market_repricing(price: Any, issued_shares: Any, revenue: Any) -> dict[str, float]:
+    """Return the quote and capitalization audit values for settled issuer revenue.
+
+    Revenue is recognized only after the Bank Bridge debit completes.  The
+    issued-share count stays fixed, so the quote moves by revenue per share and
+    the resulting market capitalization remains reproducible from FCX data.
+    """
+    current_price = max(0.01, _float(price, 0.01))
+    shares = max(0.0, _float(issued_shares))
+    recognized = max(0.0, _float(revenue))
+    before = round(current_price * shares, 2)
+    if shares <= 0 or recognized <= 0:
+        return {
+            "price_before": round(current_price, 4),
+            "price_after": round(current_price, 4),
+            "market_cap_before": before,
+            "market_cap_after": before,
+            "market_cap_change": 0.0,
+        }
+    next_price = max(0.01, round(current_price + (recognized / shares), 4))
+    after = round(next_price * shares, 2)
+    return {
+        "price_before": round(current_price, 4),
+        "price_after": next_price,
+        "market_cap_before": before,
+        "market_cap_after": after,
+        "market_cap_change": round(after - before, 2),
+    }
+
+
 def _canonical_sector(value: Any) -> str:
     requested = _text(value or "General", 60).casefold()
     return next((sector for sector in IPO_SECTORS if sector.casefold() == requested), "")
@@ -83,8 +115,12 @@ def _sector_limits(value: Any) -> dict[str, int]:
 
 def ipo_guardrails(db: Any) -> dict[str, Any]:
     rows = _all(db, """SELECT setting_key,setting_value FROM system_settings
-        WHERE setting_key IN ('business_ipo_max_public_float_percent','business_ipo_sector_limits')""")
+        WHERE setting_key IN ('business_ipo_min_capitalization','business_ipo_max_public_float_percent','business_ipo_sector_limits')""")
     settings = {str(row["setting_key"]): row.get("setting_value") for row in rows}
+    min_capitalization = max(
+        MIN_CONFIGURABLE_CAPITALIZATION,
+        min(MAX_CAPITALIZATION, _float(settings.get("business_ipo_min_capitalization"), DEFAULT_MIN_IPO_CAPITALIZATION)),
+    )
     max_public_float = max(
         MIN_PUBLIC_FLOAT_PERCENT,
         min(100.0, _float(settings.get("business_ipo_max_public_float_percent"), DEFAULT_MAX_PUBLIC_FLOAT_PERCENT)),
@@ -108,6 +144,7 @@ def ipo_guardrails(db: Any) -> dict[str, Any]:
         for sector in IPO_SECTORS
     ]
     return {
+        "min_capitalization": round(min_capitalization, 2),
         "min_public_float_percent": MIN_PUBLIC_FLOAT_PERCENT,
         "max_public_float_percent": round(max_public_float, 2),
         "sector_limits": limits,
@@ -117,6 +154,13 @@ def ipo_guardrails(db: Any) -> dict[str, Any]:
 
 
 def update_ipo_guardrails(db: Any, payload: dict[str, Any], now: str) -> dict[str, Any]:
+    current = ipo_guardrails(db)
+    min_capitalization = round(_float(payload.get("min_capitalization"), current["min_capitalization"]), 2)
+    if not MIN_CONFIGURABLE_CAPITALIZATION <= min_capitalization <= MAX_CAPITALIZATION:
+        raise ValueError(
+            f"Minimum IPO capitalization must be between ${MIN_CONFIGURABLE_CAPITALIZATION:,.0f} "
+            f"and ${MAX_CAPITALIZATION:,.0f}"
+        )
     max_public_float = round(_float(payload.get("max_public_float_percent"), DEFAULT_MAX_PUBLIC_FLOAT_PERCENT), 2)
     if not MIN_PUBLIC_FLOAT_PERCENT <= max_public_float <= 100:
         raise ValueError("Maximum IPO public float must be between 5% and 100%")
@@ -125,6 +169,7 @@ def update_ipo_guardrails(db: Any, payload: dict[str, Any], now: str) -> dict[st
         raise ValueError("Provide a company limit for every IPO sector")
     limits = _sector_limits(requested_limits)
     for key, value in (
+        ("business_ipo_min_capitalization", f"{min_capitalization:.2f}"),
         ("business_ipo_max_public_float_percent", f"{max_public_float:.2f}"),
         ("business_ipo_sector_limits", json.dumps(limits, separators=(",", ":"))),
     ):
@@ -244,6 +289,28 @@ def ensure_schema(db: Any, now: str) -> None:
         )
     """)
     db.execute("CREATE INDEX IF NOT EXISTS business_issuer_ledger_company_idx ON business_issuer_ledger (company_id,created_at DESC)")
+    db.execute("ALTER TABLE business_issuer_ledger ADD COLUMN IF NOT EXISTS funding_batch_id INTEGER")
+    db.execute("CREATE INDEX IF NOT EXISTS business_issuer_ledger_batch_idx ON business_issuer_ledger (funding_batch_id)")
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS business_issuer_market_cap_history (
+            id SERIAL PRIMARY KEY,
+            company_id INTEGER NOT NULL,
+            ledger_id INTEGER,
+            event_type TEXT NOT NULL,
+            source_reference TEXT NOT NULL DEFAULT '',
+            amount NUMERIC(20,2) NOT NULL DEFAULT 0,
+            price_before NUMERIC(20,4) NOT NULL DEFAULT 0,
+            price_after NUMERIC(20,4) NOT NULL DEFAULT 0,
+            market_cap_before NUMERIC(20,2) NOT NULL DEFAULT 0,
+            market_cap_after NUMERIC(20,2) NOT NULL DEFAULT 0,
+            issued_shares NUMERIC(20,6) NOT NULL DEFAULT 0,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            occurred_at TEXT NOT NULL,
+            FOREIGN KEY (company_id) REFERENCES business_issuer_companies(id) ON DELETE CASCADE,
+            FOREIGN KEY (ledger_id) REFERENCES business_issuer_ledger(id) ON DELETE SET NULL
+        )
+    """)
+    db.execute("CREATE INDEX IF NOT EXISTS business_issuer_cap_history_company_idx ON business_issuer_market_cap_history (company_id,occurred_at DESC,id DESC)")
     db.execute("""
         CREATE TABLE IF NOT EXISTS business_issuer_announcements (
             id SERIAL PRIMARY KEY,
@@ -377,8 +444,16 @@ def _activate_company(db: Any, company_id: int, now: str) -> None:
     db.execute("""UPDATE business_issuer_companies SET security_id=?,status=?,paid_in_capital=target_market_cap,
         treasury_balance=treasury_balance+target_market_cap,activated_at=?,updated_at=? WHERE id=?""",
         (security_id, next_status, now if is_live else None, now, company_id))
-    db.execute("""UPDATE business_issuer_ledger SET status='completed'
-        WHERE company_id=? AND entry_type='initial_capitalization' AND status='pending'""", (company_id,))
+    ledger = _one(db, """UPDATE business_issuer_ledger SET status='completed'
+        WHERE company_id=? AND entry_type='initial_capitalization' AND status='pending'
+        RETURNING id""", (company_id,))
+    opening_cap = round(float(company.get("opening_share_price") or 0) * float(company.get("authorized_shares") or 0), 2)
+    db.execute("""INSERT INTO business_issuer_market_cap_history
+        (company_id,ledger_id,event_type,source_reference,amount,price_before,price_after,
+         market_cap_before,market_cap_after,issued_shares,details_json,occurred_at)
+        VALUES (?,?, 'ipo_activation','resident_ipo',?,0,?,?,?,?,'{}',?)""",
+        (company_id, (ledger or {}).get("id"), company.get("target_market_cap") or opening_cap,
+         company.get("opening_share_price") or 0, 0, opening_cap, company.get("authorized_shares") or 0, now))
 
 
 def activate_due_ipos(db: Any, now: str) -> int:
@@ -412,12 +487,16 @@ def create_ipo(db: Any, user_id: int, payload: dict[str, Any], now: str) -> dict
         raise ValueError("Ticker must contain 2 to 8 letters or numbers")
     if not sector:
         raise ValueError("Choose an approved FCX industry sector")
-    if not 1_000 <= market_cap <= MAX_CAPITALIZATION:
-        raise ValueError(f"Initial market capitalization must be between $1,000 and ${MAX_CAPITALIZATION:,.0f}")
     if not 0.01 <= share_price <= 1_000_000:
         raise ValueError("Opening share price must be between $0.01 and $1,000,000")
     db.execute("SELECT pg_advisory_xact_lock(hashtext(?))", (f"business-ipo-sector:{sector.casefold()}",))
     guardrails = ipo_guardrails(db)
+    min_capitalization = float(guardrails["min_capitalization"])
+    if not min_capitalization <= market_cap <= MAX_CAPITALIZATION:
+        raise ValueError(
+            f"Initial market capitalization must be between ${min_capitalization:,.2f} "
+            f"and ${MAX_CAPITALIZATION:,.0f}"
+        )
     max_public_float = float(guardrails["max_public_float_percent"])
     if not MIN_PUBLIC_FLOAT_PERCENT <= public_float <= max_public_float:
         raise ValueError(f"Public float must be between {MIN_PUBLIC_FLOAT_PERCENT:.0f}% and the FCX limit of {max_public_float:g}%")
@@ -460,9 +539,9 @@ def create_ipo(db: Any, user_id: int, payload: dict[str, Any], now: str) -> dict
         VALUES (?,?,'initial_capitalization',?,?,'staged',?,?) RETURNING id""",
         (company["id"], user_id, market_cap, chunks, now, now))
     db.execute("""INSERT INTO business_issuer_ledger
-        (company_id,user_id,entry_type,direction,amount,description,status,created_at)
-        VALUES (?,?,'initial_capitalization','inflow',?,'Founder capitalization through the in-game Bank Bridge','pending',?)""",
-        (company["id"], user_id, market_cap, now))
+        (company_id,user_id,funding_batch_id,entry_type,direction,amount,description,status,created_at)
+        VALUES (?,?,?,'initial_capitalization','inflow',?,'Founder capitalization through the in-game Bank Bridge','pending',?)""",
+        (company["id"], user_id, batch["id"], market_cap, now))
     command = _queue_next_funding_command(db, int(batch["id"]), now)
     return {"company": _public_company(company), "funding": command, "chunk_count": chunks}
 
@@ -479,9 +558,9 @@ def contribute(db: Any, user_id: int, company_id: int, payload: dict[str, Any], 
         VALUES (?,?,'treasury_contribution',?,1,'staged',?,?) RETURNING id""",
         (company_id, user_id, amount, now, now))
     db.execute("""INSERT INTO business_issuer_ledger
-        (company_id,user_id,entry_type,direction,amount,description,status,created_at)
-        VALUES (?,?,'treasury_contribution','inflow',?,'Controller treasury contribution','pending',?)""",
-        (company_id, user_id, amount, now))
+        (company_id,user_id,funding_batch_id,entry_type,direction,amount,description,status,created_at)
+        VALUES (?,?,?,'treasury_contribution','inflow',?,'Reported controller revenue','pending',?)""",
+        (company_id, user_id, batch["id"], amount, now))
     return _queue_next_funding_command(db, int(batch["id"]), now)
 
 
@@ -493,6 +572,7 @@ def retry_funding(db: Any, user_id: int, company_id: int, now: str, *, developer
     if not batch:
         raise ValueError("No failed funding command is available to retry")
     db.execute("UPDATE business_issuer_funding_batches SET status='staged',current_command_id=NULL,current_amount=0,failure_reason='',updated_at=? WHERE id=?", (now, batch["id"]))
+    db.execute("UPDATE business_issuer_ledger SET status='pending' WHERE funding_batch_id=? AND status='failed'", (batch["id"],))
     db.execute("UPDATE business_issuer_companies SET status=CASE WHEN status='funding_failed' THEN 'funding_pending' ELSE status END,updated_at=? WHERE id=?", (now, company_id))
     return _queue_next_funding_command(db, int(batch["id"]), now)
 
@@ -511,8 +591,8 @@ def handle_bank_result(db: Any, command_id: str, status: str, result: dict[str, 
         db.execute("UPDATE business_issuer_funding_batches SET status='failed',failure_reason=?,updated_at=? WHERE id=?", (failure, now, batch["id"]))
         if batch["purpose"] == "initial_capitalization":
             db.execute("UPDATE business_issuer_companies SET status='funding_failed',updated_at=? WHERE id=?", (now, batch["company_id"]))
-        db.execute("UPDATE business_issuer_ledger SET status='failed' WHERE company_id=? AND entry_type=? AND status='pending'",
-                   (batch["company_id"], batch["purpose"]))
+        db.execute("UPDATE business_issuer_ledger SET status='failed' WHERE funding_batch_id=? AND status='pending'",
+                   (batch["id"],))
         return {"company_id": int(batch["company_id"]), "status": "failed", "reason": failure}
     completed = round(float(batch.get("completed_amount") or 0) + float(batch.get("current_amount") or 0), 2)
     db.execute("UPDATE business_issuer_funding_batches SET completed_amount=?,current_command_id=NULL,current_amount=0,updated_at=? WHERE id=?",
@@ -523,9 +603,31 @@ def handle_bank_result(db: Any, command_id: str, status: str, result: dict[str, 
     if batch["purpose"] == "initial_capitalization":
         _activate_company(db, int(batch["company_id"]), now)
     else:
+        company = _one(db, "SELECT * FROM business_issuer_companies WHERE id=? FOR UPDATE", (batch["company_id"],))
+        security = _one(db, "SELECT * FROM market_securities WHERE id=? FOR UPDATE", ((company or {}).get("security_id"),)) if company and company.get("security_id") else None
+        repricing = _revenue_market_repricing(
+            (security or {}).get("price"),
+            (security or {}).get("issued_shares") or (company or {}).get("authorized_shares"),
+            batch["total_amount"],
+        )
+        if security:
+            db.execute("UPDATE market_securities SET previous_price=price,price=?,updated_at=? WHERE id=?",
+                       (repricing["price_after"], now, security["id"]))
+            db.execute("INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,?,'issuer_revenue',?)",
+                       (security["id"], repricing["price_after"], now))
         db.execute("UPDATE business_issuer_companies SET paid_in_capital=paid_in_capital+?,treasury_balance=treasury_balance+?,updated_at=? WHERE id=?",
                    (batch["total_amount"], batch["total_amount"], now, batch["company_id"]))
-        db.execute("UPDATE business_issuer_ledger SET status='completed' WHERE company_id=? AND entry_type='treasury_contribution' AND status='pending'", (batch["company_id"],))
+        ledger = _one(db, """UPDATE business_issuer_ledger SET status='completed'
+            WHERE funding_batch_id=? AND entry_type='treasury_contribution' AND status='pending'
+            RETURNING id""", (batch["id"],))
+        db.execute("""INSERT INTO business_issuer_market_cap_history
+            (company_id,ledger_id,event_type,source_reference,amount,price_before,price_after,
+             market_cap_before,market_cap_after,issued_shares,details_json,occurred_at)
+            VALUES (?,?, 'reported_revenue',?,?,?,?,?,?,?,?,?)""",
+            (batch["company_id"], (ledger or {}).get("id"), command_id, batch["total_amount"],
+             repricing["price_before"], repricing["price_after"], repricing["market_cap_before"],
+             repricing["market_cap_after"], (security or {}).get("issued_shares") or (company or {}).get("authorized_shares") or 0,
+             json.dumps({"market_cap_change": repricing["market_cap_change"], "funding_batch_id": int(batch["id"])}, separators=(",", ":")), now))
     return {"company_id": int(batch["company_id"]), "status": "completed"}
 
 
@@ -622,15 +724,234 @@ def _companies_query(where: str = "", order: str = "c.updated_at DESC") -> str:
         {where} ORDER BY {order}"""
 
 
+def _market_maker_firm(source: Any) -> str:
+    """Assign a stable, fictional broker identity to non-resident market flow."""
+    value = str(source or "automation").strip().lower()
+    if "gemini" in value:
+        return "Northstar Market Making"
+    if "deepseek" in value:
+        return "Apex Quantitative Partners"
+    if "liquidation" in value:
+        return "Civic Prime Brokerage"
+    if "scheduled" in value:
+        return "Foundry Specialist Desk"
+    if "index" in value:
+        return "Ravenhood Index Liquidity"
+    if "fec" in value:
+        return "FEC Resolution Desk"
+    return "Faircroft Liquidity Services"
+
+
+def _company_intelligence(db: Any, company: dict[str, Any], now: str) -> dict[str, Any]:
+    security_id = int(company.get("security_id") or 0)
+    if not security_id:
+        return {
+            "metrics": {}, "investors": [], "market_makers": [], "recent_trades": [], "capital_history": [],
+            "investor_summary": {"holders": 0, "shares": 0, "market_value": 0},
+        }
+    current_price = max(0.0, _float(company.get("live_price")))
+    issued_shares = max(0.0, _float(company.get("issued_shares") or company.get("authorized_shares")))
+    current_cap = round(current_price * issued_shares, 2)
+    try:
+        cutoff = (dt.datetime.fromisoformat(now.replace("Z", "+00:00")) - dt.timedelta(hours=24)).isoformat()
+    except ValueError:
+        cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=24)).isoformat()
+
+    investors = []
+    for row in _all(db, """SELECT u.id AS user_id,u.name,u.civ_number,h.quantity,h.average_cost,
+            CASE WHEN u.id=? THEN 'Controller / founder' ELSE 'Resident investor' END AS investor_type
+        FROM market_holdings h JOIN market_accounts a ON a.id=h.account_id
+        JOIN users u ON u.id=a.user_id
+        WHERE h.security_id=? AND h.quantity>0
+        ORDER BY h.quantity DESC,u.name LIMIT 100""", (company.get("controlling_user_id"), security_id)):
+        shares = max(0.0, _float(row.get("quantity")))
+        investors.append({
+            "user_id": int(row["user_id"]),
+            "name": str(row.get("name") or "Resident investor"),
+            "civ_number": str(row.get("civ_number") or ""),
+            "investor_type": str(row.get("investor_type") or "Resident investor"),
+            "shares": round(shares, 6),
+            "average_cost": round(_float(row.get("average_cost")), 4),
+            "market_value": round(shares * current_price, 2),
+            "ownership_percent": round((shares / issued_shares * 100) if issued_shares else 0, 6),
+        })
+    resident_shares = sum(float(item["shares"]) for item in investors)
+    investor_value = sum(float(item["market_value"]) for item in investors)
+
+    resident_orders = _all(db, """SELECT o.id,o.side,o.quantity,o.unit_price,o.gross_amount,o.fee_amount,o.created_at,
+            u.name,u.civ_number
+        FROM market_orders o JOIN market_accounts a ON a.id=o.account_id
+        JOIN users u ON u.id=a.user_id
+        WHERE o.security_id=? ORDER BY o.created_at DESC,o.id DESC LIMIT 80""", (security_id,))
+    system_orders = _all(db, """SELECT id,buy_volume,sell_volume,buy_trade_count,sell_trade_count,
+            reference_price,source,rationale,created_at
+        FROM market_system_trades WHERE security_id=?
+        ORDER BY created_at DESC,id DESC LIMIT 80""", (security_id,))
+    recent_trades: list[dict[str, Any]] = []
+    for row in resident_orders:
+        recent_trades.append({
+            "key": f"resident-{row['id']}", "participant_type": "resident",
+            "participant": str(row.get("name") or "Resident investor"),
+            "participant_detail": f"CIV {row.get('civ_number')}" if row.get("civ_number") else "Verified FCX account",
+            "side": "sell" if str(row.get("side") or "").lower() == "sell" else "buy",
+            "shares": round(_float(row.get("quantity")), 6), "price": round(_float(row.get("unit_price")), 4),
+            "gross_amount": round(_float(row.get("gross_amount")), 2), "execution_count": 1,
+            "source": "resident_order", "created_at": row.get("created_at"),
+        })
+    for row in system_orders:
+        firm = _market_maker_firm(row.get("source"))
+        for side, volume_key, count_key in (
+            ("buy", "buy_volume", "buy_trade_count"), ("sell", "sell_volume", "sell_trade_count"),
+        ):
+            shares = max(0.0, _float(row.get(volume_key)))
+            if shares <= 0:
+                continue
+            price = max(0.0, _float(row.get("reference_price")))
+            recent_trades.append({
+                "key": f"system-{row['id']}-{side}", "participant_type": "market_maker",
+                "participant": firm, "participant_detail": "NPC broker / automated liquidity",
+                "side": side, "shares": round(shares, 6), "price": round(price, 4),
+                "gross_amount": round(shares * price, 2),
+                "execution_count": max(1, int(row.get(count_key) or 1)),
+                "source": str(row.get("source") or "automation"), "rationale": str(row.get("rationale") or ""),
+                "created_at": row.get("created_at"),
+            })
+    recent_trades.sort(key=lambda item: (str(item.get("created_at") or ""), str(item.get("key") or "")), reverse=True)
+    recent_trades = recent_trades[:100]
+
+    # System liquidity does not belong to a resident account, but issuers still need
+    # an intelligible view of who is making their market. Aggregate every automated
+    # fill under stable, fictional brokerage identities and expose the resulting net
+    # inventory separately from the resident shareholder register.
+    market_maker_rows = _all(db, """SELECT source,
+            COALESCE(SUM(buy_volume),0) AS buy_shares,
+            COALESCE(SUM(sell_volume),0) AS sell_shares,
+            COALESCE(SUM(buy_trade_count),0) AS buy_fills,
+            COALESCE(SUM(sell_trade_count),0) AS sell_fills,
+            COALESCE(SUM((buy_volume+sell_volume)*reference_price),0) AS notional,
+            MAX(created_at) AS last_trade_at
+        FROM market_system_trades WHERE security_id=?
+        GROUP BY source ORDER BY MAX(created_at) DESC""", (security_id,))
+    broker_rollup: dict[str, dict[str, Any]] = {}
+    for row in market_maker_rows:
+        source = str(row.get("source") or "automation")
+        firm = _market_maker_firm(source)
+        broker = broker_rollup.setdefault(firm, {
+            "firm": firm, "participant_type": "market_maker",
+            "participant_detail": "NPC brokerage / automated market maker",
+            "buy_shares": 0.0, "sell_shares": 0.0, "buy_fills": 0,
+            "sell_fills": 0, "notional": 0.0, "last_trade_at": None,
+            "sources": [],
+        })
+        broker["buy_shares"] += max(0.0, _float(row.get("buy_shares")))
+        broker["sell_shares"] += max(0.0, _float(row.get("sell_shares")))
+        broker["buy_fills"] += max(0, int(row.get("buy_fills") or 0))
+        broker["sell_fills"] += max(0, int(row.get("sell_fills") or 0))
+        broker["notional"] += max(0.0, _float(row.get("notional")))
+        if source not in broker["sources"]:
+            broker["sources"].append(source)
+        last_trade_at = row.get("last_trade_at")
+        if last_trade_at and (not broker["last_trade_at"] or str(last_trade_at) > str(broker["last_trade_at"])):
+            broker["last_trade_at"] = last_trade_at
+    market_makers = []
+    for broker in broker_rollup.values():
+        net_shares = broker["buy_shares"] - broker["sell_shares"]
+        broker.update({
+            "buy_shares": round(broker["buy_shares"], 6),
+            "sell_shares": round(broker["sell_shares"], 6),
+            "net_shares": round(net_shares, 6),
+            "inventory_side": "long" if net_shares > 0 else ("short" if net_shares < 0 else "flat"),
+            "inventory_value": round(abs(net_shares) * current_price, 2),
+            "notional": round(broker["notional"], 2),
+            "total_fills": broker["buy_fills"] + broker["sell_fills"],
+        })
+        market_makers.append(broker)
+    market_makers.sort(key=lambda item: (str(item.get("last_trade_at") or ""), float(item.get("notional") or 0)), reverse=True)
+
+    capital_history = []
+    for row in _all(db, """SELECT * FROM business_issuer_market_cap_history
+        WHERE company_id=? ORDER BY occurred_at DESC,id DESC LIMIT 100""", (company["id"],)):
+        item = dict(row)
+        for key in ("amount", "price_before", "price_after", "market_cap_before", "market_cap_after", "issued_shares"):
+            item[key] = round(_float(item.get(key)), 4 if "price" in key else (6 if key == "issued_shares" else 2))
+        item["market_cap_change"] = round(item["market_cap_after"] - item["market_cap_before"], 2)
+        capital_history.append(item)
+
+    day_price = _one(db, """SELECT price FROM market_price_history WHERE security_id=? AND recorded_at<=?
+        ORDER BY recorded_at DESC,id DESC LIMIT 1""", (security_id, cutoff))
+    if not day_price:
+        day_price = _one(db, "SELECT price FROM market_price_history WHERE security_id=? ORDER BY recorded_at,id LIMIT 1", (security_id,))
+    range_row = _one(db, """SELECT MIN(price) AS low,MAX(price) AS high FROM market_price_history
+        WHERE security_id=? AND recorded_at>=?""", (security_id, cutoff)) or {}
+    resident_flow = _one(db, """SELECT COUNT(*) AS trades,COALESCE(SUM(quantity),0) AS shares,
+        COALESCE(SUM(gross_amount),0) AS volume,COALESCE(SUM(fee_amount),0) AS fees,
+        COALESCE(SUM(CASE WHEN side='buy' THEN quantity ELSE 0 END),0) AS buys,
+        COALESCE(SUM(CASE WHEN side='sell' THEN quantity ELSE 0 END),0) AS sells
+        FROM market_orders WHERE security_id=?""", (security_id,)) or {}
+    maker_flow = _one(db, """SELECT COALESCE(SUM(buy_volume),0) AS buys,COALESCE(SUM(sell_volume),0) AS sells,
+        COALESCE(SUM(buy_trade_count+sell_trade_count),0) AS trades
+        FROM market_system_trades WHERE security_id=?""", (security_id,)) or {}
+    revenue = _one(db, """SELECT COUNT(*) AS reports,COALESCE(SUM(amount),0) AS total,MAX(occurred_at) AS last_at
+        FROM business_issuer_market_cap_history WHERE company_id=? AND event_type='reported_revenue'""", (company["id"],)) or {}
+    announcements = _one(db, "SELECT COUNT(*) AS total FROM business_issuer_announcements WHERE company_id=?", (company["id"],)) or {}
+    reference_price = max(0.0, _float((day_price or {}).get("price"), current_price))
+    change_24h = ((current_price - reference_price) / reference_price * 100) if reference_price else 0
+    resident_buys, resident_sells = _float(resident_flow.get("buys")), _float(resident_flow.get("sells"))
+    maker_buys, maker_sells = _float(maker_flow.get("buys")), _float(maker_flow.get("sells"))
+    gross_flow = resident_buys + resident_sells + maker_buys + maker_sells
+    public_float_shares = issued_shares * max(0.0, min(100.0, _float(company.get("public_float_percent")))) / 100
+    maker_notional = sum(_float(item.get("notional")) for item in market_makers)
+    maker_inventory = sum(_float(item.get("net_shares")) for item in market_makers)
+    valuation_adjustment = sum(_float(item.get("market_cap_change")) for item in capital_history if item.get("event_type") == "reported_revenue")
+    total_executions = int(resident_flow.get("trades") or 0) + int(maker_flow.get("trades") or 0)
+    return {
+        "metrics": {
+            "live_market_cap": current_cap, "live_price": round(current_price, 4),
+            "change_24h_percent": round(change_24h, 4),
+            "low_24h": round(_float(range_row.get("low"), current_price), 4),
+            "high_24h": round(_float(range_row.get("high"), current_price), 4),
+            "issued_shares": round(issued_shares, 6), "public_float_percent": round(_float(company.get("public_float_percent")), 2),
+            "public_float_shares": round(public_float_shares, 6), "public_float_value": round(public_float_shares * current_price, 2),
+            "resident_holders": len(investors), "resident_shares": round(resident_shares, 6),
+            "resident_market_value": round(investor_value, 2),
+            "top_holder_percent": round(max((float(item["ownership_percent"]) for item in investors), default=0.0), 6),
+            "reported_revenue": round(_float(revenue.get("total")), 2), "revenue_reports": int(revenue.get("reports") or 0),
+            "valuation_adjustment": round(valuation_adjustment, 2),
+            "last_revenue_at": revenue.get("last_at"), "resident_trade_count": int(resident_flow.get("trades") or 0),
+            "resident_trade_volume": round(_float(resident_flow.get("volume")), 2), "exchange_fees": round(_float(resident_flow.get("fees")), 2),
+            "market_maker_trade_count": int(maker_flow.get("trades") or 0),
+            "market_maker_firms": len(market_makers), "market_maker_notional": round(maker_notional, 2),
+            "market_maker_inventory_shares": round(maker_inventory, 6),
+            "market_maker_inventory_value": round(abs(maker_inventory) * current_price, 2),
+            "market_maker_buy_shares": round(maker_buys, 6), "market_maker_sell_shares": round(maker_sells, 6),
+            "market_maker_net_shares": round(maker_buys - maker_sells, 6),
+            "total_execution_count": total_executions,
+            "total_executed_shares": round(resident_buys + resident_sells + maker_buys + maker_sells, 6),
+            "total_recorded_notional": round(_float(resident_flow.get("volume")) + maker_notional, 2),
+            "buy_pressure_percent": round(((resident_buys + maker_buys) / gross_flow * 100) if gross_flow else 0, 2),
+            "sell_pressure_percent": round(((resident_sells + maker_sells) / gross_flow * 100) if gross_flow else 0, 2),
+            "announcement_count": int(announcements.get("total") or 0),
+        },
+        "investors": investors,
+        "investor_summary": {"holders": len(investors), "shares": round(resident_shares, 6), "market_value": round(investor_value, 2)},
+        "market_makers": market_makers,
+        "recent_trades": recent_trades,
+        "capital_history": capital_history,
+    }
+
+
 def resident_payload(db: Any, user_id: int, now: str) -> dict[str, Any]:
     activate_due_ipos(db, now)
     companies = [_public_company(row) for row in _all(db, _companies_query("WHERE c.controlling_user_id=?"), (user_id,))]
     ids = [int(row["id"]) for row in companies]
     ledgers: dict[str, list[dict[str, Any]]] = {}
     announcements: dict[str, list[dict[str, Any]]] = {}
+    intelligence: dict[str, dict[str, Any]] = {}
     for company_id in ids:
+        company = next(item for item in companies if int(item["id"]) == company_id)
         ledgers[str(company_id)] = [dict(row) for row in _all(db, "SELECT * FROM business_issuer_ledger WHERE company_id=? ORDER BY created_at DESC,id DESC LIMIT 80", (company_id,))]
         announcements[str(company_id)] = [dict(row) for row in _all(db, "SELECT * FROM business_issuer_announcements WHERE company_id=? ORDER BY created_at DESC,id DESC LIMIT 40", (company_id,))]
+        intelligence[str(company_id)] = _company_intelligence(db, company, now)
     wire = [dict(row) for row in _all(db, """SELECT a.*,c.ticker,c.company_name FROM business_issuer_announcements a
         JOIN business_issuer_companies c ON c.id=a.company_id
         WHERE a.status='published' AND COALESCE(a.published_at,a.created_at)<=?
@@ -643,6 +964,7 @@ def resident_payload(db: Any, user_id: int, now: str) -> dict[str, Any]:
         "companies": companies,
         "ledgers": ledgers,
         "announcements": announcements,
+        "company_intelligence": intelligence,
         "company_wire": wire,
         "bank": {"linked": bool(bank and bank.get("identity_id")), "balance": round(float((bank or {}).get("balance") or 0), 2), "synced_at": (bank or {}).get("synced_at")},
         "limits": {
