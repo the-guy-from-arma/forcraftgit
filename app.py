@@ -8636,7 +8636,7 @@ def close_ravenhood_margin_position(
     # remaining collateral + realized P/L - closing fee reaches buying power
     # exactly once while the locked position is still open.
     settled_account = one(db, """UPDATE market_accounts
-        SET cash_balance=ROUND(COALESCE(cash_balance,0)+?,2),updated_at=?
+        SET cash_balance=ROUND(CAST(COALESCE(cash_balance,0)+CAST(? AS NUMERIC) AS NUMERIC),2),updated_at=?
         WHERE id=? RETURNING cash_balance""",
         (settlement_amount, closed_at, position["account_id"]))
     if not settled_account:

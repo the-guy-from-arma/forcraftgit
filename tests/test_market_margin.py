@@ -41,7 +41,11 @@ class RavenhoodMarginMathTests(unittest.TestCase):
         start = source.index("def close_ravenhood_margin_position(")
         end = source.index("\ndef process_queued_ravenhood_margin_orders", start)
         close_source = source[start:end]
-        self.assertIn("SET cash_balance=ROUND(COALESCE(cash_balance,0)+?,2)", close_source)
+        self.assertIn(
+            "SET cash_balance=ROUND(CAST(COALESCE(cash_balance,0)+CAST(? AS NUMERIC) AS NUMERIC),2)",
+            close_source,
+        )
+        self.assertNotIn("ROUND(COALESCE(cash_balance,0)+?,2)", close_source)
         self.assertIn("RETURNING cash_balance", close_source)
         self.assertIn("'margin_settlement'", close_source)
         self.assertIn("settlement_status='completed'", close_source)
