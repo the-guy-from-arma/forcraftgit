@@ -4411,6 +4411,10 @@ def ensure_migrations(db: Database) -> None:
             close_fee NUMERIC(14,2),
             realized_pnl NUMERIC(18,2),
             payout_amount NUMERIC(18,2),
+            settlement_status TEXT NOT NULL DEFAULT '',
+            cash_balance_before NUMERIC(18,2),
+            cash_balance_after NUMERIC(18,2),
+            settled_at TEXT,
             close_reason TEXT NOT NULL DEFAULT '',
             closed_at TEXT,
             FOREIGN KEY (account_id) REFERENCES market_accounts(id) ON DELETE CASCADE,
@@ -4418,6 +4422,10 @@ def ensure_migrations(db: Database) -> None:
         )
         """
     )
+    db.execute("ALTER TABLE market_margin_positions ADD COLUMN IF NOT EXISTS settlement_status TEXT NOT NULL DEFAULT ''")
+    db.execute("ALTER TABLE market_margin_positions ADD COLUMN IF NOT EXISTS cash_balance_before NUMERIC(18,2)")
+    db.execute("ALTER TABLE market_margin_positions ADD COLUMN IF NOT EXISTS cash_balance_after NUMERIC(18,2)")
+    db.execute("ALTER TABLE market_margin_positions ADD COLUMN IF NOT EXISTS settled_at TEXT")
     db.execute("CREATE INDEX IF NOT EXISTS market_margin_positions_account_status_idx ON market_margin_positions(account_id,status,opened_at DESC)")
     db.execute("CREATE INDEX IF NOT EXISTS market_margin_positions_open_idx ON market_margin_positions(status,security_id) WHERE status='open'")
     db.execute("CREATE INDEX IF NOT EXISTS market_margin_positions_opened_idx ON market_margin_positions(opened_at DESC)")
@@ -8315,13 +8323,29 @@ def close_ravenhood_margin_position(
     )
     closed_at = now_iso()
     status = "liquidated" if reason == "liquidation" else "closed"
+    settlement_amount = round(float(metrics["estimated_payout"]), 2)
+    # Apply close proceeds as one atomic account mutation.  Reading a balance
+    # into Python and writing a replacement value can lose a concurrent fill,
+    # transfer, or bridge settlement.  The database is the authority here:
+    # remaining collateral + realized P/L - closing fee reaches buying power
+    # exactly once while the locked position is still open.
+    settled_account = one(db, """UPDATE market_accounts
+        SET cash_balance=ROUND(COALESCE(cash_balance,0)+?,2),updated_at=?
+        WHERE id=? RETURNING cash_balance""",
+        (settlement_amount, closed_at, position["account_id"]))
+    if not settled_account:
+        return {"ok": False, "status_code": 409, "error": "The Ravenhood account could not receive this margin settlement."}
+    cash_balance_after = round(float(settled_account.get("cash_balance") or 0), 2)
+    cash_balance_before = round(cash_balance_after - settlement_amount, 2)
     db.execute("""UPDATE market_margin_positions SET status=?,close_price=?,close_notional=?,close_fee=?,
-        realized_pnl=?,payout_amount=?,close_reason=?,closed_at=? WHERE id=?""",
+        realized_pnl=?,payout_amount=?,settlement_status='completed',cash_balance_before=?,cash_balance_after=?,
+        settled_at=?,close_reason=?,closed_at=? WHERE id=?""",
         (status, metrics["mark_price"], metrics["close_notional"], metrics["close_fee"], metrics["unrealized_pnl"],
-         metrics["estimated_payout"], reason[:80], closed_at, position_id))
-    account = one(db, "SELECT cash_balance FROM market_accounts WHERE id=? FOR UPDATE", (position["account_id"],))
-    db.execute("UPDATE market_accounts SET cash_balance=?,updated_at=? WHERE id=?",
-        (round(float((account or {}).get("cash_balance") or 0) + float(metrics["estimated_payout"]), 2), closed_at, position["account_id"]))
+         settlement_amount, cash_balance_before, cash_balance_after, closed_at, reason[:80], closed_at, position_id))
+    db.execute("""INSERT INTO market_cash_transactions
+        (account_id,code_id,transaction_type,amount,processed_by,command_id,status,created_at)
+        VALUES (?,NULL,'margin_settlement',?,?,?,'completed',?)""",
+        (position["account_id"], settlement_amount, position["user_id"], f"margin-settlement-{position_id}", closed_at))
     lost_collateral = max(0.0, float(position["collateral"]) - max(0.0, float(position["collateral"]) + float(metrics["unrealized_pnl"])))
     adjust_market_holding_balance(db, lost_collateral + float(metrics["close_fee"]))
     closing_buy = position["quantity"] if position["direction"] == "short" else 0
@@ -8332,7 +8356,9 @@ def close_ravenhood_margin_position(
         (position["security_id"], closing_buy, closing_sell, 1 if closing_buy else 0, 1 if closing_sell else 0,
          metrics["mark_price"], f"Isolated margin position closed: {reason}.", closed_at))
     return {"ok": True, "position_id": position_id, "status": status, "ticker": position["ticker"],
-            "realized_pnl": metrics["unrealized_pnl"], "payout_amount": metrics["estimated_payout"],
+            "realized_pnl": metrics["unrealized_pnl"], "payout_amount": settlement_amount,
+            "settlement_status": "completed", "cash_balance_before": cash_balance_before,
+            "cash_balance_after": cash_balance_after,
             "close_price": metrics["mark_price"], "close_fee": metrics["close_fee"], "closed_at": closed_at,
             "user_id": int(position["user_id"])}
 

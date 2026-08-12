@@ -36,6 +36,17 @@ class RavenhoodMarginMathTests(unittest.TestCase):
         self.assertIn("api_wallstreet_margin_cancel(db, user, self.path_int(path, 4))", source)
         self.assertNotIn("api_wallstreet_margin_close(db, user, self.path_int(path, 5))", source)
 
+    def test_margin_close_atomically_settles_buying_power_and_records_ledger(self):
+        source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        start = source.index("def close_ravenhood_margin_position(")
+        end = source.index("\ndef process_queued_ravenhood_margin_orders", start)
+        close_source = source[start:end]
+        self.assertIn("SET cash_balance=ROUND(COALESCE(cash_balance,0)+?,2)", close_source)
+        self.assertIn("RETURNING cash_balance", close_source)
+        self.assertIn("'margin_settlement'", close_source)
+        self.assertIn("settlement_status='completed'", close_source)
+        self.assertIn('"cash_balance_after": cash_balance_after', close_source)
+
 
 if __name__ == "__main__":
     unittest.main()
