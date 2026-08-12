@@ -167,6 +167,41 @@ class MarketFecInvestigationWorkspaceTests(unittest.TestCase):
         self.assertIn("Trading halted by FEC", FRONTEND_SOURCE)
         self.assertIn("selectedTradingHalt", FRONTEND_SOURCE)
 
+    def test_fec_can_delist_and_relist_without_bankruptcy_or_deletion(self) -> None:
+        self.assertIn("CREATE TABLE IF NOT EXISTS market_security_delistings", APP_SOURCE)
+        self.assertIn("MARKET_DELISTING_REASONS", APP_SOURCE)
+        self.assertIn('path == "/api/dev-tools/market/fec/security-delistings"', APP_SOURCE)
+        self.assertIn('re.fullmatch(r"/api/dev-tools/market/fec/security-delistings/\\d+/relist", path)', APP_SOURCE)
+        delist = APP_SOURCE.split("def api_dev_market_fec_security_delist", 1)[1].split(
+            "def api_dev_market_fec_security_relist", 1
+        )[0]
+        self.assertIn("SET lifecycle_status='delisted'", delist)
+        self.assertIn("status='superseded_delisting'", delist)
+        self.assertNotIn("DELETE FROM market_securities", delist)
+        self.assertNotIn("bankruptcy_chapter", delist)
+        relist = APP_SOURCE.split("def api_dev_market_fec_security_relist", 1)[1].split(
+            "def api_dev_market_fec_seizure", 1
+        )[0]
+        self.assertIn("SET lifecycle_status='active'", relist)
+        self.assertIn("status='relisted'", relist)
+
+    def test_delisted_security_is_suspended_across_exchange_activity(self) -> None:
+        self.assertIn("market_security_delisting_error", APP_SOURCE)
+        self.assertIn("AS trading_delisted", APP_SOURCE)
+        self.assertIn('"active_delistings":', APP_SOURCE)
+        self.assertIn('"delisting_history":', APP_SOURCE)
+        self.assertIn("COALESCE(s.lifecycle_status,'active')='active'", APP_SOURCE)
+        self.assertIn("COALESCE(lifecycle_status,'active')='active'", APP_SOURCE)
+
+    def test_frontend_exposes_separate_delisting_and_relisting_authority(self) -> None:
+        self.assertIn('id="devMarketFecDelistForm"', FRONTEND_SOURCE)
+        self.assertIn("Halt &amp; delist from FCX", FRONTEND_SOURCE)
+        self.assertIn("data-fec-relist-security", FRONTEND_SOURCE)
+        self.assertIn("OFF-EXCHANGE REGISTER", FRONTEND_SOURCE)
+        self.assertIn("FEC LISTING STATUS NOTICE", FRONTEND_SOURCE)
+        self.assertIn("selectedDelisted", FRONTEND_SOURCE)
+        self.assertIn("listedSecurities", FRONTEND_SOURCE)
+
 
 if __name__ == "__main__":
     unittest.main()

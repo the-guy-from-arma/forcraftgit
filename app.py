@@ -1936,6 +1936,36 @@ MARKET_TRADING_HALT_REASONS = {
         "description": "Trading is paused to protect market participants during an active investigation.",
     },
 }
+MARKET_DELISTING_REASONS = {
+    "listing_noncompliance": {
+        "label": "FCX listing standards noncompliance",
+        "description": "The issuer no longer satisfies one or more continuing FCX listing requirements.",
+    },
+    "issuer_request": {
+        "label": "Issuer-requested delisting",
+        "description": "The issuer requested removal from public FCX trading under FEC review.",
+    },
+    "inactive_operations": {
+        "label": "Inactive or suspended operations",
+        "description": "The issuer remains preserved but is no longer operating at a level appropriate for public trading.",
+    },
+    "market_integrity": {
+        "label": "Market-integrity protection",
+        "description": "Removal from public trading is required to protect an orderly market or an active investigation.",
+    },
+    "corporate_action": {
+        "label": "Corporate action or restructuring",
+        "description": "A merger, reorganization, or other issuer action requires the listing to leave the exchange.",
+    },
+    "public_interest": {
+        "label": "Public-interest determination",
+        "description": "FEC determined that continued public trading is not presently in the Faircroft market's interest.",
+    },
+    "other_fec_order": {
+        "label": "Other documented FEC order",
+        "description": "A separately documented FEC order requires reversible removal from the public exchange.",
+    },
+}
 LAW_ENFORCEMENT_DEPARTMENT_KEYS = ("state_police", "metro_police", "sheriff", "cid", "iu")
 LAW_ENFORCEMENT_DEPARTMENT_CHOICES = ("Faircroft Sheriff's Office",)
 LAW_ENFORCEMENT_COMMAND_ROLES = {
@@ -4402,6 +4432,31 @@ def ensure_migrations(db: Database) -> None:
     )
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS market_security_halts_active_idx ON market_security_halts(security_id) WHERE status='active'")
     db.execute("CREATE INDEX IF NOT EXISTS market_security_halts_history_idx ON market_security_halts(security_id,halted_at DESC,id DESC)")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS market_security_delistings (
+            id SERIAL PRIMARY KEY,
+            security_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            reason_code TEXT NOT NULL,
+            reason_label TEXT NOT NULL,
+            public_notice TEXT NOT NULL DEFAULT '',
+            case_reference TEXT NOT NULL DEFAULT '',
+            delisted_by INTEGER,
+            delisted_by_name TEXT NOT NULL DEFAULT '',
+            delisted_at TEXT NOT NULL,
+            relisted_by INTEGER,
+            relisted_by_name TEXT NOT NULL DEFAULT '',
+            relisted_at TEXT,
+            relist_note TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY (security_id) REFERENCES market_securities(id) ON DELETE CASCADE,
+            FOREIGN KEY (delisted_by) REFERENCES users(id) ON DELETE SET NULL,
+            FOREIGN KEY (relisted_by) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS market_security_delistings_active_idx ON market_security_delistings(security_id) WHERE status='active'")
+    db.execute("CREATE INDEX IF NOT EXISTS market_security_delistings_history_idx ON market_security_delistings(security_id,delisted_at DESC,id DESC)")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS market_holdings (
@@ -7350,6 +7405,7 @@ def rebalance_market_index_funds(db: Database, force: bool = False, actor_id: in
 def update_market_index_prices(db: Database, force_history: bool = False, directional_path: bool = False) -> int:
     funds = all_rows(db, """SELECT f.*,s.price,s.previous_price,s.ticker FROM market_index_funds f
         JOIN market_securities s ON s.id=f.security_id WHERE f.enabled=1 AND s.active=1
+        AND COALESCE(s.lifecycle_status,'active')='active'
         AND NOT EXISTS (SELECT 1 FROM market_price_programs p WHERE p.security_id=s.id AND p.status='active')
         AND NOT EXISTS (SELECT 1 FROM market_security_halts h WHERE h.security_id=s.id AND h.status='active')
         ORDER BY f.id""")
@@ -7391,7 +7447,8 @@ def market_index_payload(db: Database) -> list[dict[str, Any]]:
         FROM market_index_funds f JOIN market_securities s ON s.id=f.security_id
         LEFT JOIN (SELECT security_id,COUNT(*) AS holder_count,SUM(quantity) AS units_outstanding
                    FROM market_holdings WHERE quantity>0 GROUP BY security_id) position ON position.security_id=s.id
-        WHERE f.enabled=1 AND s.active=1 ORDER BY f.risk_profile""")]
+        WHERE f.enabled=1 AND s.active=1 AND COALESCE(s.lifecycle_status,'active')='active'
+        ORDER BY f.risk_profile""")]
     if not funds:
         return []
     members = all_rows(db, """SELECT m.*,f.fund_key,s.ticker,s.name,s.sector,s.price,s.previous_price,s.issued_shares,
@@ -8158,7 +8215,7 @@ def market_gemini_adjustment_cycle(
              WHERE trade.security_id=s.id AND LOWER(trade.source)=?) AS last_provider_trade
         FROM market_securities s
         LEFT JOIN business_issuer_companies issuer ON issuer.security_id=s.id
-        WHERE s.active=1 AND s.security_type<>'fund'
+        WHERE s.active=1 AND COALESCE(s.lifecycle_status,'active')='active' AND s.security_type<>'fund'
           AND NOT EXISTS (SELECT 1 FROM market_security_halts h WHERE h.security_id=s.id AND h.status='active')
         ORDER BY s.ticker""", (provider,))
     listings = [{
@@ -8219,7 +8276,7 @@ def market_gemini_adjustment_cycle(
         security = one(db, """SELECT s.id,s.price,issuer.id AS issuer_company_id,issuer.controlling_user_id AS issuer_controller_id
             FROM market_securities s
             LEFT JOIN business_issuer_companies issuer ON issuer.security_id=s.id
-            WHERE s.active=1 AND s.security_type<>'fund' AND s.ticker=?
+            WHERE s.active=1 AND COALESCE(s.lifecycle_status,'active')='active' AND s.security_type<>'fund' AND s.ticker=?
               AND NOT EXISTS (SELECT 1 FROM market_price_programs p WHERE p.security_id=s.id AND p.status='active')
               AND NOT EXISTS (SELECT 1 FROM market_security_halts h WHERE h.security_id=s.id AND h.status='active')""", (ticker,))
         if not security:
@@ -8361,7 +8418,8 @@ def apply_market_price_programs(db: Database) -> int:
             continue
         if str(program.get("status") or "active") == "scheduled":
             if program.get("security_id"):
-                live_security = one(db, "SELECT price FROM market_securities WHERE active=1 AND id=?", (program["security_id"],))
+                live_security = one(db, """SELECT price FROM market_securities
+                    WHERE active=1 AND COALESCE(lifecycle_status,'active')='active' AND id=?""", (program["security_id"],))
                 if not live_security:
                     db.execute("UPDATE market_price_programs SET status='cancelled' WHERE id=?", (program["id"],))
                     continue
@@ -8373,10 +8431,11 @@ def apply_market_price_programs(db: Database) -> int:
             program["status"] = "active"
         progress = 1.0 if current >= ends else max(0.0, min(1.0, (current - starts).total_seconds() / max(1, (ends - starts).total_seconds())))
         if program.get("security_id"):
-            targets = all_rows(db, "SELECT id,price,security_type FROM market_securities WHERE active=1 AND id=?", (program["security_id"],))
+            targets = all_rows(db, """SELECT id,price,security_type FROM market_securities
+                WHERE active=1 AND COALESCE(lifecycle_status,'active')='active' AND id=?""", (program["security_id"],))
         else:
             targets = all_rows(db, """SELECT id,price,security_type FROM market_securities s
-                WHERE active=1 AND security_type<>'fund' AND NOT EXISTS (
+                WHERE active=1 AND COALESCE(lifecycle_status,'active')='active' AND security_type<>'fund' AND NOT EXISTS (
                     SELECT 1 FROM market_security_halts h WHERE h.security_id=s.id AND h.status='active'
                 )""")
         for security in targets:
@@ -8434,6 +8493,11 @@ def market_security_halt_error(halt: DbRow) -> str:
     ticker = str(halt.get("ticker") or "This security")
     reason = str(halt.get("reason_label") or "FEC market-integrity review")
     return f"Trading in {ticker} is halted by FEC Market Integrity: {reason}. Existing upcoming orders remain suspended until trading resumes."
+
+
+def market_security_delisting_error(security: DbRow) -> str:
+    ticker = str(security.get("ticker") or "This security")
+    return f"{ticker} is delisted from the FCX by FEC order. Its company record, holdings, and price history remain preserved, but exchange trading is unavailable until FEC authorizes a relisting."
 
 
 def execute_ravenhood_order(
@@ -8611,7 +8675,7 @@ def close_ravenhood_margin_position(
     reason: str,
     account_id: int | None = None,
 ) -> dict[str, Any]:
-    position = one(db, """SELECT p.*,s.ticker,s.price AS mark_price,a.user_id
+    position = one(db, """SELECT p.*,s.ticker,s.price AS mark_price,s.lifecycle_status,a.user_id
         FROM market_margin_positions p JOIN market_securities s ON s.id=p.security_id
         JOIN market_accounts a ON a.id=p.account_id
         WHERE p.id=? FOR UPDATE OF p,s""", (position_id,))
@@ -8619,6 +8683,8 @@ def close_ravenhood_margin_position(
         return {"ok": False, "status_code": 404, "error": "Margin position was not found."}
     if str(position.get("status") or "").lower() != "open":
         return {"ok": False, "status_code": 409, "error": "This margin position is already closed."}
+    if str(position.get("lifecycle_status") or "active").lower() != "active":
+        return {"ok": False, "status_code": 423, "error": market_security_delisting_error(position)}
     halt = active_market_security_halt(db, int(position["security_id"]))
     if halt:
         return {"ok": False, "status_code": 423, "error": market_security_halt_error(halt), "halt": dict(halt)}
@@ -8678,13 +8744,15 @@ def process_queued_ravenhood_margin_orders(db: Database, settings: dict[str, Any
         return 0
     if core_open:
         queued = all_rows(db, """SELECT r.* FROM market_margin_order_requests r
-            WHERE r.status='queued' AND NOT EXISTS (
+            JOIN market_securities s ON s.id=r.security_id
+            WHERE r.status='queued' AND s.active=1 AND COALESCE(s.lifecycle_status,'active')='active' AND NOT EXISTS (
                 SELECT 1 FROM market_security_halts h WHERE h.security_id=r.security_id AND h.status='active'
             ) ORDER BY r.queued_at,r.id LIMIT 25 FOR UPDATE OF r SKIP LOCKED""")
     else:
         queued = all_rows(db, """SELECT r.* FROM market_margin_order_requests r
             JOIN market_securities s ON s.id=r.security_id
-            WHERE r.status='queued' AND s.ticker='FCXV' AND NOT EXISTS (
+            WHERE r.status='queued' AND s.ticker='FCXV' AND s.active=1
+              AND COALESCE(s.lifecycle_status,'active')='active' AND NOT EXISTS (
                 SELECT 1 FROM market_security_halts h WHERE h.security_id=r.security_id AND h.status='active'
             )
             ORDER BY r.queued_at,r.id LIMIT 25 FOR UPDATE OF r SKIP LOCKED""")
@@ -8913,7 +8981,8 @@ def process_queued_ravenhood_orders(db: Database, settings: dict[str, Any]) -> i
         queued = all_rows(
             db,
             """SELECT r.* FROM market_order_requests r
-            WHERE r.status='queued' AND NOT EXISTS (
+            JOIN market_securities s ON s.id=r.security_id
+            WHERE r.status='queued' AND s.active=1 AND COALESCE(s.lifecycle_status,'active')='active' AND NOT EXISTS (
                 SELECT 1 FROM market_security_halts h WHERE h.security_id=r.security_id AND h.status='active'
             ) ORDER BY r.queued_at,r.id LIMIT 25 FOR UPDATE OF r SKIP LOCKED""",
         )
@@ -8922,7 +8991,8 @@ def process_queued_ravenhood_orders(db: Database, settings: dict[str, Any]) -> i
             db,
             """SELECT r.* FROM market_order_requests r
             JOIN market_securities s ON s.id=r.security_id
-            WHERE r.status='queued' AND s.ticker='FCXV' AND NOT EXISTS (
+            WHERE r.status='queued' AND s.ticker='FCXV' AND s.active=1
+              AND COALESCE(s.lifecycle_status,'active')='active' AND NOT EXISTS (
                 SELECT 1 FROM market_security_halts h WHERE h.security_id=r.security_id AND h.status='active'
             )
             ORDER BY r.queued_at,r.id LIMIT 25 FOR UPDATE OF r SKIP LOCKED""",
@@ -11980,7 +12050,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 elif path == "/api/dev-tools/market/fec/security-halts" and method == "POST":
                     self.api_dev_market_fec_security_halt(db, user)
                 elif re.fullmatch(r"/api/dev-tools/market/fec/security-halts/\d+/resume", path) and method == "POST":
-                    self.api_dev_market_fec_security_resume(db, user, self.path_int(path, 6))
+                    self.api_dev_market_fec_security_resume(db, user, self.path_int(path, 5))
+                elif path == "/api/dev-tools/market/fec/security-delistings" and method == "POST":
+                    self.api_dev_market_fec_security_delist(db, user)
+                elif re.fullmatch(r"/api/dev-tools/market/fec/security-delistings/\d+/relist", path) and method == "POST":
+                    self.api_dev_market_fec_security_relist(db, user, self.path_int(path, 5))
                 elif re.fullmatch(r"/api/dev-tools/market/fec/ipo-reviews/\d+/decision", path) and method == "POST":
                     self.api_dev_market_fec_ipo_decision(db, user, self.path_int(path, 5))
                 elif path == "/api/dev-tools/market/programs" and method == "POST":
@@ -17851,7 +17925,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 halt.id AS trading_halt_id,halt.reason_code AS trading_halt_reason_code,
                 halt.reason_label AS trading_halt_reason,halt.public_notice AS trading_halt_notice,
                 halt.case_reference AS trading_halt_case_reference,halt.halted_at AS trading_halted_at,
-                CASE WHEN halt.id IS NULL THEN 0 ELSE 1 END AS trading_halted
+                CASE WHEN halt.id IS NULL THEN 0 ELSE 1 END AS trading_halted,
+                delisting.id AS delisting_id,delisting.reason_code AS delisting_reason_code,
+                delisting.reason_label AS delisting_reason,delisting.public_notice AS delisting_notice,
+                delisting.case_reference AS delisting_case_reference,delisting.delisted_at,
+                CASE WHEN COALESCE(s.lifecycle_status,'active')='delisted' THEN 1 ELSE 0 END AS trading_delisted
             FROM market_securities s
             LEFT JOIN (
                 SELECT security_id,COUNT(*) AS holder_count,SUM(quantity) AS outstanding_shares,
@@ -17859,6 +17937,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 FROM market_holdings WHERE quantity>0 GROUP BY security_id
             ) position ON position.security_id=s.id
             LEFT JOIN market_security_halts halt ON halt.security_id=s.id AND halt.status='active'
+            LEFT JOIN market_security_delistings delisting ON delisting.security_id=s.id AND delisting.status='active'
             LEFT JOIN LATERAL (
                 SELECT h.price FROM market_price_history h
                 WHERE h.security_id=s.id AND h.recorded_at<=?
@@ -17872,7 +17951,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             WHERE s.active=1 ORDER BY CASE WHEN s.security_type='fund' THEN 0 ELSE 1 END,s.security_type,s.ticker""", (day_cutoff,))
         securities = [dict(row) for row in securities]
         ranked_stocks = sorted(
-            (row for row in securities if str(row.get("security_type") or "") != "fund"),
+            (
+                row for row in securities
+                if str(row.get("security_type") or "") != "fund"
+                and str(row.get("lifecycle_status") or "active").lower() == "active"
+                and not bool(int(row.get("trading_delisted") or 0))
+            ),
             key=lambda row: (-float(row.get("market_cap") or 0), str(row.get("ticker") or "")),
         )
         market_cap_ranks = {int(row["id"]): rank for rank, row in enumerate(ranked_stocks, start=1)}
@@ -18323,6 +18407,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(400, "Choose an active ticker, long or short direction, and at least $10.00 collateral."); return
         if str(account.get("status") or "active").lower() != "active":
             self.error(409, "Ravenhood account is not active."); return
+        if str(security.get("lifecycle_status") or "active").lower() != "active":
+            self.error(423, market_security_delisting_error(security)); return
         halt = active_market_security_halt(db, int(security["id"]))
         if halt:
             self.error(423, market_security_halt_error(halt)); return
@@ -18451,6 +18537,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         security = one(db, "SELECT * FROM market_securities WHERE ticker=? AND active=1 FOR UPDATE", (ticker,))
         if not sender or not target_user or target_user["id"] == user["id"] or not security or quantity <= 0:
             self.error(400, "A confirmed recipient CIV, ticker, and quantity are required."); return
+        if str(security.get("lifecycle_status") or "active").lower() != "active":
+            self.error(423, market_security_delisting_error(security)); return
         halt = active_market_security_halt(db, int(security["id"]))
         if halt:
             self.error(423, market_security_halt_error(halt)); return
@@ -25221,12 +25309,19 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     {"code": code, "label": item["label"], "description": item["description"]}
                     for code, item in MARKET_TRADING_HALT_REASONS.items()
                 ],
+                "delisting_reasons": [
+                    {"code": code, "label": item["label"], "description": item["description"]}
+                    for code, item in MARKET_DELISTING_REASONS.items()
+                ],
                 "securities": [dict(row) for row in all_rows(db, """SELECT s.id,s.ticker,s.name,s.security_type,
-                    s.sector,s.price,s.lifecycle_status,h.id AS active_halt_id,h.reason_label AS active_halt_reason
+                    s.sector,s.price,s.lifecycle_status,h.id AS active_halt_id,h.reason_label AS active_halt_reason,
+                    d.id AS active_delisting_id,d.reason_label AS active_delisting_reason
                     FROM market_securities s
                     LEFT JOIN market_security_halts h ON h.security_id=s.id AND h.status='active'
-                    WHERE s.active=1 AND COALESCE(s.lifecycle_status,'active')='active'
-                    ORDER BY CASE WHEN h.id IS NULL THEN 0 ELSE 1 END,s.ticker""")],
+                    LEFT JOIN market_security_delistings d ON d.security_id=s.id AND d.status='active'
+                    WHERE s.active=1 AND COALESCE(s.lifecycle_status,'active')<>'bankrupt'
+                    ORDER BY CASE WHEN COALESCE(s.lifecycle_status,'active')='delisted' THEN 1 ELSE 0 END,
+                             CASE WHEN h.id IS NULL THEN 0 ELSE 1 END,s.ticker""")],
                 "active_halts": [dict(row) for row in all_rows(db, """SELECT h.*,s.ticker,s.name AS security_name,
                     (SELECT COUNT(*) FROM market_order_requests r
                      WHERE r.security_id=h.security_id AND r.status IN ('queued','processing')) AS queued_equity_orders,
@@ -25239,6 +25334,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "halt_history": [dict(row) for row in all_rows(db, """SELECT h.*,s.ticker,s.name AS security_name
                     FROM market_security_halts h JOIN market_securities s ON s.id=h.security_id
                     ORDER BY h.halted_at DESC,h.id DESC LIMIT 200""")],
+                "active_delistings": [dict(row) for row in all_rows(db, """SELECT d.*,s.ticker,s.name AS security_name,s.price,
+                    (SELECT COUNT(*) FROM market_holdings mh WHERE mh.security_id=d.security_id AND mh.quantity>0) AS holder_count,
+                    (SELECT COALESCE(SUM(mh.quantity),0) FROM market_holdings mh WHERE mh.security_id=d.security_id AND mh.quantity>0) AS held_shares,
+                    (SELECT COUNT(*) FROM market_order_requests r
+                     WHERE r.security_id=d.security_id AND r.status IN ('queued','processing')) AS queued_equity_orders,
+                    (SELECT COUNT(*) FROM market_margin_order_requests r
+                     WHERE r.security_id=d.security_id AND r.status IN ('queued','processing')) AS queued_margin_orders,
+                    (SELECT COUNT(*) FROM market_margin_positions p
+                     WHERE p.security_id=d.security_id AND p.status='open') AS open_margin_positions
+                    FROM market_security_delistings d JOIN market_securities s ON s.id=d.security_id
+                    WHERE d.status='active' ORDER BY d.delisted_at DESC,d.id DESC""")],
+                "delisting_history": [dict(row) for row in all_rows(db, """SELECT d.*,s.ticker,s.name AS security_name
+                    FROM market_security_delistings d JOIN market_securities s ON s.id=d.security_id
+                    ORDER BY d.delisted_at DESC,d.id DESC LIMIT 200""")],
             }
 
         if section == "market-settings":
@@ -27465,6 +27574,111 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         })
         self.send_json(200, {"ok": True, "halt_id": halt_id, "ticker": halt["ticker"], "resumed_at": timestamp})
 
+    def api_dev_market_fec_security_delist(self, db: Database, user: DbRow | None) -> None:
+        """Remove a security from public FCX trading without deleting or bankrupting its issuer."""
+        err = admin_tools_section_required(db, user, "fec-investigations")
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        payload = self.read_json()
+        try:
+            security_id = int(payload.get("security_id") or 0)
+        except (TypeError, ValueError):
+            security_id = 0
+        reason_code = str(payload.get("reason_code") or "").strip().lower()
+        reason_info = MARKET_DELISTING_REASONS.get(reason_code)
+        case_reference = str(payload.get("case_reference") or "").strip().upper()[:80]
+        public_notice = str(payload.get("public_notice") or "").strip()[:1000]
+        confirmation = str(payload.get("confirmation") or "").strip().upper()
+        if security_id <= 0:
+            self.error(400, "Choose the FCX security to delist."); return
+        if not reason_info:
+            self.error(400, "Choose a recognized exchange-delisting reason."); return
+        if len(case_reference) < 3:
+            self.error(400, "Enter the FEC case or listing-order reference."); return
+        if len(public_notice) < 10:
+            self.error(400, "Provide a public delisting notice using at least 10 characters."); return
+        if confirmation != "DELIST":
+            self.error(400, "Type DELIST to certify this listing action."); return
+
+        security = one(db, """SELECT id,ticker,name,active,lifecycle_status FROM market_securities
+            WHERE id=? FOR UPDATE""", (security_id,))
+        if not security:
+            self.error(404, "That FCX security was not found."); return
+        lifecycle = str(security.get("lifecycle_status") or "active").lower()
+        if lifecycle == "delisted":
+            self.error(409, f"{security['ticker']} is already delisted from the FCX."); return
+        if not bool(int(security.get("active") or 0)) or lifecycle != "active":
+            self.error(409, "Only an active public FCX listing may use reversible delisting."); return
+        timestamp = now_iso()
+        filing = one(db, """INSERT INTO market_security_delistings
+            (security_id,status,reason_code,reason_label,public_notice,case_reference,
+             delisted_by,delisted_by_name,delisted_at)
+            VALUES (?,'active',?,?,?,?,?,?,?) RETURNING id""",
+            (security_id, reason_code, reason_info["label"], public_notice, case_reference,
+             user["id"], user.get("name") or "FEC investigator", timestamp))
+        db.execute("UPDATE market_securities SET lifecycle_status='delisted',updated_at=? WHERE id=?",
+            (timestamp, security_id))
+        # Freeze issuer-specific programs at the preserved current quote. A later
+        # relisting starts cleanly without an old program silently resuming.
+        db.execute("""UPDATE market_price_programs SET status='superseded_delisting'
+            WHERE security_id=? AND status IN ('active','scheduled')""", (security_id,))
+        # A delisting supersedes any temporary halt so relisting does not accidentally
+        # inherit an old restriction. Both filings remain in their audit histories.
+        db.execute("""UPDATE market_security_halts SET status='superseded_delisting',resumed_by=?,
+            resumed_by_name=?,resumed_at=?,resume_note=? WHERE security_id=? AND status='active'""",
+            (user["id"], user.get("name") or "FEC investigator", timestamp,
+             f"Superseded by FEC delisting {case_reference}.", security_id))
+        detail = f"{security['ticker']} delisted under {case_reference}: {reason_info['label']}. {public_notice}"
+        db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('fec_security_delisted',?,?,?,?)",
+            (f"FEC delisted {security['ticker']}", detail, user["id"], timestamp))
+        add_admin_audit(db, int(user["id"]), "market.fec.security_delisted", details={
+            "delisting_id": int(filing["id"]), "security_id": security_id, "ticker": security["ticker"],
+            "reason_code": reason_code, "reason_label": reason_info["label"],
+            "case_reference": case_reference, "public_notice": public_notice,
+            "records_preserved": True,
+        })
+        self.send_json(201, {"ok": True, "delisting_id": int(filing["id"]), "ticker": security["ticker"],
+            "reason_code": reason_code, "reason_label": reason_info["label"], "delisted_at": timestamp})
+
+    def api_dev_market_fec_security_relist(self, db: Database, user: DbRow | None, delisting_id: int) -> None:
+        """Restore a preserved delisted security to public FCX trading."""
+        err = admin_tools_section_required(db, user, "fec-investigations")
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        payload = self.read_json()
+        relist_note = str(payload.get("relist_note") or "").strip()[:1000]
+        confirmation = str(payload.get("confirmation") or "").strip().upper()
+        if len(relist_note) < 10:
+            self.error(400, "Document why the security may return to public trading using at least 10 characters."); return
+        if confirmation != "RELIST":
+            self.error(400, "Type RELIST to certify the listing-restoration order."); return
+        filing = one(db, """SELECT d.*,s.ticker,s.name AS security_name,s.active,s.lifecycle_status
+            FROM market_security_delistings d JOIN market_securities s ON s.id=d.security_id
+            WHERE d.id=? FOR UPDATE OF d,s""", (delisting_id,))
+        if not filing:
+            self.error(404, "That FEC delisting filing was not found."); return
+        if str(filing.get("status") or "") != "active" or str(filing.get("lifecycle_status") or "") != "delisted":
+            self.error(409, "This delisting has already been resolved or the security is no longer relistable."); return
+        if not bool(int(filing.get("active") or 0)):
+            self.error(409, "This issuer is permanently inactive and cannot be relisted from this workflow."); return
+        timestamp = now_iso()
+        db.execute("""UPDATE market_security_delistings SET status='relisted',relisted_by=?,
+            relisted_by_name=?,relisted_at=?,relist_note=? WHERE id=?""",
+            (user["id"], user.get("name") or "FEC investigator", timestamp, relist_note, delisting_id))
+        db.execute("UPDATE market_securities SET lifecycle_status='active',updated_at=? WHERE id=?",
+            (timestamp, filing["security_id"]))
+        detail = f"{filing['ticker']} relisted under {filing['case_reference']}. {relist_note}"
+        db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('fec_security_relisted',?,?,?,?)",
+            (f"FEC relisted {filing['ticker']}", detail, user["id"], timestamp))
+        add_admin_audit(db, int(user["id"]), "market.fec.security_relisted", details={
+            "delisting_id": delisting_id, "security_id": int(filing["security_id"]),
+            "ticker": filing["ticker"], "case_reference": filing["case_reference"], "relist_note": relist_note,
+        })
+        self.send_json(200, {"ok": True, "delisting_id": delisting_id, "ticker": filing["ticker"],
+            "relisted_at": timestamp})
+
     def api_dev_market_fec_seizure(self, db: Database, user: DbRow | None) -> None:
         """Move settled Ravenhood buying power into audited FEC custody."""
         err = admin_tools_section_required(db, user, "fec-investigations")
@@ -28001,7 +28215,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             targets = all_rows(db, """SELECT s.id,s.ticker,s.price,issuer.id AS issuer_company_id
                 FROM market_securities s
                 LEFT JOIN business_issuer_companies issuer ON issuer.security_id=s.id
-                WHERE s.active=1 AND s.security_type<>'fund' ORDER BY s.ticker""")
+                WHERE s.active=1 AND COALESCE(s.lifecycle_status,'active')='active'
+                  AND s.security_type<>'fund' ORDER BY s.ticker""")
         else:
             targets = []
             missing: list[str] = []
@@ -28009,7 +28224,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 security = one(db, """SELECT s.id,s.ticker,s.price,issuer.id AS issuer_company_id
                     FROM market_securities s
                     LEFT JOIN business_issuer_companies issuer ON issuer.security_id=s.id
-                    WHERE s.ticker=? AND s.active=1""", (ticker,))
+                    WHERE s.ticker=? AND s.active=1
+                      AND COALESCE(s.lifecycle_status,'active')='active'""", (ticker,))
                 if security:
                     targets.append(security)
                 else:
@@ -28126,13 +28342,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         preset = str(self.read_json().get("preset") or "").lower()
         presets = {"market_crash": ("Faircroft market crash", -30.0, 10, "ALL"), "market_rally": ("Broad market rally", 18.0, 15, "ALL"), "flash_crash": ("Flash crash", -12.0, 2, "ALL")}
         if preset == "random_skyrocket":
-            choices = all_rows(db, "SELECT ticker FROM market_securities WHERE security_type NOT IN ('bond','fund') AND active=1")
+            choices = all_rows(db, """SELECT ticker FROM market_securities
+                WHERE security_type NOT IN ('bond','fund') AND active=1
+                  AND COALESCE(lifecycle_status,'active')='active'""")
             if not choices: self.error(409, "No active securities."); return
             event_name, percent, duration, ticker = "Breakout event", 125.0, 5, secrets.choice(choices)["ticker"]
         elif preset in presets: event_name, percent, duration, ticker = presets[preset]
         else: self.error(400, "Unknown market preset."); return
-        security = None if ticker == "ALL" else one(db, "SELECT * FROM market_securities WHERE ticker=? AND active=1 AND security_type<>'fund'", (ticker,)); start=utcnow(); end=start+dt.timedelta(minutes=duration)
-        targets = [security] if security else all_rows(db, "SELECT id,price FROM market_securities WHERE active=1 AND security_type<>'fund'")
+        security = None if ticker == "ALL" else one(db, """SELECT * FROM market_securities
+            WHERE ticker=? AND active=1 AND COALESCE(lifecycle_status,'active')='active'
+              AND security_type<>'fund'""", (ticker,)); start=utcnow(); end=start+dt.timedelta(minutes=duration)
+        targets = [security] if security else all_rows(db, """SELECT id,price FROM market_securities
+            WHERE active=1 AND COALESCE(lifecycle_status,'active')='active' AND security_type<>'fund'""")
         for target in targets:
             db.execute("""INSERT INTO market_price_programs (security_id,event_name,percent_change,duration_minutes,start_price,starts_at,ends_at,status,created_by,created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""", (target["id"],event_name,percent,duration,float(target["price"]),start.isoformat(),end.isoformat(),user["id"],start.isoformat()))
