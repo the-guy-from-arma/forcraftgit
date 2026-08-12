@@ -1890,6 +1890,7 @@ FIRE_RIG_NAMES = ("Engine 1", "Ladder 1", "Truck 1", "Rescue 1", "Battalion 1", 
 LAW_SERVICE_ROLES = ("leo", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director")
 ICE_SERVICE_ROLES = ("ice_agent", "ice_commander")
 INDEED_ADMIN_ROLE = "indeed_admin"
+FEC_INVESTIGATOR_ROLE = "fec_investigator"
 LAW_ENFORCEMENT_DEPARTMENT_KEYS = ("state_police", "metro_police", "sheriff", "cid", "iu")
 LAW_ENFORCEMENT_DEPARTMENT_CHOICES = ("Faircroft Sheriff's Office",)
 LAW_ENFORCEMENT_COMMAND_ROLES = {
@@ -9760,14 +9761,18 @@ def press_required(user: DbRow | None) -> str | None:
 def admin_tools_member_required(user: DbRow | None) -> str | None:
     if not user:
         return "Authentication required"
-    if not has_any(user, "owner", "admin", "dev"):
-        return "Owner, administrator, or developer access required"
+    if not has_any(user, "owner", "admin", "dev", FEC_INVESTIGATOR_ROLE):
+        return "Authorized Admin Tools role required"
     return None
 
 
 def developer_required(user: DbRow | None) -> str | None:
     """Authorize an Admin Tools handler after its section route has been checked."""
-    return admin_tools_member_required(user)
+    if not user:
+        return "Authentication required"
+    if not has_any(user, "owner", "admin", "dev"):
+        return "Owner, administrator, or developer access required"
+    return None
 
 
 def admin_tools_effective_sections(db: Database, user: DbRow | None) -> set[str]:
@@ -9776,6 +9781,11 @@ def admin_tools_effective_sections(db: Database, user: DbRow | None) -> set[str]
     all_sections = {section_id for section_id, _label in ADMIN_TOOLS_SECTIONS}
     if has_any(user, "owner", "dev"):
         return all_sections
+    # This is an intentionally restrictive operational role. It remains scoped
+    # to FEC even if an account also carries the general administrator role;
+    # only owner/developer authority supersedes the restriction.
+    if has_any(user, FEC_INVESTIGATOR_ROLE):
+        return {"fec-investigations"}
     if not has_any(user, "admin"):
         return set()
     settings = get_system_settings(db)
@@ -9792,6 +9802,8 @@ def admin_tools_section_required(db: Database, user: DbRow | None, section_id: s
     if err:
         return err
     if section_id not in admin_tools_effective_sections(db, user):
+        if user and has_any(user, FEC_INVESTIGATOR_ROLE) and not has_any(user, "owner", "dev"):
+            return "FEC Investigator access is limited to FEC Investigations"
         return "Development role is required"
     return None
 
@@ -9910,7 +9922,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
             apps.append({"id": "mdt", "label": "MDT", "icon": "shield", "enabled": True, "coming_soon": False, "hidden": False})
         if has_any(user, *ICE_SERVICE_ROLES):
             apps.append({"id": "ice-mdt", "label": "ICE MDT", "icon": "federal", "enabled": True, "coming_soon": False, "hidden": False})
-        if has_any(user, "owner", "admin", "dev"):
+        if has_any(user, "owner", "admin", "dev", FEC_INVESTIGATOR_ROLE):
             apps.append({"id": "dev-tools", "label": "Admin Tools", "icon": "code", "enabled": True, "coming_soon": False, "hidden": False})
         visibility = settings.get("app_visibility") or {}
         return [item for item in apps if item["id"] in PROTECTED_APP_IDS or visibility.get(item["id"], True)]
@@ -9956,7 +9968,7 @@ def app_catalog(user: DbRow | None, settings: dict[str, Any] | None = None) -> l
         apps.append({"id": "fire-settings", "label": "Fire Settings", "icon": "settings", "enabled": True, "hidden": False})
     if has_any(user, "owner", "admin", "dev", INDEED_ADMIN_ROLE, "judge"):
         apps.append({"id": "indeed-admin", "label": "Indeed Admin", "icon": "briefcase", "enabled": True, "hidden": False})
-    if has_any(user, "owner", "admin", "dev"):
+    if has_any(user, "owner", "admin", "dev", FEC_INVESTIGATOR_ROLE):
         apps.append({"id": "dev-tools", "label": "Admin Tools", "icon": "code", "enabled": True, "hidden": False})
     if has_any(user, "beta"):
         apps.append({"id": "beta-tasks", "label": "Beta Tasks", "icon": "target", "enabled": True, "hidden": False})
@@ -11164,7 +11176,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     )
                     return
                 if path.startswith("/api/dev-tools"):
-                    section_error = admin_tools_section_required(db, user, admin_tools_route_section(path))
+                    routed_section = admin_tools_route_section(path)
+                    if path == "/api/dev-tools":
+                        requested_section = str((query.get("section") or [""])[0]).strip().lower()
+                        if requested_section:
+                            routed_section = "housing-market" if requested_section == "property-intelligence" else requested_section
+                    section_error = admin_tools_section_required(db, user, routed_section)
                     if section_error:
                         self.error(403 if user else 401, section_error)
                         return
@@ -23888,28 +23905,23 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             return
         assert user is not None
         settings = get_system_settings(db)
-        if has_any(user, "owner", "dev"):
-            effective_section_set = allowed_sections
-        else:
-            enabled_section_set = {
-                key for key, enabled in settings.get("admin_tools_access", {}).items()
-                if enabled and key in ADMIN_TOOLS_CONFIGURABLE_SECTIONS
-            }
-            effective_section_set = set(ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS) | enabled_section_set
+        effective_section_set = admin_tools_effective_sections(db, user)
         if section not in effective_section_set:
-            self.error(403, "Development role is required")
+            self.error(403, admin_tools_section_required(db, user, section) or "Admin Tools section access required")
             return
         now = now_iso()
         effective_sections = sorted(effective_section_set)
+        fec_investigator_scoped = has_any(user, FEC_INVESTIGATOR_ROLE) and not has_any(user, "owner", "dev")
         payload: dict[str, Any] = {
             "section": section,
             "generated_at": now,
             "admin_tools_access": {
                 "is_developer": has_any(user, "owner", "dev"),
-                "is_admin": has_any(user, "admin") and not has_any(user, "owner", "dev"),
+                "is_admin": has_any(user, "admin") and not has_any(user, "owner", "dev", FEC_INVESTIGATOR_ROLE),
+                "is_fec_investigator": fec_investigator_scoped,
                 "effective_sections": effective_sections,
                 "default_sections": sorted(ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS),
-                "configurable_sections": [
+                "configurable_sections": [] if fec_investigator_scoped else [
                     {
                         "id": section_id,
                         "label": label,
@@ -25692,7 +25704,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 },
                 "admin_tools_access": {
                     "is_developer": has_any(user, "owner", "dev"),
-                    "is_admin": has_any(user, "admin") and not has_any(user, "owner", "dev"),
+                    "is_admin": has_any(user, "admin") and not has_any(user, "owner", "dev", FEC_INVESTIGATOR_ROLE),
+                    "is_fec_investigator": has_any(user, FEC_INVESTIGATOR_ROLE) and not has_any(user, "owner", "dev"),
                     "effective_sections": sorted(admin_tools_effective_sections(db, user)),
                     "default_sections": sorted(ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS),
                     "configurable_sections": [
@@ -26912,7 +26925,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
 
     def api_dev_market_fec_seizure(self, db: Database, user: DbRow | None) -> None:
         """Move settled Ravenhood buying power into audited FEC custody."""
-        err = developer_required(user)
+        err = admin_tools_section_required(db, user, "fec-investigations")
         if err:
             self.error(403 if user else 401, err); return
         assert user is not None
@@ -26971,7 +26984,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
 
     def api_dev_market_fec_pool_dispose(self, db: Database, user: DbRow | None) -> None:
         """Forfeit, reinvest, or return held FEC assets through an audited disposition."""
-        err = developer_required(user)
+        err = admin_tools_section_required(db, user, "fec-investigations")
         if err:
             self.error(403 if user else 401, err); return
         assert user is not None
@@ -30486,8 +30499,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         cleaned = sorted(set(["civ", *[normalize_role(role) for role in next_roles if str(role).strip()]]))
         current_roles = roles_for(target)
         dev_role_changed = ("dev" in current_roles) != ("dev" in cleaned)
+        fec_investigator_role_changed = (FEC_INVESTIGATOR_ROLE in current_roles) != (FEC_INVESTIGATOR_ROLE in cleaned)
         if dev_role_changed and not has_any(user, "owner"):
             self.error(403, "Only an owner can grant or remove Developer access")
+            return
+        if fec_investigator_role_changed and not has_any(user, "owner", "dev"):
+            self.error(403, "Only an owner or developer can grant or remove FEC Investigator access")
             return
         if "owner" in cleaned and not has_any(user, "owner"):
             self.error(403, "Only owners can assign owner access")
@@ -30528,6 +30545,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 db,
                 int(user["id"]),
                 "account.developer_role.granted" if "dev" in cleaned else "account.developer_role.removed",
+                target_id,
+                {"previous_roles": current_roles, "new_roles": cleaned},
+            )
+        if fec_investigator_role_changed:
+            add_admin_audit(
+                db,
+                int(user["id"]),
+                "account.fec_investigator_role.granted" if FEC_INVESTIGATOR_ROLE in cleaned else "account.fec_investigator_role.removed",
                 target_id,
                 {"previous_roles": current_roles, "new_roles": cleaned},
             )

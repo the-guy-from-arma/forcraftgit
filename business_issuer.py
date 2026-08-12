@@ -316,7 +316,7 @@ def _queue_next_funding_command(db: Any, batch_id: int, now: str) -> dict[str, A
         FROM business_issuer_funding_batches b
         JOIN business_issuer_companies c ON c.id=b.company_id
         LEFT JOIN arma_account_links l ON l.user_id=b.user_id
-        WHERE b.id=? FOR UPDATE""", (batch_id,))
+        WHERE b.id=? FOR UPDATE OF b""", (batch_id,))
     if not batch:
         raise ValueError("Funding batch was not found")
     if not batch.get("identity_id"):

@@ -2773,7 +2773,12 @@ function renderPanel(id) {
   `;
 }
 
+function isScopedFecInvestigator() {
+  return can("fec_investigator") && !canAny("owner", "dev");
+}
+
 function devToolsSectionName(section = state.devTab) {
+  if (isScopedFecInvestigator()) return "fec-investigations";
   return section === "property-intelligence" ? "housing-market" : section;
 }
 
@@ -7828,7 +7833,7 @@ function renderIssuerCompany(data) {
   const releases = (data.announcements || {})[String(company.id)] || [];
   return `<section class="issuer-company-desk"><nav class="issuer-company-switcher">${companies.map(item => `<button type="button" class="${Number(item.id) === Number(company.id) ? "active" : ""}" data-issuer-company="${Number(item.id)}"><span>${escapeHtml(item.ticker)}</span><b>${escapeHtml(item.company_name)}</b><small>${humanLabel(item.status)}</small></button>`).join("")}</nav>
     <article class="issuer-company-hero"><div><span>${escapeHtml(company.company_number)} / ${company.control_source === "existing_security" ? "DEVELOPER-ASSIGNED SECURITY" : "RESIDENT IPO"}</span><h1>${escapeHtml(company.ticker)} <small>${escapeHtml(company.company_name)}</small></h1><p>${escapeHtml(company.description || "Existing FCX operating company assigned to this resident controller.")}</p></div><aside><small>LIVE COMPANY VALUE</small><strong>${money(company.live_market_cap || company.target_market_cap || 0)}</strong>${issuerCompanyStatus(company)}</aside></article>
-    <div class="issuer-company-ledger"><section><header><span>COMPANY TREASURY</span><strong>${money(company.treasury_balance || 0)}</strong></header><dl><div><dt>Paid-in capital</dt><dd>${money(company.paid_in_capital || 0)}</dd></div><div><dt>Live FCX quote</dt><dd>${company.live_price != null ? money(company.live_price) : "Pending"}</dd></div><div><dt>Authorized shares</dt><dd>${Number(company.authorized_shares || company.issued_shares || 0).toLocaleString(undefined,{maximumFractionDigits:6})}</dd></div><div><dt>Funding progress</dt><dd>${money(company.funding_completed || 0)} / ${money(company.funding_total || 0)}</dd></div></dl>${["active", "scheduled"].includes(String(company.status)) ? `<form id="issuerContributionForm"><input type="hidden" name="company_id" value="${Number(company.id)}"/><label>Add controller revenue<input name="amount" type="number" min="1" max="10000000" step="1" required placeholder="Amount from game bank"/></label><button type="submit">Fund treasury</button></form>` : ""}${company.status === "funding_failed" ? `<button type="button" data-issuer-retry="${Number(company.id)}">Retry failed bridge command</button><p class="issuer-error">${escapeHtml(company.funding_failure || "Funding command failed")}</p>` : ""}</section>
+    <div class="issuer-company-ledger"><section><header><span>COMPANY TREASURY</span><strong>${money(company.treasury_balance || 0)}</strong></header><dl><div><dt>Paid-in capital</dt><dd>${money(company.paid_in_capital || 0)}</dd></div><div><dt>Live FCX quote</dt><dd>${company.live_price != null ? money(company.live_price) : "Pending"}</dd></div><div><dt>Authorized shares</dt><dd>${Number(company.authorized_shares || company.issued_shares || 0).toLocaleString(undefined,{maximumFractionDigits:6})}</dd></div><div><dt>Funding progress</dt><dd>${money(company.funding_completed || 0)} / ${money(company.funding_total || 0)}</dd></div></dl>${["active", "scheduled"].includes(String(company.status)) ? `<form id="issuerContributionForm"><input type="hidden" name="company_id" value="${Number(company.id)}"/><label>Add controller revenue<input name="amount" type="number" min="1" max="10000000" step="1" required placeholder="Amount from game bank"/></label><button type="submit">Report revenue</button></form>` : ""}${company.status === "funding_failed" ? `<button type="button" data-issuer-retry="${Number(company.id)}">Retry failed bridge command</button><p class="issuer-error">${escapeHtml(company.funding_failure || "Funding command failed")}</p>` : ""}</section>
     <section><header><span>CAPITAL LEDGER</span><strong>${ledger.length} entries</strong></header><div class="issuer-timeline">${ledger.map(entry => `<article><i class="${escapeHtml(entry.status)}"></i><div><b>${escapeHtml(humanLabel(entry.entry_type))}</b><small>${escapeHtml(entry.description || "Issuer ledger entry")}</small></div><strong>${entry.direction === "outflow" ? "-" : "+"}${money(entry.amount || 0)}<small>${humanLabel(entry.status)}</small></strong></article>`).join("") || `<p>No ledger entries yet.</p>`}</div></section></div>
     <div class="issuer-company-actions"><section><span>COMPANY WIRE</span><h2>Speak to the market.</h2><form id="issuerAnnouncementForm"><input type="hidden" name="company_id" value="${Number(company.id)}"/><label>Headline<input name="headline" maxlength="140" required/></label><label>Release type<select name="announcement_type"><option value="company_update">Company update</option><option value="earnings">Earnings</option><option value="product">Product</option><option value="leadership">Leadership</option><option value="risk_notice">Risk notice</option></select></label><label class="wide">Announcement<textarea name="body" minlength="20" maxlength="1600" required></textarea></label><label>Publish time<input name="scheduled_at" type="datetime-local"/></label><button type="submit">Publish to Company Wire</button></form></section><section class="issuer-filing-danger"><span>CHAPTER FILING</span><h2>End issuer operations.</h2><p>Filing immediately halts the security for developer review. It never erases FCX history or investor records.</p><form id="issuerBankruptcyForm"><input type="hidden" name="company_id" value="${Number(company.id)}"/><label>Reason<textarea name="reason" minlength="20" required></textarea></label><label>Type ${escapeHtml(company.ticker)} to confirm<input name="confirmation" required autocomplete="off"/></label><button type="submit" ${["active", "scheduled"].includes(String(company.status)) ? "" : "disabled"}>File bankruptcy</button></form></section></div>
     ${releases.length ? `<section class="issuer-own-wire"><header><span>YOUR RELEASES</span><strong>${releases.length}</strong></header>${releases.map(item => `<article><time>${new Date(item.published_at || item.scheduled_at || item.created_at).toLocaleString()}</time><h3>${escapeHtml(item.headline)}</h3><p>${escapeHtml(item.body)}</p><small>${humanLabel(item.status)}</small></article>`).join("")}</section>` : ""}
@@ -7858,7 +7863,7 @@ function bindBusinessWorkspace() {
   const updateCapital=()=>{ if(!launchForm)return; const cap=Math.max(0,Number(launchForm.target_market_cap.value||0)),price=Math.max(.000001,Number(launchForm.opening_share_price.value||0)),floatLimit=Math.max(5,Number(launchForm.public_float_percent.max||35)),pct=Math.max(5,Math.min(floatLimit,Number(launchForm.public_float_percent.value||25))),shares=cap/price; if($('[data-issuer-float]')) $('[data-issuer-float]').textContent=`${pct.toFixed(0)}%`; if($('[data-issuer-authorized]')) $('[data-issuer-authorized]').textContent=shares.toLocaleString(undefined,{maximumFractionDigits:6}); if($('[data-issuer-founder]')) $('[data-issuer-founder]').textContent=(shares*(100-pct)/100).toLocaleString(undefined,{maximumFractionDigits:6}); if($('[data-issuer-inventory]')) $('[data-issuer-inventory]').textContent=(shares*pct/100).toLocaleString(undefined,{maximumFractionDigits:6}); if($('[data-issuer-chunks]')) $('[data-issuer-chunks]').textContent=Math.max(1,Math.ceil(cap/10000000)).toLocaleString(); };
   launchForm?.addEventListener('input',updateCapital); updateCapital();
   launchForm?.addEventListener('submit',async event=>{event.preventDefault();const body=Object.fromEntries(new FormData(event.currentTarget).entries());delete body.certify;try{const result=await api('/api/business/companies',{method:'POST',body});state.businessCompanyId=result.company?.id;state.businessTab='company';toast('Capitalization staged through Bank Bridge');await loadAppData('business');render();}catch(error){toast(error.message);}});
-  $('#issuerContributionForm')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,id=Number(form.company_id.value);try{await api(`/api/business/companies/${id}/contributions`,{method:'POST',body:{amount:form.amount.value}});toast('Treasury contribution queued');await loadAppData('business');render();}catch(error){toast(error.message);}});
+  $('#issuerContributionForm')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,id=Number(form.company_id.value);try{await api(`/api/business/companies/${id}/contributions`,{method:'POST',body:{amount:form.amount.value}});toast('Revenue report queued');await loadAppData('business');render();}catch(error){toast(error.message);}});
   $('#issuerAnnouncementForm')?.addEventListener('submit',async event=>{event.preventDefault();const body=Object.fromEntries(new FormData(event.currentTarget).entries()),id=Number(body.company_id);delete body.company_id;try{await api(`/api/business/companies/${id}/announcements`,{method:'POST',body});toast('Company Wire release filed');await loadAppData('business');render();}catch(error){toast(error.message);}});
   $('#issuerBankruptcyForm')?.addEventListener('submit',async event=>{event.preventDefault();if(!window.confirm('File this issuer for bankruptcy and halt its FCX security?'))return;const body=Object.fromEntries(new FormData(event.currentTarget).entries()),id=Number(body.company_id);delete body.company_id;try{await api(`/api/business/companies/${id}/bankruptcy`,{method:'POST',body});toast('Bankruptcy filing recorded');await loadAppData('business');render();}catch(error){toast(error.message);}});
   $$('[data-issuer-retry]').forEach(button=>button.addEventListener('click',async()=>{try{await api(`/api/business/companies/${Number(button.dataset.issuerRetry)}/funding/retry`,{method:'POST',body:{}});toast('Funding command re-staged');await loadAppData('business');render();}catch(error){toast(error.message);}}));
@@ -13387,9 +13392,11 @@ const ADMIN_TOOL_NAV = [
 
 function adminToolAccess() {
   const access = state.cache["dev-tools"]?.admin_tools_access || {};
+  const scopedFecInvestigator = Boolean(access.is_fec_investigator) || isScopedFecInvestigator();
   return {
-    isDeveloper: access.is_developer !== false && !access.is_admin,
-    effective: new Set(access.effective_sections || ADMIN_TOOL_NAV.map(([id]) => id)),
+    isDeveloper: !scopedFecInvestigator && access.is_developer !== false && !access.is_admin,
+    isFecInvestigator: scopedFecInvestigator,
+    effective: new Set(access.effective_sections || (scopedFecInvestigator ? ["fec-investigations"] : ADMIN_TOOL_NAV.map(([id]) => id))),
   };
 }
 
@@ -13399,7 +13406,13 @@ function canOpenAdminTool(sectionId) {
 }
 
 function renderDevWorkspace() {
-  if (!canOpenAdminTool(state.devTab)) state.devTab = "dashboard";
+  const access = adminToolAccess();
+  if (!canOpenAdminTool(state.devTab)) {
+    state.devTab = ADMIN_TOOL_NAV.find(([id]) => access.effective.has(id))?.[0] || "dashboard";
+  }
+  const visibleNav = access.isFecInvestigator
+    ? [["fec-investigations", "FEC Investigations", "01"]]
+    : ADMIN_TOOL_NAV;
   const activeTab = {
     dashboard: ["Operations Overview", "Current account-linking and enforcement status"],
     accounts: ["Account Management", "Search, verify, secure, and maintain every resident account"],
@@ -13438,7 +13451,7 @@ function renderDevWorkspace() {
     <aside class="dev-sidebar">
       <div class="dev-brand"><img class="dev-emblem" src="/static/brand/faircroft-emblem.webp" alt="" /><div><strong>Faircroft RP</strong><small>Admin Tools</small></div></div>
       <p class="dev-nav-label">Operations index</p>
-      <nav>${ADMIN_TOOL_NAV.map(([id,label,number]) => { const locked=!canOpenAdminTool(id); return `<button class="${state.devTab === id ? "active" : ""} ${locked ? "locked" : ""}" data-dev-tab="${id}" aria-disabled="${locked}"><small>${number}</small><span>${label}</span><i></i>${locked ? `<b class="dev-nav-lock" aria-hidden="true">LOCKED</b>` : ""}</button>`; }).join("")}</nav>
+      <nav>${visibleNav.map(([id,label,number]) => { const locked=!canOpenAdminTool(id); return `<button class="${state.devTab === id ? "active" : ""} ${locked ? "locked" : ""}" data-dev-tab="${id}" aria-disabled="${locked}"><small>${number}</small><span>${label}</span><i></i>${locked ? `<b class="dev-nav-lock" aria-hidden="true">LOCKED</b>` : ""}</button>`; }).join("")}</nav>
       <div class="dev-sidebar-footer"><span class="dev-access-dot"></span><div><strong>Authorized Staff</strong><small>${escapeHtml(state.session?.user?.name || "Staff member")}</small></div></div>
     </aside>
     <main class="dev-main">
@@ -16969,7 +16982,7 @@ function renderSystem() {
   `;
 }
 
-const roleOptions = ["civ", "staff", "owner", "admin", "dev", "beta", "press", "indeed_admin", "leo", "judge", "lawyer", "prosecutor", "public_defender", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "ice_agent", "ice_commander", "realty_owner", "business_owner", "business_registrar", "city_hall", "economy_manager"];
+const roleOptions = ["civ", "staff", "owner", "admin", "dev", "fec_investigator", "beta", "press", "indeed_admin", "leo", "judge", "lawyer", "prosecutor", "public_defender", "ems", "fireman", "fire_chief", "deputy_chief", "fire_marshal", "dispatcher", "sheriff", "police", "metro_police_chief", "state_police", "state_police_commander", "cid", "cid_director", "iu", "iu_director", "ice_agent", "ice_commander", "realty_owner", "business_owner", "business_registrar", "city_hall", "economy_manager"];
 
 function adminUserSearchText(user) {
   return [
@@ -17255,8 +17268,12 @@ function renderAdminAccountModal(user, { developerMode = false } = {}) {
             </div>
             <div class="role-grid">
               ${roleOptions.map((role) => {
-                const ownerLocked = role === "dev" && !can("owner");
-                return `<label class="check-row ${ownerLocked ? "role-owner-locked" : ""}" ${ownerLocked ? `title="Only an owner can grant or remove Developer access"` : ""}>${ownerLocked && user.roles.includes(role) ? `<input type="hidden" name="roles" value="dev" />` : ""}<input type="checkbox" name="roles" value="${role}" ${user.roles.includes(role) ? "checked" : ""} ${ownerLocked ? "disabled" : ""} /> ${role.replaceAll("_", " ")}${ownerLocked ? `<small>Owner controlled</small>` : ""}</label>`;
+                const privilegedLocked = (role === "dev" && !can("owner")) || (role === "fec_investigator" && !canAny("owner", "dev"));
+                const lockMessage = role === "dev"
+                  ? "Only an owner can grant or remove Developer access"
+                  : "Only an owner or developer can grant or remove FEC Investigator access";
+                const roleLabel = role === "fec_investigator" ? "FEC Investigator" : role.replaceAll("_", " ");
+                return `<label class="check-row ${privilegedLocked ? "role-owner-locked" : ""}" ${privilegedLocked ? `title="${lockMessage}"` : ""}>${privilegedLocked && user.roles.includes(role) ? `<input type="hidden" name="roles" value="${role}" />` : ""}<input type="checkbox" name="roles" value="${role}" ${user.roles.includes(role) ? "checked" : ""} ${privilegedLocked ? "disabled" : ""} /> ${roleLabel}${privilegedLocked ? `<small>Privileged role</small>` : ""}</label>`;
               }).join("")}
             </div>
             <button class="primary" type="submit">Save account</button>

@@ -86,6 +86,21 @@ class BusinessIssuerHelpersTest(unittest.TestCase):
             self.assertIn(f"self.{handler}(db, user, self.path_int(path, 3))", route_source)
         self.assertNotIn("self.path_int(path, 4)", route_source)
 
+    def test_revenue_command_locks_only_the_required_funding_batch(self):
+        queue_source = BUSINESS_SOURCE.split("def _queue_next_funding_command", 1)[1].split(
+            "def _activate_company", 1
+        )[0]
+        self.assertIn("LEFT JOIN arma_account_links", queue_source)
+        self.assertIn("FOR UPDATE OF b", queue_source)
+        self.assertNotIn('WHERE b.id=? FOR UPDATE"""', queue_source)
+
+    def test_issuer_revenue_action_uses_resident_facing_label(self):
+        company_source = APP_JS_SOURCE.split("function renderIssuerCompany", 1)[1].split(
+            "function renderIssuerWire", 1
+        )[0]
+        self.assertIn("Report revenue", company_source)
+        self.assertNotIn(">Fund treasury<", company_source)
+
 
 if __name__ == "__main__":
     unittest.main()
