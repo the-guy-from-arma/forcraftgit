@@ -28,6 +28,16 @@ class MarketAutopilotTests(unittest.TestCase):
         self.assertIn('name="autopilot_direction"', FRONTEND_SOURCE)
         self.assertIn('name="volatility_min_percent"', FRONTEND_SOURCE)
 
+    def test_automation_targets_allow_market_crashes_and_skyrockets(self) -> None:
+        self.assertIn('min="-99" max="300"', FRONTEND_SOURCE)
+        self.assertIn('max="300" step="0.01"', FRONTEND_SOURCE)
+        self.assertIn('3.00–300.00% available', FRONTEND_SOURCE)
+        self.assertIn('max(-99.0, min(300.0', APP_SOURCE)
+        self.assertIn('min(300.0, abs(float(amplitude or 0)))', APP_SOURCE)
+        self.assertIn('Directional target must be from -99% through +300%', APP_SOURCE)
+        self.assertIn('if volatility < 0:', APP_SOURCE)
+        self.assertIn('autopilot_direction = "bearish"', APP_SOURCE)
+
     def test_autopilot_direction_is_enforced_and_audited(self) -> None:
         self.assertIn('"market_autopilot_direction": "bearish"', APP_SOURCE)
         self.assertIn("def direct_market_move", APP_SOURCE)

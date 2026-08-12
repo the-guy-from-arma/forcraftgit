@@ -6182,8 +6182,8 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "market_autopilot_interval_minutes": max(1, min(60, int(raw.get("market_autopilot_interval_minutes") or 5))),
         "market_autopilot_profile": str(raw.get("market_autopilot_profile") or "light").strip().lower() if str(raw.get("market_autopilot_profile") or "light").strip().lower() in ("light", "aggressive", "extreme") else "light",
         "market_autopilot_direction": str(raw.get("market_autopilot_direction") or "bearish").strip().lower() if str(raw.get("market_autopilot_direction") or "bearish").strip().lower() in ("bearish", "mixed", "bullish") else "bearish",
-        "market_volatility_min_percent": max(0.01, min(15.0, float(raw.get("market_volatility_min_percent") or 0.1))),
-        "market_volatility_percent": max(0.1, min(15.0, float(raw.get("market_volatility_percent") or 3.5))),
+        "market_volatility_min_percent": max(0.01, min(300.0, float(raw.get("market_volatility_min_percent") or 0.1))),
+        "market_volatility_percent": max(-99.0, min(300.0, float(raw.get("market_volatility_percent") or 3.5))),
         "market_autopilot_last_tick": str(raw.get("market_autopilot_last_tick") or "")[:80],
         "market_automation_provider": str(raw.get("market_automation_provider") or "local").strip().lower() if str(raw.get("market_automation_provider") or "local").strip().lower() in ("local", "gemini", "deepseek") else "local",
         "market_ai_fallback_enabled": str(raw.get("market_ai_fallback_enabled") or "1") in ("1", "true", "True", "yes", "on"),
@@ -7653,8 +7653,13 @@ def market_autopilot_bounds(settings: dict[str, Any]) -> tuple[str, float, float
     if profile not in MARKET_AUTOPILOT_PROFILES:
         profile = "light"
     defaults = MARKET_AUTOPILOT_PROFILES[profile]
-    minimum = max(0.01, min(15.0, float(settings.get("market_volatility_min_percent") or defaults["minimum"])))
-    maximum = max(0.10, min(15.0, float(settings.get("market_volatility_percent") or defaults["maximum"])))
+    minimum = max(0.01, min(300.0, float(settings.get("market_volatility_min_percent") or defaults["minimum"])))
+    # Directional targets are stored with their visible sign. Automation uses
+    # the magnitude here and applies the selected bearish/bullish direction
+    # later. Downside is capped at -99% so a quote can never become zero or
+    # negative; upside may run as high as +300% for a true skyrocket cycle.
+    target = max(-99.0, min(300.0, float(settings.get("market_volatility_percent") or defaults["maximum"])))
+    maximum = max(0.10, abs(target))
     if minimum > maximum:
         minimum = maximum
     return profile, minimum, maximum
@@ -7717,7 +7722,7 @@ def finish_market_automation_cycle(db: Database, cycle_number: int, provider: st
 
 
 def market_volatility_cycle(db: Database, amplitude: float, source: str = "autopilot", actor_id: int | None = None, cycle_number: int | None = None, direction: str | None = None) -> dict[str, Any]:
-    amplitude = max(0.1, min(15.0, float(amplitude or 0)))
+    amplitude = max(0.1, min(300.0, abs(float(amplitude or 0))))
     cycle_settings = get_system_settings(db)
     direction = market_autopilot_direction(
         {"market_autopilot_direction": direction} if direction else cycle_settings
@@ -8202,8 +8207,8 @@ def market_gemini_adjustment_cycle(
     if provider == "deepseek" and not DEEPSEEK_API_KEY:
         raise RuntimeError("DEEPSEEK_API_KEY is not configured")
     provider_name = "Gemini" if provider == "gemini" else "DeepSeek"
-    minimum_percent = max(0.01, min(15.0, float(minimum_percent or 0.1)))
-    maximum_percent = max(minimum_percent, min(15.0, float(maximum_percent or 8)))
+    minimum_percent = max(0.01, min(300.0, abs(float(minimum_percent or 0.1))))
+    maximum_percent = max(minimum_percent, min(300.0, abs(float(maximum_percent or 8))))
     profile = profile if profile in MARKET_AUTOPILOT_PROFILES else "light"
     direction = market_autopilot_direction(
         {"market_autopilot_direction": direction} if direction else get_system_settings(db)
@@ -27997,14 +28002,27 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(400, "Automation provider must be Local, Gemini, or DeepSeek."); return
         try:
             automation_interval = max(1, min(60, int(payload.get("autopilot_interval_minutes") or 5)))
-            volatility_minimum = max(0.01, min(15.0, float(payload.get("volatility_min_percent") or current_settings["market_volatility_min_percent"])))
-            volatility = max(0.1, min(15.0, float(payload.get("volatility_percent") or 3.5)))
+            volatility_minimum = float(payload.get("volatility_min_percent") or current_settings["market_volatility_min_percent"])
+            volatility = float(payload.get("volatility_percent") or current_settings["market_volatility_percent"])
             ai_interval = max(2, min(1440, int(payload.get("ai_interval_minutes") or current_settings["market_ai_interval_minutes"])))
             ai_cooldown = max(5, min(1440, int(payload.get("ai_cooldown_minutes") or current_settings["market_ai_cooldown_minutes"])))
         except (TypeError, ValueError):
             self.error(400, "Automation intervals and volatility must be numeric."); return
-        if volatility_minimum > volatility:
-            self.error(400, "Minimum fluctuation cannot be greater than the maximum fluctuation."); return
+        if not 0.01 <= volatility_minimum <= 300.0:
+            self.error(400, "Minimum fluctuation must be between 0.01% and 300%."); return
+        if volatility < -99.0 or volatility > 300.0 or abs(volatility) < 0.1:
+            self.error(400, "Directional target must be from -99% through +300%, excluding zero."); return
+        target_magnitude = abs(volatility)
+        if volatility_minimum > target_magnitude:
+            self.error(400, "Minimum fluctuation cannot be greater than the directional target magnitude."); return
+        # A typed negative target is an explicit bearish instruction. Positive
+        # values remain compatible with the separate direction selector.
+        if volatility < 0:
+            autopilot_direction = "bearish"
+        if autopilot_direction == "bearish":
+            volatility = -min(99.0, target_magnitude)
+        else:
+            volatility = min(300.0, target_magnitude)
         if "autopilot_enabled" in payload:
             autopilot_enabled = str(payload.get("autopilot_enabled") or "").strip().lower() in ("1", "true", "yes", "on")
             set_system_setting(db, "market_autopilot_enabled", "1" if autopilot_enabled else "0")
