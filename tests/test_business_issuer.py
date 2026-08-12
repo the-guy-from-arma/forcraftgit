@@ -5,6 +5,7 @@ from pathlib import Path
 from business_issuer import (
     DEFAULT_MIN_IPO_CAPITALIZATION,
     DEFAULT_SECTOR_COMPANY_LIMIT,
+    IPO_REVIEW_SLA_HOURS,
     IPO_SECTORS,
     _canonical_sector,
     _float,
@@ -77,6 +78,32 @@ class BusinessIssuerHelpersTest(unittest.TestCase):
         self.assertIn('guardrails["max_public_float_percent"]', create_source)
         self.assertIn('sector_policy["closed"]', create_source)
 
+    def test_resident_ipo_requires_fec_approval_before_bank_bridge(self):
+        create_source = BUSINESS_SOURCE.split("def create_ipo", 1)[1].split("def review_ipo", 1)[0]
+        review_source = BUSINESS_SOURCE.split("def review_ipo", 1)[1].split("def fec_review_payload", 1)[0]
+        self.assertEqual(IPO_REVIEW_SLA_HOURS, 24)
+        self.assertIn("pending_fec_review", create_source)
+        self.assertIn("awaiting_approval", create_source)
+        self.assertIn("business_issuer_ipo_reviews", create_source)
+        self.assertNotIn("_queue_next_funding_command", create_source)
+        self.assertIn("_queue_next_funding_command", review_source)
+        self.assertIn('action == "reject"', review_source)
+
+    def test_scheduled_ipo_requires_24_hours_and_browser_sends_utc(self):
+        create_source = BUSINESS_SOURCE.split("def create_ipo", 1)[1].split("def review_ipo", 1)[0]
+        self.assertIn("timedelta(hours=IPO_REVIEW_SLA_HOURS)", create_source)
+        self.assertIn("Scheduled IPO releases must be at least 24 hours", create_source)
+        self.assertIn("body.scheduled_at=release.toISOString()", APP_JS_SOURCE)
+        self.assertIn("Optional releases must be scheduled at least 24 hours ahead", APP_JS_SOURCE)
+
+    def test_fec_review_desk_has_decision_route_and_controls(self):
+        self.assertIn('/api/dev-tools/market/fec/ipo-reviews/', APP_SOURCE)
+        self.assertIn("self.path_int(path, 5)", APP_SOURCE)
+        self.assertIn("business_review_ipo", APP_SOURCE)
+        self.assertIn("data-fec-ipo-decision", APP_JS_SOURCE)
+        self.assertIn("Approve &amp; begin capitalization", APP_JS_SOURCE)
+        self.assertIn("Reject filing", APP_JS_SOURCE)
+
     def test_dev_guardrail_route_and_resident_form_share_the_policy(self):
         self.assertIn('/api/dev-tools/business/ipo-guardrails', APP_SOURCE)
         self.assertIn("developer_required(user)", APP_SOURCE.split("def api_dev_business_ipo_guardrails", 1)[1].split("\n    def ", 1)[0])
@@ -123,7 +150,7 @@ class BusinessIssuerHelpersTest(unittest.TestCase):
         self.assertIn("business_issuer_market_cap_history", BUSINESS_SOURCE)
         self.assertIn("_company_intelligence", BUSINESS_SOURCE)
         self.assertIn("Northstar Market Making", BUSINESS_SOURCE)
-        self.assertIn("NPC broker / automated liquidity", BUSINESS_SOURCE)
+        self.assertIn("Brokerage Account", BUSINESS_SOURCE)
         self.assertIn('"market_makers": market_makers', BUSINESS_SOURCE)
         self.assertIn('"market_maker_inventory_shares"', BUSINESS_SOURCE)
         self.assertIn('"total_recorded_notional"', BUSINESS_SOURCE)
@@ -133,8 +160,9 @@ class BusinessIssuerHelpersTest(unittest.TestCase):
         )[0]
         self.assertIn("REVENUE / VALUATION AUDIT", company_source)
         self.assertIn("RESIDENT INVESTOR REGISTER", company_source)
-        self.assertIn("NPC BROKER REGISTER", company_source)
+        self.assertIn("BROKER REGISTER", company_source)
         self.assertIn("RECENT COMPANY TRADES", company_source)
+        self.assertIn('item.participant_type === "market_maker" ? "Brokerage Account"', company_source)
         self.assertIn("PUBLIC FLOAT", company_source)
         self.assertIn("RECORDED NOTIONAL", company_source)
         self.assertIn("VALUATION ADDED", company_source)
@@ -144,7 +172,7 @@ class BusinessIssuerHelpersTest(unittest.TestCase):
             "def resident_payload", 1
         )[0]
         self.assertIn("GROUP BY source", intelligence_source)
-        self.assertIn("NPC brokerage / automated market maker", intelligence_source)
+        self.assertIn("Brokerage Account", intelligence_source)
         self.assertIn('"inventory_side"', intelligence_source)
         self.assertIn('"inventory_value"', intelligence_source)
         self.assertIn("WHERE security_id=?", intelligence_source)

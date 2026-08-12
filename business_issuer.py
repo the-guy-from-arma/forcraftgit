@@ -35,6 +35,7 @@ IPO_SECTORS = (
     "General",
 )
 DEFAULT_SECTOR_COMPANY_LIMIT = 5
+IPO_REVIEW_SLA_HOURS = 24
 
 
 def _one(db: Any, sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:
@@ -59,6 +60,14 @@ def _float(value: Any, default: float = 0.0) -> float:
     except (TypeError, ValueError):
         return default
     return result if math.isfinite(result) else default
+
+
+def _utc_datetime(value: Any) -> dt.datetime:
+    """Parse an application timestamp as an aware UTC datetime."""
+    parsed = dt.datetime.fromisoformat(str(value or "").strip().replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
 
 
 def _revenue_market_repricing(price: Any, issued_shares: Any, revenue: Any) -> dict[str, float]:
@@ -128,7 +137,7 @@ def ipo_guardrails(db: Any) -> dict[str, Any]:
     limits = _sector_limits(settings.get("business_ipo_sector_limits"))
     counts = {sector: 0 for sector in IPO_SECTORS}
     for row in _all(db, """SELECT sector,COUNT(*) AS total FROM business_issuer_companies
-        WHERE control_source='new_ipo' AND status NOT IN ('bankrupt','bankruptcy_filed','cancelled')
+        WHERE control_source='new_ipo' AND status NOT IN ('bankrupt','bankruptcy_filed','cancelled','rejected')
         GROUP BY sector"""):
         sector = _canonical_sector(row.get("sector"))
         if sector:
@@ -234,6 +243,30 @@ def ensure_schema(db: Any, now: str) -> None:
     """)
     db.execute("CREATE INDEX IF NOT EXISTS business_issuer_owner_idx ON business_issuer_companies (controlling_user_id,status,updated_at)")
     db.execute("CREATE INDEX IF NOT EXISTS business_issuer_status_idx ON business_issuer_companies (status,scheduled_at)")
+    # Existing live issuers predate FEC admission review and remain approved.
+    db.execute("ALTER TABLE business_issuer_companies ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT 'approved'")
+    db.execute("ALTER TABLE business_issuer_companies ADD COLUMN IF NOT EXISTS submitted_at TEXT")
+    db.execute("ALTER TABLE business_issuer_companies ADD COLUMN IF NOT EXISTS reviewed_at TEXT")
+    db.execute("ALTER TABLE business_issuer_companies ADD COLUMN IF NOT EXISTS reviewed_by INTEGER")
+    db.execute("ALTER TABLE business_issuer_companies ADD COLUMN IF NOT EXISTS review_note TEXT NOT NULL DEFAULT ''")
+    db.execute("CREATE INDEX IF NOT EXISTS business_issuer_review_idx ON business_issuer_companies (review_status,submitted_at)")
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS business_issuer_ipo_reviews (
+            id SERIAL PRIMARY KEY,
+            company_id INTEGER NOT NULL,
+            applicant_user_id INTEGER,
+            status TEXT NOT NULL,
+            decision_note TEXT NOT NULL DEFAULT '',
+            reviewed_by INTEGER,
+            submitted_at TEXT NOT NULL,
+            reviewed_at TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (company_id) REFERENCES business_issuer_companies(id) ON DELETE CASCADE,
+            FOREIGN KEY (applicant_user_id) REFERENCES users(id) ON DELETE SET NULL,
+            FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL
+        )
+    """)
+    db.execute("CREATE INDEX IF NOT EXISTS business_issuer_ipo_review_status_idx ON business_issuer_ipo_reviews (status,submitted_at DESC)")
     db.execute("""
         CREATE TABLE IF NOT EXISTS business_issuer_funding_batches (
             id SERIAL PRIMARY KEY,
@@ -481,6 +514,19 @@ def create_ipo(db: Any, user_id: int, payload: dict[str, Any], now: str) -> dict
     share_price = round(_float(payload.get("opening_share_price")), 4)
     public_float = round(_float(payload.get("public_float_percent"), 25), 2)
     scheduled_at = _text(payload.get("scheduled_at"), 40) or None
+    try:
+        submitted_time = _utc_datetime(now)
+    except ValueError:
+        submitted_time = dt.datetime.now(dt.timezone.utc)
+    if scheduled_at:
+        try:
+            release_time = _utc_datetime(scheduled_at)
+        except ValueError as exc:
+            raise ValueError("Choose a valid IPO release date and time") from exc
+        earliest_release = submitted_time + dt.timedelta(hours=IPO_REVIEW_SLA_HOURS)
+        if release_time < earliest_release:
+            raise ValueError("Scheduled IPO releases must be at least 24 hours after the filing is submitted for FEC review")
+        scheduled_at = release_time.isoformat()
     if len(name) < 3 or len(description) < 40:
         raise ValueError("Enter a company name and a detailed operating description of at least 40 characters")
     if len(ticker) < 2:
@@ -508,7 +554,7 @@ def create_ipo(db: Any, user_id: int, payload: dict[str, Any], now: str) -> dict
         )
     if _one(db, "SELECT id FROM market_securities WHERE ticker=?", (ticker,)) or _one(db, "SELECT id FROM business_issuer_companies WHERE ticker=?", (ticker,)):
         raise ValueError("That FCX ticker is already in use")
-    owned = _one(db, "SELECT COUNT(*) AS total FROM business_issuer_companies WHERE controlling_user_id=? AND status NOT IN ('bankrupt','cancelled')", (user_id,))
+    owned = _one(db, "SELECT COUNT(*) AS total FROM business_issuer_companies WHERE controlling_user_id=? AND status NOT IN ('bankrupt','cancelled','rejected')", (user_id,))
     if int((owned or {}).get("total") or 0) >= MAX_COMPANIES_PER_RESIDENT:
         raise ValueError(f"A resident may control up to {MAX_COMPANIES_PER_RESIDENT} active issuer files")
     link = _one(db, """SELECT l.identity_id,b.balance,b.synced_at FROM arma_account_links l
@@ -519,7 +565,7 @@ def create_ipo(db: Any, user_id: int, payload: dict[str, Any], now: str) -> dict
         raise ValueError("Your in-game bank snapshot has not synchronized yet")
     reserved = _one(db, """SELECT COALESCE(SUM(b.total_amount-b.completed_amount),0) AS total
         FROM business_issuer_funding_batches b
-        WHERE b.user_id=? AND b.status IN ('staged','pending','failed')""", (user_id,))
+        WHERE b.user_id=? AND b.status IN ('awaiting_approval','staged','pending','failed')""", (user_id,))
     if float(link.get("balance") or 0) - float((reserved or {}).get("total") or 0) + 0.0001 < market_cap:
         raise ValueError("The synchronized in-game balance does not cover this capitalization")
     shares = round(market_cap / share_price, 6)
@@ -529,21 +575,96 @@ def create_ipo(db: Any, user_id: int, payload: dict[str, Any], now: str) -> dict
     company = _one(db, """INSERT INTO business_issuer_companies
         (company_number,controlling_user_id,created_by,control_source,status,company_name,ticker,sector,headquarters,
          description,target_market_cap,opening_share_price,authorized_shares,public_float_percent,founder_shares,
-         issuer_inventory,scheduled_at,created_at,updated_at)
-        VALUES (?,?,?,'new_ipo','funding_pending',?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING *""",
+         issuer_inventory,scheduled_at,review_status,submitted_at,created_at,updated_at)
+        VALUES (?,?,?,'new_ipo','pending_fec_review',?,?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,?) RETURNING *""",
         (company_number, user_id, user_id, name, ticker, sector, headquarters, description, market_cap, share_price,
-         shares, public_float, founder, inventory, scheduled_at, now, now))
+         shares, public_float, founder, inventory, scheduled_at, now, now, now))
     chunks = max(1, int(math.ceil(market_cap / BRIDGE_CHUNK_LIMIT)))
     batch = _one(db, """INSERT INTO business_issuer_funding_batches
         (company_id,user_id,purpose,total_amount,chunk_count,status,created_at,updated_at)
-        VALUES (?,?,'initial_capitalization',?,?,'staged',?,?) RETURNING id""",
+        VALUES (?,?,'initial_capitalization',?,?,'awaiting_approval',?,?) RETURNING id""",
         (company["id"], user_id, market_cap, chunks, now, now))
     db.execute("""INSERT INTO business_issuer_ledger
         (company_id,user_id,funding_batch_id,entry_type,direction,amount,description,status,created_at)
-        VALUES (?,?,?,'initial_capitalization','inflow',?,'Founder capitalization through the in-game Bank Bridge','pending',?)""",
+        VALUES (?,?,?,'initial_capitalization','inflow',?,'Founder capitalization pending FEC approval','awaiting_approval',?)""",
         (company["id"], user_id, batch["id"], market_cap, now))
-    command = _queue_next_funding_command(db, int(batch["id"]), now)
-    return {"company": _public_company(company), "funding": command, "chunk_count": chunks}
+    db.execute("""INSERT INTO business_issuer_ipo_reviews
+        (company_id,applicant_user_id,status,submitted_at,created_at)
+        VALUES (?,?,'pending',?,?)""", (company["id"], user_id, now, now))
+    return {
+        "company": _public_company(company),
+        "funding": {"status": "awaiting_fec_approval"},
+        "chunk_count": chunks,
+        "review": {
+            "status": "pending",
+            "submitted_at": now,
+            "review_due_at": (submitted_time + dt.timedelta(hours=IPO_REVIEW_SLA_HOURS)).isoformat(),
+            "message": "Your IPO filing was sent to FEC Investigations. An approval decision is expected within 24 hours. No funds will be withdrawn before approval.",
+        },
+    }
+
+
+def review_ipo(db: Any, actor_id: int, company_id: int, payload: dict[str, Any], now: str) -> dict[str, Any]:
+    """Approve or reject a resident IPO before any Bank Bridge debit is created."""
+    action = _text(payload.get("action"), 20).lower()
+    note = _text(payload.get("note"), 1000)
+    confirmation = _text(payload.get("confirmation"), 20).upper()
+    if action not in ("approve", "reject"):
+        raise ValueError("Choose approve or reject for this IPO filing")
+    if confirmation != action.upper():
+        raise ValueError(f"Type {action.upper()} to authorize this FEC decision")
+    if len(note) < 10:
+        raise ValueError("Document the FEC decision in at least 10 characters")
+    company = _one(db, "SELECT * FROM business_issuer_companies WHERE id=? FOR UPDATE", (company_id,))
+    if not company:
+        raise ValueError("IPO filing was not found")
+    if str(company.get("review_status") or "") != "pending" or company.get("status") != "pending_fec_review":
+        raise ValueError("This IPO filing no longer awaits an FEC decision")
+    batch = _one(db, """SELECT * FROM business_issuer_funding_batches
+        WHERE company_id=? AND purpose='initial_capitalization' ORDER BY id DESC LIMIT 1 FOR UPDATE""", (company_id,))
+    if not batch or batch.get("status") != "awaiting_approval":
+        raise ValueError("The IPO capitalization reservation is unavailable")
+    next_status = "approved" if action == "approve" else "rejected"
+    db.execute("""UPDATE business_issuer_companies
+        SET review_status=?,reviewed_at=?,reviewed_by=?,review_note=?,status=?,updated_at=? WHERE id=?""",
+        (next_status, now, actor_id, note, "funding_pending" if action == "approve" else "rejected", now, company_id))
+    db.execute("""UPDATE business_issuer_ipo_reviews
+        SET status=?,decision_note=?,reviewed_by=?,reviewed_at=?
+        WHERE company_id=? AND status='pending'""", (next_status, note, actor_id, now, company_id))
+    if action == "reject":
+        db.execute("UPDATE business_issuer_funding_batches SET status='cancelled',failure_reason=?,updated_at=? WHERE id=?",
+                   (f"FEC rejected IPO filing: {note}", now, batch["id"]))
+        db.execute("UPDATE business_issuer_ledger SET status='cancelled',description=? WHERE funding_batch_id=?",
+                   (f"IPO filing rejected by FEC: {note}", batch["id"]))
+        return {"company_id": company_id, "ticker": company["ticker"], "status": "rejected", "note": note}
+    db.execute("UPDATE business_issuer_funding_batches SET status='staged',failure_reason='',updated_at=? WHERE id=?",
+               (now, batch["id"]))
+    db.execute("UPDATE business_issuer_ledger SET status='pending',description='Founder capitalization through the in-game Bank Bridge' WHERE funding_batch_id=?",
+               (batch["id"],))
+    funding = _queue_next_funding_command(db, int(batch["id"]), now)
+    return {"company_id": company_id, "ticker": company["ticker"], "status": "approved", "note": note, "funding": funding}
+
+
+def fec_review_payload(db: Any, now: str) -> dict[str, Any]:
+    pending = [dict(row) for row in _all(db, """SELECT c.*,u.name AS applicant_name,u.email AS applicant_email,u.civ_number,
+            b.total_amount AS reserved_capitalization,b.chunk_count
+        FROM business_issuer_companies c
+        LEFT JOIN users u ON u.id=c.controlling_user_id
+        LEFT JOIN LATERAL (SELECT * FROM business_issuer_funding_batches x WHERE x.company_id=c.id ORDER BY x.id DESC LIMIT 1) b ON TRUE
+        WHERE c.review_status='pending' AND c.status='pending_fec_review'
+        ORDER BY c.submitted_at,c.id""")]
+    history = [dict(row) for row in _all(db, """SELECT r.*,c.ticker,c.company_name,c.target_market_cap,
+            applicant.name AS applicant_name,reviewer.name AS reviewer_name
+        FROM business_issuer_ipo_reviews r JOIN business_issuer_companies c ON c.id=r.company_id
+        LEFT JOIN users applicant ON applicant.id=r.applicant_user_id
+        LEFT JOIN users reviewer ON reviewer.id=r.reviewed_by
+        WHERE r.status<>'pending' ORDER BY r.reviewed_at DESC,r.id DESC LIMIT 200""")]
+    for item in pending:
+        try:
+            item["review_due_at"] = (_utc_datetime(item.get("submitted_at") or now) + dt.timedelta(hours=IPO_REVIEW_SLA_HOURS)).isoformat()
+        except ValueError:
+            item["review_due_at"] = None
+    return {"pending": pending, "history": history, "sla_hours": IPO_REVIEW_SLA_HOURS}
 
 
 def contribute(db: Any, user_id: int, company_id: int, payload: dict[str, Any], now: str) -> dict[str, Any]:
@@ -809,7 +930,7 @@ def _company_intelligence(db: Any, company: dict[str, Any], now: str) -> dict[st
             price = max(0.0, _float(row.get("reference_price")))
             recent_trades.append({
                 "key": f"system-{row['id']}-{side}", "participant_type": "market_maker",
-                "participant": firm, "participant_detail": "NPC broker / automated liquidity",
+                "participant": firm, "participant_detail": "Brokerage Account",
                 "side": side, "shares": round(shares, 6), "price": round(price, 4),
                 "gross_amount": round(shares * price, 2),
                 "execution_count": max(1, int(row.get(count_key) or 1)),
@@ -838,7 +959,7 @@ def _company_intelligence(db: Any, company: dict[str, Any], now: str) -> dict[st
         firm = _market_maker_firm(source)
         broker = broker_rollup.setdefault(firm, {
             "firm": firm, "participant_type": "market_maker",
-            "participant_detail": "NPC brokerage / automated market maker",
+            "participant_detail": "Brokerage Account",
             "buy_shares": 0.0, "sell_shares": 0.0, "buy_fills": 0,
             "sell_fills": 0, "notional": 0.0, "last_trade_at": None,
             "sources": [],

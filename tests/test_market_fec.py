@@ -73,6 +73,32 @@ class MarketFecInvestigationWorkspaceTests(unittest.TestCase):
         self.assertNotIn("${fecCustody}", rendered_output)
         self.assertNotIn("${ravenhoodAccountRegistry}", rendered_output)
 
+    def test_fec_can_halt_and_resume_an_individual_security(self) -> None:
+        self.assertIn("CREATE TABLE IF NOT EXISTS market_security_halts", APP_SOURCE)
+        self.assertIn("MARKET_TRADING_HALT_REASONS", APP_SOURCE)
+        self.assertIn('"material_news_pending"', APP_SOURCE)
+        self.assertIn('"suspected_manipulation"', APP_SOURCE)
+        self.assertIn('"technical_operational"', APP_SOURCE)
+        self.assertIn("def active_market_security_halt", APP_SOURCE)
+        self.assertIn('path == "/api/dev-tools/market/fec/security-halts"', APP_SOURCE)
+        self.assertIn('re.fullmatch(r"/api/dev-tools/market/fec/security-halts/\\d+/resume", path)', APP_SOURCE)
+        self.assertIn('admin_tools_section_required(db, user, "fec-investigations")', APP_SOURCE)
+
+    def test_halted_security_is_blocked_from_exchange_activity(self) -> None:
+        self.assertIn("market_security_halt_error(halt)", APP_SOURCE)
+        self.assertIn("AND NOT EXISTS (SELECT 1 FROM market_security_halts h", APP_SOURCE)
+        self.assertIn("Suspended while an FEC trading halt is active.", APP_SOURCE)
+        self.assertIn("AS trading_halted", APP_SOURCE)
+        self.assertIn('"active_halts":', APP_SOURCE)
+        self.assertIn('"halt_history":', APP_SOURCE)
+
+    def test_frontend_exposes_halt_authority_and_public_notice(self) -> None:
+        self.assertIn('id="devMarketFecHaltForm"', FRONTEND_SOURCE)
+        self.assertIn("data-fec-resume-halt", FRONTEND_SOURCE)
+        self.assertIn("FEC MARKET INTEGRITY NOTICE", FRONTEND_SOURCE)
+        self.assertIn("Trading halted by FEC", FRONTEND_SOURCE)
+        self.assertIn("selectedTradingHalt", FRONTEND_SOURCE)
+
 
 if __name__ == "__main__":
     unittest.main()

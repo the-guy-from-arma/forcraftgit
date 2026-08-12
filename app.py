@@ -47,11 +47,13 @@ from business_issuer import (
     create_ipo as business_create_ipo,
     dev_payload as business_dev_payload,
     ensure_schema as ensure_business_issuer_schema,
+    fec_review_payload as business_fec_review_payload,
     file_bankruptcy as business_file_bankruptcy,
     handle_bank_result as business_handle_bank_result,
     publish_announcement as business_publish_announcement,
     published_wire as business_published_wire,
     resident_payload as business_resident_payload,
+    review_ipo as business_review_ipo,
     retry_funding as business_retry_funding,
     update_ipo_guardrails as business_update_ipo_guardrails,
 )
@@ -1891,6 +1893,48 @@ LAW_SERVICE_ROLES = ("leo", "sheriff", "police", "metro_police_chief", "state_po
 ICE_SERVICE_ROLES = ("ice_agent", "ice_commander")
 INDEED_ADMIN_ROLE = "indeed_admin"
 FEC_INVESTIGATOR_ROLE = "fec_investigator"
+MARKET_TRADING_HALT_REASONS = {
+    "material_news_pending": {
+        "label": "Material information pending",
+        "description": "Issuer or regulatory information is pending and the market cannot price it fairly yet.",
+    },
+    "news_dissemination": {
+        "label": "Material information dissemination",
+        "description": "Allow time for material information to reach the market before trading resumes.",
+    },
+    "extraordinary_volatility": {
+        "label": "Extraordinary price volatility",
+        "description": "Abnormal price movement requires an orderly-market review.",
+    },
+    "order_imbalance": {
+        "label": "Order imbalance or liquidity disruption",
+        "description": "Severe buy/sell imbalance or impaired liquidity prevents orderly execution.",
+    },
+    "suspected_manipulation": {
+        "label": "Suspected manipulation or unusual activity",
+        "description": "Potential manipulation, coordinated activity, or unexplained trading is under review.",
+    },
+    "regulatory_compliance": {
+        "label": "Regulatory compliance review",
+        "description": "FEC requires a compliance review before the security may trade again.",
+    },
+    "listing_requirements": {
+        "label": "Listing standards review",
+        "description": "The issuer's continued compliance with FCX listing requirements is under review.",
+    },
+    "technical_operational": {
+        "label": "Technical or operational issue",
+        "description": "A technical, data, or exchange-operation issue prevents reliable trading.",
+    },
+    "issuer_request": {
+        "label": "Issuer-requested halt pending review",
+        "description": "The issuer requested a halt and FEC is reviewing the stated basis.",
+    },
+    "investor_protection": {
+        "label": "Investor protection / active FEC investigation",
+        "description": "Trading is paused to protect market participants during an active investigation.",
+    },
+}
 LAW_ENFORCEMENT_DEPARTMENT_KEYS = ("state_police", "metro_police", "sheriff", "cid", "iu")
 LAW_ENFORCEMENT_DEPARTMENT_CHOICES = ("Faircroft Sheriff's Office",)
 LAW_ENFORCEMENT_COMMAND_ROLES = {
@@ -4331,6 +4375,31 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE market_securities ADD COLUMN IF NOT EXISTS index_eligible INTEGER NOT NULL DEFAULT 1")
     db.execute("ALTER TABLE market_securities ADD COLUMN IF NOT EXISTS margin_enabled INTEGER NOT NULL DEFAULT 1")
     db.execute("ALTER TABLE market_securities ADD COLUMN IF NOT EXISTS margin_max_leverage NUMERIC(4,2) NOT NULL DEFAULT 5")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS market_security_halts (
+            id SERIAL PRIMARY KEY,
+            security_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            reason_code TEXT NOT NULL,
+            reason_label TEXT NOT NULL,
+            public_notice TEXT NOT NULL DEFAULT '',
+            case_reference TEXT NOT NULL DEFAULT '',
+            halted_by INTEGER,
+            halted_by_name TEXT NOT NULL DEFAULT '',
+            halted_at TEXT NOT NULL,
+            resumed_by INTEGER,
+            resumed_by_name TEXT NOT NULL DEFAULT '',
+            resumed_at TEXT,
+            resume_note TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY (security_id) REFERENCES market_securities(id) ON DELETE CASCADE,
+            FOREIGN KEY (halted_by) REFERENCES users(id) ON DELETE SET NULL,
+            FOREIGN KEY (resumed_by) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS market_security_halts_active_idx ON market_security_halts(security_id) WHERE status='active'")
+    db.execute("CREATE INDEX IF NOT EXISTS market_security_halts_history_idx ON market_security_halts(security_id,halted_at DESC,id DESC)")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS market_holdings (
@@ -7279,6 +7348,7 @@ def update_market_index_prices(db: Database, force_history: bool = False) -> int
     funds = all_rows(db, """SELECT f.*,s.price,s.previous_price,s.ticker FROM market_index_funds f
         JOIN market_securities s ON s.id=f.security_id WHERE f.enabled=1 AND s.active=1
         AND NOT EXISTS (SELECT 1 FROM market_price_programs p WHERE p.security_id=s.id AND p.status='active')
+        AND NOT EXISTS (SELECT 1 FROM market_security_halts h WHERE h.security_id=s.id AND h.status='active')
         ORDER BY f.id""")
     timestamp = now_iso()
     updated = 0
@@ -7498,6 +7568,7 @@ def market_volatility_cycle(db: Database, amplitude: float, source: str = "autop
     amplitude = max(0.1, min(15.0, float(amplitude or 0)))
     securities = all_rows(db, """SELECT id,ticker,price,volatility,security_type FROM market_securities
         WHERE active=1 AND COALESCE(lifecycle_status,'active')='active'
+        AND not exists (SELECT 1 FROM market_security_halts h WHERE h.security_id=market_securities.id AND h.status='active')
         AND COALESCE(security_type,'stock')<>'fund' ORDER BY ticker""")
     if not securities:
         return {"updated": 0, "operating_updated": 0, "index_updated": 0, "average_change": 0.0, "changes": []}
@@ -7951,6 +8022,7 @@ def market_gemini_adjustment_cycle(
         FROM market_securities s
         LEFT JOIN business_issuer_companies issuer ON issuer.security_id=s.id
         WHERE s.active=1 AND s.security_type<>'fund'
+          AND NOT EXISTS (SELECT 1 FROM market_security_halts h WHERE h.security_id=s.id AND h.status='active')
         ORDER BY s.ticker""", (provider,))
     listings = [{
         "ticker": row["ticker"], "name": row["name"], "sector": row["sector"], "type": row["security_type"],
@@ -8005,7 +8077,8 @@ def market_gemini_adjustment_cycle(
             FROM market_securities s
             LEFT JOIN business_issuer_companies issuer ON issuer.security_id=s.id
             WHERE s.active=1 AND s.security_type<>'fund' AND s.ticker=?
-              AND NOT EXISTS (SELECT 1 FROM market_price_programs p WHERE p.security_id=s.id AND p.status='active')""", (ticker,))
+              AND NOT EXISTS (SELECT 1 FROM market_price_programs p WHERE p.security_id=s.id AND p.status='active')
+              AND NOT EXISTS (SELECT 1 FROM market_security_halts h WHERE h.security_id=s.id AND h.status='active')""", (ticker,))
         if not security:
             return False
         old_price = float(security["price"] or 0)
@@ -8103,6 +8176,8 @@ def apply_market_price_programs(db: Database) -> int:
         if current < starts:
             continue
         security_id = int(program["security_id"]) if program.get("security_id") else 0
+        if security_id and active_market_security_halt(db, security_id):
+            continue
         if security_id and latest_due_by_security.get(security_id) != program_id:
             db.execute("UPDATE market_price_programs SET status='superseded' WHERE id=?", (program_id,))
             continue
@@ -8122,7 +8197,10 @@ def apply_market_price_programs(db: Database) -> int:
         if program.get("security_id"):
             targets = all_rows(db, "SELECT id,price,security_type FROM market_securities WHERE active=1 AND id=?", (program["security_id"],))
         else:
-            targets = all_rows(db, "SELECT id,price,security_type FROM market_securities WHERE active=1 AND security_type<>'fund'")
+            targets = all_rows(db, """SELECT id,price,security_type FROM market_securities s
+                WHERE active=1 AND security_type<>'fund' AND NOT EXISTS (
+                    SELECT 1 FROM market_security_halts h WHERE h.security_id=s.id AND h.status='active'
+                )""")
         for security in targets:
             start_price = float(program.get("start_price") or security["price"])
             new_price = max(0.01, start_price * (1 + float(program["percent_change"]) * progress / 100.0))
@@ -8160,6 +8238,26 @@ def apply_market_price_programs(db: Database) -> int:
     return updated
 
 
+def active_market_security_halt(db: Database, security_id: int, lock: bool = False) -> DbRow | None:
+    """Return the active FEC halt for one security, optionally locking the filing."""
+    suffix = " FOR UPDATE OF h" if lock else ""
+    return one(
+        db,
+        """SELECT h.*,s.ticker,s.name AS security_name
+           FROM market_security_halts h
+           JOIN market_securities s ON s.id=h.security_id
+           WHERE h.security_id=? AND h.status='active'
+           ORDER BY h.halted_at DESC,h.id DESC LIMIT 1""" + suffix,
+        (security_id,),
+    )
+
+
+def market_security_halt_error(halt: DbRow) -> str:
+    ticker = str(halt.get("ticker") or "This security")
+    reason = str(halt.get("reason_label") or "FEC market-integrity review")
+    return f"Trading in {ticker} is halted by FEC Market Integrity: {reason}. Existing upcoming orders remain suspended until trading resumes."
+
+
 def execute_ravenhood_order(
     db: Database,
     account_id: int,
@@ -8177,6 +8275,9 @@ def execute_ravenhood_order(
         return {"ok": False, "status_code": 409, "error": "Ravenhood account is not active."}
     if not security or str(security.get("lifecycle_status") or "active").lower() != "active":
         return {"ok": False, "status_code": 409, "error": "This security is no longer open for trading."}
+    halt = active_market_security_halt(db, security_id)
+    if halt:
+        return {"ok": False, "status_code": 423, "error": market_security_halt_error(halt), "halt": dict(halt)}
     if side not in ("buy", "sell") or not math.isfinite(quantity) or quantity <= 0:
         return {"ok": False, "status_code": 400, "error": "A valid side and quantity are required."}
 
@@ -8271,6 +8372,9 @@ def execute_ravenhood_margin_open(
         return {"ok": False, "status_code": 409, "error": "Ravenhood account is not active."}
     if not security or str(security.get("lifecycle_status") or "active").lower() != "active":
         return {"ok": False, "status_code": 409, "error": "This security is no longer open for margin trading."}
+    halt = active_market_security_halt(db, security_id)
+    if halt:
+        return {"ok": False, "status_code": 423, "error": market_security_halt_error(halt), "halt": dict(halt)}
     if not bool(int(security.get("margin_enabled") or 0)):
         return {"ok": False, "status_code": 409, "error": "Margin trading is disabled for this security."}
     max_leverage = max(5.0, min(80.0, float(security.get("margin_max_leverage") or 5)))
@@ -8332,11 +8436,14 @@ def close_ravenhood_margin_position(
     position = one(db, """SELECT p.*,s.ticker,s.price AS mark_price,a.user_id
         FROM market_margin_positions p JOIN market_securities s ON s.id=p.security_id
         JOIN market_accounts a ON a.id=p.account_id
-        WHERE p.id=? FOR UPDATE OF p""", (position_id,))
+        WHERE p.id=? FOR UPDATE OF p,s""", (position_id,))
     if not position or (account_id is not None and int(position["account_id"]) != account_id):
         return {"ok": False, "status_code": 404, "error": "Margin position was not found."}
     if str(position.get("status") or "").lower() != "open":
         return {"ok": False, "status_code": 409, "error": "This margin position is already closed."}
+    halt = active_market_security_halt(db, int(position["security_id"]))
+    if halt:
+        return {"ok": False, "status_code": 423, "error": market_security_halt_error(halt), "halt": dict(halt)}
     metrics = ravenhood_margin_metrics(
         position["direction"], position["entry_price"], position["mark_price"], position["quantity"],
         position["collateral"], position["leverage"], settings["market_trade_fee_percent"],
@@ -8392,12 +8499,16 @@ def process_queued_ravenhood_margin_orders(db: Database, settings: dict[str, Any
     if not core_open and not fcxv_open:
         return 0
     if core_open:
-        queued = all_rows(db, """SELECT * FROM market_margin_order_requests WHERE status='queued'
-            ORDER BY queued_at,id LIMIT 25 FOR UPDATE SKIP LOCKED""")
+        queued = all_rows(db, """SELECT r.* FROM market_margin_order_requests r
+            WHERE r.status='queued' AND NOT EXISTS (
+                SELECT 1 FROM market_security_halts h WHERE h.security_id=r.security_id AND h.status='active'
+            ) ORDER BY r.queued_at,r.id LIMIT 25 FOR UPDATE OF r SKIP LOCKED""")
     else:
         queued = all_rows(db, """SELECT r.* FROM market_margin_order_requests r
             JOIN market_securities s ON s.id=r.security_id
-            WHERE r.status='queued' AND s.ticker='FCXV'
+            WHERE r.status='queued' AND s.ticker='FCXV' AND NOT EXISTS (
+                SELECT 1 FROM market_security_halts h WHERE h.security_id=r.security_id AND h.status='active'
+            )
             ORDER BY r.queued_at,r.id LIMIT 25 FOR UPDATE OF r SKIP LOCKED""")
     processed = 0
     for request in queued:
@@ -8410,14 +8521,21 @@ def process_queued_ravenhood_margin_orders(db: Database, settings: dict[str, Any
             db.execute("""UPDATE market_margin_order_requests SET status='executed',executed_position_id=?,executed_at=?,failure_reason=''
                 WHERE id=?""", (result["position_id"], result["opened_at"], request["id"]))
         else:
-            db.execute("UPDATE market_margin_order_requests SET status='failed',failure_reason=? WHERE id=?", (str(result["error"])[:500], request["id"]))
+            if int(result.get("status_code") or 0) == 423:
+                db.execute("UPDATE market_margin_order_requests SET status='queued',failure_reason=? WHERE id=?",
+                    ("Suspended while an FEC trading halt is active.", request["id"]))
+            else:
+                db.execute("UPDATE market_margin_order_requests SET status='failed',failure_reason=? WHERE id=?", (str(result["error"])[:500], request["id"]))
         processed += 1
     return processed
 
 
 def process_ravenhood_margin_liquidations(db: Database, settings: dict[str, Any]) -> int:
     open_positions = all_rows(db, """SELECT p.id,p.direction,p.entry_price,p.quantity,p.collateral,p.leverage,s.price AS mark_price
-        FROM market_margin_positions p JOIN market_securities s ON s.id=p.security_id WHERE p.status='open'""")
+        FROM market_margin_positions p JOIN market_securities s ON s.id=p.security_id
+        WHERE p.status='open' AND NOT EXISTS (
+            SELECT 1 FROM market_security_halts h WHERE h.security_id=p.security_id AND h.status='active'
+        )""")
     liquidated = 0
     for position in open_positions:
         metrics = ravenhood_margin_metrics(
@@ -8489,6 +8607,8 @@ def run_ravenhood_liquidation_hunt(
            WHERE p.status='open' AND a.status='active' AND s.active=1
              AND COALESCE(s.lifecycle_status,'active')='active'
              AND a.cash_balance>=?
+             AND NOT EXISTS (SELECT 1 FROM market_security_halts halt
+                             WHERE halt.security_id=p.security_id AND halt.status='active')
            ORDER BY a.cash_balance DESC,p.entry_notional DESC,p.id""",
         (threshold,),
     )
@@ -8614,15 +8734,19 @@ def process_queued_ravenhood_orders(db: Database, settings: dict[str, Any]) -> i
     if core_open:
         queued = all_rows(
             db,
-            """SELECT * FROM market_order_requests
-            WHERE status='queued' ORDER BY queued_at,id LIMIT 25 FOR UPDATE SKIP LOCKED""",
+            """SELECT r.* FROM market_order_requests r
+            WHERE r.status='queued' AND NOT EXISTS (
+                SELECT 1 FROM market_security_halts h WHERE h.security_id=r.security_id AND h.status='active'
+            ) ORDER BY r.queued_at,r.id LIMIT 25 FOR UPDATE OF r SKIP LOCKED""",
         )
     else:
         queued = all_rows(
             db,
             """SELECT r.* FROM market_order_requests r
             JOIN market_securities s ON s.id=r.security_id
-            WHERE r.status='queued' AND s.ticker='FCXV'
+            WHERE r.status='queued' AND s.ticker='FCXV' AND NOT EXISTS (
+                SELECT 1 FROM market_security_halts h WHERE h.security_id=r.security_id AND h.status='active'
+            )
             ORDER BY r.queued_at,r.id LIMIT 25 FOR UPDATE OF r SKIP LOCKED""",
         )
     processed = 0
@@ -8643,10 +8767,14 @@ def process_queued_ravenhood_orders(db: Database, settings: dict[str, Any]) -> i
                 (result["order_id"], result["unit_price"], result["gross"], result["fee"], result["executed_at"], request["id"]),
             )
         else:
-            db.execute(
-                "UPDATE market_order_requests SET status='failed', failure_reason=? WHERE id=?",
-                (str(result["error"])[:500], request["id"]),
-            )
+            if int(result.get("status_code") or 0) == 423:
+                db.execute("UPDATE market_order_requests SET status='queued',failure_reason=? WHERE id=?",
+                    ("Suspended while an FEC trading halt is active.", request["id"]))
+            else:
+                db.execute(
+                    "UPDATE market_order_requests SET status='failed', failure_reason=? WHERE id=?",
+                    (str(result["error"])[:500], request["id"]),
+                )
         processed += 1
     return processed
 
@@ -11671,6 +11799,12 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_market_fec_seizure(db, user)
                 elif path == "/api/dev-tools/market/fec/pool/dispose" and method == "POST":
                     self.api_dev_market_fec_pool_dispose(db, user)
+                elif path == "/api/dev-tools/market/fec/security-halts" and method == "POST":
+                    self.api_dev_market_fec_security_halt(db, user)
+                elif re.fullmatch(r"/api/dev-tools/market/fec/security-halts/\d+/resume", path) and method == "POST":
+                    self.api_dev_market_fec_security_resume(db, user, self.path_int(path, 6))
+                elif re.fullmatch(r"/api/dev-tools/market/fec/ipo-reviews/\d+/decision", path) and method == "POST":
+                    self.api_dev_market_fec_ipo_decision(db, user, self.path_int(path, 5))
                 elif path == "/api/dev-tools/market/programs" and method == "POST":
                     self.api_dev_market_program(db, user)
                 elif path.startswith("/api/dev-tools/market/programs/") and path.endswith("/stop") and method == "PATCH":
@@ -17535,13 +17669,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 CASE WHEN s.security_type='fund'
                     THEN s.price*COALESCE(position.outstanding_shares,0)
                     ELSE s.price*COALESCE(s.issued_shares,0) END AS market_cap,
-                COALESCE(day_reference.price, earliest_reference.price, s.previous_price, s.price) AS price_24h_ago
+                COALESCE(day_reference.price, earliest_reference.price, s.previous_price, s.price) AS price_24h_ago,
+                halt.id AS trading_halt_id,halt.reason_code AS trading_halt_reason_code,
+                halt.reason_label AS trading_halt_reason,halt.public_notice AS trading_halt_notice,
+                halt.case_reference AS trading_halt_case_reference,halt.halted_at AS trading_halted_at,
+                CASE WHEN halt.id IS NULL THEN 0 ELSE 1 END AS trading_halted
             FROM market_securities s
             LEFT JOIN (
                 SELECT security_id,COUNT(*) AS holder_count,SUM(quantity) AS outstanding_shares,
                        SUM(quantity*average_cost) AS invested_basis
                 FROM market_holdings WHERE quantity>0 GROUP BY security_id
             ) position ON position.security_id=s.id
+            LEFT JOIN market_security_halts halt ON halt.security_id=s.id AND halt.status='active'
             LEFT JOIN LATERAL (
                 SELECT h.price FROM market_price_history h
                 WHERE h.security_id=s.id AND h.recorded_at<=?
@@ -17904,6 +18043,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(409, "Ravenhood account is not active."); return
         if str(security.get("lifecycle_status") or "active").lower() != "active":
             self.error(409, "This security is no longer open for trading."); return
+        halt = active_market_security_halt(db, int(security["id"]))
+        if halt:
+            self.error(423, market_security_halt_error(halt)); return
         price = float(security["price"] or 0); raw_gross = price * quantity
         if raw_gross < 0.01:
             minimum_quantity = max(0.000001, math.ceil((0.01 / max(price, 0.000001)) * 1_000_000) / 1_000_000)
@@ -18003,6 +18145,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(400, "Choose an active ticker, long or short direction, and at least $10.00 collateral."); return
         if str(account.get("status") or "active").lower() != "active":
             self.error(409, "Ravenhood account is not active."); return
+        halt = active_market_security_halt(db, int(security["id"]))
+        if halt:
+            self.error(423, market_security_halt_error(halt)); return
         if not bool(int(security.get("margin_enabled") or 0)):
             self.error(409, "Margin trading is disabled for this security."); return
         max_leverage = max(5.0, min(80.0, float(security.get("margin_max_leverage") or 5)))
@@ -18128,6 +18273,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         security = one(db, "SELECT * FROM market_securities WHERE ticker=? AND active=1 FOR UPDATE", (ticker,))
         if not sender or not target_user or target_user["id"] == user["id"] or not security or quantity <= 0:
             self.error(400, "A confirmed recipient CIV, ticker, and quantity are required."); return
+        halt = active_market_security_halt(db, int(security["id"]))
+        if halt:
+            self.error(423, market_security_halt_error(halt)); return
         target = one(db, "SELECT * FROM market_accounts WHERE user_id=?", (target_user["id"],))
         if not target: self.error(409, "Recipient must create a Ravenhood account first."); return
         holding = one(db, "SELECT * FROM market_holdings WHERE account_id=? AND security_id=?", (sender["id"], security["id"]))
@@ -18180,10 +18328,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         else:
             securities: list[DbRow]
             if reward_type == "stock":
-                securities = [one(db, "SELECT * FROM market_securities WHERE id=? AND active=1", (promo["security_id"],))]
+                securities = [one(db, """SELECT * FROM market_securities s WHERE id=? AND active=1
+                    AND NOT EXISTS (SELECT 1 FROM market_security_halts h
+                                    WHERE h.security_id=s.id AND h.status='active')""", (promo["security_id"],))]
                 securities = [row for row in securities if row]
             else:
-                pool = all_rows(db, "SELECT * FROM market_securities WHERE active=1 AND security_type='stock' ORDER BY ticker")
+                pool = all_rows(db, """SELECT * FROM market_securities s
+                    WHERE active=1 AND security_type='stock'
+                      AND NOT EXISTS (SELECT 1 FROM market_security_halts h
+                                      WHERE h.security_id=s.id AND h.status='active')
+                    ORDER BY ticker""")
                 securities = []
                 for _ in range(min(int(promo["bundle_size"] or 0), len(pool))):
                     picked = pool.pop(secrets.randbelow(len(pool))); securities.append(picked)
@@ -18360,7 +18514,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         promo_code = None
         # A portion of scratch cards are stock rewards. They receive a real,
         # single-use Ravenhood promotion code tied to an active security.
-        securities = all_rows(db, "SELECT id,ticker FROM market_securities WHERE active=1 ORDER BY ticker")
+        securities = all_rows(db, """SELECT id,ticker FROM market_securities s WHERE active=1
+            AND NOT EXISTS (SELECT 1 FROM market_security_halts h
+                            WHERE h.security_id=s.id AND h.status='active') ORDER BY ticker""")
         if securities and secrets.randbelow(100) < 25:
             reward_type = "stock"
             cash_amount = 0.0
@@ -19344,11 +19500,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self.error(409, str(exc))
             return
-        add_admin_audit(db, int(user["id"]), "business.ipo.created", int(user["id"]), {
+        add_admin_audit(db, int(user["id"]), "business.ipo.submitted", int(user["id"]), {
             "company_id": int(created["company"]["id"]),
             "ticker": created["company"]["ticker"],
             "capitalization": created["company"]["target_market_cap"],
             "funding_chunks": created["chunk_count"],
+            "review_status": created.get("review", {}).get("status", "pending"),
+            "review_due_at": created.get("review", {}).get("review_due_at"),
         })
         self.send_json(201, {"ok": True, **created})
 
@@ -24746,6 +24904,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
 
         if section == "fec-investigations":
             payload["fec_investigations"] = {
+                "ipo_reviews": business_fec_review_payload(db, now_iso()),
                 "high_value_threshold": 10_000_000,
                 "pool_balance": float((one(db, "SELECT balance FROM market_fec_asset_pool WHERE id=1") or {}).get("balance") or 0),
                 "totals": dict(one(db, """SELECT
@@ -24830,6 +24989,28 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     LEFT JOIN bank_bridge_commands c ON c.command_id=t.command_id
                     WHERE t.transaction_type='withdrawal' AND t.amount>=10000000
                     ORDER BY t.created_at DESC,t.id DESC""")],
+                "halt_reasons": [
+                    {"code": code, "label": item["label"], "description": item["description"]}
+                    for code, item in MARKET_TRADING_HALT_REASONS.items()
+                ],
+                "securities": [dict(row) for row in all_rows(db, """SELECT s.id,s.ticker,s.name,s.security_type,
+                    s.sector,s.price,s.lifecycle_status,h.id AS active_halt_id,h.reason_label AS active_halt_reason
+                    FROM market_securities s
+                    LEFT JOIN market_security_halts h ON h.security_id=s.id AND h.status='active'
+                    WHERE s.active=1 AND COALESCE(s.lifecycle_status,'active')='active'
+                    ORDER BY CASE WHEN h.id IS NULL THEN 0 ELSE 1 END,s.ticker""")],
+                "active_halts": [dict(row) for row in all_rows(db, """SELECT h.*,s.ticker,s.name AS security_name,
+                    (SELECT COUNT(*) FROM market_order_requests r
+                     WHERE r.security_id=h.security_id AND r.status IN ('queued','processing')) AS queued_equity_orders,
+                    (SELECT COUNT(*) FROM market_margin_order_requests r
+                     WHERE r.security_id=h.security_id AND r.status IN ('queued','processing')) AS queued_margin_orders,
+                    (SELECT COUNT(*) FROM market_margin_positions p
+                     WHERE p.security_id=h.security_id AND p.status='open') AS open_margin_positions
+                    FROM market_security_halts h JOIN market_securities s ON s.id=h.security_id
+                    WHERE h.status='active' ORDER BY h.halted_at DESC,h.id DESC""")],
+                "halt_history": [dict(row) for row in all_rows(db, """SELECT h.*,s.ticker,s.name AS security_name
+                    FROM market_security_halts h JOIN market_securities s ON s.id=h.security_id
+                    ORDER BY h.halted_at DESC,h.id DESC LIMIT 200""")],
             }
 
         if section == "market-settings":
@@ -26691,7 +26872,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(400, "Random starter bundles must contain 3, 5, or 9 stocks."); return
         security = None
         if reward_type == "stock":
-            security = one(db, "SELECT id,ticker FROM market_securities WHERE ticker=? AND active=1", (str(payload.get("ticker") or "").upper().strip(),))
+            security = one(db, """SELECT id,ticker FROM market_securities s WHERE ticker=? AND active=1
+                AND NOT EXISTS (SELECT 1 FROM market_security_halts h
+                                WHERE h.security_id=s.id AND h.status='active')""",
+                (str(payload.get("ticker") or "").upper().strip(),))
             if not security:
                 self.error(400, "Select an active Ravenhood security."); return
         alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -26947,6 +27131,110 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         add_admin_audit(db, int(user["id"]), "market.indexes.rebalanced", details=result)
         self.send_json(200, {"ok": True, **result, "index_funds": market_index_payload(db)})
 
+    def api_dev_market_fec_ipo_decision(self, db: Database, user: DbRow | None, company_id: int) -> None:
+        """Approve or reject a resident IPO before capitalization reaches Bank Bridge."""
+        err = admin_tools_section_required(db, user, "fec-investigations")
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        try:
+            result = business_review_ipo(db, int(user["id"]), company_id, self.read_json(), now_iso())
+        except ValueError as exc:
+            self.error(409, str(exc)); return
+        add_admin_audit(db, int(user["id"]), f"business.ipo.{result['status']}", company_id, {
+            "ticker": result.get("ticker"),
+            "decision_note": result.get("note"),
+            "funding": result.get("funding"),
+        })
+        self.send_json(200, {"ok": True, **result})
+
+    def api_dev_market_fec_security_halt(self, db: Database, user: DbRow | None) -> None:
+        """Suspend every exchange operation for one security under an audited FEC order."""
+        err = admin_tools_section_required(db, user, "fec-investigations")
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        payload = self.read_json()
+        try:
+            security_id = int(payload.get("security_id") or 0)
+        except (TypeError, ValueError):
+            security_id = 0
+        reason_code = str(payload.get("reason_code") or "").strip().lower()
+        reason_info = MARKET_TRADING_HALT_REASONS.get(reason_code)
+        case_reference = str(payload.get("case_reference") or "").strip().upper()[:80]
+        public_notice = str(payload.get("public_notice") or "").strip()[:1000]
+        confirmation = str(payload.get("confirmation") or "").strip().upper()
+        if security_id <= 0:
+            self.error(400, "Choose the FCX security to halt."); return
+        if not reason_info:
+            self.error(400, "Choose a recognized exchange trading-halt reason."); return
+        if len(case_reference) < 3:
+            self.error(400, "Enter the FEC case or regulatory reference."); return
+        if len(public_notice) < 10:
+            self.error(400, "Provide a public halt notice using at least 10 characters."); return
+        if confirmation != "HALT":
+            self.error(400, "Type HALT to certify this market-integrity action."); return
+
+        security = one(db, """SELECT id,ticker,name,active,lifecycle_status FROM market_securities
+            WHERE id=? FOR UPDATE""", (security_id,))
+        if not security:
+            self.error(404, "That FCX security was not found."); return
+        if not bool(int(security.get("active") or 0)) or str(security.get("lifecycle_status") or "active") != "active":
+            self.error(409, "This security is already unavailable under its lifecycle status."); return
+        existing = active_market_security_halt(db, security_id, lock=True)
+        if existing:
+            self.error(409, market_security_halt_error(existing)); return
+        timestamp = now_iso()
+        halt = one(db, """INSERT INTO market_security_halts
+            (security_id,status,reason_code,reason_label,public_notice,case_reference,
+             halted_by,halted_by_name,halted_at)
+            VALUES (?,'active',?,?,?,?,?,?,?) RETURNING id""",
+            (security_id, reason_code, reason_info["label"], public_notice, case_reference,
+             user["id"], user.get("name") or "FEC investigator", timestamp))
+        detail = f"{security['ticker']} trading halted under {case_reference}: {reason_info['label']}. {public_notice}"
+        db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('fec_trading_halt',?,?,?,?)",
+            (f"FEC halted {security['ticker']}", detail, user["id"], timestamp))
+        add_admin_audit(db, int(user["id"]), "market.fec.trading_halted", details={
+            "halt_id": int(halt["id"]), "security_id": security_id, "ticker": security["ticker"],
+            "reason_code": reason_code, "reason_label": reason_info["label"],
+            "case_reference": case_reference, "public_notice": public_notice,
+        })
+        self.send_json(201, {"ok": True, "halt_id": int(halt["id"]), "ticker": security["ticker"],
+            "reason_code": reason_code, "reason_label": reason_info["label"], "halted_at": timestamp})
+
+    def api_dev_market_fec_security_resume(self, db: Database, user: DbRow | None, halt_id: int) -> None:
+        """Resume a security through a separate, documented FEC order."""
+        err = admin_tools_section_required(db, user, "fec-investigations")
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        payload = self.read_json()
+        resume_note = str(payload.get("resume_note") or "").strip()[:1000]
+        confirmation = str(payload.get("confirmation") or "").strip().upper()
+        if len(resume_note) < 10:
+            self.error(400, "Document why orderly trading may resume using at least 10 characters."); return
+        if confirmation != "RESUME":
+            self.error(400, "Type RESUME to certify the reopening order."); return
+        halt = one(db, """SELECT h.*,s.ticker,s.name AS security_name
+            FROM market_security_halts h JOIN market_securities s ON s.id=h.security_id
+            WHERE h.id=? FOR UPDATE OF h,s""", (halt_id,))
+        if not halt:
+            self.error(404, "That FEC trading-halt filing was not found."); return
+        if str(halt.get("status") or "") != "active":
+            self.error(409, "This trading halt has already been resolved."); return
+        timestamp = now_iso()
+        db.execute("""UPDATE market_security_halts
+            SET status='resumed',resumed_by=?,resumed_by_name=?,resumed_at=?,resume_note=? WHERE id=?""",
+            (user["id"], user.get("name") or "FEC investigator", timestamp, resume_note, halt_id))
+        detail = f"{halt['ticker']} resumed under {halt['case_reference']}. {resume_note}"
+        db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('fec_trading_resumed',?,?,?,?)",
+            (f"FEC resumed {halt['ticker']}", detail, user["id"], timestamp))
+        add_admin_audit(db, int(user["id"]), "market.fec.trading_resumed", details={
+            "halt_id": halt_id, "security_id": int(halt["security_id"]), "ticker": halt["ticker"],
+            "case_reference": halt["case_reference"], "resume_note": resume_note,
+        })
+        self.send_json(200, {"ok": True, "halt_id": halt_id, "ticker": halt["ticker"], "resumed_at": timestamp})
+
     def api_dev_market_fec_seizure(self, db: Database, user: DbRow | None) -> None:
         """Move settled Ravenhood buying power into audited FEC custody."""
         err = admin_tools_section_required(db, user, "fec-investigations")
@@ -27076,6 +27364,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             companies = [dict(row) for row in all_rows(db, """SELECT id,ticker,name,price,issued_shares,
                 price*issued_shares AS market_cap FROM market_securities
                 WHERE active=1 AND security_type<>'fund' AND COALESCE(lifecycle_status,'active')='active'
+                  AND NOT EXISTS (SELECT 1 FROM market_security_halts h
+                                  WHERE h.security_id=market_securities.id AND h.status='active')
                   AND price>0 AND issued_shares>0 ORDER BY (price*issued_shares) DESC,id FOR UPDATE""")]
             try:
                 weighted = market_cap_weighted_allocations(
@@ -27541,6 +27831,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         restored = 0
         for item in related:
             if item.get("security_id") and item.get("status") == "active":
+                if active_market_security_halt(db, int(item["security_id"])):
+                    db.execute("UPDATE market_price_programs SET status='cancelled' WHERE id=?", (item["id"],))
+                    continue
                 security = one(db, "SELECT price FROM market_securities WHERE id=?", (item["security_id"],))
                 if security:
                     prior_price = max(0.01, float(security["price"] or 0.01))
