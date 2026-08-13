@@ -13684,8 +13684,123 @@ function renderDevCourtSettings(court) {
   </div>`;
 }
 
+function renderFcxEngineConsole(engine = {}) {
+  const config = engine.settings || {};
+  const state = engine.state || {};
+  const counts = engine.counts || {};
+  const capital = engine.capital || {};
+  const personalities = engine.personalities || [];
+  const cycles = engine.cycles || [];
+  const audit = engine.audit || [];
+  const riskFlags = engine.risk_flags || [];
+  const events = engine.events || [];
+  const securities = engine.securities || [];
+  const corporateActions = engine.corporate_actions || [];
+  const liquidity = engine.liquidity || [];
+  const sectors = engine.sectors || [];
+  const halts = engine.halts || [];
+  const watchlist = engine.watchlist || [];
+  const marketOperations = engine.market_operations || {};
+  const investorLeaders = engine.investor_leaders || [];
+  const corporateSecurities = securities.filter(item => String(item.security_type || "stock") !== "fund");
+  const corporateSecurityOptions = corporateSecurities.map(item => `<option value="${escapeHtml(item.ticker || "")}">${escapeHtml(item.ticker || "--")} \u00b7 ${escapeHtml(item.name || "Operating company")}</option>`).join("");
+  const distribution = config.distribution || {};
+  const intervals = config.intervals || {};
+  const status = config.kill_switch ? "killed" : (state.status || (config.enabled ? "starting" : "offline"));
+  const statusClass = status === "online" ? "online" : status === "degraded" ? "degraded" : status === "killed" ? "killed" : "paused";
+  const cycleOptions = ["minute","five_minute","fifteen_minute","thirty_minute","hourly","six_hour","daily"];
+  const evidenceSummary = value => {
+    if (!value) return "Recorded by the risk engine";
+    try {
+      const parsed = typeof value === "string" ? JSON.parse(value) : value;
+      return Object.entries(parsed || {}).slice(0, 3).map(([key,item])=>`${humanLabel(key)} ${typeof item === "number" ? Number(item).toFixed(2) : item}`).join(" · ") || "Recorded by the risk engine";
+    } catch (_) { return String(value); }
+  };
+  return `<section class="fcx-engine-console ${statusClass}">
+    <header class="fcx-engine-hero">
+      <div class="fcx-engine-orbit" aria-hidden="true"><i></i><b>FCX</b><em></em></div>
+      <div><span>FCX AUTONOMOUS MARKET ENGINE</span><h2>A living exchange, under control.</h2><p>Persistent simulated investors, fundamentals, events, liquidity, sentiment, risk controls, and auditable multi-interval market cycles. Resident ledgers and Bank Bridge remain authoritative.</p></div>
+      <aside><small>ENGINE STATE</small><strong>${escapeHtml(humanLabel(status))}</strong><em>${state.last_heartbeat_at ? `Heartbeat ${new Date(state.last_heartbeat_at).toLocaleTimeString()}` : "Awaiting first heartbeat"}</em></aside>
+    </header>
+    <div class="fcx-engine-tape">
+      <span><small>SIMULATED INVESTORS</small><b>${Number(counts.investors || 0).toLocaleString()}</b><em>${Number(counts.positions || 0).toLocaleString()} long · ${Number(counts.short_positions || 0).toLocaleString()} short</em></span>
+      <span><small>DEPLOYED CAPITAL</small><b>${money(capital.positions || 0)}</b><em>${money(capital.cash || 0)} liquid</em></span>
+      <span><small>NPC P&amp;L</small><b class="${Number(capital.realized_pnl||0)>=0?"positive":"negative"}">${money(capital.realized_pnl || 0)}</b><em>${Number(counts.parent_orders || 0).toLocaleString()} sliced orders active</em></span>
+      <span><small>ACTIVE EVENTS</small><b>${Number(counts.active_events || 0)}</b><em>${Number(counts.open_flags || 0)} open risk flags</em></span>
+      <span><small>LAST CYCLE</small><b>${cycles[0] ? escapeHtml(humanLabel(cycles[0].cycle_key || "cycle")) : "None"}</b><em>${cycles[0]?.completed_at ? new Date(cycles[0].completed_at).toLocaleString() : "Engine has not moved"}</em></span>
+    </div>
+    <div class="fcx-engine-workspace">
+      <form id="devFcxEngineSettingsForm" class="fcx-engine-policy">
+        <header><div><span>CONTROL PLANE</span><h3>Engine policy</h3></div><button type="button" class="quiet" data-fcx-engine-refresh>Refresh telemetry</button></header>
+        <div class="fcx-engine-switches">
+          <label><input name="enabled" type="checkbox" ${config.enabled?"checked":""}/><span><b>Autonomous engine</b><small>Activates the scheduled engine and retires competing legacy price writers.</small></span></label>
+          <label class="kill"><input name="kill_switch" type="checkbox" ${config.kill_switch?"checked":""}/><span><b>Emergency kill switch</b><small>Immediately stops new autonomous cycles without deleting state.</small></span></label>
+          <label><input name="events_enabled" type="checkbox" ${config.events_enabled?"checked":""}/><span><b>Economic events</b><small>Permit deterministic event generation and sector impact.</small></span></label>
+          <label><input name="short_selling_enabled" type="checkbox" ${config.short_selling_enabled?"checked":""}/><span><b>Simulated short selling</b><small>Allows eligible engine personalities to express negative conviction.</small></span></label>
+          <label><input name="halts_enabled" type="checkbox" ${config.halts_enabled?"checked":""}/><span><b>Automatic halts</b><small>Apply configured safety boundaries during extreme motion.</small></span></label>
+          <label><input name="ipo_uncertainty_enabled" type="checkbox" ${config.ipo_uncertainty_enabled?"checked":""}/><span><b>IPO uncertainty curve</b><small>Temporarily increases volatility for new resident issuers, then decays toward normal.</small></span></label>
+          <label><input name="bankruptcy_enabled" type="checkbox" ${config.bankruptcy_enabled?"checked":""}/><span><b>Bankruptcy simulation</b><small>Disabled by default; never affects resident records without this authorization.</small></span></label>
+          <label><input name="delisting_enabled" type="checkbox" ${config.delisting_enabled?"checked":""}/><span><b>Delisting simulation</b><small>Disabled by default and independently controlled.</small></span></label>
+        </div>
+        <div class="fcx-engine-fields">
+          <label>Operating speed<select name="speed"><option value="maintenance" ${config.speed==="maintenance"?"selected":""}>Maintenance</option><option value="low" ${config.speed==="low"?"selected":""}>Low activity</option><option value="normal" ${config.speed==="normal"?"selected":""}>Normal</option><option value="high" ${config.speed==="high"?"selected":""}>High activity</option></select></label>
+          <label>Investor population<input name="population" type="number" min="1" max="5000" value="${Number(config.population || 250)}"/></label>
+          <label>Simulated capital<input name="total_capital" type="number" min="1000" max="1000000000000" step="1000" value="${Number(config.total_capital || 250000000)}"/></label>
+          <label>Deterministic seed<input name="random_seed" type="number" min="1" max="2147483647" value="${Number(config.random_seed || 44217)}"/></label>
+          <label>Absolute price floor<input name="price_floor" type="number" min="0.0001" step="0.0001" value="${Number(config.price_floor || .01)}"/></label>
+          <label>Human order priority %<input name="human_priority_percent" type="number" min="0" max="100" step="1" value="${Number(config.human_priority_percent || 70)}"/></label>
+          <label>Maximum sliced order %<input name="max_order_percent" type="number" min="0.01" max="50" step="0.01" value="${Number(config.max_order_percent || 5)}"/></label>
+          <label>Market-maker spread %<input name="market_maker_spread_percent" type="number" min="0.01" max="25" step="0.01" value="${Number(config.market_maker_spread_percent || .35)}"/></label>
+          <label>IPO uncertainty window<input name="ipo_uncertainty_days" type="number" min="1" max="90" step="1" value="${Number(config.ipo_uncertainty_days || 7)}"/><small>days</small></label>
+          <label>IPO maximum multiplier<input name="ipo_uncertainty_max_multiplier" type="number" min="1" max="5" step="0.05" value="${Number(config.ipo_uncertainty_max_multiplier || 1.75)}"/><small>decays to 1.00x</small></label>
+        </div>
+        <div class="fcx-engine-guardrails"><span>PRICE-MOVE GUARDRAILS</span><label>1 minute<input name="minute_cap_percent" type="number" min="0.01" max="100" step="0.01" value="${Number(config.minute_cap_percent || 2)}"/><i>%</i></label><label>5 minute<input name="five_minute_cap_percent" type="number" min="0.01" max="200" step="0.01" value="${Number(config.five_minute_cap_percent || 5)}"/><i>%</i></label><label>30 minute<input name="thirty_minute_cap_percent" type="number" min="0.01" max="500" step="0.01" value="${Number(config.thirty_minute_cap_percent || 15)}"/><i>%</i></label></div>
+        <details class="fcx-engine-advanced"><summary>Advanced scheduling and personality controls</summary>
+          <div class="fcx-engine-intervals">${cycleOptions.map(cycle=>`<label>${escapeHtml(humanLabel(cycle))}<input name="interval_${cycle}_seconds" type="number" min="10" max="604800" value="${Number(intervals[cycle] || 60)}"/><small>seconds</small></label>`).join("")}</div>
+          <div class="fcx-engine-lifecycle">
+            <header><span>EVENT &amp; LIFECYCLE POLICY</span><small>These controls drive real engine decisions. Bankruptcy and delisting remain inert unless their master switches are enabled.</small></header>
+            <label>Event chance %<input name="event_probability_percent" type="number" min="0" max="100" step="0.1" value="${Number(config.event_probability_percent ?? 30)}"/></label>
+            <label>Sentiment sensitivity<input name="sentiment_sensitivity" type="number" min="0" max="5" step="0.05" value="${Number(config.sentiment_sensitivity ?? 1)}"/></label>
+            <label>Protective halt score<input name="halt_risk_threshold" type="number" min="50" max="100" step="0.1" value="${Number(config.halt_risk_threshold ?? 95)}"/></label>
+            <label>Distress watch score<input name="bankruptcy_watch_threshold" type="number" min="25" max="100" step="0.1" value="${Number(config.bankruptcy_watch_threshold ?? 70)}"/></label>
+            <label>Chapter 11 score<input name="bankruptcy_ch11_threshold" type="number" min="50" max="100" step="0.1" value="${Number(config.bankruptcy_ch11_threshold ?? 92)}"/></label>
+            <label>Chapter 7 score<input name="bankruptcy_ch7_threshold" type="number" min="70" max="100" step="0.1" value="${Number(config.bankruptcy_ch7_threshold ?? 99)}"/></label>
+            <label>Loss cycles before Chapter 7<input name="bankruptcy_ch7_loss_cycles" type="number" min="1" max="365" step="1" value="${Number(config.bankruptcy_ch7_loss_cycles ?? 6)}"/></label>
+            <label>Delisting price floor<input name="delisting_price_floor" type="number" min="0.0001" max="1000000" step="0.0001" value="${Number(config.delisting_price_floor ?? .05)}"/></label>
+          </div>
+          <div class="fcx-engine-pauses"><label>Paused tickers<textarea name="paused_tickers" placeholder="FCF, FNN">${escapeHtml((config.paused_tickers||[]).join(", "))}</textarea></label><label>Paused personalities<textarea name="paused_personalities" placeholder="panic, whale">${escapeHtml((config.paused_personalities||[]).join(", "))}</textarea></label></div>
+          <div class="fcx-engine-distribution">${Object.entries(distribution).map(([key,value])=>`<label>${escapeHtml(humanLabel(key))}<input name="distribution_${escapeHtml(key)}" type="number" min="0" max="100" step="0.1" value="${Number(value).toFixed(1)}"/><small>% weight</small></label>`).join("")}</div>
+        </details>
+        <button class="primary">Save engine policy</button>
+      </form>
+      <aside class="fcx-engine-operations">
+        <section><span>MANUAL CYCLE</span><h3>Advance one clock</h3><p>Runs under PostgreSQL advisory lock and records its seed, duration, result, and error state.</p><select data-fcx-cycle-select>${cycleOptions.map(cycle=>`<option value="${cycle}">${escapeHtml(humanLabel(cycle))}</option>`).join("")}</select><button type="button" class="primary" data-fcx-engine-cycle>Run selected cycle</button></section>
+        <section><span>POPULATION</span><h3>Seed investors</h3><p>Creates only the missing persistent investors. Existing holdings and memories remain intact.</p><button type="button" class="secondary" data-fcx-engine-seed>Seed missing investors</button></section>
+        <section><span>SAFE SANDBOX</span><h3>Compressed simulation</h3><p>Pure deterministic simulation. It cannot write market, resident, bridge, or Arma records.</p><select data-fcx-sandbox-days><option value="1">1 day</option><option value="7" selected>7 days</option><option value="30">30 days</option><option value="365">365 days</option></select><button type="button" class="secondary" data-fcx-engine-sandbox>Run sandbox</button><div data-fcx-sandbox-result></div></section>
+        <section class="fcx-corporate-actions"><span>CORPORATE ACTIONS</span><h3>Split &amp; dividend desk</h3><p>Applies one atomic, audited action across resident holdings, simulated portfolios, shorts, margin positions, queued orders, index references, and issuer records.</p>
+          <details><summary>Stock split</summary><form id="devFcxSplitForm"><label>Security<select name="ticker" required>${corporateSecurityOptions}</select></label><div><label>New shares<input name="numerator" type="number" min="0.01" max="1000" step="0.01" value="2" required/></label><label>For existing<input name="denominator" type="number" min="0.01" max="1000" step="0.01" value="1" required/></label></div><label>Board rationale<textarea name="rationale" maxlength="1000" required></textarea></label><label>Typed authorization<input name="confirmation" placeholder="APPLY SPLIT" autocomplete="off" required/></label><button class="secondary">Apply stock split</button></form></details>
+          <details><summary>Cash dividend</summary><form id="devFcxDividendForm"><label>Security<select name="ticker" required>${corporateSecurityOptions}</select></label><label>Dividend per share<input name="amount_per_share" type="number" min="0.0001" max="1000000" step="0.0001" required/></label><label>Board rationale<textarea name="rationale" maxlength="1000" required></textarea></label><label>Typed authorization<input name="confirmation" placeholder="DECLARE DIVIDEND" autocomplete="off" required/></label><button class="secondary">Declare cash dividend</button></form></details>
+        </section>
+      </aside>
+    </div>
+    <div class="fcx-engine-intelligence">
+      <section><header><span>INVESTOR NETWORK</span><b>${personalities.length} ACTIVE TYPES</b></header>${personalities.map(item=>`<article><b>${escapeHtml(humanLabel(item.personality))}</b><span>${Number(item.investors||0)} investors</span><span>${money(item.cash||0)}</span><em class="${Number(item.realized_pnl||0)>=0?"positive":"negative"}">${money(item.realized_pnl||0)} P&amp;L</em></article>`).join("")||`<p class="empty compact">Seed investors to populate the network.</p>`}</section>
+      <section><header><span>CYCLE LEDGER</span><b>LAST ${Math.min(12,cycles.length)}</b></header>${cycles.slice(0,12).map(item=>`<article><b>${escapeHtml(humanLabel(item.cycle_key||"cycle"))}</b><span>${escapeHtml(String(item.cycle_token||"").slice(0,8)||"no token")}</span><span>${Number(item.duration_ms||0).toLocaleString()} ms</span><em class="${item.status==="failed"?"negative":"positive"}" title="${escapeHtml(item.error_message||"")}">${escapeHtml(humanLabel(item.status||"complete"))}</em></article>`).join("")||`<p class="empty compact">No autonomous cycle has completed.</p>`}</section>
+      <section><header><span>EXECUTION AUDIT</span><b>LAST ${Math.min(12,audit.length)}</b></header>${audit.slice(0,12).map(item=>`<article><b>${escapeHtml(item.ticker||"MARKET")}</b><span>${escapeHtml(humanLabel(item.action||"decision"))}</span><span>${Number(item.shares||0).toLocaleString(undefined,{maximumFractionDigits:2})} @ ${money(item.price||0)}</span><em title="${escapeHtml(item.reason_json||"")}">${item.created_at?new Date(item.created_at).toLocaleTimeString():"recorded"}</em></article>`).join("")||`<p class="empty compact">No engine executions have been recorded.</p>`}</section>
+      <section><header><span>RISK &amp; EVENTS</span><b>${riskFlags.length + events.length} RECORDS</b></header>${riskFlags.slice(0,5).map(item=>`<article><b>${escapeHtml(item.ticker||"MARKET")}</b><span>${escapeHtml(humanLabel(item.flag_type||"risk"))}</span><span title="${escapeHtml(evidenceSummary(item.evidence_json))}">${escapeHtml(evidenceSummary(item.evidence_json))}</span><em class="negative">${escapeHtml(humanLabel(item.severity||"open"))}</em></article>`).join("")}${events.slice(0,5).map(item=>`<article><b>${escapeHtml(humanLabel(item.event_type||"event"))}</b><span>${escapeHtml(item.title||"Economic event")}</span><span>${item.starts_at?new Date(item.starts_at).toLocaleString():""}</span><em>${escapeHtml(humanLabel(item.status||"recorded"))}</em></article>`).join("")||`<p class="empty compact">No risk or event records.</p>`}</section>
+      <section><header><span>COMPANY RISK DESK</span><b>${securities.length} TRACKED</b></header>${securities.slice(0,12).map(item=>`<article><b>${escapeHtml(item.ticker||"—")}</b><span>Fair ${money(item.fair_value||item.price||0)}</span><span>Risk ${Number(item.risk_score||0).toFixed(1)} · BKR ${Number(item.bankruptcy_risk||0).toFixed(1)}</span><em class="${Number(item.risk_score||0)>=70?"negative":"positive"}">${escapeHtml(humanLabel(item.status||"operating"))}</em></article>`).join("")||`<p class="empty compact">No operating companies are available.</p>`}</section>
+      <section><header><span>LIQUIDITY BOOK</span><b>${Number(counts.liquidity_quotes||0)} QUOTED</b></header>${liquidity.slice(0,12).map(item=>`<article><b>${escapeHtml(item.ticker||"—")}</b><span>${money(item.bid_price||0)} bid</span><span>${money(item.ask_price||0)} ask</span><em>${Number(item.spread_percent||0).toFixed(3)}% spread</em></article>`).join("")||`<p class="empty compact">The next minute cycle will publish indicative depth.</p>`}</section>
+      <section><header><span>SECTOR PULSE</span><b>${sectors.length} SECTORS</b></header>${sectors.slice(0,12).map(item=>`<article><b>${escapeHtml(item.sector||"General")}</b><span>Sentiment ${Number(item.sentiment||0).toFixed(1)}</span><span>Volatility ${Number(item.volatility||0).toFixed(1)}</span><em class="${Number(item.performance||0)>=0?"positive":"negative"}">${Number(item.performance||0)>=0?"+":""}${Number(item.performance||0).toFixed(2)}%</em></article>`).join("")||`<p class="empty compact">The daily cycle will establish sector telemetry.</p>`}</section>
+      <section><header><span>LIFECYCLE CONTROL</span><b>${halts.length} HALTED · ${watchlist.length} WATCHED</b></header>${halts.slice(0,5).map(item=>`<article><b>${escapeHtml(item.ticker||"—")}</b><span>Trading halt</span><span>${escapeHtml(item.reason_label||item.reason_code||"Risk review")}</span><em class="negative">Active</em></article>`).join("")}${watchlist.slice(0,7).map(item=>`<article><b>${escapeHtml(item.ticker||"—")}</b><span>${escapeHtml(humanLabel(item.status||"watched"))}</span><span>Risk ${Number(item.risk_score||0).toFixed(1)}</span><em>${escapeHtml(humanLabel(item.lifecycle_status||"active"))}</em></article>`).join("")||`<p class="empty compact">No security is halted or on the lifecycle watchlist.</p>`}</section>
+      <section><header><span>MARKET OPERATIONS</span><b>LIVE MINUTE</b></header><article><b>Resident flow</b><span>${Number(marketOperations.resident_trades_last_minute||0)} trades</span><span>${money(marketOperations.resident_volume_last_minute||0)}</span><em>Largest ${money(marketOperations.largest_resident_trade_last_minute||0)}</em></article><article><b>Engine flow</b><span>${Number(marketOperations.engine_executions_last_minute||0)} executions</span><span>${money(marketOperations.engine_volume_last_minute||0)}</span><em>${money(marketOperations.total_market_cap||0)} cap</em></article>${investorLeaders.slice(0,6).map(item=>`<article><b>${escapeHtml(item.name||"Investor")}</b><span>${escapeHtml(humanLabel(item.personality||"simulated"))}</span><span>${money(item.gross_equity||0)}</span><em class="${Number(item.realized_pnl||0)>=0?"positive":"negative"}">${money(item.realized_pnl||0)} P&amp;L</em></article>`).join("")}</section>
+      <section><header><span>CORPORATE ACTION LEDGER</span><b>LAST ${Math.min(12,corporateActions.length)}</b></header>${corporateActions.slice(0,12).map(item=>{const action=String(item.action_type||"");const split=action==="stock_split";const detail=split?`${Number(item.ratio_numerator||0).toLocaleString(undefined,{maximumFractionDigits:4})}:${Number(item.ratio_denominator||0).toLocaleString(undefined,{maximumFractionDigits:4})}`:`${money(item.amount_per_share||0)} / share`;return `<article><b>${escapeHtml(item.ticker||"--")}</b><span>${escapeHtml(humanLabel(action||"action"))}</span><span>${escapeHtml(detail)}</span><em>${item.created_at?new Date(item.created_at).toLocaleString():"recorded"}</em></article>`;}).join("")||`<p class="empty compact">No stock splits or dividends have been recorded.</p>`}</section>
+    </div>
+  </section>`;
+}
+
 function renderDevMarketSettings(market, users) {
   const listings = market.securities || [], codes = market.codes || [], programs = market.programs || [], promotions = market.promotions || [];
+  const autonomousEngine = market.autonomous_engine || {};
   const activeListings = listings.filter(item => Number(item.active) === 1 && String(item.lifecycle_status || "active") !== "bankrupt");
   const companyListings = activeListings.filter(item => String(item.security_type || "") !== "fund");
   const residentIssuerListings = companyListings.filter(item => Number(item.issuer_company_id || 0) > 0 && Number(item.issuer_controller_id || 0) > 0);
@@ -13746,6 +13861,7 @@ function renderDevMarketSettings(market, users) {
     <div class="market-fec-ledger"><header><div><span>CHAIN OF CUSTODY</span><h3>FEC asset ledger</h3></div><strong>IMMUTABLE AUDIT HISTORY</strong></header><div>${fecLedger.map(entry=>{const kind=String(entry.event_type||"");const delta=Number(entry.pool_delta||0);const icon=kind==="seizure"?"S":kind==="reinvestment"?"R":kind==="return"?"C":"F";return `<article class="${escapeHtml(kind)}"><i>${icon}</i><div><span><b>${kind==="return"?"Cleared · returned":escapeHtml(humanLabel(kind))}</b><small>${entry.case_reference?escapeHtml(entry.case_reference):"POOL DISPOSITION"}</small></span><strong>${money(entry.amount||0)}</strong></div><p>${escapeHtml(entry.reason||"No rationale recorded")}</p><footer><span>${entry.target_name?`${escapeHtml(entry.target_name)} · CIV ${escapeHtml(entry.target_civ_number||"pending")}`:"FEC custody pool"}</span><span>${entry.created_at?new Date(entry.created_at).toLocaleString():"Time unavailable"} · ${escapeHtml(entry.created_by_name||"Authorized operator")}</span><b class="${delta>=0?"positive":"negative"}">${delta>=0?"+":"−"}${money(Math.abs(delta))} · pool ${money(entry.pool_balance_after||0)}</b></footer></article>`}).join("")||`<div class="empty">No FEC custody actions have been filed.</div>`}</div></div>
   </section>`;
   return `<div class="stack dev-market-view">
+    ${renderFcxEngineConsole(autonomousEngine)}
     <section class="dev-card market-automation-control">
       <div class="dev-card-header"><div><span>RAVENHOOD AUTOPILOT</span><h2>Continuous market automation</h2><p>Choose the local engine, Gemini, or DeepSeek as the primary market operator. AI failures can move to the alternate configured provider and then one bounded local cycle without duplicating a successful movement.</p></div><strong class="${market.autopilot_enabled ? "green" : "amber"}">${market.autopilot_enabled ? "AUTOPILOT LIVE" : "AUTOPILOT PAUSED"}</strong></div>
       <form id="devMarketAutomationForm" class="form-grid">
@@ -15507,6 +15623,60 @@ function bindDevWorkspace() {
   $$('[data-dev-gang-action]').forEach(button=>button.addEventListener('click',async()=>{const action=button.dataset.devGangAction;if(action==='delete'&&!confirm('Delete this gang and remove every character from its roster?'))return;try{await api(`/api/dev-tools/gangs/${button.dataset.gangId}`,{method:'PATCH',body:{action}});toast('Gang record updated');await refreshDevTools();}catch(error){toast(error.message);}}));
   $$('[data-dev-gang-limit]').forEach(button=>button.addEventListener('click',async()=>{const limit=prompt('New maximum roster size',button.dataset.currentLimit||'20');if(!limit)return;try{await api(`/api/dev-tools/gangs/${button.dataset.devGangLimit}`,{method:'PATCH',body:{action:'limit',member_limit:limit}});toast('Roster limit updated');await refreshDevTools();}catch(error){toast(error.message);}}));
   $$('[data-dev-gang-member]').forEach(button=>button.addEventListener('click',async()=>{const current=button.dataset.status;const action=prompt('Member action: lock, unlock, or remove',current==='locked'?'unlock':'lock');if(!action)return;try{await api(`/api/dev-tools/gangs/members/${button.dataset.devGangMember}`,{method:'PATCH',body:{action}});toast('Gang member status updated');await refreshDevTools();}catch(error){toast(error.message);}}));
+  $("#devFcxEngineSettingsForm")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const body = Object.fromEntries(new FormData(form));
+    ["enabled","kill_switch","events_enabled","bankruptcy_enabled","delisting_enabled","short_selling_enabled","halts_enabled","ipo_uncertainty_enabled"].forEach(field => body[field] = Boolean(form.elements[field]?.checked));
+    body.paused_tickers = String(body.paused_tickers || "").split(/[,\n]/).map(item=>item.trim()).filter(Boolean);
+    body.paused_personalities = String(body.paused_personalities || "").split(/[,\n]/).map(item=>item.trim()).filter(Boolean);
+    body.distribution = {};
+    [...form.elements].filter(element=>String(element.name||"").startsWith("distribution_")).forEach(element=>{
+      body.distribution[element.name.slice("distribution_".length)] = Number(element.value || 0);
+      delete body[element.name];
+    });
+    const submit = form.querySelector('button[type="submit"], button.primary');
+    if (submit) submit.disabled = true;
+    try {
+      await api("/api/dev-tools/market/engine/settings", {method:"PATCH", body});
+      toast(body.kill_switch ? "FCX emergency stop engaged" : body.enabled ? "FCX engine policy saved and armed" : "FCX engine policy saved in standby");
+      await refreshDevTools();
+    } catch (error) { if (submit) submit.disabled = false; toast(error.message); }
+  });
+  $("#devFcxSplitForm")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const body = Object.fromEntries(new FormData(form));
+    const ticker = String(body.ticker || "").toUpperCase();
+    if (!confirm(`Apply the ${body.numerator}-for-${body.denominator} split to ${ticker}? Every live FCX share ledger and queued order will be adjusted atomically.`)) return;
+    const submit = form.querySelector('button[type="submit"], button');
+    if (submit) submit.disabled = true;
+    try {
+      const response = await api("/api/dev-tools/market/engine/corporate-actions/split", {method:"POST", body});
+      const result = response.result || {};
+      toast(`${ticker} split applied · ${Number(result.issued_shares || 0).toLocaleString(undefined,{maximumFractionDigits:4})} shares outstanding`);
+      await refreshDevTools();
+    } catch (error) { if (submit) submit.disabled = false; toast(error.message); }
+  });
+  $("#devFcxDividendForm")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const body = Object.fromEntries(new FormData(form));
+    const ticker = String(body.ticker || "").toUpperCase();
+    if (!confirm(`Declare a ${money(body.amount_per_share || 0)} per-share cash dividend for ${ticker}? Eligible FCX long holders will be paid from company cash.`)) return;
+    const submit = form.querySelector('button[type="submit"], button');
+    if (submit) submit.disabled = true;
+    try {
+      const response = await api("/api/dev-tools/market/engine/corporate-actions/dividend", {method:"POST", body});
+      const result = response.result || {};
+      toast(`${ticker} dividend declared · ${money(result.total_cash_amount || 0)} distributed`);
+      await refreshDevTools();
+    } catch (error) { if (submit) submit.disabled = false; toast(error.message); }
+  });
+  $$('[data-fcx-engine-refresh]').forEach(button=>button.addEventListener('click', async()=>{button.disabled=true;try{await refreshDevTools();toast('FCX telemetry refreshed');}catch(error){button.disabled=false;toast(error.message);}}));
+  $$('[data-fcx-engine-seed]').forEach(button=>button.addEventListener('click', async()=>{button.disabled=true;try{const result=await api('/api/dev-tools/market/engine/seed',{method:'POST',body:{replace:false}});toast(`${Number(result.result?.created||0)} persistent investor(s) created`);await refreshDevTools();}catch(error){button.disabled=false;toast(error.message);}}));
+  $$('[data-fcx-engine-cycle]').forEach(button=>button.addEventListener('click', async()=>{const cycle=$('[data-fcx-cycle-select]')?.value||'minute';button.disabled=true;try{const result=await api('/api/dev-tools/market/engine/cycle',{method:'POST',body:{cycle}});toast(result.result?.ok?`${humanLabel(cycle)} cycle completed`:(result.result?.error||'Cycle did not run'));await refreshDevTools();}catch(error){button.disabled=false;toast(error.message);}}));
+  $$('[data-fcx-engine-sandbox]').forEach(button=>button.addEventListener('click', async()=>{const days=Number($('[data-fcx-sandbox-days]')?.value||7);const target=$('[data-fcx-sandbox-result]');button.disabled=true;try{const response=await api('/api/dev-tools/market/engine/sandbox',{method:'POST',body:{days}});const result=response.result||{};if(target)target.innerHTML=`<strong>${Number(result.change_percent||0)>=0?'+':''}${Number(result.change_percent||0).toFixed(2)}%</strong><span>${Number(result.npc_trades||0).toLocaleString()} trades · ${Number(result.maximum_drawdown_percent||0).toFixed(2)}% max drawdown</span><small>${Number(result.halts||0)} halts · ${Number(result.bankruptcies||0)} bankruptcies · seed ${Number(result.seed||0)}</small>`;toast(`${days}-day FCX sandbox completed`);}catch(error){toast(error.message);}finally{button.disabled=false;}}));
   $("#devMarketSettingsForm")?.addEventListener("submit", async event => { event.preventDefault(); const form=event.currentTarget; try { await api("/api/dev-tools/market/settings", {method:"PATCH",body:{schedule_open_time:form.schedule_open_time.value,schedule_close_time:form.schedule_close_time.value,weekends_enabled:form.weekends_enabled.checked,fcxv_24h_enabled:form.fcxv_24h_enabled.checked,ai_enabled:form.ai_enabled.checked,trade_fee_percent:form.trade_fee_percent.value,transfer_fee_percent:form.transfer_fee_percent.value}}); toast("Ravenhood schedule and policy saved"); await refreshDevTools(); } catch(error){toast(error.message);} });
   $("#devMarketMarginSettingsForm")?.addEventListener("submit", async event => {
     event.preventDefault();

@@ -58,6 +58,23 @@ from business_issuer import (
     retry_funding as business_retry_funding,
     update_ipo_guardrails as business_update_ipo_guardrails,
 )
+from fcx_engine import (
+    apply_dividend as apply_fcx_engine_dividend,
+    apply_stock_split as apply_fcx_engine_stock_split,
+    admin_snapshot as fcx_engine_admin_snapshot,
+    ensure_schema as ensure_fcx_engine_schema,
+    run_due_cycles as run_fcx_engine_due_cycles,
+    run_manual_cycle as run_fcx_engine_manual_cycle,
+    run_sandbox as run_fcx_engine_sandbox,
+    seed_investors as seed_fcx_engine_investors,
+)
+from fcx_engine.config import (
+    CYCLE_DEFAULTS as FCX_ENGINE_CYCLE_DEFAULTS,
+    DEFAULT_DISTRIBUTION as FCX_ENGINE_DEFAULT_DISTRIBUTION,
+    PERSONALITY_PROFILES as FCX_ENGINE_PERSONALITY_PROFILES,
+    parse_distribution as parse_fcx_engine_distribution,
+    parse_string_list as parse_fcx_engine_string_list,
+)
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -2355,6 +2372,45 @@ SYSTEM_SETTING_DEFAULTS = {
     "market_gemini_last_success_at": "",
     "market_gemini_last_status": "idle",
     "market_gemini_last_error": "",
+    "fcx_engine_enabled": "0",
+    "fcx_engine_kill_switch": "0",
+    "fcx_engine_speed": "normal",
+    "fcx_engine_random_seed": "44217",
+    "fcx_engine_population": "250",
+    "fcx_engine_total_capital": "250000000.00",
+    "fcx_engine_price_floor": "0.01",
+    "fcx_engine_minute_cap_percent": "2.00",
+    "fcx_engine_five_minute_cap_percent": "5.00",
+    "fcx_engine_thirty_minute_cap_percent": "15.00",
+    "fcx_engine_human_priority_percent": "70.00",
+    "fcx_engine_max_order_percent": "5.00",
+    "fcx_engine_market_maker_spread_percent": "0.35",
+    "fcx_engine_event_probability_percent": "30.00",
+    "fcx_engine_sentiment_sensitivity": "1.00",
+    "fcx_engine_halt_risk_threshold": "95.00",
+    "fcx_engine_bankruptcy_watch_threshold": "70.00",
+    "fcx_engine_bankruptcy_ch11_threshold": "92.00",
+    "fcx_engine_bankruptcy_ch7_threshold": "99.00",
+    "fcx_engine_bankruptcy_ch7_loss_cycles": "6",
+    "fcx_engine_delisting_price_floor": "0.05",
+    "fcx_engine_events_enabled": "1",
+    "fcx_engine_bankruptcy_enabled": "0",
+    "fcx_engine_delisting_enabled": "0",
+    "fcx_engine_short_selling_enabled": "1",
+    "fcx_engine_halts_enabled": "1",
+    "fcx_engine_ipo_uncertainty_enabled": "1",
+    "fcx_engine_ipo_uncertainty_days": "7",
+    "fcx_engine_ipo_uncertainty_max_multiplier": "1.75",
+    "fcx_engine_paused_personalities": "[]",
+    "fcx_engine_paused_tickers": "[]",
+    "fcx_engine_personality_distribution": json.dumps(FCX_ENGINE_DEFAULT_DISTRIBUTION, separators=(",", ":")),
+    "fcx_engine_interval_minute_seconds": "60",
+    "fcx_engine_interval_five_minute_seconds": "300",
+    "fcx_engine_interval_fifteen_minute_seconds": "900",
+    "fcx_engine_interval_thirty_minute_seconds": "1800",
+    "fcx_engine_interval_hourly_seconds": "3600",
+    "fcx_engine_interval_six_hour_seconds": "21600",
+    "fcx_engine_interval_daily_seconds": "86400",
     "lottery_enabled": "1",
     "lottery_daily_entries": "3",
     "lottery_daily_credit": "0.00",
@@ -5962,6 +6018,7 @@ def ensure_migrations(db: Database) -> None:
     )
     db.execute("CREATE INDEX IF NOT EXISTS cid_internal_affairs_notes_ia_idx ON cid_internal_affairs_notes (ia_id, created_at)")
     ensure_business_issuer_schema(db, now_iso())
+    ensure_fcx_engine_schema(db, now_iso())
 
 
 def normalize_market_clock(value: Any, fallback: str) -> str:
@@ -6148,6 +6205,9 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         scratch_prizes = []
     if not scratch_prizes:
         scratch_prizes = [25.0, 50.0, 75.0, 100.0, 150.0, 250.0, 500.0]
+    fcx_engine_paused_personalities = list(parse_fcx_engine_string_list(raw.get("fcx_engine_paused_personalities")))
+    fcx_engine_paused_tickers = list(parse_fcx_engine_string_list(raw.get("fcx_engine_paused_tickers")))
+    fcx_engine_distribution = parse_fcx_engine_distribution(raw.get("fcx_engine_personality_distribution"))
     market_session = market_session_state(raw)
     return {
         "autopilot_verify_enabled": str(raw.get("autopilot_verify_enabled") or "0") in ("1", "true", "True", "yes", "on"),
@@ -6242,6 +6302,49 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "market_gemini_last_success_at": str(raw.get("market_gemini_last_success_at") or "")[:80],
         "market_gemini_last_status": str(raw.get("market_gemini_last_status") or "idle").strip().lower()[:40],
         "market_gemini_last_error": str(raw.get("market_gemini_last_error") or "")[:500],
+        # The autonomous engine keeps its settings under an isolated prefix so
+        # the existing Ravenhood automation and resident order contracts stay
+        # backward compatible.  These normalized values are also consumed by
+        # the engine worker and its Dev Tools adapter.
+        "fcx_engine_enabled": str(raw.get("fcx_engine_enabled") or "0") in ("1", "true", "True", "yes", "on"),
+        "fcx_engine_kill_switch": str(raw.get("fcx_engine_kill_switch") or "0") in ("1", "true", "True", "yes", "on"),
+        "fcx_engine_speed": str(raw.get("fcx_engine_speed") or "normal").strip().lower(),
+        "fcx_engine_random_seed": max(1, min(2147483647, int(raw.get("fcx_engine_random_seed") or 44217))),
+        "fcx_engine_population": max(1, min(5000, int(raw.get("fcx_engine_population") or 250))),
+        "fcx_engine_total_capital": max(1000.0, min(1000000000000.0, float(raw.get("fcx_engine_total_capital") or 250000000))),
+        "fcx_engine_price_floor": max(0.0001, min(1000000.0, float(raw.get("fcx_engine_price_floor") or 0.01))),
+        "fcx_engine_minute_cap_percent": max(0.01, min(100.0, float(raw.get("fcx_engine_minute_cap_percent") or 2))),
+        "fcx_engine_five_minute_cap_percent": max(0.01, min(200.0, float(raw.get("fcx_engine_five_minute_cap_percent") or 5))),
+        "fcx_engine_thirty_minute_cap_percent": max(0.01, min(500.0, float(raw.get("fcx_engine_thirty_minute_cap_percent") or 15))),
+        "fcx_engine_human_priority_percent": max(0.0, min(100.0, float(raw.get("fcx_engine_human_priority_percent") or 70))),
+        "fcx_engine_max_order_percent": max(0.01, min(50.0, float(raw.get("fcx_engine_max_order_percent") or 5))),
+        "fcx_engine_market_maker_spread_percent": max(0.01, min(25.0, float(raw.get("fcx_engine_market_maker_spread_percent") or 0.35))),
+        "fcx_engine_event_probability_percent": max(0.0, min(100.0, float(raw.get("fcx_engine_event_probability_percent") or 30))),
+        "fcx_engine_sentiment_sensitivity": max(0.0, min(5.0, float(raw.get("fcx_engine_sentiment_sensitivity") or 1))),
+        "fcx_engine_halt_risk_threshold": max(50.0, min(100.0, float(raw.get("fcx_engine_halt_risk_threshold") or 95))),
+        "fcx_engine_bankruptcy_watch_threshold": max(25.0, min(100.0, float(raw.get("fcx_engine_bankruptcy_watch_threshold") or 70))),
+        "fcx_engine_bankruptcy_ch11_threshold": max(50.0, min(100.0, float(raw.get("fcx_engine_bankruptcy_ch11_threshold") or 92))),
+        "fcx_engine_bankruptcy_ch7_threshold": max(70.0, min(100.0, float(raw.get("fcx_engine_bankruptcy_ch7_threshold") or 99))),
+        "fcx_engine_bankruptcy_ch7_loss_cycles": max(1, min(365, int(raw.get("fcx_engine_bankruptcy_ch7_loss_cycles") or 6))),
+        "fcx_engine_delisting_price_floor": max(0.0001, min(1000000.0, float(raw.get("fcx_engine_delisting_price_floor") or 0.05))),
+        "fcx_engine_events_enabled": str(raw.get("fcx_engine_events_enabled") or "1") in ("1", "true", "True", "yes", "on"),
+        "fcx_engine_bankruptcy_enabled": str(raw.get("fcx_engine_bankruptcy_enabled") or "0") in ("1", "true", "True", "yes", "on"),
+        "fcx_engine_delisting_enabled": str(raw.get("fcx_engine_delisting_enabled") or "0") in ("1", "true", "True", "yes", "on"),
+        "fcx_engine_short_selling_enabled": str(raw.get("fcx_engine_short_selling_enabled") or "1") in ("1", "true", "True", "yes", "on"),
+        "fcx_engine_halts_enabled": str(raw.get("fcx_engine_halts_enabled") or "1") in ("1", "true", "True", "yes", "on"),
+        "fcx_engine_ipo_uncertainty_enabled": str(raw.get("fcx_engine_ipo_uncertainty_enabled") or "1") in ("1", "true", "True", "yes", "on"),
+        "fcx_engine_ipo_uncertainty_days": max(1, min(90, int(raw.get("fcx_engine_ipo_uncertainty_days") or 7))),
+        "fcx_engine_ipo_uncertainty_max_multiplier": max(1.0, min(5.0, float(raw.get("fcx_engine_ipo_uncertainty_max_multiplier") or 1.75))),
+        "fcx_engine_paused_personalities": fcx_engine_paused_personalities,
+        "fcx_engine_paused_tickers": fcx_engine_paused_tickers,
+        "fcx_engine_personality_distribution": fcx_engine_distribution,
+        "fcx_engine_interval_minute_seconds": max(10, min(604800, int(raw.get("fcx_engine_interval_minute_seconds") or 60))),
+        "fcx_engine_interval_five_minute_seconds": max(10, min(604800, int(raw.get("fcx_engine_interval_five_minute_seconds") or 300))),
+        "fcx_engine_interval_fifteen_minute_seconds": max(10, min(604800, int(raw.get("fcx_engine_interval_fifteen_minute_seconds") or 900))),
+        "fcx_engine_interval_thirty_minute_seconds": max(10, min(604800, int(raw.get("fcx_engine_interval_thirty_minute_seconds") or 1800))),
+        "fcx_engine_interval_hourly_seconds": max(10, min(604800, int(raw.get("fcx_engine_interval_hourly_seconds") or 3600))),
+        "fcx_engine_interval_six_hour_seconds": max(10, min(604800, int(raw.get("fcx_engine_interval_six_hour_seconds") or 21600))),
+        "fcx_engine_interval_daily_seconds": max(10, min(604800, int(raw.get("fcx_engine_interval_daily_seconds") or 86400))),
         "lottery_enabled": str(raw.get("lottery_enabled") or "1") in ("1", "true", "True", "yes", "on"),
         "lottery_daily_entries": max(1, min(20, int(raw.get("lottery_daily_entries") or 3))),
         "lottery_daily_credit": 0.0,
@@ -9150,6 +9253,23 @@ def market_automation_worker() -> None:
                 process_ravenhood_margin_liquidations(db, settings)
         except Exception as exc:
             print(f"Market automation error: {type(exc).__name__}: {exc}")
+        time.sleep(15)
+
+
+def fcx_autonomous_market_worker() -> None:
+    """Run the additive FCX engine without touching resident/bridge ledgers."""
+    time.sleep(10)
+    while True:
+        try:
+            with conn() as db:
+                settings = get_system_settings(db)
+                result = run_fcx_engine_due_cycles(db, settings, maximum_cycles=2)
+                completed = [item for item in result.get("cycles", []) if item.get("ok")]
+                if completed:
+                    names = ", ".join(str(item.get("cycle") or "cycle") for item in completed)
+                    print(f"FCX autonomous engine completed {names}")
+        except Exception as exc:
+            print(f"FCX autonomous engine error: {type(exc).__name__}: {exc}")
         time.sleep(15)
 
 
@@ -12090,6 +12210,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_resend_bank_command(db, user, path.split("/")[5])
                 elif path == "/api/dev-tools/market/codes" and method == "POST":
                     self.api_dev_market_code(db, user)
+                elif path == "/api/dev-tools/market/engine/settings" and method == "PATCH":
+                    self.api_dev_fcx_engine_settings(db, user)
+                elif path == "/api/dev-tools/market/engine/seed" and method == "POST":
+                    self.api_dev_fcx_engine_seed(db, user)
+                elif path == "/api/dev-tools/market/engine/cycle" and method == "POST":
+                    self.api_dev_fcx_engine_cycle(db, user)
+                elif path == "/api/dev-tools/market/engine/sandbox" and method == "POST":
+                    self.api_dev_fcx_engine_sandbox(db, user)
+                elif path == "/api/dev-tools/market/engine/corporate-actions/split" and method == "POST":
+                    self.api_dev_fcx_engine_stock_split(db, user)
+                elif path == "/api/dev-tools/market/engine/corporate-actions/dividend" and method == "POST":
+                    self.api_dev_fcx_engine_dividend(db, user)
                 elif path in ("/api/dev-tools/market/settings", "/api/dev-tools/market/margin-settings") and method == "PATCH":
                     self.api_dev_market_settings(db, user)
                 elif path == "/api/dev-tools/market/securities" and method == "POST":
@@ -25420,6 +25552,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
 
         if section == "market-settings":
             payload["market_settings"] = {
+                "autonomous_engine": fcx_engine_admin_snapshot(db, settings),
                 "market_open": settings["market_open"],
                 "fcxv_24h_enabled": settings["market_fcxv_24h_enabled"],
                 "scheduled_open": settings["market_scheduled_open"],
@@ -28021,6 +28154,175 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "fec_pool_balance": pool_balance, "allocations": allocations,
             "resident": return_account["name"] if action == "return" and return_account else None,
             "cash_balance": return_cash_balance})
+
+    def api_dev_fcx_engine_settings(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        payload = self.read_json()
+        current = get_system_settings(db)
+        bool_fields = {
+            "enabled": "fcx_engine_enabled",
+            "kill_switch": "fcx_engine_kill_switch",
+            "events_enabled": "fcx_engine_events_enabled",
+            "bankruptcy_enabled": "fcx_engine_bankruptcy_enabled",
+            "delisting_enabled": "fcx_engine_delisting_enabled",
+            "short_selling_enabled": "fcx_engine_short_selling_enabled",
+            "halts_enabled": "fcx_engine_halts_enabled",
+            "ipo_uncertainty_enabled": "fcx_engine_ipo_uncertainty_enabled",
+        }
+        numeric_fields: dict[str, tuple[str, float, float, bool]] = {
+            "random_seed": ("fcx_engine_random_seed", 1, 2147483647, True),
+            "population": ("fcx_engine_population", 1, 5000, True),
+            "total_capital": ("fcx_engine_total_capital", 1000, 1000000000000, False),
+            "price_floor": ("fcx_engine_price_floor", 0.0001, 1000000, False),
+            "minute_cap_percent": ("fcx_engine_minute_cap_percent", 0.01, 100, False),
+            "five_minute_cap_percent": ("fcx_engine_five_minute_cap_percent", 0.01, 200, False),
+            "thirty_minute_cap_percent": ("fcx_engine_thirty_minute_cap_percent", 0.01, 500, False),
+            "human_priority_percent": ("fcx_engine_human_priority_percent", 0, 100, False),
+            "max_order_percent": ("fcx_engine_max_order_percent", 0.01, 50, False),
+            "market_maker_spread_percent": ("fcx_engine_market_maker_spread_percent", 0.01, 25, False),
+            "event_probability_percent": ("fcx_engine_event_probability_percent", 0, 100, False),
+            "sentiment_sensitivity": ("fcx_engine_sentiment_sensitivity", 0, 5, False),
+            "halt_risk_threshold": ("fcx_engine_halt_risk_threshold", 50, 100, False),
+            "bankruptcy_watch_threshold": ("fcx_engine_bankruptcy_watch_threshold", 25, 100, False),
+            "bankruptcy_ch11_threshold": ("fcx_engine_bankruptcy_ch11_threshold", 50, 100, False),
+            "bankruptcy_ch7_threshold": ("fcx_engine_bankruptcy_ch7_threshold", 70, 100, False),
+            "bankruptcy_ch7_loss_cycles": ("fcx_engine_bankruptcy_ch7_loss_cycles", 1, 365, True),
+            "delisting_price_floor": ("fcx_engine_delisting_price_floor", 0.0001, 1000000, False),
+            "ipo_uncertainty_days": ("fcx_engine_ipo_uncertainty_days", 1, 90, True),
+            "ipo_uncertainty_max_multiplier": ("fcx_engine_ipo_uncertainty_max_multiplier", 1, 5, False),
+        }
+        try:
+            for field, (key, minimum, maximum, integer) in numeric_fields.items():
+                if field not in payload:
+                    continue
+                value = float(payload[field])
+                if not minimum <= value <= maximum:
+                    raise ValueError(f"{field} must be between {minimum:g} and {maximum:g}")
+                set_system_setting(db, key, str(int(value) if integer else value))
+            for cycle, default_interval in FCX_ENGINE_CYCLE_DEFAULTS.items():
+                field = f"interval_{cycle}_seconds"
+                if field not in payload:
+                    continue
+                value = int(payload[field])
+                if not 10 <= value <= 604800:
+                    raise ValueError(f"{field} must be between 10 and 604800 seconds")
+                set_system_setting(db, f"fcx_engine_interval_{cycle}_seconds", str(value))
+        except (TypeError, ValueError) as exc:
+            self.error(400, str(exc) or "FCX engine limits must be numeric."); return
+        for field, key in bool_fields.items():
+            if field in payload:
+                enabled = str(payload.get(field) or "").strip().lower() in ("1", "true", "yes", "on")
+                set_system_setting(db, key, "1" if enabled else "0")
+        speed = str(payload.get("speed") or "").strip().lower()
+        if speed:
+            if speed not in ("maintenance", "low", "normal", "high"):
+                self.error(400, "Engine speed must be maintenance, low, normal, or high."); return
+            set_system_setting(db, "fcx_engine_speed", speed)
+        if "paused_personalities" in payload:
+            paused = parse_fcx_engine_string_list(payload.get("paused_personalities"))
+            invalid = sorted(set(paused) - set(FCX_ENGINE_PERSONALITY_PROFILES))
+            if invalid:
+                self.error(400, f"Unknown investor personalities: {', '.join(invalid)}"); return
+            set_system_setting(db, "fcx_engine_paused_personalities", json.dumps(list(paused), separators=(",", ":")))
+        if "paused_tickers" in payload:
+            paused_tickers = [item.upper() for item in parse_fcx_engine_string_list(payload.get("paused_tickers"))]
+            set_system_setting(db, "fcx_engine_paused_tickers", json.dumps(paused_tickers, separators=(",", ":")))
+        if "distribution" in payload:
+            distribution = parse_fcx_engine_distribution(payload.get("distribution"))
+            set_system_setting(db, "fcx_engine_personality_distribution", json.dumps(distribution, separators=(",", ":"), sort_keys=True))
+        # Two autonomous quote writers must never race. Enabling FCX Engine
+        # retires the legacy local/Gemini workers while preserving their data.
+        if str(payload.get("enabled") or "").strip().lower() in ("1", "true", "yes", "on"):
+            set_system_setting(db, "market_autopilot_enabled", "0")
+            set_system_setting(db, "market_gemini_autopilot_enabled", "0")
+        settings = get_system_settings(db)
+        add_admin_audit(db, int(user["id"]), "market.fcx_engine.settings", details={
+            "enabled": settings["fcx_engine_enabled"], "kill_switch": settings["fcx_engine_kill_switch"],
+            "speed": settings["fcx_engine_speed"],
+        })
+        self.send_json(200, {"ok": True, "engine": fcx_engine_admin_snapshot(db, settings)})
+
+    def api_dev_fcx_engine_seed(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        payload = self.read_json()
+        replace = bool(payload.get("replace"))
+        if replace and str(payload.get("confirmation") or "").strip().upper() != "RESEED FCX":
+            self.error(400, "Type RESEED FCX to replace the simulated investor population."); return
+        result = seed_fcx_engine_investors(db, get_system_settings(db), replace=replace)
+        add_admin_audit(db, int(user["id"]), "market.fcx_engine.seed", details={"replace": replace, **result})
+        self.send_json(200, {"ok": True, "result": result,
+            "engine": fcx_engine_admin_snapshot(db, get_system_settings(db))})
+
+    def api_dev_fcx_engine_cycle(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        payload = self.read_json()
+        cycle = str(payload.get("cycle") or "minute").strip().lower()
+        if cycle not in FCX_ENGINE_CYCLE_DEFAULTS:
+            self.error(400, "Unknown FCX engine cycle."); return
+        try:
+            result = run_fcx_engine_manual_cycle(db, get_system_settings(db), cycle)
+        except Exception as exc:
+            self.error(500, f"FCX {cycle} cycle failed: {exc}"); return
+        add_admin_audit(db, int(user["id"]), "market.fcx_engine.cycle", details={"cycle": cycle, "result": result})
+        self.send_json(200, {"ok": bool(result.get("ok")), "result": result,
+            "engine": fcx_engine_admin_snapshot(db, get_system_settings(db))})
+
+    def api_dev_fcx_engine_sandbox(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        payload = self.read_json()
+        try:
+            days = int(payload.get("days") or 7)
+        except (TypeError, ValueError):
+            self.error(400, "Sandbox duration must be numeric."); return
+        if days not in (1, 7, 30, 365):
+            self.error(400, "Sandbox duration must be 1, 7, 30, or 365 days."); return
+        result = run_fcx_engine_sandbox(days=days, seed=int(get_system_settings(db)["fcx_engine_random_seed"]))
+        add_admin_audit(db, int(user["id"]), "market.fcx_engine.sandbox", details={"days": days, "summary": result.get("summary")})
+        self.send_json(200, {"ok": True, "result": result})
+
+    def api_dev_fcx_engine_stock_split(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        payload = self.read_json()
+        if str(payload.get("confirmation") or "").strip().upper() != "APPLY SPLIT":
+            self.error(400, "Type APPLY SPLIT to confirm this corporate action."); return
+        try:
+            result = apply_fcx_engine_stock_split(
+                db, str(payload.get("ticker") or ""), float(payload.get("numerator") or 0),
+                float(payload.get("denominator") or 0), int(user["id"]), str(payload.get("rationale") or ""),
+            )
+        except (TypeError, ValueError) as exc:
+            self.error(400, str(exc) or "Invalid stock split."); return
+        add_admin_audit(db, int(user["id"]), "market.fcx_engine.stock_split", details=result)
+        self.send_json(200, {"ok": True, "result": result,
+            "engine": fcx_engine_admin_snapshot(db, get_system_settings(db))})
+
+    def api_dev_fcx_engine_dividend(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        payload = self.read_json()
+        if str(payload.get("confirmation") or "").strip().upper() != "DECLARE DIVIDEND":
+            self.error(400, "Type DECLARE DIVIDEND to confirm this corporate action."); return
+        try:
+            result = apply_fcx_engine_dividend(
+                db, str(payload.get("ticker") or ""), float(payload.get("amount_per_share") or 0),
+                int(user["id"]), str(payload.get("rationale") or ""),
+            )
+        except (TypeError, ValueError) as exc:
+            self.error(400, str(exc) or "Invalid dividend."); return
+        add_admin_audit(db, int(user["id"]), "market.fcx_engine.cash_dividend", details=result)
+        self.send_json(200, {"ok": True, "result": result,
+            "engine": fcx_engine_admin_snapshot(db, get_system_settings(db))})
 
     def api_dev_market_settings(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)
@@ -31633,6 +31935,8 @@ def initialize_application() -> None:
         threading.Thread(target=lottery_worker, name="faircroft-lottery", daemon=True).start()
         threading.Thread(target=market_automation_worker, name="ravenhood-market-automation", daemon=True).start()
         threading.Thread(target=market_gemini_worker, name="ravenhood-gemini-autopilot", daemon=True).start()
+        if str(os.environ.get("FCX_RUN_INTEGRATED_ENGINE", "1")).strip().lower() in ("1", "true", "yes", "on"):
+            threading.Thread(target=fcx_autonomous_market_worker, name="fcx-autonomous-market", daemon=True).start()
         threading.Thread(target=sportsbook_sync_worker, name="faircroft-sportsbook-sync", daemon=True).start()
         threading.Thread(target=casino_balance_worker, name="faircroft-casino-balance", daemon=True).start()
         APPLICATION_READY.set()

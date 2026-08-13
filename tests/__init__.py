@@ -1,0 +1,2 @@
+"""Faircroft automated tests."""
+
