@@ -4677,6 +4677,23 @@ def ensure_migrations(db: Database) -> None:
     db.execute("ALTER TABLE market_fec_asset_ledger ADD COLUMN IF NOT EXISTS notice_acknowledged_at TEXT")
     db.execute(
         """
+        CREATE TABLE IF NOT EXISTS market_fec_equity_cash_resets (
+            id SERIAL PRIMARY KEY,
+            accounts_scanned INTEGER NOT NULL DEFAULT 0,
+            accounts_affected INTEGER NOT NULL DEFAULT 0,
+            positive_cash_deleted NUMERIC(24,2) NOT NULL DEFAULT 0,
+            negative_cash_cleared NUMERIC(24,2) NOT NULL DEFAULT 0,
+            reason TEXT NOT NULL,
+            account_snapshot_json TEXT NOT NULL DEFAULT '[]',
+            created_by INTEGER,
+            created_by_name TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS market_fec_equity_cash_resets_time_idx ON market_fec_equity_cash_resets(created_at DESC)")
+    db.execute(
+        """
         CREATE TABLE IF NOT EXISTS market_security_writeoffs (
             id SERIAL PRIMARY KEY,
             security_id INTEGER NOT NULL,
@@ -12089,6 +12106,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_market_indexes_rebalance(db, user)
                 elif path == "/api/dev-tools/market/fec/seizures" and method == "POST":
                     self.api_dev_market_fec_seizure(db, user)
+                elif path == "/api/dev-tools/market/fec/equity-cash/reset-all" and method == "POST":
+                    self.api_dev_market_fec_equity_cash_reset_all(db, user)
                 elif path == "/api/dev-tools/market/fec/pool/dispose" and method == "POST":
                     self.api_dev_market_fec_pool_dispose(db, user)
                 elif path == "/api/dev-tools/market/fec/security-halts" and method == "POST":
@@ -25258,6 +25277,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 WHERE p.status='open' OR p.closed_at>=?""", (pnl_windows["1w"].isoformat(),))]
             payload["fec_investigations"] = {
                 "ipo_reviews": business_fec_review_payload(db, now_iso()),
+                "can_reset_all_equity_cash": strict_developer_required(user) is None,
+                "equity_cash_resets": [dict(row) for row in all_rows(db, """SELECT id,accounts_scanned,
+                    accounts_affected,positive_cash_deleted,negative_cash_cleared,reason,created_by,
+                    created_by_name,created_at FROM market_fec_equity_cash_resets
+                    ORDER BY created_at DESC,id DESC LIMIT 25""")],
                 "high_value_threshold": 10_000_000,
                 "residential_pnl": ravenhood_residential_pnl_windows(
                     pnl_equity_trades,
@@ -27722,6 +27746,67 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         })
         self.send_json(200, {"ok": True, "delisting_id": delisting_id, "ticker": filing["ticker"],
             "relisted_at": timestamp})
+
+    def api_dev_market_fec_equity_cash_reset_all(self, db: Database, user: DbRow | None) -> None:
+        """Permanently zero settled Ravenhood cash across every resident equity account."""
+        err = admin_tools_section_required(db, user, "fec-investigations")
+        if err:
+            self.error(403 if user else 401, err); return
+        err = strict_developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        payload = self.read_json()
+        reason = str(payload.get("reason") or "").strip()[:2000]
+        confirmation = str(payload.get("confirmation") or "").strip().upper()
+        certified = str(payload.get("certify") or "").strip().lower() in ("1", "true", "yes", "on")
+        if len(reason) < 20:
+            self.error(400, "Document the systemic deletion reason using at least 20 characters."); return
+        if confirmation != "DELETE ALL EQUITY CASH":
+            self.error(400, "Type DELETE ALL EQUITY CASH to authorize this systemic action."); return
+        if not certified:
+            self.error(400, "Developer certification is required for this systemic action."); return
+
+        account_rows = [dict(row) for row in all_rows(db, """SELECT a.id AS account_id,a.user_id,
+            a.cash_balance,u.name,u.civ_number FROM market_accounts a
+            JOIN users u ON u.id=a.user_id ORDER BY a.id FOR UPDATE OF a""")]
+        snapshot: list[dict[str, Any]] = []
+        positive_cash_deleted = 0.0
+        for account in account_rows:
+            balance = round(float(account.get("cash_balance") or 0), 2)
+            if balance <= 0.005:
+                continue
+            snapshot.append({
+                "account_id": int(account["account_id"]),
+                "user_id": int(account["user_id"]),
+                "name": str(account.get("name") or "Resident"),
+                "civ_number": str(account.get("civ_number") or ""),
+                "cash_balance_before": balance,
+            })
+            positive_cash_deleted = round(positive_cash_deleted + balance, 2)
+        if not snapshot:
+            self.error(409, "All Ravenhood equity cash balances are already zero."); return
+
+        timestamp = now_iso()
+        db.execute("UPDATE market_accounts SET cash_balance=0,updated_at=? WHERE cash_balance>0.005", (timestamp,))
+        db.execute("""INSERT INTO market_fec_equity_cash_resets
+            (accounts_scanned,accounts_affected,positive_cash_deleted,negative_cash_cleared,reason,
+             account_snapshot_json,created_by,created_by_name,created_at)
+            VALUES (?,?,?,?,?,?,?,?,?)""", (
+                len(account_rows), len(snapshot), positive_cash_deleted, 0, reason,
+                json.dumps(snapshot, separators=(",", ":"), default=str), int(user["id"]),
+                user.get("name") or "Developer", timestamp,
+            ))
+        add_admin_audit(db, int(user["id"]), "market.fec.all_equity_cash_deleted", details={
+            "accounts_scanned": len(account_rows), "accounts_affected": len(snapshot),
+            "positive_cash_deleted": positive_cash_deleted,
+            "negative_cash_cleared": 0, "reason": reason,
+        })
+        self.send_json(200, {
+            "ok": True, "accounts_scanned": len(account_rows), "accounts_affected": len(snapshot),
+            "positive_cash_deleted": positive_cash_deleted,
+            "negative_cash_cleared": 0, "completed_at": timestamp,
+        })
 
     def api_dev_market_fec_seizure(self, db: Database, user: DbRow | None) -> None:
         """Move settled Ravenhood buying power into audited FEC custody."""

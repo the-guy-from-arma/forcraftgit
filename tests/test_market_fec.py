@@ -202,6 +202,31 @@ class MarketFecInvestigationWorkspaceTests(unittest.TestCase):
         self.assertIn("selectedDelisted", FRONTEND_SOURCE)
         self.assertIn("listedSecurities", FRONTEND_SOURCE)
 
+    def test_developer_can_zero_all_resident_equity_cash_with_audited_snapshot(self) -> None:
+        self.assertIn("CREATE TABLE IF NOT EXISTS market_fec_equity_cash_resets", APP_SOURCE)
+        self.assertIn('path == "/api/dev-tools/market/fec/equity-cash/reset-all"', APP_SOURCE)
+        handler = APP_SOURCE.split("def api_dev_market_fec_equity_cash_reset_all", 1)[1].split(
+            "def api_dev_market_fec_seizure", 1
+        )[0]
+        self.assertIn('admin_tools_section_required(db, user, "fec-investigations")', handler)
+        self.assertIn("strict_developer_required(user)", handler)
+        self.assertIn('confirmation != "DELETE ALL EQUITY CASH"', handler)
+        self.assertIn("FOR UPDATE OF a", handler)
+        self.assertIn("cash_balance_before", handler)
+        self.assertIn("account_snapshot_json", handler)
+        self.assertIn("UPDATE market_accounts SET cash_balance=0", handler)
+        self.assertIn("WHERE cash_balance>0.005", handler)
+        self.assertNotIn("bank_bridge_commands", handler)
+        self.assertNotIn("market_fec_asset_pool", handler)
+
+    def test_frontend_exposes_guarded_systemwide_equity_cash_control(self) -> None:
+        self.assertIn("can_reset_all_equity_cash", FRONTEND_SOURCE)
+        self.assertIn('id="devMarketFecEquityCashResetForm"', FRONTEND_SOURCE)
+        self.assertIn("DELETE ALL EQUITY CASH", FRONTEND_SOURCE)
+        self.assertIn("Systemwide equity-cash deletion", FRONTEND_SOURCE)
+        self.assertIn("PERMANENT RESET LEDGER", FRONTEND_SOURCE)
+        self.assertIn("/api/dev-tools/market/fec/equity-cash/reset-all", FRONTEND_SOURCE)
+
 
 if __name__ == "__main__":
     unittest.main()
