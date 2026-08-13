@@ -4763,6 +4763,25 @@ def ensure_migrations(db: Database) -> None:
     db.execute("CREATE INDEX IF NOT EXISTS market_fec_equity_cash_resets_time_idx ON market_fec_equity_cash_resets(created_at DESC)")
     db.execute(
         """
+        CREATE TABLE IF NOT EXISTS market_fec_share_resets (
+            id SERIAL PRIMARY KEY,
+            accounts_scanned INTEGER NOT NULL DEFAULT 0,
+            accounts_affected INTEGER NOT NULL DEFAULT 0,
+            holdings_affected INTEGER NOT NULL DEFAULT 0,
+            shares_deleted NUMERIC(30,6) NOT NULL DEFAULT 0,
+            cost_basis_deleted NUMERIC(30,2) NOT NULL DEFAULT 0,
+            market_value_deleted NUMERIC(30,2) NOT NULL DEFAULT 0,
+            reason TEXT NOT NULL,
+            holding_snapshot_json TEXT NOT NULL DEFAULT '[]',
+            created_by INTEGER,
+            created_by_name TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS market_fec_share_resets_time_idx ON market_fec_share_resets(created_at DESC)")
+    db.execute(
+        """
         CREATE TABLE IF NOT EXISTS market_security_writeoffs (
             id SERIAL PRIMARY KEY,
             security_id INTEGER NOT NULL,
@@ -12421,6 +12440,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_market_fec_seizure(db, user)
                 elif path == "/api/dev-tools/market/fec/equity-cash/reset-all" and method == "POST":
                     self.api_dev_market_fec_equity_cash_reset_all(db, user)
+                elif path == "/api/dev-tools/market/fec/shares/reset-all" and method == "POST":
+                    self.api_dev_market_fec_shares_reset_all(db, user)
                 elif path == "/api/dev-tools/market/fec/pool/dispose" and method == "POST":
                     self.api_dev_market_fec_pool_dispose(db, user)
                 elif path == "/api/dev-tools/market/fec/security-halts" and method == "POST":
@@ -25591,10 +25612,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             payload["fec_investigations"] = {
                 "ipo_reviews": business_fec_review_payload(db, now_iso()),
                 "can_reset_all_equity_cash": strict_developer_required(user) is None,
+                "can_reset_all_shares": strict_developer_required(user) is None,
                 "equity_cash_resets": [dict(row) for row in all_rows(db, """SELECT id,accounts_scanned,
                     accounts_affected,positive_cash_deleted,negative_cash_cleared,reason,created_by,
                     created_by_name,created_at FROM market_fec_equity_cash_resets
                     ORDER BY created_at DESC,id DESC LIMIT 25""")],
+                "share_resets": [dict(row) for row in all_rows(db, """SELECT id,accounts_scanned,
+                    accounts_affected,holdings_affected,shares_deleted,cost_basis_deleted,
+                    market_value_deleted,reason,created_by,created_by_name,created_at
+                    FROM market_fec_share_resets ORDER BY created_at DESC,id DESC LIMIT 25""")],
+                "share_reset_scope": dict(one(db, """SELECT COUNT(DISTINCT h.account_id) AS accounts_with_shares,
+                    COUNT(*) AS holdings_affected,COALESCE(SUM(ABS(h.quantity)),0) AS total_shares,
+                    COALESCE(SUM(ABS(h.quantity)*s.price),0) AS market_value
+                    FROM market_holdings h JOIN market_securities s ON s.id=h.security_id
+                    WHERE ABS(h.quantity)>0.0000005""") or {}),
                 "high_value_threshold": 10_000_000,
                 "residential_pnl": ravenhood_residential_pnl_windows(
                     pnl_equity_trades,
@@ -28120,6 +28151,97 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "ok": True, "accounts_scanned": len(account_rows), "accounts_affected": len(snapshot),
             "positive_cash_deleted": positive_cash_deleted,
             "negative_cash_cleared": 0, "completed_at": timestamp,
+        })
+
+    def api_dev_market_fec_shares_reset_all(self, db: Database, user: DbRow | None) -> None:
+        """Permanently zero every settled resident Ravenhood share position."""
+        err = admin_tools_section_required(db, user, "fec-investigations")
+        if err:
+            self.error(403 if user else 401, err); return
+        err = strict_developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        payload = self.read_json()
+        reason = str(payload.get("reason") or "").strip()[:2000]
+        confirmation = str(payload.get("confirmation") or "").strip().upper()
+        certified = str(payload.get("certify") or "").strip().lower() in ("1", "true", "yes", "on")
+        if len(reason) < 20:
+            self.error(400, "Document the systemic share-deletion reason using at least 20 characters."); return
+        if confirmation != "DELETE ALL RESIDENT SHARES":
+            self.error(400, "Type DELETE ALL RESIDENT SHARES to authorize this systemic action."); return
+        if not certified:
+            self.error(400, "Developer certification is required for this systemic action."); return
+
+        account_rows = [dict(row) for row in all_rows(db, """SELECT a.id AS account_id,a.user_id,
+            u.name,u.civ_number FROM market_accounts a JOIN users u ON u.id=a.user_id
+            ORDER BY a.id FOR UPDATE OF a""")]
+        holding_rows = [dict(row) for row in all_rows(db, """SELECT h.id AS holding_id,h.account_id,
+            a.user_id,u.name,u.civ_number,h.security_id,s.ticker,s.name AS security_name,
+            h.quantity,h.average_cost,s.price AS current_price
+            FROM market_holdings h JOIN market_accounts a ON a.id=h.account_id
+            JOIN users u ON u.id=a.user_id JOIN market_securities s ON s.id=h.security_id
+            WHERE ABS(h.quantity)>0.0000005 ORDER BY h.id FOR UPDATE OF h""")]
+        if not holding_rows:
+            self.error(409, "All Ravenhood resident share positions are already zero."); return
+
+        snapshot: list[dict[str, Any]] = []
+        affected_accounts: set[int] = set()
+        shares_deleted = 0.0
+        cost_basis_deleted = 0.0
+        market_value_deleted = 0.0
+        for holding in holding_rows:
+            quantity = round(float(holding.get("quantity") or 0), 6)
+            average_cost = round(float(holding.get("average_cost") or 0), 4)
+            current_price = round(float(holding.get("current_price") or 0), 4)
+            account_id = int(holding["account_id"])
+            affected_accounts.add(account_id)
+            snapshot.append({
+                "holding_id": int(holding["holding_id"]),
+                "account_id": account_id,
+                "user_id": int(holding["user_id"]),
+                "name": str(holding.get("name") or "Resident"),
+                "civ_number": str(holding.get("civ_number") or ""),
+                "security_id": int(holding["security_id"]),
+                "ticker": str(holding.get("ticker") or ""),
+                "security_name": str(holding.get("security_name") or "Security"),
+                "quantity_before": quantity,
+                "average_cost_before": average_cost,
+                "current_price_at_reset": current_price,
+            })
+            shares_deleted += abs(quantity)
+            cost_basis_deleted += abs(quantity) * average_cost
+            market_value_deleted += abs(quantity) * current_price
+
+        shares_deleted = round(shares_deleted, 6)
+        cost_basis_deleted = round(cost_basis_deleted, 2)
+        market_value_deleted = round(market_value_deleted, 2)
+        timestamp = now_iso()
+        db.execute("""UPDATE market_accounts SET updated_at=? WHERE id IN (
+            SELECT DISTINCT account_id FROM market_holdings WHERE ABS(quantity)>0.0000005
+        )""", (timestamp,))
+        db.execute("""UPDATE market_holdings SET quantity=0,average_cost=0
+            WHERE ABS(quantity)>0.0000005""")
+        db.execute("""INSERT INTO market_fec_share_resets
+            (accounts_scanned,accounts_affected,holdings_affected,shares_deleted,cost_basis_deleted,
+             market_value_deleted,reason,holding_snapshot_json,created_by,created_by_name,created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (
+                len(account_rows), len(affected_accounts), len(snapshot), shares_deleted,
+                cost_basis_deleted, market_value_deleted, reason,
+                json.dumps(snapshot, separators=(",", ":"), default=str), int(user["id"]),
+                user.get("name") or "Developer", timestamp,
+            ))
+        add_admin_audit(db, int(user["id"]), "market.fec.all_resident_shares_deleted", details={
+            "accounts_scanned": len(account_rows), "accounts_affected": len(affected_accounts),
+            "holdings_affected": len(snapshot), "shares_deleted": shares_deleted,
+            "cost_basis_deleted": cost_basis_deleted, "market_value_deleted": market_value_deleted,
+            "reason": reason,
+        })
+        self.send_json(200, {
+            "ok": True, "accounts_scanned": len(account_rows),
+            "accounts_affected": len(affected_accounts), "holdings_affected": len(snapshot),
+            "shares_deleted": shares_deleted, "cost_basis_deleted": cost_basis_deleted,
+            "market_value_deleted": market_value_deleted, "completed_at": timestamp,
         })
 
     def api_dev_market_fec_seizure(self, db: Database, user: DbRow | None) -> None:

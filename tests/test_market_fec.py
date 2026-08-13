@@ -227,6 +227,30 @@ class MarketFecInvestigationWorkspaceTests(unittest.TestCase):
         self.assertIn("PERMANENT RESET LEDGER", FRONTEND_SOURCE)
         self.assertIn("/api/dev-tools/market/fec/equity-cash/reset-all", FRONTEND_SOURCE)
 
+    def test_developer_can_zero_all_resident_shares_with_an_audited_snapshot(self) -> None:
+        self.assertIn("CREATE TABLE IF NOT EXISTS market_fec_share_resets", APP_SOURCE)
+        self.assertIn('path == "/api/dev-tools/market/fec/shares/reset-all"', APP_SOURCE)
+        handler = APP_SOURCE.split("def api_dev_market_fec_shares_reset_all", 1)[1].split(
+            "def api_dev_market_fec_seizure", 1
+        )[0]
+        self.assertIn('admin_tools_section_required(db, user, "fec-investigations")', handler)
+        self.assertIn("strict_developer_required(user)", handler)
+        self.assertIn('confirmation != "DELETE ALL RESIDENT SHARES"', handler)
+        self.assertIn("FOR UPDATE OF h", handler)
+        self.assertIn("quantity_before", handler)
+        self.assertIn("holding_snapshot_json", handler)
+        self.assertIn("UPDATE market_holdings SET quantity=0,average_cost=0", handler)
+        self.assertNotIn("bank_bridge_commands", handler)
+        self.assertNotIn("fcx_engine_npc_positions", handler)
+
+    def test_frontend_exposes_guarded_systemwide_resident_share_control(self) -> None:
+        self.assertIn("can_reset_all_shares", FRONTEND_SOURCE)
+        self.assertIn('id="devMarketFecShareResetForm"', FRONTEND_SOURCE)
+        self.assertIn("DELETE ALL RESIDENT SHARES", FRONTEND_SOURCE)
+        self.assertIn("Systemwide resident-share deletion", FRONTEND_SOURCE)
+        self.assertIn("PERMANENT SHARE-RESET LEDGER", FRONTEND_SOURCE)
+        self.assertIn("/api/dev-tools/market/fec/shares/reset-all", FRONTEND_SOURCE)
+
 
 if __name__ == "__main__":
     unittest.main()

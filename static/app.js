@@ -13976,9 +13976,14 @@ function renderDevFecInvestigations(fec = {}) {
   const ipoHistory = ipoReviews.history || [];
   const accounts = fec.accounts || [];
   const canResetAllEquityCash = Boolean(fec.can_reset_all_equity_cash);
+  const canResetAllShares = Boolean(fec.can_reset_all_shares);
   const equityCashResets = fec.equity_cash_resets || [];
+  const shareResets = fec.share_resets || [];
+  const shareResetScope = fec.share_reset_scope || {};
   const totalEquityCash = accounts.reduce((total, account) => total + Math.max(0, Number(account.cash_balance || 0)), 0);
   const portfolioPositions = fec.shareholders || [];
+  const totalResidentShares = Number(shareResetScope.total_shares || 0);
+  const totalResidentShareValue = Number(shareResetScope.market_value || 0);
   const positionsByAccount = portfolioPositions.reduce((directory, position) => {
     const accountId = Number(position.account_id || 0);
     if (!directory.has(accountId)) directory.set(accountId, []);
@@ -14065,6 +14070,20 @@ function renderDevFecInvestigations(fec = {}) {
       <aside class="fec-equity-cash-reset-ledger"><header><span>PERMANENT RESET LEDGER</span><strong>${equityCashResets.length} RECENT ACTION${equityCashResets.length===1?"":"S"}</strong></header><div>${equityCashResets.map(entry=>`<article><span><b>${money(entry.positive_cash_deleted||0)} deleted</b><small>${Number(entry.accounts_affected||0)} of ${Number(entry.accounts_scanned||0)} accounts changed</small></span><p>${escapeHtml(entry.reason||"No rationale recorded")}</p><footer><span>${entry.created_at?new Date(entry.created_at).toLocaleString():"Time unavailable"}</span><strong>${escapeHtml(entry.created_by_name||"Developer")}</strong></footer></article>`).join("")||`<div class="empty">No systemwide equity-cash deletions have been recorded.</div>`}</div></aside>
     </div>
   </section>` : "";
+  const systemicShareControl = canResetAllShares ? `<section class="dev-card fec-equity-cash-reset fec-resident-share-reset">
+    <header><div><span>DEVELOPER EMERGENCY AUTHORITY</span><h2>Systemwide resident-share deletion</h2><p>Remove every settled stock and index-fund share from every resident Ravenhood account.</p></div><aside><small>CURRENT RESIDENT SHARES</small><strong>${Number(totalResidentShares).toLocaleString(undefined,{maximumFractionDigits:6})}</strong><em>${Number(shareResetScope.holdings_affected||0)} POSITIONS · ${money(totalResidentShareValue)} LIVE VALUE</em></aside></header>
+    <div class="fec-equity-cash-reset-layout">
+      <form id="devMarketFecShareResetForm" data-current-shares="${Number(totalResidentShares).toFixed(6)}" data-current-value="${Number(totalResidentShareValue).toFixed(2)}">
+        <div class="market-fec-form-title"><i>!</i><span><small>IRREVERSIBLE SYSTEMIC ACTION</small><h3>Delete all resident shares</h3></span></div>
+        <div class="fec-equity-cash-scope"><p><b>This action deletes:</b> every settled resident holding, including company stocks and FCXS/FCXV fund shares, plus its recorded average cost.</p><p><b>This action preserves:</b> equity cash, leveraged positions, companies, quotes, executions, in-game banks, Bank Bridge commands, brokerage inventory, and historical records.</p><p><b>Pending orders remain pending:</b> a later execution can create a new holding after this reset.</p></div>
+        <label>Permanent audit rationale<textarea name="reason" minlength="20" maxlength="2000" placeholder="Document the authorization and operational reason for deleting every resident share position." required></textarea></label>
+        <label>Typed authorization<input name="confirmation" autocomplete="off" maxlength="26" placeholder="DELETE ALL RESIDENT SHARES" required/><small>Type the complete phrase exactly as shown.</small></label>
+        <label class="market-fec-certify"><input name="certify" type="checkbox" required/><span>I understand this permanently sets every settled resident share quantity and average cost to zero and cannot be reversed from this screen.</span></label>
+        <button class="danger" type="submit" ${totalResidentShares > 0 ? "" : "disabled"}>Delete all resident shares</button>
+      </form>
+      <aside class="fec-equity-cash-reset-ledger"><header><span>PERMANENT SHARE-RESET LEDGER</span><strong>${shareResets.length} RECENT ACTION${shareResets.length===1?"":"S"}</strong></header><div>${shareResets.map(entry=>`<article><span><b>${Number(entry.shares_deleted||0).toLocaleString(undefined,{maximumFractionDigits:6})} shares deleted</b><small>${Number(entry.holdings_affected||0)} positions across ${Number(entry.accounts_affected||0)} of ${Number(entry.accounts_scanned||0)} accounts</small></span><p>${escapeHtml(entry.reason||"No rationale recorded")}</p><footer><span>${money(entry.market_value_deleted||0)} live value · ${entry.created_at?new Date(entry.created_at).toLocaleString():"Time unavailable"}</span><strong>${escapeHtml(entry.created_by_name||"Developer")}</strong></footer></article>`).join("")||`<div class="empty">No systemwide resident-share deletions have been recorded.</div>`}</div></aside>
+    </div>
+  </section>` : "";
   const custody = `<section class="dev-card market-fec-custody fec-investigation-custody">
     <header class="market-fec-head"><div><span>FEC MARKET INTEGRITY DIVISION</span><h2>Asset custody & forfeiture</h2><p>Controlled evidentiary custody for documented securities-fraud investigations.</p></div><aside><small>ASSETS HELD IN CUSTODY</small><strong>${money(poolBalance)}</strong><em>FEC CONTROLLED POOL</em></aside></header>
     <div class="market-fec-totals"><span><small>SEIZED TO DATE</small><strong>${money(totals.seized || 0)}</strong></span><span><small>RETURNED · CLEARED</small><strong>${money(totals.returned || 0)}</strong></span><span><small>PERMANENTLY FORFEITED</small><strong>${money(totals.forfeited || 0)}</strong></span><span><small>MARKET-CAP REINVESTMENT</small><strong>${money(totals.reinvested || 0)}</strong></span><span><small>AUDIT FILINGS</small><strong>${ledger.length}</strong></span></div>
@@ -14082,6 +14101,7 @@ function renderDevFecInvestigations(fec = {}) {
     ${listingAuthority}
     ${residentPortfolios}
     ${systemicCashControl}
+    ${systemicShareControl}
     <section class="dev-card fec-withdrawal-watch"><header><div><span>HIGH-VALUE CASH WATCH</span><h2>Flagged withdrawals</h2></div><strong class="${withdrawals.length?"red":"green"}">${withdrawals.length} FLAGGED</strong></header><div>${withdrawals.map(item=>`<article><i>!</i><span><b>${escapeHtml(item.name||"Resident")}</b><small>CIV ${escapeHtml(item.civ_number||"pending")} · ${escapeHtml(item.email||"No email")}</small></span><strong>${money(item.amount||0)}</strong><span><b>${escapeHtml(humanLabel(item.bridge_status||item.transaction_status||"pending"))}</b><small>${item.created_at?new Date(item.created_at).toLocaleString():"Time unavailable"}</small></span><code>${escapeHtml(item.command_id||"NO BRIDGE COMMAND")}</code></article>`).join("")||`<div class="fec-clear-state"><i>✓</i><span><strong>No high-value withdrawal flags</strong><small>FC$${(threshold/1000000).toFixed(0)}M boundary monitoring is active.</small></span></div>`}</div></section>
     <section class="dev-card fec-trade-surveillance"><header><div><span>CONSOLIDATED TRADE TAPE</span><h2>All resident executions</h2><p>Cash equity and leveraged positions are shown together.</p></div><div class="fec-trade-controls"><label><span>⌕</span><input data-fec-trade-search type="search" autocomplete="off" placeholder="Search resident, CIV, ticker, or email"/></label><select data-fec-trade-sort><option value="newest">Newest first</option><option value="name-asc">Resident A–Z</option><option value="name-desc">Resident Z–A</option><option value="value-desc">Largest value</option><option value="oldest">Oldest first</option></select></div></header><section class="fec-residential-pnl" data-fec-pnl-root data-window="${initialPnlWindow}"><header><div><span>RESIDENTIAL PROFIT &amp; LOSS</span><h3>Net residential P&amp;L</h3><p>Realized executions plus marked open positions across every resident Ravenhood account.</p></div><nav aria-label="P and L period">${pnlWindowOrder.map(key=>`<button type="button" data-fec-pnl-window="${key}" class="${key===initialPnlWindow?"active":""}">${pnlWindowLabels[key]}</button>`).join("")}</nav></header><div class="fec-pnl-periods">${pnlWindowOrder.map(key=>{const period=residentialPnl[key]||{};const net=Number(period.net_pnl||0);const realized=Number(period.realized_pnl||0);const unrealized=Number(period.unrealized_pnl||0);const residents=(period.residents||[]);const gainers=[...residents].filter(item=>Number(item.net_pnl||0)>0).sort((a,b)=>Number(b.net_pnl||0)-Number(a.net_pnl||0)).slice(0,5);const losses=[...residents].filter(item=>Number(item.net_pnl||0)<0).sort((a,b)=>Number(a.net_pnl||0)-Number(b.net_pnl||0)).slice(0,5);return `<article data-fec-pnl-period="${key}" ${key===initialPnlWindow?"":"hidden"}><div class="fec-pnl-primary"><small>NET RESIDENTIAL P&amp;L · ${escapeHtml(pnlWindowLabels[key].toUpperCase())}</small><strong class="${net>0?"positive":net<0?"negative":"flat"}">${net>0?"+":""}${money(net)}</strong><span>Since ${period.cutoff_at?new Date(period.cutoff_at).toLocaleString():"the selected boundary"}</span></div><div class="fec-pnl-breakdown"><span><small>REALIZED</small><strong class="${realized>=0?"positive":"negative"}">${realized>0?"+":""}${money(realized)}</strong></span><span><small>UNREALIZED</small><strong class="${unrealized>=0?"positive":"negative"}">${unrealized>0?"+":""}${money(unrealized)}</strong></span><span><small>CASH EQUITY</small><strong>${money(period.equity_pnl||0)}</strong></span><span><small>LEVERAGE</small><strong>${money(period.margin_pnl||0)}</strong></span><span><small>RESIDENTS</small><strong>${Number(period.resident_count||0)}</strong><em>${Number(period.profitable_residents||0)} gain · ${Number(period.losing_residents||0)} loss</em></span></div><div class="fec-pnl-concentration"><section><header><span>LARGEST GAINS</span><strong>${gainers.length}</strong></header>${gainers.map((item,index)=>`<div><i>${String(index+1).padStart(2,"0")}</i><span><b>${escapeHtml(item.name||"Resident")}</b><small>CIV ${escapeHtml(item.civ_number||"pending")} · ${money(item.realized_pnl||0)} realized / ${money(item.unrealized_pnl||0)} open</small></span><strong class="positive">+${money(item.net_pnl||0)}</strong></div>`).join("")||`<p>No resident gains in this period.</p>`}</section><section><header><span>LARGEST LOSSES</span><strong>${losses.length}</strong></header>${losses.map((item,index)=>`<div><i>${String(index+1).padStart(2,"0")}</i><span><b>${escapeHtml(item.name||"Resident")}</b><small>CIV ${escapeHtml(item.civ_number||"pending")} · ${money(item.realized_pnl||0)} realized / ${money(item.unrealized_pnl||0)} open</small></span><strong class="negative">${money(item.net_pnl||0)}</strong></div>`).join("")||`<p>No resident losses in this period.</p>`}</section></div></article>`}).join("")}</div><footer>Resident execution records only. Brokerage market-maker activity is excluded.</footer></section><div class="fec-trade-columns"><span>Resident</span><span>Security</span><span>Execution</span><span>Quantity</span><span>Value / fee</span><span>Time</span></div><div class="fec-trade-tape" data-fec-trade-tape>${trades.map(trade=>{const value=Number(trade.gross_amount||0);const search=`${trade.name||""} ${trade.civ_number||""} ${trade.email||""} ${trade.ticker||""} ${trade.security_name||""} ${trade.action||""}`.toLowerCase();const action=String(trade.action||"").toLowerCase();return `<article data-fec-trade-row data-name="${escapeHtml(String(trade.name||"").toLowerCase())}" data-time="${escapeHtml(String(trade.created_at||""))}" data-value="${value}" data-search="${escapeHtml(search)}"><span><b>${escapeHtml(trade.name||"Resident")}</b><small>CIV ${escapeHtml(trade.civ_number||"pending")} · ${escapeHtml(trade.email||"No email")}</small></span><span><b>${escapeHtml(trade.ticker||"—")}</b><small>${escapeHtml(trade.security_name||"Security")} · ${escapeHtml(humanLabel(trade.record_type||"equity"))}</small></span><span><b class="${["buy","long"].includes(action)?"positive":"negative"}">${escapeHtml(action.toUpperCase()||"TRADE")}${trade.leverage?` · ${Number(trade.leverage)}x`:""}</b><small>${escapeHtml(humanLabel(trade.status||"executed"))} · ${money(trade.unit_price||0)}/share</small></span><strong>${Number(trade.quantity||0).toLocaleString(undefined,{maximumFractionDigits:6})}</strong><span><b>${money(value)}</b><small>${money(trade.fee_amount||0)} fee</small></span><time>${trade.created_at?new Date(trade.created_at).toLocaleString():"Unavailable"}</time></article>`}).join("")||`<div class="empty">No resident trades have executed.</div>`}</div><footer><strong data-fec-trade-visible>${trades.length.toLocaleString()} records shown</strong><small>The tape is read-only and includes the complete recorded exchange history.</small></footer></section>
     ${custody}
@@ -15570,6 +15590,33 @@ function bindDevWorkspace() {
     try {
       const result = await api('/api/dev-tools/market/fec/equity-cash/reset-all', { method: 'POST', body });
       toast(`${money(result.positive_cash_deleted || 0)} deleted across ${Number(result.accounts_affected || 0)} Ravenhood accounts`);
+      await refreshDevTools();
+    } catch (error) {
+      if (submit) submit.disabled = false;
+      toast(error.message);
+    }
+  });
+  $('#devMarketFecShareResetForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const body = Object.fromEntries(new FormData(form));
+    const authorization = 'DELETE ALL RESIDENT SHARES';
+    if (String(body.reason || '').trim().length < 20) {
+      toast('Enter a permanent audit rationale of at least 20 characters');
+      return;
+    }
+    if (String(body.confirmation || '').trim().toUpperCase() !== authorization) {
+      toast(`Type ${authorization} to authorize this systemwide action`);
+      return;
+    }
+    const currentShares = Number(form.dataset.currentShares || 0);
+    const currentValue = Number(form.dataset.currentValue || 0);
+    if (!confirm(`Final developer authorization: permanently delete ${currentShares.toLocaleString(undefined,{maximumFractionDigits:6})} settled resident shares with a current value of ${money(currentValue)}? Cash, leverage, brokerage inventory, companies, and market history will not be changed.`)) return;
+    const submit = form.querySelector('button[type="submit"]');
+    if (submit) submit.disabled = true;
+    try {
+      const result = await api('/api/dev-tools/market/fec/shares/reset-all', { method: 'POST', body });
+      toast(`${Number(result.shares_deleted || 0).toLocaleString(undefined,{maximumFractionDigits:6})} resident shares deleted across ${Number(result.accounts_affected || 0)} accounts`);
       await refreshDevTools();
     } catch (error) {
       if (submit) submit.disabled = false;
