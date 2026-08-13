@@ -59,6 +59,28 @@ class EngineConfigurationTests(unittest.TestCase):
         self.assertEqual(config.speed, "normal")
         self.assertEqual(set(config.intervals), set(CYCLE_DEFAULTS))
 
+    def test_operational_safety_controls_are_bounded(self) -> None:
+        config = EngineConfig.from_settings(
+            {
+                "fcx_engine_market_maker_depth_multiplier": "100",
+                "fcx_engine_execution_budget_per_tick": "2",
+                "fcx_engine_panic_participation_percent": "-10",
+                "fcx_engine_circuit_breaker_10m_percent": "9999",
+                "fcx_engine_circuit_breaker_30m_duration_minutes": "0",
+                "fcx_engine_abnormal_volume_float_percent": "0",
+                "fcx_engine_flow_concentration_percent": "140",
+                "fcx_engine_coordinated_flow_min_participants": "1",
+            }
+        )
+        self.assertEqual(config.market_maker_depth_multiplier, 10)
+        self.assertEqual(config.execution_budget_per_tick, 10)
+        self.assertEqual(config.panic_participation_percent, 0)
+        self.assertEqual(config.circuit_breaker_10m_percent, 500)
+        self.assertEqual(config.circuit_breaker_30m_duration_minutes, 1)
+        self.assertEqual(config.abnormal_volume_float_percent, .01)
+        self.assertEqual(config.flow_concentration_percent, 100)
+        self.assertEqual(config.coordinated_flow_min_participants, 2)
+
 
 class DecisionEngineTests(unittest.TestCase):
     def test_decisions_are_reproducible_with_a_seed(self) -> None:

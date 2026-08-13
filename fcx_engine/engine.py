@@ -325,6 +325,46 @@ def ensure_schema(db: Any, timestamp: str | None = None) -> None:
         )"""
     )
     db.execute("CREATE INDEX IF NOT EXISTS fcx_engine_corporate_security_idx ON fcx_engine_corporate_actions(security_id,created_at DESC)")
+    db.execute(
+        """CREATE TABLE IF NOT EXISTS fcx_engine_deployments (
+            id SERIAL PRIMARY KEY,
+            status TEXT NOT NULL DEFAULT 'running',
+            target_listings INTEGER NOT NULL DEFAULT 30,
+            listings_before INTEGER NOT NULL DEFAULT 0,
+            listings_created INTEGER NOT NULL DEFAULT 0,
+            listings_after INTEGER NOT NULL DEFAULT 0,
+            archived_index_accounts INTEGER NOT NULL DEFAULT 0,
+            archived_index_units NUMERIC(30,6) NOT NULL DEFAULT 0,
+            index_constituents INTEGER NOT NULL DEFAULT 0,
+            investors INTEGER NOT NULL DEFAULT 0,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            deployed_by INTEGER,
+            created_at TEXT NOT NULL,
+            completed_at TEXT,
+            error_message TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY (deployed_by) REFERENCES users(id) ON DELETE SET NULL
+        )"""
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS fcx_engine_deployments_time_idx ON fcx_engine_deployments(created_at DESC)")
+    db.execute(
+        """CREATE TABLE IF NOT EXISTS fcx_engine_index_unit_archive (
+            id SERIAL PRIMARY KEY,
+            deployment_id INTEGER NOT NULL,
+            account_id INTEGER NOT NULL,
+            security_id INTEGER NOT NULL,
+            ticker TEXT NOT NULL,
+            quantity NUMERIC(30,6) NOT NULL,
+            average_cost NUMERIC(18,4) NOT NULL DEFAULT 0,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            archived_at TEXT NOT NULL,
+            FOREIGN KEY (deployment_id) REFERENCES fcx_engine_deployments(id) ON DELETE CASCADE
+        )"""
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS fcx_engine_index_archive_deployment_idx ON fcx_engine_index_unit_archive(deployment_id,account_id)")
+    # The PWA owns this established table. These additive fields distinguish
+    # temporary engine circuit breakers from manual FEC/developer halts.
+    db.execute("ALTER TABLE market_security_halts ADD COLUMN IF NOT EXISTS automatic_resume_at TEXT")
+    db.execute("ALTER TABLE market_security_halts ADD COLUMN IF NOT EXISTS engine_managed INTEGER NOT NULL DEFAULT 0")
 
 
 def seed_investors(db: Any, settings: dict[str, Any], replace: bool = False) -> dict[str, Any]:
@@ -927,7 +967,7 @@ def _refresh_market_maker_quotes(
             configured_spread_percent=config.market_maker_spread_percent,
             issued_shares=float(security.get("issued_shares") or 1_000_000),
             provider_count=provider_count,
-            depth_factor=rng.uniform(0.75, 1.25),
+            depth_factor=rng.uniform(0.75, 1.25) * config.market_maker_depth_multiplier,
             price_floor=config.price_floor,
         )
         db.execute(
@@ -970,13 +1010,91 @@ def _finish_cycle(db: Any, cycle_id: int, clock: float, result: dict[str, Any], 
     )
 
 
+def _resume_expired_circuit_breakers(db: Any, timestamp: str) -> int:
+    resumed = _rows(
+        db,
+        """UPDATE market_security_halts
+           SET status='resumed',resumed_by_name='FCX Engine',resumed_at=?,
+               resume_note='Automatic circuit-breaker window completed.'
+           WHERE status='active' AND engine_managed=1
+             AND automatic_resume_at IS NOT NULL AND automatic_resume_at<=?
+           RETURNING id""",
+        (timestamp, timestamp),
+    )
+    return len(resumed)
+
+
+def _circuit_breaker_scan(db: Any, config: EngineConfig, timestamp: str) -> dict[str, Any]:
+    if not config.halt_enabled:
+        return {"triggered": 0, "tickers": []}
+    current_time = _parse_time(timestamp) or utcnow()
+    securities = _rows(
+        db,
+        """SELECT s.id,s.ticker,s.price FROM market_securities s
+           WHERE s.active=1 AND COALESCE(s.lifecycle_status,'active')='active'
+             AND COALESCE(s.security_type,'stock')<>'fund'
+             AND NOT EXISTS (SELECT 1 FROM market_security_halts h
+                             WHERE h.security_id=s.id AND h.status='active')""",
+    )
+    triggered: list[dict[str, Any]] = []
+    windows = (
+        ("30m", 30, config.circuit_breaker_30m_percent, config.circuit_breaker_30m_duration_minutes),
+        ("10m", 10, config.circuit_breaker_10m_percent, config.circuit_breaker_10m_duration_minutes),
+    )
+    for security in securities:
+        price = max(config.price_floor, float(security.get("price") or config.price_floor))
+        candidates: list[tuple[str, float, float, int]] = []
+        for window, minutes, threshold, duration in windows:
+            cutoff = (current_time - dt.timedelta(minutes=minutes)).isoformat()
+            reference = _one(
+                db,
+                """SELECT price FROM market_price_history WHERE security_id=? AND recorded_at>=?
+                   ORDER BY recorded_at ASC,id ASC LIMIT 1""",
+                (security["id"], cutoff),
+            )
+            if not reference:
+                continue
+            base = max(config.price_floor, float(reference.get("price") or price))
+            movement = (price / base - 1.0) * 100.0
+            if abs(movement) >= threshold:
+                candidates.append((window, movement, threshold, duration))
+        if not candidates:
+            continue
+        window, movement, threshold, duration = candidates[0]
+        resume_at = (current_time + dt.timedelta(minutes=duration)).isoformat()
+        case_reference = f"FCX-CB-{security['ticker']}-{current_time.strftime('%Y%m%d%H%M%S')}"
+        inserted = db.execute(
+            """INSERT INTO market_security_halts
+               (security_id,status,reason_code,reason_label,public_notice,case_reference,
+                halted_by_name,halted_at,automatic_resume_at,engine_managed)
+               VALUES (?,'active','ENGINE_CIRCUIT_BREAKER','Automatic circuit breaker',?,?,
+                       'FCX Engine',?,?,1)
+               ON CONFLICT DO NOTHING RETURNING id""",
+            (
+                security["id"],
+                f"Trading paused after a {movement:+.2f}% move over {window}; automatic review window active.",
+                case_reference,
+                timestamp,
+                resume_at,
+            ),
+        ).fetchone()
+        if inserted:
+            triggered.append({
+                "ticker": str(security["ticker"]), "window": window,
+                "movement_percent": round(movement, 4), "threshold_percent": threshold,
+                "resume_at": resume_at,
+            })
+    return {"triggered": len(triggered), "tickers": triggered}
+
+
 def _minute_cycle(db: Any, config: EngineConfig, cycle_id: int, seed: int) -> dict[str, Any]:
+    timestamp = now_iso()
+    circuit_breakers_resumed = _resume_expired_circuit_breakers(db, timestamp)
     securities = _load_securities(db)
     _ensure_fundamentals(db, securities, config.random_seed)
     securities = _load_securities(db)
     if not securities:
         return {"investors_evaluated": 0, "trades_executed": 0, "securities_moved": 0, "volume": 0, "message": "No operating securities"}
-    timestamp = now_iso()
     timestamp_dt = _parse_time(timestamp) or utcnow()
     cutoff = (utcnow() - dt.timedelta(minutes=5)).isoformat()
     human = {
@@ -990,7 +1108,10 @@ def _minute_cycle(db: Any, config: EngineConfig, cycle_id: int, seed: int) -> di
             (cutoff,),
         )
     }
-    max_evaluations = max(10, min(config.population, int(80 * max(0.25, config.activity_multiplier))))
+    max_evaluations = max(
+        10,
+        min(config.population, int(config.execution_budget_per_tick * max(0.25, config.activity_multiplier))),
+    )
     investors = _rows(
         db,
         """SELECT * FROM fcx_engine_npc_investors
@@ -1043,11 +1164,22 @@ def _minute_cycle(db: Any, config: EngineConfig, cycle_id: int, seed: int) -> di
         )
         shorts = {(int(row["investor_id"]), int(row["security_id"])): row for row in short_rows}
     executed: list[dict[str, Any]] = []
+    panic_limit = int(math.ceil(max_evaluations * config.panic_participation_percent / 100.0))
+    panic_evaluated = 0
     for investor in investors:
         investor = _one(db, "SELECT * FROM fcx_engine_npc_investors WHERE id=?", (investor["id"],)) or investor
         personality = str(investor.get("personality") or "retail")
         if personality in config.paused_personalities:
             continue
+        if personality == "panic":
+            if panic_evaluated >= panic_limit:
+                next_at = (utcnow() + dt.timedelta(seconds=60)).isoformat()
+                db.execute(
+                    "UPDATE fcx_engine_npc_investors SET next_action_at=?,updated_at=? WHERE id=?",
+                    (next_at, timestamp, investor["id"]),
+                )
+                continue
+            panic_evaluated += 1
         rng = random.Random(seed + int(investor["id"]) * 104729)
         if rng.random() > float(investor.get("trade_frequency") or 0.25) * config.activity_multiplier:
             next_at = (utcnow() + dt.timedelta(seconds=rng.randint(45, 420))).isoformat()
@@ -1217,7 +1349,7 @@ def _minute_cycle(db: Any, config: EngineConfig, cycle_id: int, seed: int) -> di
         )
     index_funds_revalued = _revalue_index_funds(db, config, cycle_id, timestamp)
     liquidity_quotes = _refresh_market_maker_quotes(db, _load_securities(db), config, timestamp, seed)
-    return {"investors_evaluated": len(investors), "trades_executed": len(executed) + len(parent_fills) + len(squeeze_fills), "parent_order_fills": len(parent_fills), "short_squeeze_covers": len(squeeze_fills), "active_events": int(market_effect["events"]), "securities_moved": moved, "index_funds_revalued": index_funds_revalued, "liquidity_quotes": liquidity_quotes, "volume": round(total_volume, 2), "human_priority_percent": round(config.human_priority * 100, 2)}
+    return {"investors_evaluated": len(investors), "trades_executed": len(executed) + len(parent_fills) + len(squeeze_fills), "parent_order_fills": len(parent_fills), "short_squeeze_covers": len(squeeze_fills), "active_events": int(market_effect["events"]), "securities_moved": moved, "index_funds_revalued": index_funds_revalued, "liquidity_quotes": liquidity_quotes, "volume": round(total_volume, 2), "human_priority_percent": round(config.human_priority * 100, 2), "execution_budget": max_evaluations, "panic_evaluated": panic_evaluated, "circuit_breakers_resumed": circuit_breakers_resumed}
 
 
 def _five_minute_cycle(db: Any, config: EngineConfig, seed: int) -> dict[str, Any]:
@@ -1281,9 +1413,9 @@ def _fifteen_minute_cycle(db: Any, config: EngineConfig, seed: int) -> dict[str,
         buys = float(item.get("buy_quantity") or 0)
         sells = float(item.get("sell_quantity") or 0)
         round_trip = min(buys, sells) / max(1.0, max(buys, sells)) * 100.0
-        rapid_round_trip = round_trip >= 65.0 and int(item.get("executions") or 0) >= 4
-        abnormal = concentration >= 75.0 and quantity >= 100.0
-        wash_pattern = round_trip >= 85.0 and int(item.get("executions") or 0) >= 6
+        rapid_round_trip = round_trip >= config.rapid_round_trip_percent and int(item.get("executions") or 0) >= 4
+        abnormal = concentration >= config.flow_concentration_percent and quantity >= 100.0
+        wash_pattern = round_trip >= config.wash_round_trip_percent and int(item.get("executions") or 0) >= 6
         if not abnormal and not rapid_round_trip:
             continue
         flag_type = "wash_trading_pattern" if wash_pattern else ("rapid_round_trip" if rapid_round_trip else "flow_concentration")
@@ -1313,9 +1445,9 @@ def _fifteen_minute_cycle(db: Any, config: EngineConfig, seed: int) -> dict[str,
         issued = max(1.0, float((security_by_id.get(security_id) or {}).get("issued_shares") or 1))
         imbalance = abs(flow["buy"] - flow["sell"]) / max(1.0, gross) * 100.0
         flags_to_create: list[tuple[str, str, dict[str, Any]]] = []
-        if gross / issued * 100.0 >= 5.0:
+        if gross / issued * 100.0 >= config.abnormal_volume_float_percent:
             flags_to_create.append(("abnormal_volume", "review", {"volume": gross, "percent_of_float": gross / issued * 100.0}))
-        if participant_counts[security_id] >= 4 and imbalance >= 80.0 and gross >= 100.0:
+        if participant_counts[security_id] >= config.coordinated_flow_min_participants and imbalance >= config.coordinated_flow_imbalance_percent and gross >= 100.0:
             flags_to_create.append(("coordinated_flow_review", "high", {"participants": participant_counts[security_id], "directional_imbalance_percent": imbalance, "volume": gross}))
         for flag_type, severity, details in flags_to_create:
             evidence = json.dumps({**details, "window_minutes": 15, "automatic_action": "none"}, separators=(",", ":"))
@@ -1369,7 +1501,8 @@ def _thirty_minute_cycle(db: Any, config: EngineConfig, seed: int) -> dict[str, 
                 db.execute("UPDATE fcx_engine_company_fundamentals SET status='delisted',updated_at=? WHERE security_id=?", (timestamp, row["id"]))
                 db.execute("UPDATE fcx_engine_parent_orders SET status='cancelled',updated_at=? WHERE security_id=? AND status='active'", (timestamp, row["id"]))
                 delisted += 1
-    return {"distressed_companies": len(distressed), "protective_halts": halts, "chapter_11": chapter_11, "chapter_7": chapter_7, "delisted": delisted, "bankruptcy_automation": config.bankruptcy_enabled, "delisting_automation": config.delisting_enabled}
+    circuit_breakers = _circuit_breaker_scan(db, config, timestamp)
+    return {"distressed_companies": len(distressed), "protective_halts": halts, "circuit_breakers": circuit_breakers, "chapter_11": chapter_11, "chapter_7": chapter_7, "delisted": delisted, "bankruptcy_automation": config.bankruptcy_enabled, "delisting_automation": config.delisting_enabled}
 
 
 def _event_severity(sentiment: float, revenue: float, volatility: float) -> str:
@@ -1581,6 +1714,39 @@ def admin_snapshot(db: Any, settings: dict[str, Any]) -> dict[str, Any]:
         "active_events": int((_one(db, "SELECT COUNT(*) AS count FROM fcx_engine_economic_events WHERE status='active' AND ends_at> ?", (now_iso(),)) or {}).get("count") or 0),
         "liquidity_quotes": int((_one(db, "SELECT COUNT(*) AS count FROM fcx_engine_liquidity_quotes") or {}).get("count") or 0),
         "active_halts": int((_one(db, "SELECT COUNT(*) AS count FROM market_security_halts WHERE status='active'") or {}).get("count") or 0),
+        "operating_listings": int((_one(db, """SELECT COUNT(*) AS count FROM market_securities
+            WHERE active=1 AND COALESCE(lifecycle_status,'active')='active'
+              AND COALESCE(index_eligible,1)=1 AND security_type IN ('stock','volatile')""") or {}).get("count") or 0),
+    }
+    index_rows = _rows(db, """SELECT f.fund_key,COUNT(m.id) AS constituents
+        FROM market_index_funds f LEFT JOIN market_index_members m ON m.fund_id=f.id
+        GROUP BY f.id,f.fund_key ORDER BY f.fund_key""")
+    index_counts = {str(row.get("fund_key") or "").upper(): int(row.get("constituents") or 0) for row in index_rows}
+    fund_units = _one(db, """SELECT COUNT(DISTINCT h.account_id) AS accounts,COALESCE(SUM(h.quantity),0) AS units
+        FROM market_holdings h JOIN market_securities s ON s.id=h.security_id
+        WHERE s.ticker IN ('FCXS','FCXV') AND h.quantity<>0""") or {}
+    latest_deployment = _one(db, "SELECT * FROM fcx_engine_deployments ORDER BY id DESC LIMIT 1") or {}
+    if latest_deployment:
+        latest_deployment["details"] = _json(latest_deployment.pop("details_json", "{}"), {})
+    readiness = {
+        "ready": bool(
+            counts["operating_listings"] >= 30
+            and index_counts.get("FCXS", 0) >= 8
+            and index_counts.get("FCXV", 0) >= 6
+            and counts["investors"] >= config.population
+            and config.enabled
+            and not config.kill_switch
+        ),
+        "operating_listings": counts["operating_listings"],
+        "target_listings": 30,
+        "fcxs_constituents": index_counts.get("FCXS", 0),
+        "fcxv_constituents": index_counts.get("FCXV", 0),
+        "fund_accounts": int(fund_units.get("accounts") or 0),
+        "fund_units": float(fund_units.get("units") or 0),
+        "investors": counts["investors"],
+        "target_investors": config.population,
+        "engine_enabled": config.enabled,
+        "kill_switch": config.kill_switch,
     }
     settings_payload = {
         "enabled": config.enabled, "kill_switch": config.kill_switch, "speed": config.speed,
@@ -1588,9 +1754,24 @@ def admin_snapshot(db: Any, settings: dict[str, Any]) -> dict[str, Any]:
         "price_floor": config.price_floor, "minute_cap_percent": config.minute_cap_percent,
         "five_minute_cap_percent": config.five_minute_cap_percent, "thirty_minute_cap_percent": config.thirty_minute_cap_percent,
         "human_priority_percent": config.human_priority * 100, "max_order_percent": config.max_order_percent * 100,
-        "market_maker_spread_percent": config.market_maker_spread_percent, "events_enabled": config.events_enabled,
+        "market_maker_spread_percent": config.market_maker_spread_percent,
+        "market_maker_depth_multiplier": config.market_maker_depth_multiplier,
+        "execution_budget_per_tick": config.execution_budget_per_tick,
+        "panic_participation_percent": config.panic_participation_percent,
+        "events_enabled": config.events_enabled,
         "event_probability_percent": config.event_probability_percent, "sentiment_sensitivity": config.sentiment_sensitivity,
-        "halt_risk_threshold": config.halt_risk_threshold, "bankruptcy_watch_threshold": config.bankruptcy_watch_threshold,
+        "halt_risk_threshold": config.halt_risk_threshold,
+        "circuit_breaker_10m_percent": config.circuit_breaker_10m_percent,
+        "circuit_breaker_30m_percent": config.circuit_breaker_30m_percent,
+        "circuit_breaker_10m_duration_minutes": config.circuit_breaker_10m_duration_minutes,
+        "circuit_breaker_30m_duration_minutes": config.circuit_breaker_30m_duration_minutes,
+        "abnormal_volume_float_percent": config.abnormal_volume_float_percent,
+        "flow_concentration_percent": config.flow_concentration_percent,
+        "rapid_round_trip_percent": config.rapid_round_trip_percent,
+        "wash_round_trip_percent": config.wash_round_trip_percent,
+        "coordinated_flow_imbalance_percent": config.coordinated_flow_imbalance_percent,
+        "coordinated_flow_min_participants": config.coordinated_flow_min_participants,
+        "bankruptcy_watch_threshold": config.bankruptcy_watch_threshold,
         "bankruptcy_ch11_threshold": config.bankruptcy_ch11_threshold, "bankruptcy_ch7_threshold": config.bankruptcy_ch7_threshold,
         "bankruptcy_ch7_loss_cycles": config.bankruptcy_ch7_loss_cycles, "delisting_price_floor": config.delisting_price_floor,
         "bankruptcy_enabled": config.bankruptcy_enabled, "delisting_enabled": config.delisting_enabled,
@@ -1606,6 +1787,7 @@ def admin_snapshot(db: Any, settings: dict[str, Any]) -> dict[str, Any]:
         "settings": settings_payload,
         "state": state,
         "counts": counts,
+        "deployment": {"latest": latest_deployment, "readiness": readiness},
         "capital": _capital_stats(db),
         "personalities": personality,
         "cycles": _rows(db, "SELECT * FROM fcx_engine_cycle_log ORDER BY id DESC LIMIT 24"),

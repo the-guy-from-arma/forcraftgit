@@ -93,3 +93,30 @@ The Shadow Haven integration uses password-authenticated SFTP when
 `SHADOWHAVEN_SFTP_PASSWORD` is configured. Do not set the private-key variables
 unless the hosting account has explicitly been configured for SSH-key
 authentication. The former `LOAFHOSTS_*` names are no longer read.
+
+## FCX autonomous exchange
+
+The production FCX engine is managed from **Dev Tools > Stock Market > FCX
+Autonomous Engine**. Its launch panel provides one controlled deployment action
+that:
+
+- creates or repairs exactly 30 operating-company listings;
+- builds the FCXS stability basket with 8 constituents and the FCXV volatility
+  basket with 6 constituents;
+- seeds the configured persistent simulated-investor population;
+- enables the FCX scheduler and runs the opening daily and minute cycles; and
+- disables the older Ravenhood price writers so two automation systems cannot
+  race the same quote.
+
+When there are no operating-company listings, deployment is treated as a fresh
+exchange launch. Any stale resident FCXS/FCXV units are first copied into the
+FCX index-unit archive and then removed from the live empty funds before their
+new constituent baskets are built. Resident Ravenhood cash, game-bank balances,
+Bank Bridge commands, and all Arma records remain outside this operation.
+
+The Stock Settings control plane also exposes market-maker liquidity depth,
+per-tick execution capacity, panic participation, price caps, automatic 10- and
+30-minute circuit breakers, surveillance thresholds, economic events,
+fundamental analysis, short selling, IPO uncertainty, corporate actions, and a
+deterministic read-only sandbox. Manual and FEC halts are never automatically
+resumed by the circuit-breaker worker.

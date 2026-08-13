@@ -13688,6 +13688,9 @@ function renderFcxEngineConsole(engine = {}) {
   const config = engine.settings || {};
   const state = engine.state || {};
   const counts = engine.counts || {};
+  const deployment = engine.deployment || {};
+  const readiness = deployment.readiness || {};
+  const latestDeployment = deployment.latest || {};
   const capital = engine.capital || {};
   const personalities = engine.personalities || [];
   const cycles = engine.cycles || [];
@@ -13709,6 +13712,9 @@ function renderFcxEngineConsole(engine = {}) {
   const status = config.kill_switch ? "killed" : (state.status || (config.enabled ? "starting" : "offline"));
   const statusClass = status === "online" ? "online" : status === "degraded" ? "degraded" : status === "killed" ? "killed" : "paused";
   const cycleOptions = ["minute","five_minute","fifteen_minute","thirty_minute","hourly","six_hour","daily"];
+  const deploymentReady = Boolean(readiness.ready);
+  const emptyMarketResidue = Number(readiness.operating_listings || 0) === 0 && Number(readiness.fund_units || 0) > 0;
+  const readinessItem = (label, value, target, ready) => `<span class="${ready ? "ready" : "waiting"}"><i>${ready ? "\u2713" : "\u2022"}</i><small>${escapeHtml(label)}</small><b>${Number(value || 0).toLocaleString()} / ${Number(target || 0).toLocaleString()}</b></span>`;
   const evidenceSummary = value => {
     if (!value) return "Recorded by the risk engine";
     try {
@@ -13722,6 +13728,19 @@ function renderFcxEngineConsole(engine = {}) {
       <div><span>FCX AUTONOMOUS MARKET ENGINE</span><h2>A living exchange, under control.</h2><p>Persistent simulated investors, fundamentals, events, liquidity, sentiment, risk controls, and auditable multi-interval market cycles. Resident ledgers and Bank Bridge remain authoritative.</p></div>
       <aside><small>ENGINE STATE</small><strong>${escapeHtml(humanLabel(status))}</strong><em>${state.last_heartbeat_at ? `Heartbeat ${new Date(state.last_heartbeat_at).toLocaleTimeString()}` : "Awaiting first heartbeat"}</em></aside>
     </header>
+    <section class="fcx-engine-launchpad ${deploymentReady ? "ready" : "staged"}">
+      <div class="fcx-engine-launch-copy"><span>${deploymentReady ? "FCX EXCHANGE ONLINE" : "ONE-CLICK EXCHANGE BOOTSTRAP"}</span><h3>${deploymentReady ? "The 30-stock system is deployed." : "Deploy the complete FCX market."}</h3><p>${deploymentReady ? "Every launch checkpoint is online. Re-running deployment verifies and repairs missing pieces without duplicating the market." : "One controlled action creates 30 operating companies, rebuilds FCXS and FCXV, seeds the persistent investor network, arms the autonomous engine, and runs its opening cycles."}</p>${emptyMarketResidue ? `<div class="fcx-engine-residue"><b>EMPTY-INDEX DATA FOUND</b><span>${Number(readiness.fund_accounts || 0).toLocaleString()} resident account(s) hold ${Number(readiness.fund_units || 0).toLocaleString(undefined,{maximumFractionDigits:6})} orphaned FCXS/FCXV units. The first deployment archives this evidence, then clears it from the live empty funds.</span></div>` : ""}<small class="fcx-engine-scope">Resident Ravenhood cash, game-bank balances, Bank Bridge commands, and Arma records are never changed by this launch.</small></div>
+      <div class="fcx-engine-readiness">
+        <header><span>LAUNCH READINESS</span><b>${deploymentReady ? "5 / 5 ONLINE" : "PRE-FLIGHT"}</b></header>
+        ${readinessItem("Operating listings", readiness.operating_listings, readiness.target_listings || 30, Number(readiness.operating_listings || 0) >= 30)}
+        ${readinessItem("FCXS constituents", readiness.fcxs_constituents, 8, Number(readiness.fcxs_constituents || 0) >= 8)}
+        ${readinessItem("FCXV constituents", readiness.fcxv_constituents, 6, Number(readiness.fcxv_constituents || 0) >= 6)}
+        ${readinessItem("Persistent investors", readiness.investors, readiness.target_investors || config.population || 250, Number(readiness.investors || 0) >= Number(readiness.target_investors || config.population || 250))}
+        <span class="${readiness.engine_enabled && !readiness.kill_switch ? "ready" : "waiting"}"><i>${readiness.engine_enabled && !readiness.kill_switch ? "\u2713" : "\u2022"}</i><small>Autonomous engine</small><b>${readiness.engine_enabled && !readiness.kill_switch ? "ARMED" : "STAGED"}</b></span>
+        <button type="button" class="primary" data-fcx-engine-deploy>${deploymentReady ? "Verify & repair deployment" : "Deploy 30-stock FCX system"}</button>
+        ${latestDeployment.completed_at ? `<footer>Last completed ${new Date(latestDeployment.completed_at).toLocaleString()} &middot; deployment #${Number(latestDeployment.id || 0)}</footer>` : `<footer>No completed FCX system deployment recorded.</footer>`}
+      </div>
+    </section>
     <div class="fcx-engine-tape">
       <span><small>SIMULATED INVESTORS</small><b>${Number(counts.investors || 0).toLocaleString()}</b><em>${Number(counts.positions || 0).toLocaleString()} long · ${Number(counts.short_positions || 0).toLocaleString()} short</em></span>
       <span><small>DEPLOYED CAPITAL</small><b>${money(capital.positions || 0)}</b><em>${money(capital.cash || 0)} liquid</em></span>
@@ -13751,10 +13770,22 @@ function renderFcxEngineConsole(engine = {}) {
           <label>Human order priority %<input name="human_priority_percent" type="number" min="0" max="100" step="1" value="${Number(config.human_priority_percent || 70)}"/></label>
           <label>Maximum sliced order %<input name="max_order_percent" type="number" min="0.01" max="50" step="0.01" value="${Number(config.max_order_percent || 5)}"/></label>
           <label>Market-maker spread %<input name="market_maker_spread_percent" type="number" min="0.01" max="25" step="0.01" value="${Number(config.market_maker_spread_percent || .35)}"/></label>
+          <label>Market-maker depth<input name="market_maker_depth_multiplier" type="number" min="0.1" max="10" step="0.1" value="${Number(config.market_maker_depth_multiplier ?? 1)}"/><small>liquidity multiplier</small></label>
+          <label>Execution budget<input name="execution_budget_per_tick" type="number" min="10" max="5000" step="10" value="${Number(config.execution_budget_per_tick ?? 80)}"/><small>investor evaluations per tick</small></label>
+          <label>Panic participation<input name="panic_participation_percent" type="number" min="0" max="100" step="1" value="${Number(config.panic_participation_percent ?? 20)}"/><small>% of panic investors per tick</small></label>
           <label>IPO uncertainty window<input name="ipo_uncertainty_days" type="number" min="1" max="90" step="1" value="${Number(config.ipo_uncertainty_days || 7)}"/><small>days</small></label>
           <label>IPO maximum multiplier<input name="ipo_uncertainty_max_multiplier" type="number" min="1" max="5" step="0.05" value="${Number(config.ipo_uncertainty_max_multiplier || 1.75)}"/><small>decays to 1.00x</small></label>
         </div>
         <div class="fcx-engine-guardrails"><span>PRICE-MOVE GUARDRAILS</span><label>1 minute<input name="minute_cap_percent" type="number" min="0.01" max="100" step="0.01" value="${Number(config.minute_cap_percent || 2)}"/><i>%</i></label><label>5 minute<input name="five_minute_cap_percent" type="number" min="0.01" max="200" step="0.01" value="${Number(config.five_minute_cap_percent || 5)}"/><i>%</i></label><label>30 minute<input name="thirty_minute_cap_percent" type="number" min="0.01" max="500" step="0.01" value="${Number(config.thirty_minute_cap_percent || 15)}"/><i>%</i></label></div>
+        <section class="fcx-engine-control-band">
+          <header><span>AUTOMATIC CIRCUIT BREAKERS</span><small>Engine-owned halts resume automatically after the configured pause. Manual and FEC halts remain untouched.</small></header>
+          <div class="fcx-engine-control-grid">
+            <label>10-minute move<input name="circuit_breaker_10m_percent" type="number" min="0.1" max="500" step="0.1" value="${Number(config.circuit_breaker_10m_percent ?? 20)}"/><small>% trigger</small></label>
+            <label>10-minute pause<input name="circuit_breaker_10m_duration_minutes" type="number" min="1" max="1440" step="1" value="${Number(config.circuit_breaker_10m_duration_minutes ?? 15)}"/><small>minutes</small></label>
+            <label>30-minute move<input name="circuit_breaker_30m_percent" type="number" min="0.1" max="1000" step="0.1" value="${Number(config.circuit_breaker_30m_percent ?? 35)}"/><small>% trigger</small></label>
+            <label>30-minute pause<input name="circuit_breaker_30m_duration_minutes" type="number" min="1" max="1440" step="1" value="${Number(config.circuit_breaker_30m_duration_minutes ?? 30)}"/><small>minutes</small></label>
+          </div>
+        </section>
         <details class="fcx-engine-advanced"><summary>Advanced scheduling and personality controls</summary>
           <div class="fcx-engine-intervals">${cycleOptions.map(cycle=>`<label>${escapeHtml(humanLabel(cycle))}<input name="interval_${cycle}_seconds" type="number" min="10" max="604800" value="${Number(intervals[cycle] || 60)}"/><small>seconds</small></label>`).join("")}</div>
           <div class="fcx-engine-lifecycle">
@@ -13768,6 +13799,17 @@ function renderFcxEngineConsole(engine = {}) {
             <label>Loss cycles before Chapter 7<input name="bankruptcy_ch7_loss_cycles" type="number" min="1" max="365" step="1" value="${Number(config.bankruptcy_ch7_loss_cycles ?? 6)}"/></label>
             <label>Delisting price floor<input name="delisting_price_floor" type="number" min="0.0001" max="1000000" step="0.0001" value="${Number(config.delisting_price_floor ?? .05)}"/></label>
           </div>
+          <section class="fcx-engine-control-band surveillance">
+            <header><span>SURVEILLANCE POLICY</span><small>Thresholds create auditable flags for review. They do not seize resident funds or alter Bank Bridge records.</small></header>
+            <div class="fcx-engine-control-grid surveillance-grid">
+              <label>Abnormal volume<input name="abnormal_volume_float_percent" type="number" min="0.01" max="100" step="0.01" value="${Number(config.abnormal_volume_float_percent ?? 5)}"/><small>% of public float</small></label>
+              <label>Flow concentration<input name="flow_concentration_percent" type="number" min="1" max="100" step="1" value="${Number(config.flow_concentration_percent ?? 75)}"/><small>% one-sided</small></label>
+              <label>Rapid round trip<input name="rapid_round_trip_percent" type="number" min="1" max="100" step="1" value="${Number(config.rapid_round_trip_percent ?? 65)}"/><small>% returned quickly</small></label>
+              <label>Wash pattern<input name="wash_round_trip_percent" type="number" min="1" max="100" step="1" value="${Number(config.wash_round_trip_percent ?? 85)}"/><small>% matching flow</small></label>
+              <label>Coordinated imbalance<input name="coordinated_flow_imbalance_percent" type="number" min="1" max="100" step="1" value="${Number(config.coordinated_flow_imbalance_percent ?? 80)}"/><small>% aligned flow</small></label>
+              <label>Minimum participants<input name="coordinated_flow_min_participants" type="number" min="2" max="1000" step="1" value="${Number(config.coordinated_flow_min_participants ?? 4)}"/><small>distinct investors</small></label>
+            </div>
+          </section>
           <div class="fcx-engine-pauses"><label>Paused tickers<textarea name="paused_tickers" placeholder="FCF, FNN">${escapeHtml((config.paused_tickers||[]).join(", "))}</textarea></label><label>Paused personalities<textarea name="paused_personalities" placeholder="panic, whale">${escapeHtml((config.paused_personalities||[]).join(", "))}</textarea></label></div>
           <div class="fcx-engine-distribution">${Object.entries(distribution).map(([key,value])=>`<label>${escapeHtml(humanLabel(key))}<input name="distribution_${escapeHtml(key)}" type="number" min="0" max="100" step="0.1" value="${Number(value).toFixed(1)}"/><small>% weight</small></label>`).join("")}</div>
         </details>
@@ -15674,6 +15716,26 @@ function bindDevWorkspace() {
     } catch (error) { if (submit) submit.disabled = false; toast(error.message); }
   });
   $$('[data-fcx-engine-refresh]').forEach(button=>button.addEventListener('click', async()=>{button.disabled=true;try{await refreshDevTools();toast('FCX telemetry refreshed');}catch(error){button.disabled=false;toast(error.message);}}));
+  $$('[data-fcx-engine-deploy]').forEach(button=>button.addEventListener('click', async()=>{
+    const repair = /repair/i.test(button.textContent || '');
+    const message = repair
+      ? 'Verify the live FCX deployment and repair any missing listings, index members, investors, or engine state?'
+      : 'Deploy the complete 30-stock FCX system now? Empty FCXS/FCXV units will be archived and cleared before the new indexes are built.';
+    if (!confirm(message)) return;
+    const previous = button.textContent;
+    button.disabled = true;
+    button.textContent = repair ? 'Verifying FCX deployment\u2026' : 'Deploying FCX system\u2026';
+    try {
+      const response = await api('/api/dev-tools/market/engine/deploy',{method:'POST',body:{confirmed:true,target_listings:30}});
+      const result = response.result || {};
+      toast(`FCX online: ${Number(result.listings_after||0)} stocks, FCXS ${Number(result.indexes?.FCXS||0)}, FCXV ${Number(result.indexes?.FCXV||0)}`);
+      await refreshDevTools();
+    } catch(error) {
+      button.disabled = false;
+      button.textContent = previous;
+      toast(error.message);
+    }
+  }));
   $$('[data-fcx-engine-seed]').forEach(button=>button.addEventListener('click', async()=>{button.disabled=true;try{const result=await api('/api/dev-tools/market/engine/seed',{method:'POST',body:{replace:false}});toast(`${Number(result.result?.created||0)} persistent investor(s) created`);await refreshDevTools();}catch(error){button.disabled=false;toast(error.message);}}));
   $$('[data-fcx-engine-cycle]').forEach(button=>button.addEventListener('click', async()=>{const cycle=$('[data-fcx-cycle-select]')?.value||'minute';button.disabled=true;try{const result=await api('/api/dev-tools/market/engine/cycle',{method:'POST',body:{cycle}});toast(result.result?.ok?`${humanLabel(cycle)} cycle completed`:(result.result?.error||'Cycle did not run'));await refreshDevTools();}catch(error){button.disabled=false;toast(error.message);}}));
   $$('[data-fcx-engine-sandbox]').forEach(button=>button.addEventListener('click', async()=>{const days=Number($('[data-fcx-sandbox-days]')?.value||7);const target=$('[data-fcx-sandbox-result]');button.disabled=true;try{const response=await api('/api/dev-tools/market/engine/sandbox',{method:'POST',body:{days}});const result=response.result||{};if(target)target.innerHTML=`<strong>${Number(result.change_percent||0)>=0?'+':''}${Number(result.change_percent||0).toFixed(2)}%</strong><span>${Number(result.npc_trades||0).toLocaleString()} trades · ${Number(result.maximum_drawdown_percent||0).toFixed(2)}% max drawdown</span><small>${Number(result.halts||0)} halts · ${Number(result.bankruptcies||0)} bankruptcies · seed ${Number(result.seed||0)}</small>`;toast(`${days}-day FCX sandbox completed`);}catch(error){toast(error.message);}finally{button.disabled=false;}}));

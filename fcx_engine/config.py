@@ -114,9 +114,22 @@ class EngineConfig:
     human_priority: float
     max_order_percent: float
     market_maker_spread_percent: float
+    market_maker_depth_multiplier: float
+    execution_budget_per_tick: int
+    panic_participation_percent: float
     event_probability_percent: float
     sentiment_sensitivity: float
     halt_risk_threshold: float
+    circuit_breaker_10m_percent: float
+    circuit_breaker_30m_percent: float
+    circuit_breaker_10m_duration_minutes: int
+    circuit_breaker_30m_duration_minutes: int
+    abnormal_volume_float_percent: float
+    flow_concentration_percent: float
+    rapid_round_trip_percent: float
+    wash_round_trip_percent: float
+    coordinated_flow_imbalance_percent: float
+    coordinated_flow_min_participants: int
     bankruptcy_watch_threshold: float
     bankruptcy_ch11_threshold: float
     bankruptcy_ch7_threshold: float
@@ -162,9 +175,22 @@ class EngineConfig:
             human_priority=_number(settings.get("fcx_engine_human_priority_percent"), 70, 0, 100) / 100.0,
             max_order_percent=_number(settings.get("fcx_engine_max_order_percent"), 5, 0.01, 50) / 100.0,
             market_maker_spread_percent=_number(settings.get("fcx_engine_market_maker_spread_percent"), 0.35, 0.01, 25),
+            market_maker_depth_multiplier=_number(settings.get("fcx_engine_market_maker_depth_multiplier"), 1, 0.1, 10),
+            execution_budget_per_tick=int(_number(settings.get("fcx_engine_execution_budget_per_tick"), 80, 10, 5000)),
+            panic_participation_percent=_number(settings.get("fcx_engine_panic_participation_percent"), 20, 0, 100),
             event_probability_percent=_number(settings.get("fcx_engine_event_probability_percent"), 30, 0, 100),
             sentiment_sensitivity=_number(settings.get("fcx_engine_sentiment_sensitivity"), 1, 0, 5),
             halt_risk_threshold=_number(settings.get("fcx_engine_halt_risk_threshold"), 95, 50, 100),
+            circuit_breaker_10m_percent=_number(settings.get("fcx_engine_circuit_breaker_10m_percent"), 20, 0.1, 500),
+            circuit_breaker_30m_percent=_number(settings.get("fcx_engine_circuit_breaker_30m_percent"), 35, 0.1, 1000),
+            circuit_breaker_10m_duration_minutes=int(_number(settings.get("fcx_engine_circuit_breaker_10m_duration_minutes"), 15, 1, 1440)),
+            circuit_breaker_30m_duration_minutes=int(_number(settings.get("fcx_engine_circuit_breaker_30m_duration_minutes"), 30, 1, 1440)),
+            abnormal_volume_float_percent=_number(settings.get("fcx_engine_abnormal_volume_float_percent"), 5, 0.01, 100),
+            flow_concentration_percent=_number(settings.get("fcx_engine_flow_concentration_percent"), 75, 1, 100),
+            rapid_round_trip_percent=_number(settings.get("fcx_engine_rapid_round_trip_percent"), 65, 1, 100),
+            wash_round_trip_percent=_number(settings.get("fcx_engine_wash_round_trip_percent"), 85, 1, 100),
+            coordinated_flow_imbalance_percent=_number(settings.get("fcx_engine_coordinated_flow_imbalance_percent"), 80, 1, 100),
+            coordinated_flow_min_participants=int(_number(settings.get("fcx_engine_coordinated_flow_min_participants"), 4, 2, 100)),
             bankruptcy_watch_threshold=_number(settings.get("fcx_engine_bankruptcy_watch_threshold"), 70, 25, 100),
             bankruptcy_ch11_threshold=_number(settings.get("fcx_engine_bankruptcy_ch11_threshold"), 92, 50, 100),
             bankruptcy_ch7_threshold=_number(settings.get("fcx_engine_bankruptcy_ch7_threshold"), 99, 70, 100),

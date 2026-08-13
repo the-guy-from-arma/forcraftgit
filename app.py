@@ -2385,9 +2385,22 @@ SYSTEM_SETTING_DEFAULTS = {
     "fcx_engine_human_priority_percent": "70.00",
     "fcx_engine_max_order_percent": "5.00",
     "fcx_engine_market_maker_spread_percent": "0.35",
+    "fcx_engine_market_maker_depth_multiplier": "1.00",
+    "fcx_engine_execution_budget_per_tick": "80",
+    "fcx_engine_panic_participation_percent": "20.00",
     "fcx_engine_event_probability_percent": "30.00",
     "fcx_engine_sentiment_sensitivity": "1.00",
     "fcx_engine_halt_risk_threshold": "95.00",
+    "fcx_engine_circuit_breaker_10m_percent": "20.00",
+    "fcx_engine_circuit_breaker_30m_percent": "35.00",
+    "fcx_engine_circuit_breaker_10m_duration_minutes": "15",
+    "fcx_engine_circuit_breaker_30m_duration_minutes": "30",
+    "fcx_engine_abnormal_volume_float_percent": "5.00",
+    "fcx_engine_flow_concentration_percent": "75.00",
+    "fcx_engine_rapid_round_trip_percent": "65.00",
+    "fcx_engine_wash_round_trip_percent": "85.00",
+    "fcx_engine_coordinated_flow_imbalance_percent": "80.00",
+    "fcx_engine_coordinated_flow_min_participants": "4",
     "fcx_engine_bankruptcy_watch_threshold": "70.00",
     "fcx_engine_bankruptcy_ch11_threshold": "92.00",
     "fcx_engine_bankruptcy_ch7_threshold": "99.00",
@@ -6319,9 +6332,22 @@ def get_system_settings(db: Database) -> dict[str, Any]:
         "fcx_engine_human_priority_percent": max(0.0, min(100.0, float(raw.get("fcx_engine_human_priority_percent") or 70))),
         "fcx_engine_max_order_percent": max(0.01, min(50.0, float(raw.get("fcx_engine_max_order_percent") or 5))),
         "fcx_engine_market_maker_spread_percent": max(0.01, min(25.0, float(raw.get("fcx_engine_market_maker_spread_percent") or 0.35))),
+        "fcx_engine_market_maker_depth_multiplier": max(0.1, min(10.0, float(raw.get("fcx_engine_market_maker_depth_multiplier") or 1))),
+        "fcx_engine_execution_budget_per_tick": max(10, min(5000, int(raw.get("fcx_engine_execution_budget_per_tick") or 80))),
+        "fcx_engine_panic_participation_percent": max(0.0, min(100.0, float(raw.get("fcx_engine_panic_participation_percent") or 20))),
         "fcx_engine_event_probability_percent": max(0.0, min(100.0, float(raw.get("fcx_engine_event_probability_percent") or 30))),
         "fcx_engine_sentiment_sensitivity": max(0.0, min(5.0, float(raw.get("fcx_engine_sentiment_sensitivity") or 1))),
         "fcx_engine_halt_risk_threshold": max(50.0, min(100.0, float(raw.get("fcx_engine_halt_risk_threshold") or 95))),
+        "fcx_engine_circuit_breaker_10m_percent": max(0.1, min(500.0, float(raw.get("fcx_engine_circuit_breaker_10m_percent") or 20))),
+        "fcx_engine_circuit_breaker_30m_percent": max(0.1, min(1000.0, float(raw.get("fcx_engine_circuit_breaker_30m_percent") or 35))),
+        "fcx_engine_circuit_breaker_10m_duration_minutes": max(1, min(1440, int(raw.get("fcx_engine_circuit_breaker_10m_duration_minutes") or 15))),
+        "fcx_engine_circuit_breaker_30m_duration_minutes": max(1, min(1440, int(raw.get("fcx_engine_circuit_breaker_30m_duration_minutes") or 30))),
+        "fcx_engine_abnormal_volume_float_percent": max(0.01, min(100.0, float(raw.get("fcx_engine_abnormal_volume_float_percent") or 5))),
+        "fcx_engine_flow_concentration_percent": max(1.0, min(100.0, float(raw.get("fcx_engine_flow_concentration_percent") or 75))),
+        "fcx_engine_rapid_round_trip_percent": max(1.0, min(100.0, float(raw.get("fcx_engine_rapid_round_trip_percent") or 65))),
+        "fcx_engine_wash_round_trip_percent": max(1.0, min(100.0, float(raw.get("fcx_engine_wash_round_trip_percent") or 85))),
+        "fcx_engine_coordinated_flow_imbalance_percent": max(1.0, min(100.0, float(raw.get("fcx_engine_coordinated_flow_imbalance_percent") or 80))),
+        "fcx_engine_coordinated_flow_min_participants": max(2, min(100, int(raw.get("fcx_engine_coordinated_flow_min_participants") or 4))),
         "fcx_engine_bankruptcy_watch_threshold": max(25.0, min(100.0, float(raw.get("fcx_engine_bankruptcy_watch_threshold") or 70))),
         "fcx_engine_bankruptcy_ch11_threshold": max(50.0, min(100.0, float(raw.get("fcx_engine_bankruptcy_ch11_threshold") or 92))),
         "fcx_engine_bankruptcy_ch7_threshold": max(70.0, min(100.0, float(raw.get("fcx_engine_bankruptcy_ch7_threshold") or 99))),
@@ -7671,6 +7697,159 @@ def market_index_payload(db: Database) -> list[dict[str, Any]]:
         fund["market_cap"] = round(price * total_capitalized_units, 2)
         fund["constituents"] = constituents
     return funds
+
+
+FCX_DEPLOYMENT_LOCK_ID = 741629106
+
+
+def deploy_fcx_exchange(db: Database, actor_id: int, target_listings: int = 30) -> dict[str, Any]:
+    """Atomically establish a complete operating FCX market.
+
+    A first deployment from an empty exchange archives and removes orphaned
+    FCXS/FCXV resident units before the new baskets are built.  Resident cash,
+    game-bank balances, and every Arma/Bank Bridge record stay outside scope.
+    Re-running this operation repairs missing pieces without duplicating the
+    investor population or wiping a live market.
+    """
+    target_listings = 30
+    locked = one(db, "SELECT pg_try_advisory_xact_lock(?) AS locked", (FCX_DEPLOYMENT_LOCK_ID,)) or {}
+    if not bool(locked.get("locked")):
+        raise RuntimeError("Another FCX deployment is already running")
+    timestamp = now_iso()
+    ensure_fcx_engine_schema(db, timestamp)
+    active_filter = """active=1 AND COALESCE(lifecycle_status,'active')='active'
+        AND COALESCE(index_eligible,1)=1 AND security_type IN ('stock','volatile')"""
+    listings_before = int((one(db, f"SELECT COUNT(*) AS count FROM market_securities WHERE {active_filter}") or {}).get("count") or 0)
+    # An empty operating exchange is always a clean-launch boundary.  A prior
+    # deployment record must not preserve orphaned FCXS/FCXV units after every
+    # operating company has been removed.
+    fresh_launch = listings_before == 0
+    deployment_row = db.execute(
+        """INSERT INTO fcx_engine_deployments
+           (status,target_listings,listings_before,deployed_by,created_at)
+           VALUES ('running',?,?,?,?) RETURNING id""",
+        (target_listings, listings_before, actor_id, timestamp),
+    ).fetchone()
+    deployment_id = int((deployment_row or {}).get("id") or 0)
+
+    archived_rows: list[dict[str, Any]] = []
+    if fresh_launch:
+        archived_rows = [dict(row) for row in all_rows(db, """SELECT h.account_id,h.security_id,h.quantity,h.average_cost,
+                s.ticker,a.user_id,u.name AS resident_name
+            FROM market_holdings h
+            JOIN market_securities s ON s.id=h.security_id
+            JOIN market_accounts a ON a.id=h.account_id
+            LEFT JOIN users u ON u.id=a.user_id
+            WHERE s.ticker IN ('FCXS','FCXV') AND h.quantity<>0
+            ORDER BY h.account_id,s.ticker""")]
+        for row in archived_rows:
+            db.execute(
+                """INSERT INTO fcx_engine_index_unit_archive
+                   (deployment_id,account_id,security_id,ticker,quantity,average_cost,details_json,archived_at)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (
+                    deployment_id, int(row["account_id"]), int(row["security_id"]), str(row["ticker"]),
+                    float(row.get("quantity") or 0), float(row.get("average_cost") or 0),
+                    json.dumps({"user_id": row.get("user_id"), "resident_name": row.get("resident_name")}, separators=(",", ":")),
+                    timestamp,
+                ),
+            )
+        db.execute("""DELETE FROM market_holdings WHERE security_id IN
+            (SELECT id FROM market_securities WHERE ticker IN ('FCXS','FCXV'))""")
+        db.execute("DELETE FROM market_index_members")
+        db.execute("""UPDATE market_price_programs SET status='cancelled'
+            WHERE security_id IN (SELECT id FROM market_securities WHERE ticker IN ('FCXS','FCXV'))
+              AND status IN ('active','scheduled')""")
+        db.execute("""UPDATE market_security_halts SET status='deployment_reset',resumed_at=?,resume_note='FCX system deployment reset'
+            WHERE security_id IN (SELECT id FROM market_securities WHERE ticker IN ('FCXS','FCXV')) AND status='active'""", (timestamp,))
+        db.execute("""UPDATE market_security_delistings SET status='deployment_reset',relisted_at=?,relist_note='FCX system deployment reset'
+            WHERE security_id IN (SELECT id FROM market_securities WHERE ticker IN ('FCXS','FCXV')) AND status='active'""", (timestamp,))
+        db.execute("""UPDATE market_securities SET price=100,previous_price=100,active=1,lifecycle_status='active',
+            bankruptcy_chapter=NULL,bankruptcy_reason=NULL,bankruptcy_at=NULL,closed_by=NULL,
+            issued_shares=0,index_eligible=0,margin_enabled=1,updated_at=?
+            WHERE ticker IN ('FCXS','FCXV')""", (timestamp,))
+        db.execute("""UPDATE market_index_funds SET base_nav=100,last_rebalanced_at=NULL,last_valued_at=NULL,updated_at=?
+            WHERE fund_key IN ('FCXS','FCXV')""", (timestamp,))
+        for fund in all_rows(db, "SELECT id,ticker FROM market_securities WHERE ticker IN ('FCXS','FCXV')"):
+            db.execute(
+                "INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,100,'fcx_deployment_baseline',?)",
+                (fund["id"], timestamp),
+            )
+
+    created: list[dict[str, Any]] = []
+    remaining = max(0, target_listings - listings_before)
+    for _ in range(remaining):
+        created.append(generated_market_company(db, actor_id))
+    listings_after = int((one(db, f"SELECT COUNT(*) AS count FROM market_securities WHERE {active_filter}") or {}).get("count") or 0)
+    if listings_after < target_listings:
+        raise RuntimeError(f"FCX listing deployment stopped at {listings_after} of {target_listings}")
+
+    index_result = rebalance_market_index_funds(db, force=True, actor_id=actor_id)
+    index_counts = {
+        str(row.get("fund_key") or "").upper(): int(row.get("constituents") or 0)
+        for row in all_rows(db, """SELECT f.fund_key,COUNT(m.security_id) AS constituents
+            FROM market_index_funds f LEFT JOIN market_index_members m ON m.fund_id=f.id
+            GROUP BY f.id,f.fund_key""")
+    }
+    if index_counts.get("FCXS", 0) < 8 or index_counts.get("FCXV", 0) < 6:
+        raise RuntimeError(
+            f"FCX indexes failed readiness: FCXS {index_counts.get('FCXS', 0)}/8, FCXV {index_counts.get('FCXV', 0)}/6"
+        )
+
+    set_system_setting(db, "fcx_engine_enabled", "1")
+    set_system_setting(db, "fcx_engine_kill_switch", "0")
+    set_system_setting(db, "market_autopilot_enabled", "0")
+    set_system_setting(db, "market_gemini_autopilot_enabled", "0")
+    settings = get_system_settings(db)
+    seed_result = seed_fcx_engine_investors(db, settings, replace=fresh_launch)
+    investor_count = int((one(db, "SELECT COUNT(*) AS count FROM fcx_engine_npc_investors") or {}).get("count") or 0)
+    target_investors = int(settings.get("fcx_engine_population") or 0)
+    if investor_count < target_investors:
+        raise RuntimeError(f"FCX investor deployment stopped at {investor_count} of {target_investors}")
+    daily_cycle = run_fcx_engine_manual_cycle(db, settings, "daily")
+    minute_cycle = run_fcx_engine_manual_cycle(db, settings, "minute")
+
+    archived_accounts = len({int(row["account_id"]) for row in archived_rows})
+    archived_units = round(sum(float(row.get("quantity") or 0) for row in archived_rows), 6)
+    details = {
+        "fresh_launch": fresh_launch,
+        "created_tickers": [str(item.get("ticker") or "") for item in created],
+        "indexes": index_counts,
+        "index_result": index_result,
+        "seed": seed_result,
+        "opening_cycles": {"daily": daily_cycle.get("status"), "minute": minute_cycle.get("status")},
+    }
+    db.execute(
+        """UPDATE fcx_engine_deployments SET status='complete',listings_created=?,listings_after=?,
+           archived_index_accounts=?,archived_index_units=?,index_constituents=?,investors=?,
+           details_json=?,completed_at=? WHERE id=?""",
+        (
+            len(created), listings_after, archived_accounts, archived_units,
+            sum(index_counts.values()), investor_count,
+            json.dumps(details, separators=(",", ":"), default=str), now_iso(), deployment_id,
+        ),
+    )
+    db.execute(
+        "INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('fcx_system_deployed',?,?,?,?)",
+        (
+            "FCX autonomous exchange deployed",
+            f"{listings_after} operating listings, FCXS {index_counts.get('FCXS', 0)}, FCXV {index_counts.get('FCXV', 0)}, and {investor_count} persistent engine investors are online.",
+            actor_id, now_iso(),
+        ),
+    )
+    return {
+        "deployment_id": deployment_id,
+        "fresh_launch": fresh_launch,
+        "listings_before": listings_before,
+        "listings_created": len(created),
+        "listings_after": listings_after,
+        "created_tickers": details["created_tickers"],
+        "archived_index_accounts": archived_accounts,
+        "archived_index_units": archived_units,
+        "indexes": index_counts,
+        "investors": investor_count,
+        "opening_cycles": details["opening_cycles"],
+    }
 
 
 def record_market_system_trades(
@@ -12212,6 +12391,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_market_code(db, user)
                 elif path == "/api/dev-tools/market/engine/settings" and method == "PATCH":
                     self.api_dev_fcx_engine_settings(db, user)
+                elif path == "/api/dev-tools/market/engine/deploy" and method == "POST":
+                    self.api_dev_fcx_engine_deploy(db, user)
                 elif path == "/api/dev-tools/market/engine/seed" and method == "POST":
                     self.api_dev_fcx_engine_seed(db, user)
                 elif path == "/api/dev-tools/market/engine/cycle" and method == "POST":
@@ -28182,9 +28363,22 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "human_priority_percent": ("fcx_engine_human_priority_percent", 0, 100, False),
             "max_order_percent": ("fcx_engine_max_order_percent", 0.01, 50, False),
             "market_maker_spread_percent": ("fcx_engine_market_maker_spread_percent", 0.01, 25, False),
+            "market_maker_depth_multiplier": ("fcx_engine_market_maker_depth_multiplier", 0.1, 10, False),
+            "execution_budget_per_tick": ("fcx_engine_execution_budget_per_tick", 10, 5000, True),
+            "panic_participation_percent": ("fcx_engine_panic_participation_percent", 0, 100, False),
             "event_probability_percent": ("fcx_engine_event_probability_percent", 0, 100, False),
             "sentiment_sensitivity": ("fcx_engine_sentiment_sensitivity", 0, 5, False),
             "halt_risk_threshold": ("fcx_engine_halt_risk_threshold", 50, 100, False),
+            "circuit_breaker_10m_percent": ("fcx_engine_circuit_breaker_10m_percent", 0.1, 500, False),
+            "circuit_breaker_30m_percent": ("fcx_engine_circuit_breaker_30m_percent", 0.1, 1000, False),
+            "circuit_breaker_10m_duration_minutes": ("fcx_engine_circuit_breaker_10m_duration_minutes", 1, 1440, True),
+            "circuit_breaker_30m_duration_minutes": ("fcx_engine_circuit_breaker_30m_duration_minutes", 1, 1440, True),
+            "abnormal_volume_float_percent": ("fcx_engine_abnormal_volume_float_percent", 0.01, 100, False),
+            "flow_concentration_percent": ("fcx_engine_flow_concentration_percent", 1, 100, False),
+            "rapid_round_trip_percent": ("fcx_engine_rapid_round_trip_percent", 1, 100, False),
+            "wash_round_trip_percent": ("fcx_engine_wash_round_trip_percent", 1, 100, False),
+            "coordinated_flow_imbalance_percent": ("fcx_engine_coordinated_flow_imbalance_percent", 1, 100, False),
+            "coordinated_flow_min_participants": ("fcx_engine_coordinated_flow_min_participants", 2, 100, True),
             "bankruptcy_watch_threshold": ("fcx_engine_bankruptcy_watch_threshold", 25, 100, False),
             "bankruptcy_ch11_threshold": ("fcx_engine_bankruptcy_ch11_threshold", 50, 100, False),
             "bankruptcy_ch7_threshold": ("fcx_engine_bankruptcy_ch7_threshold", 70, 100, False),
@@ -28243,6 +28437,42 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "speed": settings["fcx_engine_speed"],
         })
         self.send_json(200, {"ok": True, "engine": fcx_engine_admin_snapshot(db, settings)})
+
+    def api_dev_fcx_engine_deploy(self, db: Database, user: DbRow | None) -> None:
+        err = developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        payload = self.read_json()
+        if payload.get("confirmed") is not True:
+            self.error(400, "Confirm the FCX system deployment before launching it."); return
+        # Keep the launch atomic even though this handler translates expected
+        # deployment failures into an HTTP response.  Without a savepoint, a
+        # caught validation/readiness error would allow the request context to
+        # commit whatever portion of the exchange had already been created.
+        db.execute("SAVEPOINT fcx_deployment_request")
+        try:
+            result = deploy_fcx_exchange(db, int(user["id"]), target_listings=30)
+        except (TypeError, ValueError) as exc:
+            db.execute("ROLLBACK TO SAVEPOINT fcx_deployment_request")
+            db.execute("RELEASE SAVEPOINT fcx_deployment_request")
+            self.error(400, str(exc) or "FCX deployment could not be started."); return
+        except RuntimeError as exc:
+            db.execute("ROLLBACK TO SAVEPOINT fcx_deployment_request")
+            db.execute("RELEASE SAVEPOINT fcx_deployment_request")
+            self.error(409, str(exc) or "FCX deployment could not reach operational readiness."); return
+        except Exception:
+            db.execute("ROLLBACK TO SAVEPOINT fcx_deployment_request")
+            db.execute("RELEASE SAVEPOINT fcx_deployment_request")
+            raise
+        else:
+            db.execute("RELEASE SAVEPOINT fcx_deployment_request")
+        add_admin_audit(db, int(user["id"]), "market.fcx_engine.deploy", details=result)
+        settings = get_system_settings(db)
+        self.send_json(200, {
+            "ok": True,
+            "result": result,
+            "engine": fcx_engine_admin_snapshot(db, settings),
+        })
 
     def api_dev_fcx_engine_seed(self, db: Database, user: DbRow | None) -> None:
         err = developer_required(user)

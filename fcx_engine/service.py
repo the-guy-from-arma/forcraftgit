@@ -410,9 +410,22 @@ class EngineSettingsRequest(BaseModel):
     human_priority_percent: float | None = Field(default=None, ge=0, le=100)
     max_order_percent: float | None = Field(default=None, ge=.01, le=50)
     market_maker_spread_percent: float | None = Field(default=None, ge=.01, le=25)
+    market_maker_depth_multiplier: float | None = Field(default=None, ge=.1, le=10)
+    execution_budget_per_tick: int | None = Field(default=None, ge=10, le=5000)
+    panic_participation_percent: float | None = Field(default=None, ge=0, le=100)
     event_probability_percent: float | None = Field(default=None, ge=0, le=100)
     sentiment_sensitivity: float | None = Field(default=None, ge=0, le=5)
     halt_risk_threshold: float | None = Field(default=None, ge=50, le=100)
+    circuit_breaker_10m_percent: float | None = Field(default=None, ge=.1, le=500)
+    circuit_breaker_30m_percent: float | None = Field(default=None, ge=.1, le=1000)
+    circuit_breaker_10m_duration_minutes: int | None = Field(default=None, ge=1, le=1440)
+    circuit_breaker_30m_duration_minutes: int | None = Field(default=None, ge=1, le=1440)
+    abnormal_volume_float_percent: float | None = Field(default=None, ge=.01, le=100)
+    flow_concentration_percent: float | None = Field(default=None, ge=1, le=100)
+    rapid_round_trip_percent: float | None = Field(default=None, ge=1, le=100)
+    wash_round_trip_percent: float | None = Field(default=None, ge=1, le=100)
+    coordinated_flow_imbalance_percent: float | None = Field(default=None, ge=1, le=100)
+    coordinated_flow_min_participants: int | None = Field(default=None, ge=2, le=100)
     bankruptcy_watch_threshold: float | None = Field(default=None, ge=25, le=100)
     bankruptcy_ch11_threshold: float | None = Field(default=None, ge=50, le=100)
     bankruptcy_ch7_threshold: float | None = Field(default=None, ge=70, le=100)
@@ -452,9 +465,22 @@ def admin_settings(payload: EngineSettingsRequest) -> dict[str, Any]:
         "human_priority_percent": "fcx_engine_human_priority_percent",
         "max_order_percent": "fcx_engine_max_order_percent",
         "market_maker_spread_percent": "fcx_engine_market_maker_spread_percent",
+        "market_maker_depth_multiplier": "fcx_engine_market_maker_depth_multiplier",
+        "execution_budget_per_tick": "fcx_engine_execution_budget_per_tick",
+        "panic_participation_percent": "fcx_engine_panic_participation_percent",
         "event_probability_percent": "fcx_engine_event_probability_percent",
         "sentiment_sensitivity": "fcx_engine_sentiment_sensitivity",
         "halt_risk_threshold": "fcx_engine_halt_risk_threshold",
+        "circuit_breaker_10m_percent": "fcx_engine_circuit_breaker_10m_percent",
+        "circuit_breaker_30m_percent": "fcx_engine_circuit_breaker_30m_percent",
+        "circuit_breaker_10m_duration_minutes": "fcx_engine_circuit_breaker_10m_duration_minutes",
+        "circuit_breaker_30m_duration_minutes": "fcx_engine_circuit_breaker_30m_duration_minutes",
+        "abnormal_volume_float_percent": "fcx_engine_abnormal_volume_float_percent",
+        "flow_concentration_percent": "fcx_engine_flow_concentration_percent",
+        "rapid_round_trip_percent": "fcx_engine_rapid_round_trip_percent",
+        "wash_round_trip_percent": "fcx_engine_wash_round_trip_percent",
+        "coordinated_flow_imbalance_percent": "fcx_engine_coordinated_flow_imbalance_percent",
+        "coordinated_flow_min_participants": "fcx_engine_coordinated_flow_min_participants",
         "bankruptcy_watch_threshold": "fcx_engine_bankruptcy_watch_threshold",
         "bankruptcy_ch11_threshold": "fcx_engine_bankruptcy_ch11_threshold",
         "bankruptcy_ch7_threshold": "fcx_engine_bankruptcy_ch7_threshold",
