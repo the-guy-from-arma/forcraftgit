@@ -4841,6 +4841,24 @@ def ensure_migrations(db: Database) -> None:
         """
     )
     db.execute("CREATE INDEX IF NOT EXISTS market_index_members_security_idx ON market_index_members(security_id, fund_id)")
+    # One-time repair for constituent rows left behind by historical Chapter 7
+    # filings.  The marker prevents this cleanup from running on every startup;
+    # future filings use the normal bankruptcy/rebalance path.
+    index_cleanup_key = "migration_index_constituent_cleanup_20260812"
+    if not one(db, "SELECT setting_key FROM system_settings WHERE setting_key=?", (index_cleanup_key,)):
+        db.execute(
+            """DELETE FROM market_index_members
+               WHERE security_id IN (
+                   SELECT id FROM market_securities
+                   WHERE active<>1 OR COALESCE(lifecycle_status,'active')<>'active'
+                      OR COALESCE(index_eligible,1)<>1
+               )"""
+        )
+        cleanup_at = now_iso()
+        db.execute(
+            "INSERT INTO system_settings (setting_key,setting_value,updated_at) VALUES (?, 'completed', ?)",
+            (index_cleanup_key, cleanup_at),
+        )
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS market_promo_codes (
@@ -7353,8 +7371,27 @@ def rebalance_market_index_funds(db: Database, force: bool = False, actor_id: in
         JOIN market_securities s ON s.id=f.security_id WHERE f.enabled=1
         ORDER BY CASE WHEN f.risk_profile='stability' THEN 0 ELSE 1 END,f.id""")
     candidates = market_index_candidate_metrics(db)
-    if not funds or not candidates:
+    if not funds:
         return {"rebalanced": 0, "funds": []}
+    # A market with no eligible operating companies is a valid empty state,
+    # not a reason to preserve the previous basket.  Clear both funds so
+    # bankrupt/delisted securities disappear immediately and newly created
+    # listings can later rebuild the indexes from a clean slate.
+    if not candidates:
+        timestamp = now_iso()
+        outcomes: list[dict[str, Any]] = []
+        for fund in funds:
+            db.execute("DELETE FROM market_index_members WHERE fund_id=?", (fund["id"],))
+            db.execute(
+                "UPDATE market_index_funds SET last_rebalanced_at=?,last_valued_at=?,updated_at=? WHERE id=?",
+                (timestamp, timestamp, timestamp, fund["id"]),
+            )
+            db.execute(
+                "INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('index_rebalanced',?,?,?,?)",
+                (f"{fund['ticker']} cleared", "No eligible operating companies remain in this index.", actor_id, timestamp),
+            )
+            outcomes.append({"ticker": fund["ticker"], "constituents": 0})
+        return {"rebalanced": len(outcomes), "funds": outcomes}
     safe_ranked = sorted(candidates, key=lambda item: (float(item["stability_score"]), -float(item["market_cap"]), -int(item["holder_count"] or 0)))
     safe_ids: set[int] = {
         int(row["security_id"])
@@ -7465,6 +7502,8 @@ def market_index_payload(db: Database) -> list[dict[str, Any]]:
             FROM market_system_trades WHERE LOWER(source)='gemini'
             GROUP BY security_id
         ) gemini_flow ON gemini_flow.security_id=s.id
+        WHERE s.active=1 AND COALESCE(s.lifecycle_status,'active')='active'
+          AND COALESCE(s.index_eligible,1)=1
         ORDER BY f.id,m.rank""")
     grouped: dict[int, list[dict[str, Any]]] = {}
     for raw in members:
