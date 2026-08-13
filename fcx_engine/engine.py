@@ -1718,7 +1718,7 @@ def admin_snapshot(db: Any, settings: dict[str, Any]) -> dict[str, Any]:
             WHERE active=1 AND COALESCE(lifecycle_status,'active')='active'
               AND COALESCE(index_eligible,1)=1 AND security_type IN ('stock','volatile')""") or {}).get("count") or 0),
     }
-    index_rows = _rows(db, """SELECT f.fund_key,COUNT(m.id) AS constituents
+    index_rows = _rows(db, """SELECT f.fund_key,COUNT(m.security_id) AS constituents
         FROM market_index_funds f LEFT JOIN market_index_members m ON m.fund_id=f.id
         GROUP BY f.id,f.fund_key ORDER BY f.fund_key""")
     index_counts = {str(row.get("fund_key") or "").upper(): int(row.get("constituents") or 0) for row in index_rows}
