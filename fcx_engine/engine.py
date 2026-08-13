@@ -54,6 +54,25 @@ def _json(value: Any, fallback: Any) -> Any:
         return fallback
 
 
+def index_constituent_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    """Return index membership totals keyed by the public FCX ticker.
+
+    ``market_index_funds.fund_key`` stores the internal identities
+    ``stability`` and ``volatility``.  Readiness checks are expressed using
+    the public tickers FCXS and FCXV, so using ``fund_key`` directly makes a
+    populated index look empty.  Prefer the joined fund-security ticker and
+    retain the aliases for callers working with older query shapes.
+    """
+    aliases = {"STABILITY": "FCXS", "VOLATILITY": "FCXV"}
+    counts: dict[str, int] = {}
+    for row in rows:
+        identity = str(row.get("fund_ticker") or row.get("ticker") or row.get("fund_key") or "").strip().upper()
+        identity = aliases.get(identity, identity)
+        if identity:
+            counts[identity] = int(row.get("constituents") or 0)
+    return counts
+
+
 def _parse_time(value: Any) -> dt.datetime | None:
     try:
         parsed = dt.datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
@@ -1718,10 +1737,12 @@ def admin_snapshot(db: Any, settings: dict[str, Any]) -> dict[str, Any]:
             WHERE active=1 AND COALESCE(lifecycle_status,'active')='active'
               AND COALESCE(index_eligible,1)=1 AND security_type IN ('stock','volatile')""") or {}).get("count") or 0),
     }
-    index_rows = _rows(db, """SELECT f.fund_key,COUNT(m.security_id) AS constituents
-        FROM market_index_funds f LEFT JOIN market_index_members m ON m.fund_id=f.id
-        GROUP BY f.id,f.fund_key ORDER BY f.fund_key""")
-    index_counts = {str(row.get("fund_key") or "").upper(): int(row.get("constituents") or 0) for row in index_rows}
+    index_rows = _rows(db, """SELECT f.fund_key,s.ticker AS fund_ticker,COUNT(m.security_id) AS constituents
+        FROM market_index_funds f
+        JOIN market_securities s ON s.id=f.security_id
+        LEFT JOIN market_index_members m ON m.fund_id=f.id
+        GROUP BY f.id,f.fund_key,s.ticker ORDER BY f.fund_key""")
+    index_counts = index_constituent_counts(index_rows)
     fund_units = _one(db, """SELECT COUNT(DISTINCT h.account_id) AS accounts,COALESCE(SUM(h.quantity),0) AS units
         FROM market_holdings h JOIN market_securities s ON s.id=h.security_id
         WHERE s.ticker IN ('FCXS','FCXV') AND h.quantity<>0""") or {}

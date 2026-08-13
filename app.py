@@ -63,6 +63,7 @@ from fcx_engine import (
     apply_stock_split as apply_fcx_engine_stock_split,
     admin_snapshot as fcx_engine_admin_snapshot,
     ensure_schema as ensure_fcx_engine_schema,
+    index_constituent_counts as fcx_index_constituent_counts,
     run_due_cycles as run_fcx_engine_due_cycles,
     run_manual_cycle as run_fcx_engine_manual_cycle,
     run_sandbox as run_fcx_engine_sandbox,
@@ -7788,7 +7789,7 @@ def deploy_fcx_exchange(db: Database, actor_id: int, target_listings: int = 30) 
             issued_shares=0,index_eligible=0,margin_enabled=1,updated_at=?
             WHERE ticker IN ('FCXS','FCXV')""", (timestamp,))
         db.execute("""UPDATE market_index_funds SET base_nav=100,last_rebalanced_at=NULL,last_valued_at=NULL,updated_at=?
-            WHERE fund_key IN ('FCXS','FCXV')""", (timestamp,))
+            WHERE UPPER(fund_key) IN ('STABILITY','VOLATILITY','FCXS','FCXV')""", (timestamp,))
         for fund in all_rows(db, "SELECT id,ticker FROM market_securities WHERE ticker IN ('FCXS','FCXV')"):
             db.execute(
                 "INSERT INTO market_price_history (security_id,price,source,recorded_at) VALUES (?,100,'fcx_deployment_baseline',?)",
@@ -7804,12 +7805,14 @@ def deploy_fcx_exchange(db: Database, actor_id: int, target_listings: int = 30) 
         raise RuntimeError(f"FCX listing deployment stopped at {listings_after} of {target_listings}")
 
     index_result = rebalance_market_index_funds(db, force=True, actor_id=actor_id)
-    index_counts = {
-        str(row.get("fund_key") or "").upper(): int(row.get("constituents") or 0)
-        for row in all_rows(db, """SELECT f.fund_key,COUNT(m.security_id) AS constituents
-            FROM market_index_funds f LEFT JOIN market_index_members m ON m.fund_id=f.id
-            GROUP BY f.id,f.fund_key""")
-    }
+    index_counts = fcx_index_constituent_counts([
+        dict(row) for row in all_rows(db, """SELECT f.fund_key,s.ticker AS fund_ticker,
+                COUNT(m.security_id) AS constituents
+            FROM market_index_funds f
+            JOIN market_securities s ON s.id=f.security_id
+            LEFT JOIN market_index_members m ON m.fund_id=f.id
+            GROUP BY f.id,f.fund_key,s.ticker""")
+    ])
     if index_counts.get("FCXS", 0) < 8 or index_counts.get("FCXV", 0) < 6:
         raise RuntimeError(
             f"FCX indexes failed readiness: FCXS {index_counts.get('FCXS', 0)}/8, FCXV {index_counts.get('FCXV', 0)}/6"

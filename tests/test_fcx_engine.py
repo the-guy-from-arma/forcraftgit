@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from fcx_engine.config import (
     CYCLE_DEFAULTS,
@@ -23,11 +24,30 @@ from fcx_engine.pricing import (
     short_squeeze_cover_quantity,
     split_adjustment,
 )
-from fcx_engine.engine import _event_severity
+from fcx_engine.engine import _event_severity, index_constituent_counts
 from fcx_engine.sandbox import run_sandbox
 
 
 class EngineConfigurationTests(unittest.TestCase):
+    def test_index_readiness_uses_public_tickers_not_internal_fund_keys(self) -> None:
+        rows = [
+            {"fund_key": "stability", "fund_ticker": "FCXS", "constituents": 8},
+            {"fund_key": "volatility", "fund_ticker": "FCXV", "constituents": 6},
+        ]
+        self.assertEqual(index_constituent_counts(rows), {"FCXS": 8, "FCXV": 6})
+
+    def test_index_readiness_supports_legacy_internal_key_rows(self) -> None:
+        rows = [
+            {"fund_key": "stability", "constituents": 8},
+            {"fund_key": "volatility", "constituents": 6},
+        ]
+        self.assertEqual(index_constituent_counts(rows), {"FCXS": 8, "FCXV": 6})
+
+    def test_fresh_deployment_resets_internal_index_fund_keys(self) -> None:
+        app_source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+        deploy_source = app_source.split("def deploy_fcx_exchange", 1)[1].split("def ", 1)[0]
+        self.assertIn("'STABILITY','VOLATILITY','FCXS','FCXV'", deploy_source)
+
     def test_all_requested_investor_personalities_exist(self) -> None:
         self.assertEqual(len(PERSONALITY_PROFILES), 15)
         self.assertEqual(set(PERSONALITY_PROFILES), set(DEFAULT_DISTRIBUTION))
