@@ -285,6 +285,51 @@ const iconSvg = {
   logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M10 17l5-5-5-5M15 12H3M21 3v18"/></svg>',
 };
 
+// Launcher marks are deliberately separate from the small utility icons used
+// throughout RP OS.  These are drawn on a larger grid with solid secondary
+// planes so the home screen reads like a family of real products rather than
+// a collection of generic outline symbols.
+const launcherIconSvg = {
+  profile: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><circle class="glyph-surface" cx="16" cy="16" r="13"/><circle cx="16" cy="11" r="4.2"/><path d="M7.5 26c1.1-5 4.2-7.4 8.5-7.4s7.4 2.4 8.5 7.4"/><path class="glyph-detail" d="m23.5 7.5 1.2 1.2 2.6-3"/></svg>',
+  "getting-started": '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="m4 7 8-3 8 3 8-3v21l-8 3-8-3-8 3Z"/><path d="m4 7 8-3 8 3 8-3v21l-8 3-8-3-8 3ZM12 4v21M20 7v21"/><path class="glyph-detail" d="m15 14 2 2 4-5"/></svg>',
+  roadmap: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><circle class="glyph-surface" cx="7" cy="25" r="4"/><circle class="glyph-surface" cx="25" cy="7" r="4"/><circle cx="7" cy="25" r="2.7"/><circle cx="25" cy="7" r="2.7"/><path d="M9.7 25h4.1a4 4 0 0 0 4-4v-2a4 4 0 0 0-4-4h-.8a4 4 0 0 1-4-4V9a4 4 0 0 1 4-4h9.3"/><path class="glyph-detail" d="m20 3 3 2-3 2"/></svg>',
+  dmv: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><rect class="glyph-surface" x="3.5" y="6" width="25" height="20" rx="4"/><rect x="3.5" y="6" width="25" height="20" rx="4"/><circle cx="11" cy="15" r="3.3"/><path d="M6.8 22c.8-3 7.6-3 8.4 0M18 12h6.5M18 16h6.5M18 20h4"/><path class="glyph-detail" d="M6.5 9h5"/></svg>',
+  jobs: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><rect class="glyph-surface" x="3.5" y="9" width="25" height="18" rx="3"/><rect x="3.5" y="9" width="25" height="18" rx="3"/><path d="M11 9V6h10v3M3.5 16h25M13.5 16v3h5v-3"/><path class="glyph-detail" d="M9 23h14"/></svg>',
+  "my-faircroft": '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="M4 27h24L26 12 16 5 6 12Z"/><path d="M3 27h26M6 24h20M8 12h16M10 12v12M15 12v12M22 12v12M5 11 16 4l11 7Z"/><circle class="glyph-detail" cx="16" cy="8" r="1.5"/></svg>',
+  fnn: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><rect class="glyph-surface" x="4" y="4" width="24" height="24" rx="4"/><path d="M8 9h9v7H8zM20 9h4M20 13h4M8 20h16M8 24h12"/><path class="glyph-detail" d="M10.5 11.5h4"/></svg>',
+  citizenship: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><rect class="glyph-surface" x="7" y="3" width="18" height="26" rx="3"/><rect x="7" y="3" width="18" height="26" rx="3"/><circle cx="16" cy="14" r="5"/><path d="M11 14h10M16 9c1.5 1.4 2.3 3 2.3 5S17.5 17.6 16 19c-1.5-1.4-2.3-3-2.3-5S14.5 10.4 16 9ZM12 24h8"/><path class="glyph-detail" d="M10 6h4"/></svg>',
+  business: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="M5 13h22l-2-7H7Z"/><path d="M5 13h22l-2-7H7ZM7 13v14h18V13M11 27v-8h10v8M5 13c0 3 4 3 5.5 0 1.5 3 5.5 3 7 0 1.5 3 5.5 3 7 0 1.5 3 2.5 1.5 2.5 0"/><path class="glyph-detail" d="M12 10h8"/></svg>',
+  properties: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="m3 15 13-10 13 10v13H3Z"/><path d="m3 15 13-10 13 10M6 13v15h20V13M12 28v-9h8v9"/><path class="glyph-detail" d="M21 8V5h4v6"/></svg>',
+  bank: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="m3 12 13-8 13 8Z"/><path d="m3 12 13-8 13 8ZM5 27h22M7 12v12M13 12v12M19 12v12M25 12v12M4 24h24"/><circle class="glyph-detail" cx="16" cy="9" r="1.6"/></svg>',
+  lottery: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><circle class="glyph-surface" cx="16" cy="16" r="12"/><circle cx="16" cy="16" r="12"/><path class="glyph-detail glyph-number" d="M12 11h8l-5.5 10M11 24h10"/><circle cx="7" cy="7" r="1.5"/></svg>',
+  sportsbook: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="M5 8h22v16H5Z"/><rect x="4" y="7" width="24" height="18" rx="3"/><path d="M11 7v18M21 7v18M11 16h10"/><circle cx="16" cy="16" r="3.5"/><path class="glyph-detail" d="M7 11h2M23 21h2"/></svg>',
+  casino: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><rect class="glyph-surface" x="3" y="7" width="26" height="18" rx="5"/><rect x="3" y="7" width="26" height="18" rx="5"/><path d="M11.5 8v16M20.5 8v16"/><path class="glyph-detail" d="M6.5 16h2M15 13l1 2 2 .3-1.5 1.5.4 2.2-1.9-1-1.9 1 .4-2.2-1.5-1.5 2-.3 1-2ZM23.5 13v6M22 14h3"/></svg>',
+  insurance: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="M16 3 27 7v8c0 7-4.7 11.6-11 14-6.3-2.4-11-7-11-14V7Z"/><path d="M16 3 27 7v8c0 7-4.7 11.6-11 14-6.3-2.4-11-7-11-14V7Z"/><circle cx="16" cy="15" r="6"/><path class="glyph-detail" d="M16 11v8M12 15h8"/></svg>',
+  gangs: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><circle class="glyph-surface" cx="16" cy="10" r="4"/><circle cx="16" cy="9" r="4"/><circle cx="7" cy="13" r="3"/><circle cx="25" cy="13" r="3"/><path d="M8 27v-2c0-5 3-8 8-8s8 3 8 8v2M2 27v-1c0-4 2-6 6-6M30 27v-1c0-4-2-6-6-6"/><path class="glyph-detail" d="M13 25h6"/></svg>',
+  realty: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="m3 15 13-10 13 10v13H3Z"/><path d="m3 15 13-10 13 10M6 13v15h20V13M11 28v-9h6v9M20 18h4"/><path class="glyph-detail" d="m22 8 4-4 3 3-4 4"/></svg>',
+  leaderboards: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="M10 4h12v6c0 5-2 8-6 8s-6-3-6-8Z"/><path d="M10 4h12v6c0 5-2 8-6 8s-6-3-6-8ZM10 7H5v3c0 4 2 6 6 6M22 7h5v3c0 4-2 6-6 6M16 18v6M10 28h12M12 24h8"/><path class="glyph-detail" d="m16 7 1 2 2 .3-1.5 1.5.4 2.2-1.9-1-1.9 1 .4-2.2L13 9.3 15 9Z"/></svg>',
+  stats: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="M5 25V17h5v8M13.5 25V8h5v17M22 25V13h5v12Z"/><path d="M4 27h24M6 24v-7h4v7M14 24V8h4v16M22 24V13h4v11"/><path class="glyph-detail" d="m4 12 7-6 6 4 10-7M23 3h4v4"/></svg>',
+  wallstreet: '<svg class="launcher-glyph ravenhood-mark" viewBox="0 0 40 40" aria-hidden="true"><path class="glyph-surface" d="M20 3c9 0 15 6 15 15v8l-6-3v8l-9 6-9-6v-8l-6 3v-8C5 9 11 3 20 3Z"/><path class="ravenhood-hood" d="M20 3c9 0 15 6 15 15v8l-6-3v8l-9 6-9-6v-8l-6 3v-8C5 9 11 3 20 3Z"/><path class="ravenhood-r" d="M10 29V12h7c3.7 0 6 2 6 5s-2.3 5-6 5h-7m7 0 6 7"/><path class="ravenhood-h glyph-detail" d="M25 12v17M34 12v17M25 20.5h9"/></svg>',
+  messages: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="M4 5h24v18H12l-8 5Z"/><path d="M4 5h24v18H12l-8 5V5Z"/><path class="glyph-detail" d="M9 11h14M9 16h10"/></svg>',
+  changelog: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="M8 3h18v26H8Z"/><path d="M8 3h18v26H8a4 4 0 0 1-4-4V7a4 4 0 0 1 4-4ZM8 3v26M12 10h9M12 15h9M12 20h6"/><path class="glyph-detail" d="m20 24 2 2 5-5"/></svg>',
+  mdt: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="M16 3 27 7v8c0 7-4.7 11.6-11 14-6.3-2.4-11-7-11-14V7Z"/><path d="M16 3 27 7v8c0 7-4.7 11.6-11 14-6.3-2.4-11-7-11-14V7Z"/><path class="glyph-detail" d="m16 9 2 4 4 .5-3 3 .8 4.5-3.8-2-3.8 2 .8-4.5-3-3 4-.5Z"/></svg>',
+  "ice-mdt": '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="M16 3 27 7v8c0 7-4.7 11.6-11 14-6.3-2.4-11-7-11-14V7Z"/><path d="M16 3 27 7v8c0 7-4.7 11.6-11 14-6.3-2.4-11-7-11-14V7ZM9 22h14M11 14v7M16 14v7M21 14v7M9 13h14l-7-5Z"/><path class="glyph-detail" d="M16 9.5v2"/></svg>',
+  court: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="m8 7 7 7-4 4-7-7ZM19 4l7 7-4 4-7-7Z"/><path d="m8 7 7 7-4 4-7-7ZM19 4l7 7-4 4-7-7ZM13 16l12 12M17 24l7-7M4 29h17"/><path class="glyph-detail" d="M19 27h8"/></svg>',
+  fire: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="M9 19c-2-6 5-9 7-16 5 5 9 9 7 15 4-3 5-5 5-7 3 9-1 18-12 18C7 29 3 23 5 16c1 2 2 3 4 3Z"/><path d="M9 19c-2-6 5-9 7-16 5 5 9 9 7 15 4-3 5-5 5-7 3 9-1 18-12 18C7 29 3 23 5 16c1 2 2 3 4 3Z"/><path class="glyph-detail" d="M12 24c-1-3 2-5 4-9 3 3 5 6 3 9-1 2-5 3-7 0Z"/></svg>',
+  "fire-settings": '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="M12 20c-2-5 4-8 6-14 4 4 7 8 5 13 3-2 4-4 4-6 2 6 0 11-5 14"/><path d="M12 20c-2-5 4-8 6-14 4 4 7 8 5 13 3-2 4-4 4-6 2 6 0 11-5 14"/><circle cx="10" cy="23" r="5"/><path class="glyph-detail" d="M10 15v3M10 28v3M2 23h3M15 23h3M4.5 17.5l2 2M13.5 26.5l2 2M15.5 17.5l-2 2M6.5 26.5l-2 2"/></svg>',
+  "indeed-admin": '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><rect class="glyph-surface" x="4" y="9" width="24" height="18" rx="3"/><rect x="4" y="9" width="24" height="18" rx="3"/><path d="M11 9V6h10v3M4 16h24"/><path class="glyph-detail" d="m12 21 3 3 6-7"/></svg>',
+  "dev-tools": '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><rect class="glyph-surface" x="3" y="5" width="26" height="22" rx="4"/><rect x="3" y="5" width="26" height="22" rx="4"/><path d="M3 11h26M8 8h.1M12 8h.1"/><path class="glyph-detail" d="m9 17-3 3 3 3M23 17l3 3-3 3M19 14l-6 12"/></svg>',
+  press: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="M5 4h19v24H9a4 4 0 0 1-4-4Z"/><path d="M5 4h19v24H9a4 4 0 0 1-4-4V4ZM24 10h4v14a4 4 0 0 1-4 4M10 10h9M10 15h9M10 20h6"/><path class="glyph-detail" d="M8 7h5"/></svg>',
+  contracts: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="M6 3h16l5 5v21H6Z"/><path d="M6 3h16l5 5v21H6ZM22 3v6h5M11 14h11M11 19h8"/><path class="glyph-detail" d="m11 24 2 2 5-6"/></svg>',
+  "beta-tasks": '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="M12 4h8M14 4v8L7 25c-1 2 .4 4 2.7 4h12.6c2.3 0 3.7-2 2.7-4l-7-13V4"/><path d="M12 4h8M14 4v8L7 25c-1 2 .4 4 2.7 4h12.6c2.3 0 3.7-2 2.7-4l-7-13V4M10 21h12"/><path class="glyph-detail" d="m13 24 2 2 5-6"/></svg>',
+  downloads: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><rect class="glyph-surface" x="5" y="3" width="22" height="26" rx="4"/><rect x="5" y="3" width="22" height="26" rx="4"/><path d="M16 8v11M11 15l5 5 5-5M11 25h10"/><path class="glyph-detail" d="M9 7h3"/></svg>',
+  "realty-dashboard": '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="m3 14 12-9 12 9v14H3Z"/><path d="m3 14 12-9 12 9M6 12v16h19V12M10 28v-8h6v8M19 18h4M19 22h4"/><circle class="glyph-detail" cx="25" cy="7" r="3"/></svg>',
+};
+
+function launcherIcon(item) {
+  return launcherIconSvg[item?.id] || iconSvg[item?.icon] || iconSvg.settings;
+}
+
 const tileColors = {
   profile: "linear-gradient(145deg, #7ee7ff, #276a88)",
   "getting-started": "linear-gradient(145deg, #ffe36d, #1d8b7d)",
@@ -1418,7 +1463,7 @@ function renderHome() {
         ${apps.map((item, index) => `
           <button class="app-icon ${item.enabled ? "" : "locked"} ${item.coming_soon ? "coming-soon" : ""}" style="--i:${index}" data-open-app="${item.id}" ${item.enabled ? "" : "disabled"}>
             <span class="icon-tile" style="--tile:${tileColors[item.id] || tileColors.dmv}">
-              ${iconSvg[item.icon] || iconSvg.settings}
+              ${launcherIcon(item)}
               ${item.coming_soon ? `<span class="soon-badge">SOON</span>` : item.enabled ? "" : `<span class="lock-badge">${iconSvg.lock}</span>`}
             </span>
             <span>${escapeHtml(item.label)}${item.id === "messages" && unread ? ` (${unread})` : ""}</span>
@@ -1450,7 +1495,7 @@ function renderAdminRestrictedHome(apps) {
       <div class="app-grid anticheat-lock-apps">
         ${(apps || []).map((item, index) => `
           <button class="app-icon" style="--i:${index}" data-open-app="${item.id}">
-            <span class="icon-tile" style="--tile:${tileColors[item.id] || tileColors.messages}">${iconSvg[item.icon] || iconSvg.message}${item.id === "messages" && unread ? `<span class="soon-badge">${unread}</span>` : ""}</span>
+            <span class="icon-tile" style="--tile:${tileColors[item.id] || tileColors.messages}">${launcherIcon(item)}${item.id === "messages" && unread ? `<span class="soon-badge">${unread}</span>` : ""}</span>
             <span>${escapeHtml(item.label)}</span>
           </button>`).join("")}
       </div>
@@ -1483,7 +1528,7 @@ function renderAntiCheatLockedHome(apps) {
       <div class="app-grid anticheat-lock-apps">
         ${(chatApps.length ? chatApps : [{ id: "messages", label: "Dev Chat", icon: "message", enabled: true }]).map((item, index) => `
           <button class="app-icon" style="--i:${index}" data-open-app="messages">
-            <span class="icon-tile" style="--tile:${tileColors.messages}">${iconSvg.message}${unread ? `<span class="soon-badge">${unread}</span>` : ""}</span>
+            <span class="icon-tile" style="--tile:${tileColors.messages}">${launcherIcon(item)}${unread ? `<span class="soon-badge">${unread}</span>` : ""}</span>
             <span>${escapeHtml(item.label || "Dev Chat")}${unread ? ` (${unread})` : ""}</span>
           </button>
         `).join("")}

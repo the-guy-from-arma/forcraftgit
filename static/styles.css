@@ -1732,13 +1732,15 @@ textarea:focus {
   place-items: center;
   position: relative;
   overflow: hidden;
-  border: 0;
-  border-radius: 22px;
+  isolation: isolate;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 19px;
   background: var(--tile, linear-gradient(145deg, #25302d, #14191d));
   box-shadow:
-    0 16px 34px rgba(0, 0, 0, 0.3),
-    inset 0 1px 0 rgba(255, 255, 255, 0.26),
-    inset 0 -16px 26px rgba(0, 0, 0, 0.14);
+    0 14px 28px rgba(0, 0, 0, 0.38),
+    0 1px 0 rgba(255,255,255,.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.34),
+    inset 0 -18px 28px rgba(0, 0, 0, 0.22);
   transform: translateZ(0);
 }
 
@@ -1748,33 +1750,90 @@ textarea:focus {
   inset: 0;
   border-radius: inherit;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.24), transparent 44%),
-    linear-gradient(35deg, transparent 0 58%, rgba(255, 255, 255, 0.13));
+    radial-gradient(circle at 22% 12%, rgba(255,255,255,.4), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.17), transparent 46%),
+    linear-gradient(135deg, transparent 45%, rgba(255, 255, 255, 0.10));
   pointer-events: none;
 }
 
 .icon-tile::after {
   content: "";
   position: absolute;
-  inset: -40%;
-  background: linear-gradient(115deg, transparent 35%, rgba(255, 255, 255, 0.24), transparent 65%);
-  transform: translateX(-80%) rotate(12deg);
-  animation: iconSheen 5.8s ease-in-out infinite;
-  animation-delay: calc(var(--i) * 140ms);
-}
-
-@keyframes iconSheen {
-  0%, 58% { transform: translateX(-80%) rotate(12deg); }
-  82%, 100% { transform: translateX(80%) rotate(12deg); }
+  inset: 1px;
+  border-radius: 17px;
+  border: 1px solid rgba(255,255,255,.09);
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.12);
+  pointer-events: none;
 }
 
 .icon-tile svg {
-  width: 28px;
-  height: 28px;
+  width: 34px;
+  height: 34px;
   position: relative;
   z-index: 1;
-  stroke-width: 2.2;
-  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.24));
+  overflow: visible;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 3px 7px rgba(0, 0, 0, 0.34));
+}
+
+.icon-tile .launcher-glyph {
+  color: #fff;
+  fill: none;
+  stroke: currentColor;
+}
+
+.icon-tile .launcher-glyph .glyph-surface {
+  fill: rgba(255,255,255,.09);
+  stroke: rgba(255,255,255,.18);
+  stroke-width: 1;
+}
+
+.icon-tile .launcher-glyph .glyph-detail {
+  color: #fff;
+  stroke-width: 2.35;
+  filter: drop-shadow(0 0 5px rgba(255,255,255,.24));
+}
+
+.app-icon[data-open-app="wallstreet"] .icon-tile {
+  color: #85f8c5;
+  border-color: rgba(92, 240, 177, .42);
+  background:
+    radial-gradient(circle at 26% 12%,rgba(110,255,201,.24),transparent 33%),
+    linear-gradient(145deg,#0d4338 0%,#051e19 52%,#030b09 100%);
+  box-shadow:
+    0 15px 32px rgba(0,0,0,.5),
+    0 0 22px rgba(61,235,167,.14),
+    inset 0 1px rgba(181,255,227,.33),
+    inset 0 -18px 30px rgba(0,0,0,.28);
+}
+
+.app-icon[data-open-app="wallstreet"] .ravenhood-mark {
+  width: 42px;
+  height: 42px;
+  color: #69f0ba;
+  stroke-width: 1.75;
+}
+
+.app-icon[data-open-app="wallstreet"] .ravenhood-mark .glyph-surface {
+  fill: rgba(0,0,0,.3);
+  stroke: rgba(112,255,200,.26);
+}
+
+.app-icon[data-open-app="wallstreet"] .ravenhood-mark .ravenhood-hood {
+  stroke: #83ffd0;
+  stroke-width: 1.2;
+}
+
+.app-icon[data-open-app="wallstreet"] .ravenhood-mark .ravenhood-r,
+.app-icon[data-open-app="wallstreet"] .ravenhood-mark .ravenhood-h {
+  stroke-width: 2.4;
+}
+
+.app-icon[data-open-app="wallstreet"] > span:last-child {
+  color: #9ef5d1;
+  letter-spacing: .035em;
 }
 
 .app-icon > span:not(.icon-tile) {
@@ -18173,9 +18232,9 @@ textarea:focus {
   padding: clamp(22px,4vh,46px) clamp(4px,1vw,14px) 32px;
 }
 .rp-workspace-shell .app-icon { gap: 11px; }
-.rp-workspace-shell .icon-tile { width: 76px; height: 76px; border-radius: 22px; transition: transform .28s cubic-bezier(.16,1,.3,1),box-shadow .28s ease; }
-.rp-workspace-shell .app-icon:not(:disabled):hover .icon-tile { transform: translateY(-5px) scale(1.045); box-shadow:0 24px 45px rgba(0,0,0,.38),0 0 30px rgba(80,205,220,.13),inset 0 1px rgba(255,255,255,.3); }
-.rp-workspace-shell .icon-tile svg { width: 32px; height: 32px; }
+.rp-workspace-shell .icon-tile { width: 76px; height: 76px; border-radius: 20px; transition: transform .28s cubic-bezier(.16,1,.3,1),box-shadow .28s ease,border-color .28s ease; }
+.rp-workspace-shell .app-icon:not(:disabled):hover .icon-tile { transform: translateY(-5px) scale(1.045); border-color:rgba(255,255,255,.4); box-shadow:0 24px 45px rgba(0,0,0,.44),0 0 30px rgba(80,205,220,.14),inset 0 1px rgba(255,255,255,.34); }
+.rp-workspace-shell .icon-tile svg { width: 38px; height: 38px; }
 .rp-workspace-shell .app-icon > span:not(.icon-tile) { min-height: 30px; max-width: 110px; font-size: .72rem; line-height: 1.22; }
 .rp-workspace-shell .os-version { position: fixed; bottom: 0; min-height: 27px; display:grid; place-items:center; background:linear-gradient(transparent,rgba(8,12,14,.94)); }
 
@@ -18210,8 +18269,8 @@ textarea:focus {
   .rp-workspace-shell .home-header h1 { font-size:1.65rem; }
   .rp-workspace-shell .home-emblem { width:46px; height:46px; flex-basis:46px; }
   .rp-workspace-shell .app-grid { gap:25px 8px; padding-top:22px; }
-  .rp-workspace-shell .icon-tile { width:62px; height:62px; border-radius:19px; }
-  .rp-workspace-shell .icon-tile svg { width:27px; height:27px; }
+  .rp-workspace-shell .icon-tile { width:62px; height:62px; border-radius:17px; }
+  .rp-workspace-shell .icon-tile svg { width:31px; height:31px; }
   .rp-workspace-shell .app-panel { padding-inline:14px; }
   .rp-workspace-shell .app-panel .panel-top { min-height:68px; }
 }
@@ -19598,6 +19657,13 @@ textarea:focus {
 .lottery-purchased-board{max-width:1260px;margin:auto}.lottery-purchased-board>header{display:flex;justify-content:space-between;gap:48px;align-items:flex-end;padding-bottom:34px;border-bottom:1px solid rgba(237,195,79,.28)}.lottery-purchased-board>header span,.lottery-ticket-section-title span,.lottery-latest-results>span{font:800 9px/1 Inter,sans-serif;letter-spacing:.22em;color:#edc34f}.lottery-purchased-board>header h2{margin:12px 0 8px;font:880 clamp(38px,5vw,68px)/.92 Inter,sans-serif;letter-spacing:-.06em}.lottery-purchased-board>header p{max-width:680px;margin:0;color:#9f95a4;line-height:1.65}.lottery-purchased-board>header dl{display:flex;margin:0;border-block:1px solid rgba(255,255,255,.14)}.lottery-purchased-board>header dl div{min-width:116px;padding:14px 18px}.lottery-purchased-board>header dt{color:#786e80;font:800 8px/1 Inter,sans-serif;letter-spacing:.16em}.lottery-purchased-board>header dd{margin:8px 0 0;color:#fff;font:850 27px/1 Inter,sans-serif}.lottery-ticket-section{margin-top:42px}.lottery-ticket-section-title{display:grid;grid-template-columns:1fr auto;align-items:end;margin-bottom:4px;padding:0 4px 16px}.lottery-ticket-section-title span{grid-column:1}.lottery-ticket-section-title h3{margin:8px 0 0;font:820 24px/1 Inter,sans-serif}.lottery-ticket-section-title>strong{grid-column:2;grid-row:1/3;color:#edc34f;font-size:30px}.lottery-purchased-list{border-top:1px solid rgba(255,255,255,.14)}.lottery-purchased-ticket{position:relative;display:grid;grid-template-columns:250px 1fr;background:linear-gradient(100deg,rgba(255,255,255,.035),transparent 65%);border-bottom:1px solid rgba(255,255,255,.13);overflow:hidden;animation:lottery-ticket-arrive .45s ease both}.lottery-purchased-ticket:before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:#39e8ba;box-shadow:0 0 20px rgba(57,232,186,.55)}.lottery-purchased-ticket.winner{background:linear-gradient(105deg,rgba(237,195,79,.14),rgba(237,195,79,.025) 58%,transparent)}.lottery-purchased-ticket.winner:before{background:#edc34f;box-shadow:0 0 28px #edc34f}.lottery-purchased-ticket.not_winner{opacity:.72}.lottery-purchased-ticket.not_winner:before{background:#69616e;box-shadow:none}.lottery-purchased-ticket.review:before{background:#f45368}.lottery-ticket-edge{padding:24px 28px;border-right:1px dashed rgba(255,255,255,.17)}.lottery-ticket-edge small{display:block;color:#817789;font:800 8px/1 Inter,sans-serif;letter-spacing:.16em}.lottery-ticket-edge strong{display:block;margin:9px 0 15px;font:750 15px/1.1 ui-monospace,monospace;letter-spacing:.08em}.lottery-ticket-edge em{color:#48e7bd;font:850 9px/1 Inter,sans-serif;letter-spacing:.14em}.lottery-purchased-ticket.winner .lottery-ticket-edge em{color:#edc34f;text-shadow:0 0 15px rgba(237,195,79,.7)}.lottery-purchased-ticket.not_winner .lottery-ticket-edge em{color:#aaa1ad}.lottery-purchased-ticket.review .lottery-ticket-edge em{color:#ff6d80}.lottery-ticket-line{display:grid;grid-template-columns:1fr 1fr;gap:28px;align-items:center;padding:21px 28px 50px}.lottery-ticket-line small{display:block;margin-bottom:10px;color:#746b7b;font:800 8px/1 Inter,sans-serif;letter-spacing:.16em}.lottery-ticket-balls{display:flex;gap:8px;flex-wrap:wrap}.lottery-ticket-balls i{display:grid;place-items:center;width:38px;height:38px;border-radius:50%;background:#f3ead1;color:#21172a;box-shadow:inset 0 -5px 9px rgba(101,69,12,.18),0 5px 15px rgba(0,0,0,.22);font:850 12px/1 Inter,sans-serif;font-style:normal}.lottery-ticket-line>div:nth-child(2) .lottery-ticket-balls i{background:transparent;color:#edc34f;border:1px solid rgba(237,195,79,.42);box-shadow:0 0 15px rgba(237,195,79,.08)}.lottery-ticket-legacy{color:#8a808e;font:750 11px/1 ui-monospace,monospace;letter-spacing:.1em}.lottery-ticket-wait strong{display:block;color:#ddd5df;font-size:13px}.lottery-ticket-wait span{display:block;margin-top:6px;color:#786f7d;font-size:10px}.lottery-purchased-ticket>footer{position:absolute;left:278px;right:28px;bottom:13px;display:flex;gap:24px;color:#716878;font-size:9px}.lottery-purchased-ticket>footer strong{margin-left:auto;color:#edc34f;letter-spacing:.12em}.lottery-purchased-ticket>footer em{margin-left:auto;color:#817989;letter-spacing:.1em}.lottery-purchased-empty{display:flex;align-items:center;gap:18px;padding:30px 4px;border-block:1px dashed rgba(255,255,255,.12);color:#8d8392}.lottery-purchased-empty i{display:grid;place-items:center;width:44px;height:44px;border:1px solid rgba(237,195,79,.35);border-radius:50%;color:#edc34f;font:850 12px/1 Inter,sans-serif}.lottery-purchased-empty strong{color:#eee7ef}.lottery-purchased-empty span{margin-left:auto;max-width:540px;font-size:11px}.lottery-latest-results{display:flex;align-items:center;gap:34px;margin-top:48px;padding-top:24px;border-top:1px solid rgba(237,195,79,.24)}.lottery-latest-results>div{display:flex;align-items:center;gap:15px}.lottery-latest-results small{color:#807687;font:800 8px/1 Inter,sans-serif;letter-spacing:.14em}.lottery-latest-results .lottery-ticket-balls i{width:30px;height:30px;font-size:10px}@keyframes lottery-ticket-arrive{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
 @media(max-width:900px){.lottery-number-hero{grid-template-columns:1fr 1fr}.lottery-number-hero>div:first-child{grid-column:1/-1}.lottery-draw-clock{grid-column:1/-1}.lottery-game-rail{overflow-x:auto;padding-inline:20px}.lottery-game-rail button{flex:0 0 170px}.lottery-pick-stage{grid-template-columns:1fr}.lottery-pick-stage>footer{grid-column:1}.lottery-number-field{grid-template-columns:repeat(7,1fr)}.lottery-purchased-board>header{align-items:flex-start;flex-direction:column}.lottery-purchased-ticket{grid-template-columns:190px 1fr}.lottery-purchased-ticket>footer{left:218px}.lottery-latest-results{align-items:flex-start;flex-direction:column}}
 @media(max-width:600px){.lottery-number-hero{display:block;padding:42px 20px 30px}.lottery-live-jackpot{margin-top:36px}.lottery-wallet-display,.lottery-draw-clock{margin-top:22px}.lottery-draw-clock{align-items:flex-start;flex-direction:column}.lottery-game-deck{width:calc(100% - 32px);padding-top:40px}.lottery-number-field{grid-template-columns:repeat(5,1fr);gap:8px}.lottery-pick-stage.quick .lottery-number-field{grid-template-columns:repeat(5,1fr)}.lottery-pick-stage>footer{align-items:stretch;flex-direction:column}.lottery-ticket-ledger li{grid-template-columns:40px 1fr}.lottery-ticket-ledger li span,.lottery-ticket-ledger li em{grid-column:2}.lottery-number-field button{font-size:12px}.lottery-number-hero h1{font-size:47px}.lottery-purchased-board>header dl{width:100%}.lottery-purchased-board>header dl div{min-width:0;flex:1;padding-inline:10px}.lottery-purchased-ticket{display:block}.lottery-ticket-edge{border-right:0;border-bottom:1px dashed rgba(255,255,255,.17);padding:19px 20px}.lottery-ticket-edge em{position:absolute;right:18px;top:22px}.lottery-ticket-line{grid-template-columns:1fr;padding:20px 20px 58px}.lottery-purchased-ticket>footer{left:20px;right:20px;flex-wrap:wrap}.lottery-purchased-ticket>footer span:nth-child(2){display:none}.lottery-purchased-empty{align-items:flex-start;flex-wrap:wrap}.lottery-purchased-empty span{margin-left:62px;margin-top:-22px}.lottery-ticket-balls i{width:34px;height:34px}.lottery-latest-results>div{align-items:flex-start;flex-direction:column}}
+
+/* Keep live lottery totals inside their own ledger columns at every viewport size. */
+.lottery-live-jackpot,.lottery-wallet-display{min-width:0;overflow:hidden;container-type:inline-size}
+.lottery-live-jackpot strong,.lottery-wallet-display strong{max-width:100%;white-space:nowrap;font-variant-numeric:tabular-nums;font-size:clamp(24px,8.4cqi,67px)}
+.lottery-wallet-display strong{font-size:clamp(22px,8.2cqi,45px)}
+.lottery-live-jackpot span,.lottery-wallet-display span{min-width:0;flex-wrap:wrap;overflow-wrap:anywhere;line-height:1.45}
+@media(max-width:1180px) and (min-width:601px){.lottery-number-hero{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.lottery-number-hero>div:first-child{grid-column:1/-1}.lottery-draw-clock{grid-column:1/-1}}
 /* Developer-only account deletion command */
 .account-deletion-command{--delete-red:#ff5267;--delete-line:#26343d;display:flex;flex-direction:column;min-height:100%;background:radial-gradient(circle at 88% 4%,rgba(255,82,103,.1),transparent 28%),linear-gradient(135deg,#0b1217 0%,#0a1115 62%,#100d12 100%);color:#eaf2f5}.account-deletion-hero{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:40px;padding:46px 48px 38px;border-bottom:1px solid var(--delete-line);position:relative;overflow:hidden}.account-deletion-hero:after{content:"DELETE";position:absolute;right:15%;bottom:-28px;font:900 100px/1 sans-serif;letter-spacing:.12em;color:transparent;-webkit-text-stroke:1px rgba(255,82,103,.07);pointer-events:none}.account-deletion-hero span,.account-deletion-command small{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:#83949e}.account-deletion-hero>div:first-child>span{color:#ff7687}.account-deletion-hero h2{font-size:clamp(34px,4vw,64px);line-height:.96;margin:12px 0 16px;letter-spacing:-.045em}.account-deletion-hero p{max-width:780px;color:#9dafb8;font-size:15px;line-height:1.7}.account-deletion-clearance{align-self:center;border-left:1px solid rgba(255,82,103,.35);padding:10px 0 10px 28px;display:grid;gap:7px;position:relative;z-index:1}.account-deletion-clearance i{width:10px;height:10px;border-radius:50%;background:var(--delete-red);box-shadow:0 0 24px var(--delete-red);animation:accountDeletePulse 1.8s ease-in-out infinite}.account-deletion-clearance strong{font-size:18px;color:#ff9daa}.account-deletion-clearance span{font-size:12px;color:#9dafb8;text-transform:none;letter-spacing:0}.account-deletion-status{display:grid;grid-template-columns:180px 180px 1fr;align-items:stretch;border-bottom:1px solid var(--delete-line)}.account-deletion-status>div{padding:22px 28px;border-right:1px solid var(--delete-line);display:grid;gap:3px}.account-deletion-status strong{font-size:27px}.account-deletion-status p{padding:22px 32px;margin:0;color:#9dafb8;line-height:1.55;align-self:center}.account-deletion-status p b{color:#ff8796}.account-deletion-console{display:grid;grid-template-columns:minmax(360px,42%) minmax(0,1fr);min-height:610px;border-bottom:1px solid var(--delete-line)}.account-deletion-directory{border-right:1px solid var(--delete-line);min-width:0}.account-deletion-directory>header,.account-deletion-ledger>header{padding:26px 30px;border-bottom:1px solid var(--delete-line)}.account-deletion-directory h3,.account-deletion-ledger h3{font-size:24px;margin:5px 0 18px}.account-deletion-directory input{width:100%;border:0;border-bottom:1px solid #40515b;border-radius:0;background:transparent;padding:12px 2px;color:#fff}.account-deletion-directory>div{max-height:530px;overflow:auto;scrollbar-width:thin;scrollbar-color:#63717a transparent}.account-deletion-row{width:100%;display:grid;grid-template-columns:minmax(0,1fr) 130px 82px;align-items:center;gap:16px;padding:17px 24px;border:0;border-bottom:1px solid #1c2a31;background:transparent;color:inherit;text-align:left;cursor:pointer;transition:.2s ease}.account-deletion-row:hover{background:linear-gradient(90deg,rgba(255,82,103,.1),transparent);padding-left:30px}.account-deletion-ident{display:grid;grid-template-columns:38px minmax(0,1fr);column-gap:12px;align-items:center}.account-deletion-ident i{grid-row:1/3;width:38px;height:38px;border:1px solid #42535c;border-radius:50%;display:grid;place-items:center;font-style:normal;color:#b9c8ce}.account-deletion-ident b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.account-deletion-ident small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:none;letter-spacing:0}.account-deletion-link{font-size:9px;letter-spacing:.12em;color:#81929b}.account-deletion-link small{text-transform:none;letter-spacing:0}.account-deletion-state{font-size:9px;letter-spacing:.1em;text-align:right;color:#63e3b2}.account-deletion-state.protected{color:#e0b55e}.account-deletion-inspector{position:relative;min-width:0}.account-deletion-inspector>header{padding:30px 36px 22px;border-bottom:1px solid var(--delete-line);position:relative}.account-deletion-inspector>header button{position:absolute;right:28px;top:24px;border:0;background:transparent;color:#9babb3;font-size:28px;cursor:pointer}.account-deletion-inspector h3{font-size:34px;margin:8px 0 2px}.account-deletion-inspector p{color:#8fa1aa}.account-deletion-identity{display:grid;grid-template-columns:110px 1.4fr 1fr;border-bottom:1px solid var(--delete-line)}.account-deletion-identity>div{padding:20px 24px;border-right:1px solid var(--delete-line);display:grid;gap:6px;min-width:0}.account-deletion-identity strong{overflow:hidden;text-overflow:ellipsis}.account-deletion-impact{display:grid;grid-template-columns:190px 1fr;border-bottom:1px solid var(--delete-line)}.account-deletion-impact>div{padding:28px;border-right:1px solid var(--delete-line);display:grid;align-content:center}.account-deletion-impact>div strong{font-size:48px;color:#ff7485}.account-deletion-impact ul{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));margin:0;padding:14px 28px;list-style:none}.account-deletion-impact li{display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid #1d2a30;color:#9aabb3}.account-deletion-impact li strong{color:#eaf2f5}.account-deletion-authorize{padding:25px 34px 32px;display:grid;grid-template-columns:1fr 1fr;gap:18px}.account-deletion-authorize label{display:grid;gap:8px}.account-deletion-authorize textarea,.account-deletion-authorize input{background:#0a1014;border:1px solid #34434b;color:#fff}.account-deletion-certify,.account-deletion-authorize button{grid-column:1/-1}.account-deletion-certify{display:flex!important;grid-template-columns:auto 1fr!important;align-items:center;color:#aab8be}.account-deletion-authorize button{min-height:48px;background:linear-gradient(90deg,#c92e47,#ff5369);box-shadow:0 12px 30px rgba(255,82,103,.14)}.account-deletion-protected{margin:34px;padding:28px;border-left:3px solid #ddb452;background:linear-gradient(90deg,rgba(221,180,82,.12),transparent)}.account-deletion-protected strong{color:#f2cc71}.account-deletion-idle{height:100%;min-height:560px;display:grid;place-content:center;text-align:center;padding:50px}.account-deletion-idle>span{width:94px;height:94px;border:1px solid #3b4a52;border-radius:50%;display:grid;place-items:center;margin:0 auto 26px;font:700 28px Georgia;color:#65737a;box-shadow:0 0 0 20px rgba(255,255,255,.012)}.account-deletion-idle h3{font-size:30px;margin:10px 0}.account-deletion-idle p{max-width:480px;line-height:1.7}.account-deletion-ledger{padding-bottom:36px}.account-deletion-ledger>header{display:flex;align-items:end;justify-content:space-between}.account-deletion-ledger>div>article{display:grid;grid-template-columns:180px 1fr 1.2fr 180px;gap:25px;align-items:center;padding:19px 30px;border-bottom:1px solid #1d2a31}.account-deletion-ledger article>div{display:grid;gap:3px}.account-deletion-ledger time{font-size:11px;color:#71828b}.account-deletion-ledger span{font-size:12px;color:#91a2aa}.account-deletion-ledger .empty{padding:40px}.dev-sidebar nav button.locked[data-dev-tab="account-deletion"]{opacity:.38;filter:saturate(.25)}@keyframes accountDeletePulse{50%{opacity:.45;transform:scale(.75)}}
 @media(max-width:900px){.account-deletion-hero{grid-template-columns:1fr;padding:30px 24px}.account-deletion-status{grid-template-columns:1fr 1fr}.account-deletion-status p{grid-column:1/-1}.account-deletion-console{grid-template-columns:1fr}.account-deletion-directory{border-right:0;border-bottom:1px solid var(--delete-line)}.account-deletion-directory>div{max-height:360px}.account-deletion-inspector{min-height:540px}.account-deletion-ledger>div>article{grid-template-columns:1fr 1fr}.account-deletion-ledger time{grid-column:1/-1}.account-deletion-identity{grid-template-columns:1fr}.account-deletion-impact{grid-template-columns:1fr}.account-deletion-impact ul{grid-template-columns:1fr}.account-deletion-authorize{grid-template-columns:1fr}.account-deletion-authorize>*{grid-column:1!important}}@media(max-width:560px){.account-deletion-row{grid-template-columns:minmax(0,1fr) 70px}.account-deletion-link{display:none}.account-deletion-status{grid-template-columns:1fr 1fr}.account-deletion-status>div{padding:18px}.account-deletion-ledger>div>article{grid-template-columns:1fr}.account-deletion-hero h2{font-size:38px}}
