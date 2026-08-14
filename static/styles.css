@@ -20955,3 +20955,151 @@ textarea:focus {
 .market-program-quote-board{display:grid;grid-template-columns:minmax(180px,.55fr) 1fr;align-items:center;gap:20px;min-height:76px;padding:15px 17px;border:1px solid #294b40;border-radius:12px;background:radial-gradient(circle at 8% 50%,rgba(76,226,171,.11),transparent 30%),linear-gradient(120deg,#091813,#0b1618)}.market-program-quote-board>span{display:grid;gap:4px}.market-program-quote-board small{color:#5dbb99;font:850 8px ui-monospace,Consolas,monospace;letter-spacing:.15em}.market-program-quote-board strong{color:#f0faf5;font-size:20px;letter-spacing:-.025em;font-variant-numeric:tabular-nums}.market-program-quote-board p{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:14px;margin:0;color:#819a8f;font-size:10px}.market-program-quote-board p b{min-width:0;overflow:hidden;color:#cfe2d9;text-overflow:ellipsis;white-space:nowrap}.market-program-quote-board p span{color:#dceae3;font:850 12px ui-monospace,Consolas,monospace;font-variant-numeric:tabular-nums}.market-program-quote-board p em{min-width:68px;padding:6px 8px;border-radius:999px;background:rgba(255,255,255,.04);font:900 10px ui-monospace,Consolas,monospace;font-style:normal;text-align:center}.market-program-quote-board p em.up,[data-market-target-change].up{color:#57e5aa}.market-program-quote-board p em.down,[data-market-target-change].down{color:#ff6b82}
 .market-program-pricing-mode{display:grid;grid-template-columns:1fr 1fr;gap:10px}.market-program-pricing-mode>label{position:relative;display:flex;align-items:center;gap:13px;min-height:72px;padding:13px 15px;border:1px solid #29463d;border-radius:11px;background:#0c1714;cursor:pointer;transition:.18s}.market-program-pricing-mode>label:has(input:checked){border-color:#52e1aa;background:linear-gradient(135deg,rgba(38,115,88,.25),rgba(12,23,20,.95));box-shadow:0 0 0 2px rgba(82,225,170,.06)}.market-program-pricing-mode input{width:18px;height:18px;accent-color:#52e1aa}.market-program-pricing-mode span{display:grid;gap:4px}.market-program-pricing-mode b{color:#e8f5ef;font-size:12px}.market-program-pricing-mode small{color:#789087;font-size:9px;line-height:1.45}.market-program-pricing-mode>label.disabled{cursor:not-allowed;filter:saturate(.2);opacity:.48}.market-program-builder label[hidden]{display:none!important}.market-program-builder [data-market-target-change]{color:#79938a;font-size:9px;line-height:1.5;font-variant-numeric:tabular-nums}
 @media(max-width:760px){.market-program-quote-board{grid-template-columns:1fr;gap:9px}.market-program-quote-board p{grid-template-columns:1fr auto}.market-program-quote-board p b{grid-column:1/-1}.market-program-pricing-mode{grid-template-columns:1fr}.market-program-option{grid-template-columns:18px 45px minmax(0,1fr) auto;gap:7px}.market-program-option>em{font-size:9px}}
+
+/* FEC Ravenhood account supervision */
+.market-compliance-banner {
+  margin: 0;
+  min-height: 66px;
+  padding: 13px clamp(18px, 3vw, 50px);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 15px;
+  color: #dafcf1;
+  background: linear-gradient(90deg, rgba(37, 216, 167, .13), rgba(7, 23, 19, .98) 56%, rgba(61, 171, 255, .08));
+  border-block: 1px solid rgba(89, 231, 187, .2);
+}
+.market-compliance-banner > i {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(91, 239, 193, .56);
+  border-radius: 50%;
+  color: #67f2c4;
+  font: 800 10px/1 var(--mono, monospace);
+  font-style: normal;
+  letter-spacing: .08em;
+  box-shadow: 0 0 22px rgba(54, 224, 170, .12);
+}
+.market-compliance-banner span { min-width: 0; display: grid; gap: 3px; }
+.market-compliance-banner strong { font-size: 13px; letter-spacing: .02em; }
+.market-compliance-banner small { color: #8eaaa1; font-size: 10px; line-height: 1.45; }
+.market-compliance-banner > b {
+  color: #6df2c6;
+  font: 800 9px/1 var(--mono, monospace);
+  letter-spacing: .18em;
+  white-space: nowrap;
+}
+.market-compliance-banner.restricted {
+  background: linear-gradient(90deg, rgba(255, 82, 112, .13), rgba(24, 9, 13, .98) 58%, rgba(255, 183, 77, .07));
+  border-color: rgba(255, 97, 126, .2);
+}
+.market-compliance-banner.restricted > i,
+.market-compliance-banner.restricted > b { color: #ff758e; border-color: rgba(255, 105, 131, .54); }
+.market-v18-read-only {
+  margin-top: 14px;
+  display: inline-flex !important;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid rgba(92, 231, 188, .27);
+  border-radius: 999px;
+  color: #6fe8c2 !important;
+  background: rgba(20, 82, 65, .18);
+  font: 800 9px/1 var(--mono, monospace) !important;
+  letter-spacing: .13em;
+  white-space: nowrap;
+}
+.market-v18-read-only i { width: 6px; height: 6px; border-radius: 50%; background: #63f0c1; box-shadow: 0 0 12px #4ee1b2; }
+
+.fec-account-restriction-console { overflow: hidden; }
+.fec-account-restriction-head {
+  padding: 26px 30px;
+  display: flex;
+  justify-content: space-between;
+  gap: 28px;
+  border-bottom: 1px solid rgba(105, 229, 192, .18);
+  background: linear-gradient(115deg, rgba(15, 65, 54, .42), transparent 62%);
+}
+.fec-account-restriction-head > div > span,
+.fec-account-restriction-form small,
+.fec-account-active-restrictions > header span {
+  color: #66eac1;
+  font: 800 9px/1.2 var(--mono, monospace);
+  letter-spacing: .15em;
+}
+.fec-account-restriction-head h2 { margin: 7px 0 5px; font-size: clamp(25px, 3vw, 39px); }
+.fec-account-restriction-head p { max-width: 790px; margin: 0; color: #93aba4; line-height: 1.55; }
+.fec-account-restriction-head > aside { min-width: 205px; padding-left: 25px; border-left: 1px solid rgba(105, 229, 192, .18); display: grid; align-content: center; gap: 4px; }
+.fec-account-restriction-head > aside small,
+.fec-account-restriction-head > aside em { color: #78958c; font: 800 9px/1.2 var(--mono, monospace); font-style: normal; letter-spacing: .12em; }
+.fec-account-restriction-head > aside strong { color: #68efc2; font-size: 31px; }
+.fec-account-restriction-head > aside.alert strong,
+.fec-account-restriction-head > aside.alert em { color: #ff708a; }
+.fec-account-restriction-layout { display: grid; grid-template-columns: minmax(310px, .8fr) minmax(470px, 1.35fr); }
+.fec-account-restriction-form { padding: 28px 30px; display: grid; align-content: start; gap: 17px; border-right: 1px solid rgba(105, 229, 192, .16); }
+.fec-account-restriction-form label { display: grid; gap: 8px; color: #d8eee7; font-size: 11px; font-weight: 750; }
+.fec-account-restriction-form label > small { color: #718f86; letter-spacing: normal; line-height: 1.5; font-weight: 500; }
+.fec-account-restriction-form input,
+.fec-account-restriction-form select,
+.fec-account-restriction-form textarea,
+.fec-account-active-restrictions input {
+  width: 100%;
+  color: #e5fff6;
+  background: rgba(7, 23, 19, .78);
+  border: 1px solid rgba(103, 220, 185, .23);
+  border-radius: 8px;
+}
+.fec-account-restriction-form input,
+.fec-account-restriction-form select,
+.fec-account-active-restrictions input { min-height: 43px; padding: 0 12px; }
+.fec-account-restriction-form textarea { min-height: 92px; padding: 12px; resize: vertical; }
+.fec-account-restriction-form .market-fec-certify { grid-template-columns: auto 1fr; align-items: start; color: #83a199; font-size: 10px; line-height: 1.45; }
+.fec-account-restriction-form .market-fec-certify input { width: 16px; min-height: 16px; margin-top: 1px; }
+.fec-account-active-restrictions { min-width: 0; padding: 28px 30px; }
+.fec-account-active-restrictions > header { display: flex; justify-content: space-between; gap: 20px; padding-bottom: 13px; border-bottom: 1px solid rgba(105, 229, 192, .17); }
+.fec-account-active-restrictions > header strong { color: #ff718b; font: 800 10px/1 var(--mono, monospace); letter-spacing: .12em; }
+.fec-account-active-restrictions > div > article { padding: 19px 0; display: grid; grid-template-columns: minmax(175px, .7fr) minmax(240px, 1.2fr) minmax(180px, .8fr); gap: 18px; align-items: center; border-bottom: 1px solid rgba(105, 229, 192, .14); }
+.fec-account-restriction-person { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.fec-account-restriction-person > i { width: 37px; height: 37px; flex: 0 0 37px; display: grid; place-items: center; border: 1px solid rgba(108, 235, 195, .43); border-radius: 50%; color: #6cf0c4; font-style: normal; font-weight: 900; }
+.fec-account-restriction-person span,
+.fec-account-restriction-order { min-width: 0; display: grid; gap: 4px; }
+.fec-account-restriction-person small,
+.fec-account-restriction-order small { color: #708c83; font-size: 9px; line-height: 1.35; }
+.fec-account-restriction-order strong { color: #ff728a; font-size: 12px; }
+.fec-account-restriction-order p { margin: 0; color: #b9cec7; font-size: 10px; line-height: 1.45; }
+.fec-account-active-restrictions form { display: grid; gap: 8px; }
+.fec-account-active-restrictions form input { min-height: 36px; font-size: 10px; }
+.fec-account-active-restrictions form button { min-height: 37px; }
+.fec-account-restriction-history { border-top: 1px solid rgba(105, 229, 192, .17); }
+.fec-account-restriction-history > summary { padding: 17px 30px; display: flex; justify-content: space-between; cursor: pointer; color: #cbe2db; }
+.fec-account-restriction-history > summary strong { color: #718f86; font: 800 9px/1 var(--mono, monospace); letter-spacing: .11em; }
+.fec-account-restriction-history > div { padding: 0 30px 25px; }
+.fec-account-restriction-history article { display: grid; grid-template-columns: .8fr .85fr .65fr 1.4fr; gap: 16px; padding: 13px 0; border-top: 1px solid rgba(105, 229, 192, .12); }
+.fec-account-restriction-history article span { display: grid; gap: 3px; }
+.fec-account-restriction-history article small { color: #718f86; font-size: 9px; }
+.fec-account-restriction-history article p { margin: 0; color: #a7beb6; font-size: 10px; line-height: 1.4; }
+.fec-account-restriction-history article.active > span:nth-child(3) b { color: #ff718b; }
+.fec-account-restriction-history article.released > span:nth-child(3) b { color: #64e9bd; }
+
+@media (max-width: 1080px) {
+  .fec-account-restriction-layout { grid-template-columns: 1fr; }
+  .fec-account-restriction-form { border-right: 0; border-bottom: 1px solid rgba(105, 229, 192, .16); }
+  .fec-account-active-restrictions > div > article { grid-template-columns: minmax(170px, .8fr) minmax(230px, 1.2fr); }
+  .fec-account-active-restrictions form { grid-column: 1 / -1; grid-template-columns: 1fr 180px 180px; }
+}
+@media (max-width: 700px) {
+  .market-compliance-banner { grid-template-columns: auto 1fr; padding-inline: 16px; }
+  .market-compliance-banner > b { grid-column: 2; }
+  .fec-account-restriction-head { padding: 21px 18px; display: grid; }
+  .fec-account-restriction-head > aside { padding: 14px 0 0; border: 0; border-top: 1px solid rgba(105, 229, 192, .18); }
+  .fec-account-restriction-form,
+  .fec-account-active-restrictions { padding: 22px 18px; }
+  .fec-account-active-restrictions > div > article { grid-template-columns: 1fr; }
+  .fec-account-active-restrictions form { grid-column: auto; grid-template-columns: 1fr; }
+  .fec-account-restriction-history > summary { padding-inline: 18px; }
+  .fec-account-restriction-history > div { padding-inline: 18px; }
+  .fec-account-restriction-history article { grid-template-columns: 1fr 1fr; }
+  .fec-account-restriction-history article p { grid-column: 1 / -1; }
+}

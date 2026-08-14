@@ -60,6 +60,69 @@ class FecInvestigatorAccessTests(unittest.TestCase):
         self.assertIn("fec_investigator_role_changed", update)
         self.assertIn('not has_any(user, "owner", "dev")', update)
 
+    def test_fec_investigator_is_server_enforced_read_only_in_ravenhood(self) -> None:
+        access = APP_SOURCE.split("def market_account_trading_access", 1)[1].split(
+            "def market_account_execution_access", 1
+        )[0]
+        self.assertIn("FEC_INVESTIGATOR_ROLE in roles_for(user)", access)
+        self.assertIn('scope in ("all", "equity")', access)
+        self.assertIn('scope in ("all", "margin")', access)
+        self.assertIn('"can_trade_equity": not equity_blocked', access)
+        self.assertIn('"can_trade_margin": not margin_blocked', access)
+        self.assertIn('"can_transfer_shares": not equity_blocked', access)
+
+        for function_name, permission in (
+            ("api_wallstreet_order", "can_trade_equity"),
+            ("api_wallstreet_margin_open", "can_trade_margin"),
+            ("api_wallstreet_transfer", "can_transfer_shares"),
+        ):
+            function = APP_SOURCE.split(f"def {function_name}", 1)[1].split("\n    def ", 1)[0]
+            self.assertIn("market_account_trading_access", function)
+            self.assertIn(permission, function)
+            self.assertIn("self.error(423", function)
+
+    def test_account_restrictions_cover_direct_and_queued_execution(self) -> None:
+        self.assertIn("CREATE TABLE IF NOT EXISTS market_account_trading_restrictions", APP_SOURCE)
+        self.assertIn("idx_market_account_restrictions_active", APP_SOURCE)
+        self.assertIn("def active_market_account_restriction", APP_SOURCE)
+        self.assertIn("market_account_execution_access(db, account_id)", APP_SOURCE)
+        self.assertIn('"status_code": 423', APP_SOURCE)
+
+        equity_queue = APP_SOURCE.split("def process_queued_ravenhood_orders", 1)[1].split(
+            "def clear_legacy_ravenhood_price_freeze", 1
+        )[0]
+        margin_queue = APP_SOURCE.split("def process_queued_ravenhood_margin_orders", 1)[1].split(
+            "def process_ravenhood_margin_liquidations", 1
+        )[0]
+        for queue in (equity_queue, margin_queue):
+            self.assertIn('status_code") or 0) == 423', queue)
+            self.assertIn("SET status='queued',failure_reason=?", queue)
+
+    def test_fec_workspace_exposes_scoped_lock_and_release_controls(self) -> None:
+        self.assertIn('path == "/api/dev-tools/market/fec/account-restrictions"', APP_SOURCE)
+        self.assertIn("api_dev_market_fec_account_restriction_release", APP_SOURCE)
+        self.assertIn('scope not in ("all", "equity", "margin")', APP_SOURCE)
+        self.assertIn('confirmation != "RESTRICT"', APP_SOURCE)
+        self.assertIn('confirmation != "UNLOCK"', APP_SOURCE)
+        self.assertIn('"account_restrictions":', APP_SOURCE)
+        self.assertIn('"account_restriction_history":', APP_SOURCE)
+
+        self.assertIn('id="devMarketFecAccountRestrictionForm"', FRONTEND_SOURCE)
+        self.assertIn('value="all">All trading', FRONTEND_SOURCE)
+        self.assertIn('value="equity">Share trading only', FRONTEND_SOURCE)
+        self.assertIn('value="margin">Leverage trading only', FRONTEND_SOURCE)
+        self.assertIn("data-fec-account-unlock", FRONTEND_SOURCE)
+
+    def test_live_ravenhood_renderer_hides_trade_button_for_investigator(self) -> None:
+        live_renderer = FRONTEND_SOURCE.split("function renderMarketWorkspace()", 1)[1].split(
+            "function renderMarketWorkspaceV10", 1
+        )[0]
+        self.assertIn("const tradingAccess = data.trading_access || {};", live_renderer)
+        self.assertIn("const investigatorReadOnly = Boolean(tradingAccess.read_only);", live_renderer)
+        self.assertIn("FEC INVESTIGATOR · READ ONLY", live_renderer)
+        self.assertIn('investigatorReadOnly ? `<span class="market-v18-read-only"', live_renderer)
+        self.assertIn("state.cache.wallstreet?.trading_access?.read_only", FRONTEND_SOURCE)
+
 
 if __name__ == "__main__":
     unittest.main()

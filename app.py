@@ -4453,6 +4453,36 @@ def ensure_migrations(db: Database) -> None:
     )
     db.execute(
         """
+        CREATE TABLE IF NOT EXISTS market_account_trading_restrictions (
+            id SERIAL PRIMARY KEY,
+            account_id INTEGER NOT NULL,
+            scope TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            reason TEXT NOT NULL,
+            case_reference TEXT NOT NULL DEFAULT '',
+            created_by INTEGER,
+            created_by_name TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            released_by INTEGER,
+            released_by_name TEXT NOT NULL DEFAULT '',
+            released_at TEXT,
+            release_note TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY (account_id) REFERENCES market_accounts(id) ON DELETE CASCADE,
+            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+            FOREIGN KEY (released_by) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    db.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_market_account_restrictions_active
+           ON market_account_trading_restrictions(account_id) WHERE status='active'"""
+    )
+    db.execute(
+        """CREATE INDEX IF NOT EXISTS idx_market_account_restrictions_history
+           ON market_account_trading_restrictions(account_id,created_at DESC,id DESC)"""
+    )
+    db.execute(
+        """
         CREATE TABLE IF NOT EXISTS market_securities (
             id SERIAL PRIMARY KEY,
             ticker TEXT NOT NULL UNIQUE,
@@ -8898,6 +8928,69 @@ def market_security_delisting_error(security: DbRow) -> str:
     return f"{ticker} is delisted from the FCX by FEC order. Its company record, holdings, and price history remain preserved, but exchange trading is unavailable until FEC authorizes a relisting."
 
 
+def active_market_account_restriction(db: Database, account_id: int, lock: bool = False) -> DbRow | None:
+    """Return the active FEC account restriction, optionally locking its filing."""
+    suffix = " FOR UPDATE OF r" if lock else ""
+    return one(
+        db,
+        """SELECT r.*,a.user_id,u.name AS resident_name,u.civ_number,u.email
+           FROM market_account_trading_restrictions r
+           JOIN market_accounts a ON a.id=r.account_id
+           JOIN users u ON u.id=a.user_id
+           WHERE r.account_id=? AND r.status='active'
+           ORDER BY r.created_at DESC,r.id DESC LIMIT 1""" + suffix,
+        (account_id,),
+    )
+
+
+def market_account_trading_access(db: Database, user: DbRow, account_id: int | None = None) -> dict[str, Any]:
+    """Resolve role- and FEC-imposed Ravenhood permissions for one resident."""
+    investigator_read_only = FEC_INVESTIGATOR_ROLE in roles_for(user)
+    restriction = active_market_account_restriction(db, account_id) if account_id else None
+    scope = str((restriction or {}).get("scope") or "").strip().lower()
+    equity_blocked = investigator_read_only or scope in ("all", "equity")
+    margin_blocked = investigator_read_only or scope in ("all", "margin")
+    return {
+        "read_only": investigator_read_only,
+        "can_trade_equity": not equity_blocked,
+        "can_trade_margin": not margin_blocked,
+        "can_transfer_shares": not equity_blocked,
+        "restriction_scope": "all" if investigator_read_only else scope,
+        "restriction": dict(restriction) if restriction else None,
+    }
+
+
+def market_account_execution_access(db: Database, account_id: int) -> dict[str, Any]:
+    """Resolve an account's access for direct and queued execution paths."""
+    account_user = one(
+        db,
+        """SELECT u.* FROM users u JOIN market_accounts a ON a.user_id=u.id WHERE a.id=?""",
+        (account_id,),
+    )
+    if not account_user:
+        return {
+            "read_only": False,
+            "can_trade_equity": False,
+            "can_trade_margin": False,
+            "can_transfer_shares": False,
+            "restriction_scope": "all",
+            "restriction": None,
+        }
+    return market_account_trading_access(db, account_user, account_id)
+
+
+def market_account_trading_error(access: dict[str, Any], lane: str) -> str:
+    """Return a user-safe compliance message for a blocked Ravenhood lane."""
+    if bool(access.get("read_only")):
+        return "FEC investigators have read-only Ravenhood access and cannot place or transfer trades while that role is assigned."
+    restriction = access.get("restriction") or {}
+    reason = str(restriction.get("reason") or "suspicious trading behavior under review").strip()
+    case_reference = str(restriction.get("case_reference") or "").strip()
+    lane_label = "leveraged" if lane == "margin" else "share"
+    case_copy = f" Case {case_reference}." if case_reference else ""
+    return f"This account's {lane_label} trading is restricted by FEC Market Integrity: {reason}.{case_copy} Existing orders may be cancelled and open risk may still be closed."
+
+
 def execute_ravenhood_order(
     db: Database,
     account_id: int,
@@ -8913,6 +9006,10 @@ def execute_ravenhood_order(
         return {"ok": False, "status_code": 409, "error": "Ravenhood account is no longer available."}
     if str(account.get("status") or "active").lower() != "active":
         return {"ok": False, "status_code": 409, "error": "Ravenhood account is not active."}
+    account_access = market_account_execution_access(db, account_id)
+    if not account_access["can_trade_equity"]:
+        return {"ok": False, "status_code": 423, "error": market_account_trading_error(account_access, "equity"),
+                "account_restriction": account_access.get("restriction")}
     if not security or str(security.get("lifecycle_status") or "active").lower() != "active":
         return {"ok": False, "status_code": 409, "error": "This security is no longer open for trading."}
     halt = active_market_security_halt(db, security_id)
@@ -9010,6 +9107,10 @@ def execute_ravenhood_margin_open(
         return {"ok": False, "status_code": 409, "error": "Leveraged positions are currently paused."}
     if not account or str(account.get("status") or "active").lower() != "active":
         return {"ok": False, "status_code": 409, "error": "Ravenhood account is not active."}
+    account_access = market_account_execution_access(db, account_id)
+    if not account_access["can_trade_margin"]:
+        return {"ok": False, "status_code": 423, "error": market_account_trading_error(account_access, "margin"),
+                "account_restriction": account_access.get("restriction")}
     if not security or str(security.get("lifecycle_status") or "active").lower() != "active":
         return {"ok": False, "status_code": 409, "error": "This security is no longer open for margin trading."}
     halt = active_market_security_halt(db, security_id)
@@ -9167,7 +9268,7 @@ def process_queued_ravenhood_margin_orders(db: Database, settings: dict[str, Any
         else:
             if int(result.get("status_code") or 0) == 423:
                 db.execute("UPDATE market_margin_order_requests SET status='queued',failure_reason=? WHERE id=?",
-                    ("Suspended while an FEC trading halt is active.", request["id"]))
+                    (str(result.get("error") or "Suspended while an FEC trading halt is active.")[:500], request["id"]))
             else:
                 db.execute("UPDATE market_margin_order_requests SET status='failed',failure_reason=? WHERE id=?", (str(result["error"])[:500], request["id"]))
         processed += 1
@@ -9415,7 +9516,7 @@ def process_queued_ravenhood_orders(db: Database, settings: dict[str, Any]) -> i
         else:
             if int(result.get("status_code") or 0) == 423:
                 db.execute("UPDATE market_order_requests SET status='queued',failure_reason=? WHERE id=?",
-                    ("Suspended while an FEC trading halt is active.", request["id"]))
+                    (str(result.get("error") or "Suspended while an FEC trading halt is active.")[:500], request["id"]))
             else:
                 db.execute(
                     "UPDATE market_order_requests SET status='failed', failure_reason=? WHERE id=?",
@@ -12486,6 +12587,10 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_market_fec_security_resume(db, user, self.path_int(path, 5))
                 elif path == "/api/dev-tools/market/fec/security-halts/bulk-resume" and method == "POST":
                     self.api_dev_market_fec_security_bulk_resume(db, user)
+                elif path == "/api/dev-tools/market/fec/account-restrictions" and method == "POST":
+                    self.api_dev_market_fec_account_restriction(db, user)
+                elif re.fullmatch(r"/api/dev-tools/market/fec/account-restrictions/\d+/release", path) and method == "POST":
+                    self.api_dev_market_fec_account_restriction_release(db, user, self.path_int(path, 5))
                 elif path == "/api/dev-tools/market/fec/security-delistings" and method == "POST":
                     self.api_dev_market_fec_security_delist(db, user)
                 elif re.fullmatch(r"/api/dev-tools/market/fec/security-delistings/\d+/relist", path) and method == "POST":
@@ -18634,7 +18739,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             security["market_cap"] = fund["market_cap"]
         exchange_market_cap = sum(float(row.get("market_cap") or 0) for row in securities if str(row.get("security_type") or "") != "fund")
         anonymous_trade_tape = self.market_anonymous_trade_tape(db)
-        return {"account": dict(account) if account else None, "securities": [dict(x) for x in securities], "holdings": [dict(x) for x in holdings],
+        return {"account": dict(account) if account else None,
+                "trading_access": market_account_trading_access(db, user, int(account["id"]) if account else None),
+                "securities": [dict(x) for x in securities], "holdings": [dict(x) for x in holdings],
                 "orders": [dict(x) for x in orders], "order_requests": [dict(x) for x in order_requests],
                 "cash_transactions": [dict(x) for x in cash_log], "transfers": [dict(x) for x in transfers],
                 "promo_redemptions": [dict(x) for x in promo_redemptions],
@@ -18740,6 +18847,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(400, "Valid account, ticker, side, and quantity are required."); return
         if str(account.get("status") or "active").lower() != "active":
             self.error(409, "Ravenhood account is not active."); return
+        account_access = market_account_trading_access(db, user, int(account["id"]))
+        if not account_access["can_trade_equity"]:
+            self.error(423, market_account_trading_error(account_access, "equity")); return
         if str(security.get("lifecycle_status") or "active").lower() != "active":
             self.error(409, "This security is no longer open for trading."); return
         halt = active_market_security_halt(db, int(security["id"]))
@@ -18844,6 +18954,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(400, "Choose an active ticker, long or short direction, and at least $10.00 collateral."); return
         if str(account.get("status") or "active").lower() != "active":
             self.error(409, "Ravenhood account is not active."); return
+        account_access = market_account_trading_access(db, user, int(account["id"]))
+        if not account_access["can_trade_margin"]:
+            self.error(423, market_account_trading_error(account_access, "margin")); return
         if str(security.get("lifecycle_status") or "active").lower() != "active":
             self.error(423, market_security_delisting_error(security)); return
         halt = active_market_security_halt(db, int(security["id"]))
@@ -18974,6 +19087,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         security = one(db, "SELECT * FROM market_securities WHERE ticker=? AND active=1 FOR UPDATE", (ticker,))
         if not sender or not target_user or target_user["id"] == user["id"] or not security or quantity <= 0:
             self.error(400, "A confirmed recipient CIV, ticker, and quantity are required."); return
+        account_access = market_account_trading_access(db, user, int(sender["id"]))
+        if not account_access["can_transfer_shares"]:
+            self.error(423, market_account_trading_error(account_access, "equity")); return
         if str(security.get("lifecycle_status") or "active").lower() != "active":
             self.error(423, market_security_delisting_error(security)); return
         halt = active_market_security_halt(db, int(security["id"]))
@@ -25717,6 +25833,19 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                         GROUP BY h.account_id
                     ) position ON position.account_id=a.id
                     ORDER BY (a.cash_balance+COALESCE(position.market_value,0)) DESC,u.name""")],
+                "account_restrictions": [dict(row) for row in all_rows(db, """SELECT r.*,a.user_id,
+                    u.name AS resident_name,u.civ_number,u.email
+                    FROM market_account_trading_restrictions r
+                    JOIN market_accounts a ON a.id=r.account_id
+                    JOIN users u ON u.id=a.user_id
+                    WHERE r.status='active'
+                    ORDER BY r.created_at DESC,r.id DESC""")],
+                "account_restriction_history": [dict(row) for row in all_rows(db, """SELECT r.*,a.user_id,
+                    u.name AS resident_name,u.civ_number,u.email
+                    FROM market_account_trading_restrictions r
+                    JOIN market_accounts a ON a.id=r.account_id
+                    JOIN users u ON u.id=a.user_id
+                    ORDER BY r.created_at DESC,r.id DESC LIMIT 250""")],
                 "shareholders": [dict(row) for row in all_rows(db, """SELECT s.id AS security_id,s.ticker,s.name AS company_name,
                     s.security_type,s.sector,s.price AS current_price,s.previous_price,
                     a.id AS account_id,u.id AS user_id,u.name AS shareholder_name,u.civ_number,
@@ -27993,6 +28122,91 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         })
         self.send_json(201, {"ok": True, "halt_id": int(halt["id"]), "ticker": security["ticker"],
             "reason_code": reason_code, "reason_label": reason_info["label"], "halted_at": timestamp})
+
+    def api_dev_market_fec_account_restriction(self, db: Database, user: DbRow | None) -> None:
+        """Restrict one resident Ravenhood account under a documented FEC case."""
+        err = admin_tools_section_required(db, user, "fec-investigations")
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        payload = self.read_json()
+        try:
+            account_id = int(payload.get("account_id") or 0)
+        except (TypeError, ValueError):
+            account_id = 0
+        scope = str(payload.get("scope") or "").strip().lower()
+        case_reference = str(payload.get("case_reference") or "").strip().upper()[:80]
+        reason = str(payload.get("reason") or "").strip()[:2000]
+        confirmation = str(payload.get("confirmation") or "").strip().upper()
+        if account_id <= 0:
+            self.error(400, "Choose the resident Ravenhood account to restrict."); return
+        if scope not in ("all", "equity", "margin"):
+            self.error(400, "Choose all trading, share trading, or leverage trading."); return
+        if len(case_reference) < 3:
+            self.error(400, "Enter the FEC case or investigation reference."); return
+        if len(reason) < 10:
+            self.error(400, "Document the suspicious behavior using at least 10 characters."); return
+        if confirmation != "RESTRICT":
+            self.error(400, "Type RESTRICT to certify this account action."); return
+
+        account = one(db, """SELECT a.id,a.user_id,a.status,u.name,u.civ_number,u.email
+            FROM market_accounts a JOIN users u ON u.id=a.user_id
+            WHERE a.id=? FOR UPDATE OF a,u""", (account_id,))
+        if not account:
+            self.error(404, "That Ravenhood account was not found."); return
+        existing = active_market_account_restriction(db, account_id, lock=True)
+        if existing:
+            self.error(409, f"This account already has an active {human_label(existing['scope'])} restriction."); return
+        timestamp = now_iso()
+        actor_name = user.get("name") or "FEC investigator"
+        filing = one(db, """INSERT INTO market_account_trading_restrictions
+            (account_id,scope,status,reason,case_reference,created_by,created_by_name,created_at)
+            VALUES (?,?,'active',?,?,?,?,?) RETURNING id""",
+            (account_id, scope, reason, case_reference, user["id"], actor_name, timestamp))
+        add_admin_audit(db, int(user["id"]), "market.fec.account_restricted", int(account["user_id"]), {
+            "restriction_id": int(filing["id"]), "account_id": account_id, "resident_name": account["name"],
+            "civ_number": account["civ_number"], "scope": scope, "case_reference": case_reference,
+            "reason": reason,
+        })
+        self.send_json(201, {"ok": True, "restriction_id": int(filing["id"]), "account_id": account_id,
+            "resident_name": account["name"], "scope": scope, "created_at": timestamp})
+
+    def api_dev_market_fec_account_restriction_release(self, db: Database, user: DbRow | None, restriction_id: int) -> None:
+        """Release an active Ravenhood account restriction under an audited FEC order."""
+        err = admin_tools_section_required(db, user, "fec-investigations")
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        payload = self.read_json()
+        release_note = str(payload.get("release_note") or "").strip()[:2000]
+        confirmation = str(payload.get("confirmation") or "").strip().upper()
+        if len(release_note) < 10:
+            self.error(400, "Document why the account restriction may be released using at least 10 characters."); return
+        if confirmation != "UNLOCK":
+            self.error(400, "Type UNLOCK to certify the account release."); return
+        restriction = one(db, """SELECT r.*,a.user_id,u.name AS resident_name,u.civ_number
+            FROM market_account_trading_restrictions r
+            JOIN market_accounts a ON a.id=r.account_id
+            JOIN users u ON u.id=a.user_id
+            WHERE r.id=? FOR UPDATE OF r""", (restriction_id,))
+        if not restriction:
+            self.error(404, "That FEC account-restriction filing was not found."); return
+        if str(restriction.get("status") or "") != "active":
+            self.error(409, "This account restriction has already been released."); return
+        timestamp = now_iso()
+        actor_name = user.get("name") or "FEC investigator"
+        db.execute("""UPDATE market_account_trading_restrictions
+            SET status='released',released_by=?,released_by_name=?,released_at=?,release_note=?
+            WHERE id=? AND status='active'""",
+            (user["id"], actor_name, timestamp, release_note, restriction_id))
+        add_admin_audit(db, int(user["id"]), "market.fec.account_restriction_released", int(restriction["user_id"]), {
+            "restriction_id": restriction_id, "account_id": int(restriction["account_id"]),
+            "resident_name": restriction["resident_name"], "civ_number": restriction["civ_number"],
+            "scope": restriction["scope"], "case_reference": restriction["case_reference"],
+            "release_note": release_note,
+        })
+        self.send_json(200, {"ok": True, "restriction_id": restriction_id,
+            "account_id": int(restriction["account_id"]), "released_at": timestamp})
 
     def api_dev_market_fec_security_resume(self, db: Database, user: DbRow | None, halt_id: int) -> None:
         """Resume a security through a separate, documented FEC order."""
