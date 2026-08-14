@@ -25905,6 +25905,16 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     WHERE s.active=1 AND COALESCE(s.lifecycle_status,'active')<>'bankrupt'
                     ORDER BY CASE WHEN COALESCE(s.lifecycle_status,'active')='delisted' THEN 1 ELSE 0 END,
                              CASE WHEN h.id IS NULL THEN 0 ELSE 1 END,s.ticker""")],
+                "security_price_history": [dict(row) for row in all_rows(db, """SELECT ticker,price,source,recorded_at
+                    FROM (
+                        SELECT s.ticker,h.price,h.source,h.recorded_at,h.id,
+                               ROW_NUMBER() OVER (PARTITION BY h.security_id ORDER BY h.id DESC) AS history_rank
+                        FROM market_price_history h
+                        JOIN market_securities s ON s.id=h.security_id
+                        WHERE s.active=1 AND COALESCE(s.lifecycle_status,'active')<>'bankrupt'
+                    ) recent_quotes
+                    WHERE history_rank<=96
+                    ORDER BY ticker,recorded_at,id""")],
                 "active_halts": [dict(row) for row in all_rows(db, """SELECT h.*,s.ticker,s.name AS security_name,
                     (SELECT COUNT(*) FROM market_order_requests r
                      WHERE r.security_id=h.security_id AND r.status IN ('queued','processing')) AS queued_equity_orders,

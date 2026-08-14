@@ -14490,6 +14490,17 @@ function renderDevFecInvestigations(fec = {}) {
   const dashboardTabs = ["overview", "surveillance", "residents", "securities", "enforcement"];
   if (!dashboardTabs.includes(state.fecDashboardTab)) state.fecDashboardTab = "overview";
   const normalizeTicker = value => String(value || "").trim().toUpperCase();
+  const securityHistoryRows = fec.security_price_history || [];
+  const historyByTicker = securityHistoryRows.reduce((directory, row) => {
+    const ticker = normalizeTicker(row.ticker);
+    const price = Number(row.price || 0);
+    const timestamp = new Date(row.recorded_at || 0).getTime();
+    if (!ticker || !(price > 0) || !Number.isFinite(timestamp)) return directory;
+    if (!directory.has(ticker)) directory.set(ticker, []);
+    directory.get(ticker).push({price, timestamp, source: String(row.source || "recorded quote")});
+    return directory;
+  }, new Map());
+  historyByTicker.forEach(points => points.sort((left, right) => left.timestamp - right.timestamp));
   const securityTradeStats = new Map();
   trades.forEach(trade => {
     const ticker = normalizeTicker(trade.ticker);
@@ -14547,6 +14558,10 @@ function renderDevFecInvestigations(fec = {}) {
     label: new Date(Date.now() - ((11 - index) * 3600000)).toLocaleTimeString([], {hour: "numeric"}),
     buys: 0,
     sells: 0,
+    buyValue: 0,
+    sellValue: 0,
+    fees: 0,
+    volume: 0,
   }));
   trades.forEach(trade => {
     const timestamp = new Date(trade.created_at || 0).getTime();
@@ -14554,10 +14569,17 @@ function renderDevFecInvestigations(fec = {}) {
     const age = Math.floor((Date.now() - timestamp) / 3600000);
     if (age < 0 || age > 11) return;
     const bucket = tradeHours[11 - age];
-    if (["buy", "long"].includes(String(trade.action || "").toLowerCase())) bucket.buys += 1;
-    else bucket.sells += 1;
+    const isBuy = ["buy", "long"].includes(String(trade.action || "").toLowerCase());
+    if (isBuy) {
+      bucket.buys += 1;
+      bucket.buyValue += Math.abs(Number(trade.gross_amount || 0));
+    } else {
+      bucket.sells += 1;
+      bucket.sellValue += Math.abs(Number(trade.gross_amount || 0));
+    }
+    bucket.fees += Math.abs(Number(trade.fee_amount || 0));
+    bucket.volume += Math.abs(Number(trade.quantity || 0));
   });
-  const maxHourlyExecutions = Math.max(1, ...tradeHours.map(item => item.buys + item.sells));
   const tradeMixTotal = Math.max(1, trades.length + withdrawals.length);
   const equityShare = Math.round(((fec.equity_trades || []).length / tradeMixTotal) * 100);
   const marginShare = Math.round(((fec.margin_trades || []).length / tradeMixTotal) * 100);
@@ -14568,6 +14590,48 @@ function renderDevFecInvestigations(fec = {}) {
     const denominator = Math.max(1, safeValues.length - 1);
     const points = safeValues.map((value, index) => `${((index / denominator) * 100).toFixed(2)},${(28 - ((Number(value || 0) / max) * 24)).toFixed(2)}`).join(" ");
     return `<svg viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true"><polyline points="${points}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`;
+  };
+  const compactValue = value => Intl.NumberFormat(undefined, {notation:"compact", maximumFractionDigits:1}).format(Number(value || 0));
+  const seriesPath = (values, width, height, padding, maxValue = null) => {
+    const safe = values.length ? values.map(value => Math.max(0, Number(value || 0))) : [0];
+    const ceiling = Math.max(1, Number(maxValue || 0), ...safe);
+    const step = safe.length > 1 ? (width - padding * 2) / (safe.length - 1) : 0;
+    return safe.map((value, index) => `${(padding + index * step).toFixed(1)},${(height - padding - (value / ceiling) * (height - padding * 2)).toFixed(1)}`).join(" ");
+  };
+  const activityChart = (() => {
+    const width = 960, height = 330, padding = 46;
+    const buyValues = tradeHours.map(item => item.buyValue);
+    const sellValues = tradeHours.map(item => item.sellValue);
+    const maxValue = Math.max(1, ...buyValues, ...sellValues);
+    const buyPoints = seriesPath(buyValues, width, height, padding, maxValue);
+    const sellPoints = seriesPath(sellValues, width, height, padding, maxValue);
+    const grid = Array.from({length:5}, (_, index) => { const y = padding + index * ((height-padding*2)/4); const value=maxValue*(1-index/4); return `<g><line x1="${padding}" y1="${y}" x2="${width-padding}" y2="${y}"/><text x="8" y="${y+4}">${escapeHtml(compactValue(value))}</text></g>`; }).join("");
+    const dots = tradeHours.map((item,index)=>{const x=padding+index*((width-padding*2)/Math.max(1,tradeHours.length-1));const buyY=height-padding-(item.buyValue/maxValue)*(height-padding*2);const sellY=height-padding-(item.sellValue/maxValue)*(height-padding*2);return `<circle class="buy" cx="${x}" cy="${buyY}" r="4"><title>${escapeHtml(item.label)} buy / long turnover: ${escapeHtml(money(item.buyValue))}</title></circle><circle class="sell" cx="${x}" cy="${sellY}" r="4"><title>${escapeHtml(item.label)} sell / short turnover: ${escapeHtml(money(item.sellValue))}</title></circle>`;}).join("");
+    const labels=tradeHours.map((item,index)=>index%2===0?`<text class="x-label" x="${padding+index*((width-padding*2)/Math.max(1,tradeHours.length-1))}" y="${height-10}" text-anchor="middle">${escapeHtml(item.label)}</text>`:"").join("");
+    return `<svg class="fec-market-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Buy and sell turnover over the last twelve hours"><g class="grid">${grid}</g><polygon class="buy-area" points="${padding},${height-padding} ${buyPoints} ${width-padding},${height-padding}"/><polygon class="sell-area" points="${padding},${height-padding} ${sellPoints} ${width-padding},${height-padding}"/><polyline class="buy-line" points="${buyPoints}"/><polyline class="sell-line" points="${sellPoints}"/>${dots}${labels}</svg>`;
+  })();
+  const renderSecurityChart = (item, itemTrades) => {
+    const recorded = [...(historyByTicker.get(item.ticker) || [])];
+    if (!recorded.length) recorded.push({price:item.previous || item.price, timestamp:Date.now()-3600000, source:"previous quote"}, {price:item.price, timestamp:Date.now(), source:"live quote"});
+    const maxCandles = 30;
+    const bucketSize = Math.max(1, Math.ceil(recorded.length / maxCandles));
+    const candles = [];
+    for (let index=0; index<recorded.length; index+=bucketSize) {
+      const points=recorded.slice(index,index+bucketSize); const prices=points.map(point=>point.price);
+      candles.push({open:points[0].price,close:points[points.length-1].price,high:Math.max(...prices),low:Math.min(...prices),timestamp:points[points.length-1].timestamp,source:points[points.length-1].source});
+    }
+    const prices=candles.flatMap(candle=>[candle.low,candle.high]);
+    let low=Math.min(...prices), high=Math.max(...prices); const range=Math.max(.01,high-low); low-=range*.12; high+=range*.12;
+    const width=900,height=290,left=66,right=18,top=24,bottom=42,plotW=width-left-right,plotH=height-top-bottom;
+    const y=value=>top+((high-value)/(high-low))*plotH;
+    const step=plotW/Math.max(1,candles.length); const bodyWidth=Math.max(3,Math.min(16,step*.56));
+    const grid=Array.from({length:5},(_,index)=>{const py=top+index*(plotH/4);const value=high-index*((high-low)/4);return `<g><line x1="${left}" y1="${py}" x2="${width-right}" y2="${py}"/><text x="4" y="${py+4}">${escapeHtml(money(value))}</text></g>`;}).join("");
+    const bars=candles.map((candle,index)=>{const x=left+step*(index+.5),up=candle.close>=candle.open,bodyTop=Math.min(y(candle.open),y(candle.close)),bodyHeight=Math.max(2,Math.abs(y(candle.open)-y(candle.close)));return `<g class="candle ${up?"up":"down"}"><line x1="${x}" y1="${y(candle.high)}" x2="${x}" y2="${y(candle.low)}"/><rect x="${x-bodyWidth/2}" y="${bodyTop}" width="${bodyWidth}" height="${bodyHeight}" rx="1"/><title>${escapeHtml(new Date(candle.timestamp).toLocaleString())}\nOpen ${escapeHtml(money(candle.open))} / High ${escapeHtml(money(candle.high))} / Low ${escapeHtml(money(candle.low))} / Close ${escapeHtml(money(candle.close))}\n${escapeHtml(candle.source)}</title></g>`;}).join("");
+    const closes=candles.map((candle,index)=>`${left+step*(index+.5)},${y(candle.close)}`).join(" ");
+    const labels=[candles[0],candles[Math.floor((candles.length-1)/2)],candles[candles.length-1]].map((candle,index)=>`<text class="x-label" x="${left+(plotW/2)*index}" y="${height-10}" text-anchor="${index===0?"start":index===2?"end":"middle"}">${escapeHtml(new Date(candle.timestamp).toLocaleDateString([], {month:"short",day:"numeric"}))}</text>`).join("");
+    const quantity=itemTrades.reduce((sum,trade)=>sum+Math.abs(Number(trade.quantity||0)),0);
+    const vwap=quantity>0?itemTrades.reduce((sum,trade)=>sum+Math.abs(Number(trade.unit_price||0))*Math.abs(Number(trade.quantity||0)),0)/quantity:item.price;
+    return {html:`<svg class="fec-security-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Recorded price history for ${escapeHtml(item.ticker)}"><g class="grid">${grid}</g><polyline class="close-line" points="${closes}"/>${bars}${labels}</svg>`,low:Math.min(...prices),high:Math.max(...prices),vwap,quotes:recorded.length,first:recorded[0]?.timestamp,last:recorded[recorded.length-1]?.timestamp};
   };
   const hourlyVolumes = tradeHours.map(item => item.buys + item.sells);
   const ipoReviewDesk = `<section class="dev-card fec-ipo-review-desk">
@@ -14664,26 +14728,26 @@ function renderDevFecInvestigations(fec = {}) {
     </div>
     <div class="market-fec-ledger"><header><div><span>CHAIN OF CUSTODY</span><h3>FEC asset ledger</h3></div><strong>IMMUTABLE AUDIT HISTORY</strong></header><div>${ledger.map(entry=>{const kind=String(entry.event_type||"");const delta=Number(entry.pool_delta||0);const icon=kind==="seizure"?"S":kind==="reinvestment"?"R":kind==="return"?"C":"F";return `<article class="${escapeHtml(kind)}"><i>${icon}</i><div><span><b>${kind==="return"?"Cleared · returned":escapeHtml(humanLabel(kind))}</b><small>${entry.case_reference?escapeHtml(entry.case_reference):"POOL DISPOSITION"}</small></span><strong>${money(entry.amount||0)}</strong></div><p>${escapeHtml(entry.reason||"No rationale recorded")}</p><footer><span>${entry.target_name?`${escapeHtml(entry.target_name)} · CIV ${escapeHtml(entry.target_civ_number||"pending")}`:"FEC custody pool"}</span><span>${entry.created_at?new Date(entry.created_at).toLocaleString():"Time unavailable"} · ${escapeHtml(entry.created_by_name||"Authorized operator")}</span><b class="${delta>=0?"positive":"negative"}">${delta>=0?"+":"−"}${money(Math.abs(delta))} · pool ${money(entry.pool_balance_after||0)}</b></footer></article>`}).join("")||`<div class="empty">No FEC custody actions have been filed.</div>`}</div></div>
   </section>`;
-  const executionBars = tradeHours.map((item, index) => {
-    const total = item.buys + item.sells;
-    const buyHeight = total ? Math.max(4, (item.buys / maxHourlyExecutions) * 100) : 2;
-    const sellHeight = total ? Math.max(4, (item.sells / maxHourlyExecutions) * 100) : 2;
-    return `<span class="fec-execution-column" style="--delay:${index}"><i><b class="buy" style="height:${buyHeight}%"></b><b class="sell" style="height:${sellHeight}%"></b></i><small>${escapeHtml(item.label)}</small><em>${total}</em></span>`;
-  }).join("");
   const watchedSecurities = securityIntel.filter(item => item.watched);
   const prioritySecurities = (watchedSecurities.length ? watchedSecurities : securityIntel).slice(0, 7);
+  const twelveHourBuyTurnover = tradeHours.reduce((sum, item) => sum + item.buyValue, 0);
+  const twelveHourSellTurnover = tradeHours.reduce((sum, item) => sum + item.sellValue, 0);
+  const twelveHourFees = tradeHours.reduce((sum, item) => sum + item.fees, 0);
+  const averageTicket = trades.length ? grossTradeValue / trades.length : 0;
+  const openExposure = openMargin.reduce((sum, item) => sum + Math.abs(Number(item.exposure || item.position_size || item.gross_amount || 0)), 0);
   const overviewDashboard = `<section class="fec-dashboard-panel fec-overview-panel" data-fec-dashboard-panel="overview" ${state.fecDashboardTab === "overview" ? "" : "hidden"}>
     <div class="fec-kpi-grid">
-      <article><span>SECURITIES MONITORED</span><strong>${securityIntel.length.toLocaleString()}</strong><small>${activeHalts.length} halted · ${activeDelistings.length} delisted</small>${sparkline(securityIntel.slice(0,8).map(item=>Math.abs(item.change)),"#68a1ff")}</article>
-      <article><span>RECORDED EXECUTIONS</span><strong>${trades.length.toLocaleString()}</strong><small>${investigatedResidents.toLocaleString()} resident accounts on tape</small>${sparkline(hourlyVolumes,"#5ee7c4")}</article>
-      <article><span>EXECUTED TURNOVER</span><strong>${money(grossTradeValue)}</strong><small>${money(totalTradeFees)} in recorded fees</small>${sparkline(tradeHours.map(item=>item.buys),"#9c7cff")}</article>
-      <article class="${withdrawals.length ? "attention" : ""}"><span>HIGH-VALUE WITHDRAWALS</span><strong>${withdrawals.length}</strong><small>${money(threshold)} review threshold</small>${sparkline(withdrawals.slice(0,8).map(item=>Number(item.amount||0)),"#ff6b83")}</article>
-      <article class="${activeRestrictionsCount ? "attention" : ""}"><span>RESTRICTED ACCOUNTS</span><strong>${activeRestrictionsCount}</strong><small>${accountRestrictionHistory.length} historical orders</small>${sparkline(accountRestrictions.slice(0,8).map((_,index)=>index+1),"#ffb85c")}</article>
-      <article class="${enforcementCount ? "attention" : ""}"><span>OPEN ENFORCEMENT</span><strong>${enforcementCount}</strong><small>${pendingIpos.length} IPO reviews · ${activeHalts.length} live halts</small>${sparkline([pendingIpos.length,activeHalts.length,activeDelistings.length,activeRestrictionsCount],"#ff5f78")}</article>
+      <article class="fec-kpi-card blue"><span>SECURITIES MONITORED</span><strong>${securityIntel.length.toLocaleString()}</strong><small>${activeHalts.length} halted · ${activeDelistings.length} delisted</small><div class="fec-kpi-spark">${sparkline(securityIntel.slice(0,8).map(item=>Math.abs(item.change)),"#68a1ff")}</div></article>
+      <article class="fec-kpi-card green"><span>RECORDED EXECUTIONS</span><strong>${trades.length.toLocaleString()}</strong><small>${investigatedResidents.toLocaleString()} resident accounts on tape</small><div class="fec-kpi-spark">${sparkline(hourlyVolumes,"#5ee7c4")}</div></article>
+      <article class="fec-kpi-card violet"><span>EXECUTED TURNOVER</span><strong title="${escapeHtml(money(grossTradeValue))}">${money(grossTradeValue)}</strong><small>${money(totalTradeFees)} in recorded fees</small><div class="fec-kpi-spark">${sparkline(tradeHours.map(item=>item.buyValue+item.sellValue),"#9c7cff")}</div></article>
+      <article class="fec-kpi-card red ${withdrawals.length ? "attention" : ""}"><span>HIGH-VALUE WITHDRAWALS</span><strong>${withdrawals.length}</strong><small>${money(threshold)} review threshold</small><div class="fec-kpi-spark">${sparkline(withdrawals.slice(0,8).map(item=>Number(item.amount||0)),"#ff6b83")}</div></article>
+      <article class="fec-kpi-card amber ${activeRestrictionsCount ? "attention" : ""}"><span>RESTRICTED ACCOUNTS</span><strong>${activeRestrictionsCount}</strong><small>${accountRestrictionHistory.length} historical orders</small><div class="fec-kpi-spark">${sparkline(accountRestrictions.slice(0,8).map((_,index)=>index+1),"#ffb85c")}</div></article>
+      <article class="fec-kpi-card red ${enforcementCount ? "attention" : ""}"><span>OPEN ENFORCEMENT</span><strong>${enforcementCount}</strong><small>${pendingIpos.length} IPO reviews · ${activeHalts.length} live halts</small><div class="fec-kpi-spark">${sparkline([pendingIpos.length,activeHalts.length,activeDelistings.length,activeRestrictionsCount],"#ff5f78")}</div></article>
     </div>
+    <div class="fec-risk-strip"><span><small>AVERAGE EXECUTION</small><strong>${money(averageTicket)}</strong><em>Across the consolidated tape</em></span><span><small>OPEN LEVERAGED EXPOSURE</small><strong>${money(openExposure)}</strong><em>${openMargin.length} live position${openMargin.length === 1 ? "" : "s"}</em></span><span><small>12H BUY / LONG</small><strong>${money(twelveHourBuyTurnover)}</strong><em>Executed turnover</em></span><span><small>12H SELL / SHORT</small><strong>${money(twelveHourSellTurnover)}</strong><em>Executed turnover</em></span><span><small>12H RECORDED FEES</small><strong>${money(twelveHourFees)}</strong><em>Execution-fee trail</em></span></div>
     <div class="fec-overview-grid">
-      <section class="fec-analytics-card fec-hourly-chart"><header><div><span>MARKET ACTIVITY</span><h3>Execution flow</h3></div><aside><i class="buy"></i>Buy / long <i class="sell"></i>Sell / short</aside></header><div class="fec-execution-chart">${executionBars}</div></section>
-      <section class="fec-analytics-card fec-mix-card"><header><div><span>ACTIVITY MIX</span><h3>Surveillance coverage</h3></div></header><div class="fec-mix-body"><div class="fec-donut" style="--equity:${equityShare};--margin:${marginShare}"><strong>${trades.length.toLocaleString()}</strong><small>executions</small></div><dl><div><dt><i class="equity"></i>Cash equity</dt><dd>${equityShare}%</dd></div><div><dt><i class="margin"></i>Leverage</dt><dd>${marginShare}%</dd></div><div><dt><i class="withdrawal"></i>Withdrawal flags</dt><dd>${withdrawalShare}%</dd></div></dl></div></section>
+      <section class="fec-analytics-card fec-execution-card"><header><div><span>MARKET ACTIVITY · LAST 12 HOURS</span><h3>Executed turnover flow</h3></div><aside class="fec-chart-key"><span><i class="buy"></i>Buy / long</span><span><i class="sell"></i>Sell / short</span></aside></header><div class="fec-market-chart">${activityChart}</div><footer><span><small>BUY-SIDE TURNOVER</small><strong>${money(twelveHourBuyTurnover)}</strong></span><span><small>SELL-SIDE TURNOVER</small><strong>${money(twelveHourSellTurnover)}</strong></span><span><small>RECORDED FEES</small><strong>${money(twelveHourFees)}</strong></span></footer></section>
+      <section class="fec-analytics-card fec-mix-card"><header><div><span>ACTIVITY MIX</span><h3>Surveillance coverage</h3></div><strong>${trades.length.toLocaleString()} EXECUTIONS</strong></header><div class="fec-trade-mix-body"><div class="fec-trade-donut" style="--equity:${equityShare}%;--margin:${marginShare}%"><span>${trades.length.toLocaleString()}<small>EXECUTIONS</small></span></div><div class="fec-trade-mix-list"><span><i class="equity"></i>Cash equity<b>${equityShare}%</b></span><span><i class="margin"></i>Leverage<b>${marginShare}%</b></span><span><i class="cash"></i>Withdrawal flags<b>${withdrawalShare}%</b></span></div></div></section>
       <section class="fec-analytics-card fec-priority-list"><header><div><span>SECURITY WATCH</span><h3>${watchedSecurities.length ? "Investigator watchlist" : "Highest activity"}</h3></div><button type="button" data-fec-jump="securities">Open surveillance</button></header><div>${prioritySecurities.map((item,index)=>`<button type="button" data-fec-focus-security="${escapeHtml(item.ticker)}" data-fec-jump="securities"><i>${String(index+1).padStart(2,"0")}</i><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name||item.sector||"FCX security")}</small></span><em>${money(item.price)}<small class="${item.change>=0?"positive":"negative"}">${item.change>=0?"+":""}${item.change.toFixed(2)}%</small></em></button>`).join("")||`<p class="muted">No securities are available for surveillance.</p>`}</div></section>
       <section class="fec-analytics-card fec-live-feed"><header><div><span>LIVE TAPE</span><h3>Latest executions</h3></div><button type="button" data-fec-jump="surveillance">Full tape</button></header><div>${trades.slice(0,8).map(trade=>{const action=String(trade.action||"trade").toLowerCase();const value=Math.abs(Number(trade.gross_amount||0));return `<article><i class="${["buy","long"].includes(action)?"buy":"sell"}">${["buy","long"].includes(action)?"B":"S"}</i><span><b>${escapeHtml(normalizeTicker(trade.ticker)||"FCX")}</b><small>${escapeHtml(humanLabel(action))} · ${trade.created_at?new Date(trade.created_at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}):"Recorded"}</small></span><strong>${money(value)}</strong></article>`}).join("")||`<p class="muted">The execution tape is awaiting activity.</p>`}</div></section>
     </div>
@@ -14693,7 +14757,23 @@ function renderDevFecInvestigations(fec = {}) {
     <header><div><span>SECURITY INTELLIGENCE</span><h2>FCX surveillance desk</h2><p>Select a listing to inspect its quote, ownership, execution flow, and recent tape.</p></div><label><i>⌕</i><input data-fec-security-search type="search" autocomplete="off" placeholder="Search ticker, company, or sector"/></label></header>
     <div class="fec-security-workspace">
       <div class="fec-security-roster">${securityIntel.map(item=>`<button type="button" class="${item.ticker===focusedTicker?"active":""}" data-fec-security-row data-search="${escapeHtml(`${item.ticker} ${item.name||""} ${item.sector||""}`.toLowerCase())}" data-fec-focus-security="${escapeHtml(item.ticker)}"><i class="${item.change>=0?"positive":"negative"}">${item.change>=0?"↑":"↓"}</i><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name||item.sector||"FCX security")}</small></span><em>${money(item.price)}<small>${item.trades} trades</small></em></button>`).join("")||`<p class="muted">No FCX securities are available.</p>`}</div>
-      <div class="fec-security-details">${securityIntel.map(item=>{const itemTrades=trades.filter(trade=>normalizeTicker(trade.ticker)===item.ticker).slice(0,12);const flowTotal=Math.max(1,item.buys+item.sells);const buyPct=Math.round(item.buys/flowTotal*100);return `<article data-fec-security-detail="${escapeHtml(item.ticker)}" ${item.ticker===focusedTicker?"":"hidden"}><header><div><i>${escapeHtml(item.ticker.slice(0,3))}</i><span><small>${escapeHtml(item.sector||"FCX LISTING")}</small><h3>${escapeHtml(item.name||item.ticker)}</h3><p>${escapeHtml(item.description||"Live FCX security under FEC market surveillance.")}</p></span></div><button type="button" class="${item.watched?"active":""}" data-fec-watch-toggle="${escapeHtml(item.ticker)}" aria-pressed="${item.watched?"true":"false"}">${item.watched?"Watching":"Add to watchlist"}</button></header><div class="fec-security-metrics"><span><small>LIVE QUOTE</small><strong>${money(item.price)}</strong><em class="${item.change>=0?"positive":"negative"}">${item.change>=0?"+":""}${item.change.toFixed(2)}%</em></span><span><small>MARKET CAP</small><strong>${money(item.marketCap)}</strong><em>${Number(item.issued_shares||0).toLocaleString()} shares</em></span><span><small>RESIDENT HOLDERS</small><strong>${item.holderCount}</strong><em>${item.residentCount} active on tape</em></span><span><small>RECORDED TURNOVER</small><strong>${money(item.value)}</strong><em>${Number(item.volume||0).toLocaleString(undefined,{maximumFractionDigits:4})} shares</em></span></div><div class="fec-security-flow"><header><span>ORDER FLOW</span><strong>${item.trades} executions</strong></header><i><b style="width:${buyPct}%"></b></i><footer><span>${buyPct}% buy / long</span><span>${100-buyPct}% sell / short</span></footer></div><section class="fec-security-tape"><header><span>RECENT SECURITY TAPE</span><strong>${itemTrades.length} SHOWN</strong></header>${itemTrades.map(trade=>{const action=String(trade.action||"trade").toLowerCase();return `<div><i class="${["buy","long"].includes(action)?"buy":"sell"}">${["buy","long"].includes(action)?"B":"S"}</i><span><b>${escapeHtml(humanLabel(action))}</b><small>${trade.created_at?new Date(trade.created_at).toLocaleString():"Recorded execution"}</small></span><em>${Number(trade.quantity||0).toLocaleString(undefined,{maximumFractionDigits:6})} shares</em><strong>${money(Math.abs(Number(trade.gross_amount||0)))}</strong></div>`}).join("")||`<p class="muted">No executions are recorded for this security.</p>`}</section></article>`}).join("")}</div>
+      <div class="fec-security-details">${securityIntel.map(item=>{
+        const allItemTrades=trades.filter(trade=>normalizeTicker(trade.ticker)===item.ticker);
+        const recentItemTrades=allItemTrades.slice(0,12);
+        const flowTotal=Math.max(1,item.buys+item.sells);
+        const buyPct=Math.round(item.buys/flowTotal*100);
+        const chart=renderSecurityChart(item,allItemTrades);
+        const averageSecurityTicket=item.trades?item.value/item.trades:0;
+        const recordedRange=chart.low>0?((chart.high-chart.low)/chart.low)*100:0;
+        const historyWindow=chart.first&&chart.last?`${new Date(chart.first).toLocaleDateString()} – ${new Date(chart.last).toLocaleDateString()}`:"Live quote";
+        return `<article data-fec-security-detail="${escapeHtml(item.ticker)}" ${item.ticker===focusedTicker?"":"hidden"}>
+          <header><div><i>${escapeHtml(item.ticker.slice(0,3))}</i><span><small>${escapeHtml(item.sector||"FCX LISTING")}</small><h3>${escapeHtml(item.name||item.ticker)}</h3><p>${escapeHtml(item.description||"Live FCX security under FEC market surveillance.")}</p></span></div><button type="button" class="${item.watched?"active":""}" data-fec-watch-toggle="${escapeHtml(item.ticker)}" aria-pressed="${item.watched?"true":"false"}">${item.watched?"Watching":"Add to watchlist"}</button></header>
+          <div class="fec-security-metrics"><span><small>LIVE QUOTE</small><strong>${money(item.price)}</strong><em class="${item.change>=0?"positive":"negative"}">${item.change>=0?"+":""}${item.change.toFixed(2)}%</em></span><span><small>MARKET CAP</small><strong>${money(item.marketCap)}</strong><em>${Number(item.issued_shares||0).toLocaleString()} issued shares</em></span><span><small>RESIDENT HOLDERS</small><strong>${item.holderCount}</strong><em>${item.residentCount} active on tape</em></span><span><small>RECORDED TURNOVER</small><strong>${money(item.value)}</strong><em>${Number(item.volume||0).toLocaleString(undefined,{maximumFractionDigits:4})} shares</em></span><span><small>RECORDED RANGE</small><strong>${recordedRange.toFixed(2)}%</strong><em>${money(chart.low)} – ${money(chart.high)}</em></span><span><small>RECORDED VWAP</small><strong>${money(chart.vwap)}</strong><em>${chart.quotes} quote records</em></span></div>
+          <section class="fec-security-chart-card"><header><div><span>RECORDED MARKET HISTORY</span><h4>${escapeHtml(item.ticker)} price surveillance</h4></div><aside>${escapeHtml(historyWindow)} · hover candles for OHLC</aside></header><div class="fec-security-chart">${chart.html}</div><footer><span><small>LOW</small><strong>${money(chart.low)}</strong></span><span><small>HIGH</small><strong>${money(chart.high)}</strong></span><span><small>VWAP</small><strong>${money(chart.vwap)}</strong></span><span><small>AVG EXECUTION</small><strong>${money(averageSecurityTicket)}</strong></span><span><small>RECORDED FEES</small><strong>${money(item.fees)}</strong></span><span><small>TRADE COUNT</small><strong>${item.trades.toLocaleString()}</strong></span></footer></section>
+          <div class="fec-security-flow"><header><span>ORDER FLOW</span><strong>${item.trades} executions · ${Number(item.volume||0).toLocaleString(undefined,{maximumFractionDigits:4})} shares</strong></header><i><b style="width:${buyPct}%"></b></i><footer><span>${buyPct}% buy / long · ${item.buys} trades</span><span>${100-buyPct}% sell / short · ${item.sells} trades</span></footer></div>
+          <section class="fec-security-tape"><header><span>RECENT SECURITY TAPE</span><strong>${recentItemTrades.length} SHOWN</strong></header>${recentItemTrades.map(trade=>{const action=String(trade.action||"trade").toLowerCase();return `<div><i class="${["buy","long"].includes(action)?"buy":"sell"}">${["buy","long"].includes(action)?"B":"S"}</i><span><b>${escapeHtml(humanLabel(action))}</b><small>${trade.created_at?new Date(trade.created_at).toLocaleString():"Recorded execution"}</small></span><em>${Number(trade.quantity||0).toLocaleString(undefined,{maximumFractionDigits:6})} shares</em><strong>${money(Math.abs(Number(trade.gross_amount||0)))}</strong></div>`}).join("")||`<p class="muted">No executions are recorded for this security.</p>`}</section>
+        </article>`;
+      }).join("")}</div>
     </div>
   </section>`;
   return `<div class="stack dev-fec-view fec-dashboard-v2">
