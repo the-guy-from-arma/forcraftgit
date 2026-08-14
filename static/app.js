@@ -14480,6 +14480,7 @@ function renderDevFecInvestigations(fec = {}) {
   const investigatedResidents = new Set(trades.map(trade => Number(trade.user_id || 0)).filter(Boolean)).size;
   const poolBalance = Number(fec.pool_balance || 0);
   const securities = fec.securities || [];
+  const indexFunds = fec.index_funds || [];
   const activeHalts = fec.active_halts || [];
   const haltHistory = fec.halt_history || [];
   const delistingReasons = fec.delisting_reasons || [];
@@ -14592,24 +14593,44 @@ function renderDevFecInvestigations(fec = {}) {
     return `<svg viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true"><polyline points="${points}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`;
   };
   const compactValue = value => Intl.NumberFormat(undefined, {notation:"compact", maximumFractionDigits:1}).format(Number(value || 0));
-  const seriesPath = (values, width, height, padding, maxValue = null) => {
-    const safe = values.length ? values.map(value => Math.max(0, Number(value || 0))) : [0];
-    const ceiling = Math.max(1, Number(maxValue || 0), ...safe);
-    const step = safe.length > 1 ? (width - padding * 2) / (safe.length - 1) : 0;
-    return safe.map((value, index) => `${(padding + index * step).toFixed(1)},${(height - padding - (value / ceiling) * (height - padding * 2)).toFixed(1)}`).join(" ");
-  };
   const activityChart = (() => {
-    const width = 960, height = 330, padding = 46;
-    const buyValues = tradeHours.map(item => item.buyValue);
-    const sellValues = tradeHours.map(item => item.sellValue);
-    const maxValue = Math.max(1, ...buyValues, ...sellValues);
-    const buyPoints = seriesPath(buyValues, width, height, padding, maxValue);
-    const sellPoints = seriesPath(sellValues, width, height, padding, maxValue);
-    const grid = Array.from({length:5}, (_, index) => { const y = padding + index * ((height-padding*2)/4); const value=maxValue*(1-index/4); return `<g><line x1="${padding}" y1="${y}" x2="${width-padding}" y2="${y}"/><text x="8" y="${y+4}">${escapeHtml(compactValue(value))}</text></g>`; }).join("");
-    const dots = tradeHours.map((item,index)=>{const x=padding+index*((width-padding*2)/Math.max(1,tradeHours.length-1));const buyY=height-padding-(item.buyValue/maxValue)*(height-padding*2);const sellY=height-padding-(item.sellValue/maxValue)*(height-padding*2);return `<circle class="buy" cx="${x}" cy="${buyY}" r="4"><title>${escapeHtml(item.label)} buy / long turnover: ${escapeHtml(money(item.buyValue))}</title></circle><circle class="sell" cx="${x}" cy="${sellY}" r="4"><title>${escapeHtml(item.label)} sell / short turnover: ${escapeHtml(money(item.sellValue))}</title></circle>`;}).join("");
-    const labels=tradeHours.map((item,index)=>index%2===0?`<text class="x-label" x="${padding+index*((width-padding*2)/Math.max(1,tradeHours.length-1))}" y="${height-10}" text-anchor="middle">${escapeHtml(item.label)}</text>`:"").join("");
-    return `<svg class="fec-market-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Buy and sell turnover over the last twelve hours"><g class="grid">${grid}</g><polygon class="buy-area" points="${padding},${height-padding} ${buyPoints} ${width-padding},${height-padding}"/><polygon class="sell-area" points="${padding},${height-padding} ${sellPoints} ${width-padding},${height-padding}"/><polyline class="buy-line" points="${buyPoints}"/><polyline class="sell-line" points="${sellPoints}"/>${dots}${labels}</svg>`;
+    const width = 960, height = 330, padding = 52;
+    const turnoverValues = tradeHours.map(item => item.buyValue + item.sellValue);
+    const maxValue = Math.max(1, ...turnoverValues);
+    const cumulativeDelta = [];
+    tradeHours.reduce((running, item) => { const next = running + item.buyValue - item.sellValue; cumulativeDelta.push(next); return next; }, 0);
+    const maxAbsDelta = Math.max(1, ...cumulativeDelta.map(value => Math.abs(value)));
+    const plotWidth = width - padding * 2;
+    const plotHeight = height - padding * 2;
+    const slot = plotWidth / tradeHours.length;
+    const barWidth = Math.max(7, slot * .28);
+    const yTurnover = value => height - padding - (Math.max(0, value) / maxValue) * plotHeight;
+    const yDelta = value => padding + plotHeight / 2 - (value / maxAbsDelta) * (plotHeight * .42);
+    const deltaPoints = cumulativeDelta.map((value, index) => `${(padding + slot * (index + .5)).toFixed(1)},${yDelta(value).toFixed(1)}`).join(" ");
+    const grid = Array.from({length:5}, (_, index) => { const y = padding + index * (plotHeight / 4); const value=maxValue*(1-index/4); return `<g><line x1="${padding}" y1="${y}" x2="${width-padding}" y2="${y}"/><text x="8" y="${y+4}">${escapeHtml(compactValue(value))}</text></g>`; }).join("");
+    const bars = tradeHours.map((item,index)=>{const x=padding+slot*(index+.5);const buyY=yTurnover(item.buyValue);const sellY=yTurnover(item.sellValue);const buyH=height-padding-buyY;const sellH=height-padding-sellY;return `<g class="fec-flow-slot"><rect class="buy-bar" x="${(x-barWidth-1).toFixed(1)}" y="${buyY.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${Math.max(1,buyH).toFixed(1)}" rx="2"><title>${escapeHtml(item.label)} buy / long: ${escapeHtml(money(item.buyValue))}</title></rect><rect class="sell-bar" x="${(x+1).toFixed(1)}" y="${sellY.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${Math.max(1,sellH).toFixed(1)}" rx="2"><title>${escapeHtml(item.label)} sell / short: ${escapeHtml(money(item.sellValue))}</title></rect><text class="x-label" x="${x.toFixed(1)}" y="${height-13}" text-anchor="middle">${index%2===0?escapeHtml(item.label):""}</text></g>`;}).join("");
+    const deltaDots = cumulativeDelta.map((value,index)=>{const x=padding+slot*(index+.5);return `<circle class="delta" cx="${x.toFixed(1)}" cy="${yDelta(value).toFixed(1)}" r="3.5"><title>${escapeHtml(tradeHours[index].label)} cumulative net flow: ${escapeHtml(money(value))}</title></circle>`;}).join("");
+    return `<svg class="fec-market-svg fec-orderflow-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Executed turnover and cumulative net order flow over the last twelve hours"><defs><linearGradient id="fecDeltaFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b08cff" stop-opacity=".28"/><stop offset="1" stop-color="#b08cff" stop-opacity="0"/></linearGradient></defs><g class="grid">${grid}</g><line class="delta-zero" x1="${padding}" y1="${yDelta(0)}" x2="${width-padding}" y2="${yDelta(0)}"/>${bars}<polygon class="delta-area" points="${padding},${yDelta(0)} ${deltaPoints} ${width-padding},${yDelta(0)}"/><polyline class="delta-line" points="${deltaPoints}"/>${deltaDots}</svg>`;
   })();
+  const renderIndexChart = (index, accent = "#56e4be") => {
+    const width = 720, height = 250, left = 48, right = 18, top = 20, bottom = 34;
+    const points = index.points.length ? index.points : [{price:index.price || 0,timestamp:Date.now()-3600000},{price:index.price || 0,timestamp:Date.now()}];
+    const prices = points.map(point => Number(point.price || 0));
+    let low = Math.min(...prices), high = Math.max(...prices);
+    const rawRange = Math.max(.01, high - low);
+    low -= rawRange * .14; high += rawRange * .14;
+    const plotWidth = width-left-right, plotHeight = height-top-bottom;
+    const x = idx => left + (idx / Math.max(1, points.length-1)) * plotWidth;
+    const y = value => top + ((high-value) / Math.max(.01, high-low)) * plotHeight;
+    const pricePath = points.map((point,idx)=>`${x(idx).toFixed(1)},${y(point.price).toFixed(1)}`).join(" ");
+    const emaValues = [];
+    points.reduce((ema,point,indexValue)=>{const next=indexValue===0?point.price:(point.price*(2/13)+ema*(11/13));emaValues.push(next);return next;},points[0]?.price||0);
+    const emaPath = emaValues.map((value,idx)=>`${x(idx).toFixed(1)},${y(value).toFixed(1)}`).join(" ");
+    const grid = Array.from({length:4},(_,idx)=>{const gy=top+idx*(plotHeight/3),value=high-idx*((high-low)/3);return `<g><line x1="${left}" y1="${gy}" x2="${width-right}" y2="${gy}"/><text x="2" y="${gy+4}">${escapeHtml(money(value))}</text></g>`;}).join("");
+    const hoverPoints = points.map((point,idx)=>`<circle class="index-point" cx="${x(idx)}" cy="${y(point.price)}" r="5"><title>${escapeHtml(new Date(point.timestamp).toLocaleString())}\n${escapeHtml(money(point.price))}\n${escapeHtml(point.source||"recorded quote")}</title></circle>`).join("");
+    const gradientId=`fecIndex${escapeHtml(index.ticker)}`;
+    return `<svg class="fec-index-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(index.ticker)} recorded index performance"><defs><linearGradient id="${gradientId}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${accent}" stop-opacity=".32"/><stop offset="1" stop-color="${accent}" stop-opacity="0"/></linearGradient></defs><g class="grid">${grid}</g><polygon class="index-area" style="fill:url(#${gradientId})" points="${left},${height-bottom} ${pricePath} ${width-right},${height-bottom}"/><polyline class="index-ema" points="${emaPath}"/><polyline class="index-price" style="stroke:${accent}" points="${pricePath}"/>${hoverPoints}<text class="index-date" x="${left}" y="${height-9}">${escapeHtml(new Date(points[0].timestamp).toLocaleDateString([], {month:"short",day:"numeric"}))}</text><text class="index-date" x="${width-right}" y="${height-9}" text-anchor="end">${escapeHtml(new Date(points[points.length-1].timestamp).toLocaleDateString([], {month:"short",day:"numeric"}))}</text></svg>`;
+  };
   const renderSecurityChart = (item, itemTrades) => {
     const recorded = [...(historyByTicker.get(item.ticker) || [])];
     if (!recorded.length) recorded.push({price:item.previous || item.price, timestamp:Date.now()-3600000, source:"previous quote"}, {price:item.price, timestamp:Date.now(), source:"live quote"});
@@ -14735,7 +14756,58 @@ function renderDevFecInvestigations(fec = {}) {
   const twelveHourFees = tradeHours.reduce((sum, item) => sum + item.fees, 0);
   const averageTicket = trades.length ? grossTradeValue / trades.length : 0;
   const openExposure = openMargin.reduce((sum, item) => sum + Math.abs(Number(item.exposure || item.position_size || item.gross_amount || 0)), 0);
-  const overviewDashboard = `<section class="fec-dashboard-panel fec-overview-panel" data-fec-dashboard-panel="overview" ${state.fecDashboardTab === "overview" ? "" : "hidden"}>
+  const operatingSecurities = securityIntel.filter(item => String(item.lifecycle_status || "active").toLowerCase() === "active" && !item.active_delisting_id);
+  const advancers = operatingSecurities.filter(item => item.change > .005);
+  const decliners = operatingSecurities.filter(item => item.change < -.005);
+  const unchanged = Math.max(0, operatingSecurities.length - advancers.length - decliners.length);
+  const totalOperatingCap = operatingSecurities.reduce((sum, item) => sum + Math.max(0, Number(item.marketCap || 0)), 0);
+  const capLeaders = [...operatingSecurities].sort((left, right) => right.marketCap - left.marketCap).slice(0, 5);
+  const topFiveCap = capLeaders.reduce((sum, item) => sum + Math.max(0, Number(item.marketCap || 0)), 0);
+  const topFiveCapShare = totalOperatingCap > 0 ? (topFiveCap / totalOperatingCap) * 100 : 0;
+  const volatilityLeaders = [...operatingSecurities].sort((left, right) => Math.abs(right.change) - Math.abs(left.change)).slice(0, 7);
+  const breadthPercent = operatingSecurities.length ? (advancers.length / operatingSecurities.length) * 100 : 0;
+  const capWeightedBreadth = totalOperatingCap > 0
+    ? operatingSecurities.reduce((sum, item) => sum + ((item.change >= 0 ? 1 : -1) * Math.max(0, Number(item.marketCap || 0))), 0) / totalOperatingCap * 100
+    : 0;
+  const orderFlowTotal = Math.max(1, twelveHourBuyTurnover + twelveHourSellTurnover);
+  const buyFlowPercent = twelveHourBuyTurnover / orderFlowTotal * 100;
+  const sellFlowPercent = 100 - buyFlowPercent;
+  const indexFundMap = new Map(indexFunds.map(index => [normalizeTicker(index.ticker), index]));
+  const analyzeIndex = ticker => {
+    const source = indexFundMap.get(ticker) || {};
+    const price = Number(source.price || 0);
+    const previous = Number(source.previous_price || price || 0);
+    const points = [...(historyByTicker.get(ticker) || [])];
+    if (!points.length && price > 0) points.push({price: previous || price, timestamp: Date.now() - 3600000, source: "previous quote"}, {price, timestamp: Date.now(), source: "live quote"});
+    const prices = points.map(point => Number(point.price || 0)).filter(value => value > 0);
+    const low = prices.length ? Math.min(...prices) : price;
+    const high = prices.length ? Math.max(...prices) : price;
+    const change = previous > 0 ? ((price - previous) / previous) * 100 : Number(source.change_percent || 0);
+    const constituents = source.constituents || [];
+    return {
+      ...source,
+      ticker,
+      name: source.name || (ticker === "FCXS" ? "Faircroft Stability Index" : "Faircroft Volatility Index"),
+      price,
+      previous,
+      change,
+      points,
+      low,
+      high,
+      marketCap: Number(source.market_cap || source.fund_capitalization || 0),
+      units: Number(source.total_capitalized_units || source.units_outstanding || 0),
+      holders: Number(source.holder_count || 0),
+      constituents,
+      topWeight: constituents.reduce((max, item) => Math.max(max, Number(item.weight_percent || 0)), 0),
+    };
+  };
+  const fcxsIndex = analyzeIndex("FCXS");
+  const fcxvIndex = analyzeIndex("FCXV");
+  const indexCard = (index, tone) => {
+    const range = index.low > 0 ? ((index.high - index.low) / index.low) * 100 : 0;
+    return `<article class="fec-index-card ${tone}"><header><div><i>${escapeHtml(index.ticker.slice(-1))}</i><span><small>${tone === "stability" ? "LOWER-VOLATILITY BENCHMARK" : "HIGHER-VOLATILITY BENCHMARK"}</small><h3>${escapeHtml(index.ticker)}</h3><p>${escapeHtml(index.name)}</p></span></div><em class="${index.change >= 0 ? "positive" : "negative"}"><b>${money(index.price)}</b><small>${index.change >= 0 ? "+" : ""}${index.change.toFixed(2)}%</small></em></header><div class="fec-index-chart">${renderIndexChart(index, tone === "stability" ? "#51e2bd" : "#aa83ff")}</div><footer><span><small>RECORDED LOW</small><strong>${money(index.low)}</strong></span><span><small>RECORDED HIGH</small><strong>${money(index.high)}</strong></span><span><small>FUND CAPITALIZATION</small><strong>${money(index.marketCap)}</strong></span><span><small>CONSTITUENTS</small><strong>${index.constituents.length}</strong></span><span><small>FUND HOLDERS</small><strong>${index.holders}</strong></span><span><small>RECORDED RANGE</small><strong>${range.toFixed(2)}%</strong></span></footer></article>`;
+  };
+  const legacyOverviewDashboard = `<section class="fec-dashboard-panel fec-overview-panel" data-fec-dashboard-panel="overview" ${state.fecDashboardTab === "overview" ? "" : "hidden"}>
     <div class="fec-kpi-grid">
       <article class="fec-kpi-card blue"><span>SECURITIES MONITORED</span><strong>${securityIntel.length.toLocaleString()}</strong><small>${activeHalts.length} halted · ${activeDelistings.length} delisted</small><div class="fec-kpi-spark">${sparkline(securityIntel.slice(0,8).map(item=>Math.abs(item.change)),"#68a1ff")}</div></article>
       <article class="fec-kpi-card green"><span>RECORDED EXECUTIONS</span><strong>${trades.length.toLocaleString()}</strong><small>${investigatedResidents.toLocaleString()} resident accounts on tape</small><div class="fec-kpi-spark">${sparkline(hourlyVolumes,"#5ee7c4")}</div></article>
@@ -14753,6 +14825,25 @@ function renderDevFecInvestigations(fec = {}) {
     </div>
     <section class="fec-case-rail"><header><span>ACTIVE CASE QUEUE</span><strong>${enforcementCount} OPEN</strong></header><button type="button" data-fec-jump="enforcement"><i>IPO</i><span><b>Primary market review</b><small>Resident listings awaiting a decision</small></span><strong>${pendingIpos.length}</strong></button><button type="button" data-fec-jump="securities"><i>H</i><span><b>Trading restrictions</b><small>Live security halts and delistings</small></span><strong>${activeHalts.length+activeDelistings.length}</strong></button><button type="button" data-fec-jump="residents"><i>R</i><span><b>Resident supervision</b><small>Accounts under an active order</small></span><strong>${activeRestrictionsCount}</strong></button><button type="button" data-fec-jump="surveillance"><i>W</i><span><b>Cash surveillance</b><small>High-value withdrawals requiring review</small></span><strong>${withdrawals.length}</strong></button></section>
   </section>`;
+  const overviewDashboard = `<section class="fec-dashboard-panel fec-overview-panel fec-institutional-overview" data-fec-dashboard-panel="overview" ${state.fecDashboardTab === "overview" ? "" : "hidden"}>
+    <header class="fec-market-command-head"><div><span>MARKET STRUCTURE / RECORDED INTELLIGENCE</span><h2>Exchange surveillance terminal</h2><p>Index performance, breadth, concentration, order flow, and enforcement risk from the authoritative FCX tape.</p></div><aside><span><small>OPERATING SECURITIES</small><strong>${operatingSecurities.length}</strong></span><span><small>RECORDED TURNOVER</small><strong>${money(grossTradeValue)}</strong></span><span><small>OPEN EXPOSURE</small><strong>${money(openExposure)}</strong></span></aside></header>
+    <section class="fec-index-command"><header><div><span>BENCHMARK SURVEILLANCE</span><h3>FCX index command</h3></div><small>Recorded quotes only · hover any point for exact time and value</small></header><div class="fec-index-grid">${indexCard(fcxsIndex,"stability")}${indexCard(fcxvIndex,"volatility")}</div></section>
+    <div class="fec-market-structure-grid">
+      <section class="fec-structure-panel fec-breadth-panel"><header><span>MARKET BREADTH</span><strong>${operatingSecurities.length} LISTINGS</strong></header><div class="fec-breadth-gauge" style="--advance:${breadthPercent.toFixed(2)}%"><div><strong>${breadthPercent.toFixed(1)}%</strong><small>ADVANCING</small></div></div><div class="fec-breadth-counts"><span class="positive"><b>${advancers.length}</b>Advancing</span><span><b>${unchanged}</b>Unchanged</span><span class="negative"><b>${decliners.length}</b>Declining</span></div><footer><span>CAP-WEIGHTED SIGNAL</span><strong class="${capWeightedBreadth >= 0 ? "positive" : "negative"}">${capWeightedBreadth >= 0 ? "+" : ""}${capWeightedBreadth.toFixed(2)}%</strong></footer></section>
+      <section class="fec-structure-panel fec-concentration-panel"><header><span>CAPITALIZATION CONCENTRATION</span><strong>${money(totalOperatingCap)}</strong></header><div class="fec-concentration-meter"><i style="width:${Math.min(100,topFiveCapShare).toFixed(2)}%"></i></div><p>Top five operating issuers represent <b>${topFiveCapShare.toFixed(1)}%</b> of FCX company capitalization.</p><div class="fec-cap-rank-list">${capLeaders.map((item,index)=>`<button type="button" data-fec-focus-security="${escapeHtml(item.ticker)}" data-fec-jump="securities"><i>${String(index+1).padStart(2,"0")}</i><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name||"FCX issuer")}</small></span><em>${money(item.marketCap)}<small>${totalOperatingCap>0?(item.marketCap/totalOperatingCap*100).toFixed(1):"0.0"}%</small></em></button>`).join("")||`<p class="muted">No operating capitalization is available.</p>`}</div></section>
+      <section class="fec-structure-panel fec-volatility-panel"><header><span>REALIZED MOVEMENT</span><strong>ABSOLUTE CHANGE</strong></header><div class="fec-mover-table">${volatilityLeaders.map((item,index)=>{const magnitude=Math.min(100,Math.abs(item.change)/Math.max(1,...volatilityLeaders.map(row=>Math.abs(row.change)))*100);return `<button type="button" data-fec-focus-security="${escapeHtml(item.ticker)}" data-fec-jump="securities"><i>${String(index+1).padStart(2,"0")}</i><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.sector||item.name||"FCX")}</small></span><em><i style="width:${magnitude.toFixed(1)}%" class="${item.change>=0?"positive":"negative"}"></i></em><strong class="${item.change>=0?"positive":"negative"}">${item.change>=0?"+":""}${item.change.toFixed(2)}%</strong></button>`}).join("")||`<p class="muted">No movement is recorded.</p>`}</div></section>
+    </div>
+    <div class="fec-institutional-analytics-grid">
+      <section class="fec-analytics-card fec-execution-card fec-flow-terminal"><header><div><span>EXECUTED TURNOVER · LAST 12 HOURS</span><h3>Institutional order-flow monitor</h3></div><aside class="fec-chart-key"><span><i class="buy"></i>Buy / long</span><span><i class="sell"></i>Sell / short</span><span><i class="delta"></i>Cumulative delta</span></aside></header><div class="fec-market-chart">${activityChart}</div><footer><span><small>BUY-SIDE TURNOVER</small><strong>${money(twelveHourBuyTurnover)}</strong><em>${buyFlowPercent.toFixed(1)}% of flow</em></span><span><small>SELL-SIDE TURNOVER</small><strong>${money(twelveHourSellTurnover)}</strong><em>${sellFlowPercent.toFixed(1)}% of flow</em></span><span><small>NET ORDER FLOW</small><strong class="${twelveHourBuyTurnover-twelveHourSellTurnover>=0?"positive":"negative"}">${money(twelveHourBuyTurnover-twelveHourSellTurnover)}</strong><em>Buy minus sell turnover</em></span><span><small>RECORDED FEES</small><strong>${money(twelveHourFees)}</strong><em>Execution-fee trail</em></span></footer></section>
+      <section class="fec-analytics-card fec-risk-matrix"><header><div><span>CONTROL ENVIRONMENT</span><h3>Surveillance diagnostics</h3></div><strong>${enforcementCount} OPEN</strong></header><div class="fec-trade-mix-body"><div class="fec-trade-donut" style="--equity:${equityShare}%;--margin:${marginShare}%"><span>${trades.length.toLocaleString()}<small>EXECUTIONS</small></span></div><div class="fec-trade-mix-list"><span><i class="equity"></i>Cash equity<b>${equityShare}%</b></span><span><i class="margin"></i>Leverage<b>${marginShare}%</b></span><span><i class="cash"></i>Withdrawal flags<b>${withdrawalShare}%</b></span></div></div><div class="fec-risk-register"><button type="button" data-fec-jump="surveillance"><span>High-value withdrawals</span><strong>${withdrawals.length}</strong></button><button type="button" data-fec-jump="residents"><span>Restricted accounts</span><strong>${activeRestrictionsCount}</strong></button><button type="button" data-fec-jump="securities"><span>Halts / delistings</span><strong>${activeHalts.length + activeDelistings.length}</strong></button><button type="button" data-fec-jump="enforcement"><span>IPO reviews</span><strong>${pendingIpos.length}</strong></button></div></section>
+    </div>
+    <div class="fec-secondary-intelligence">
+      <section class="fec-analytics-card fec-priority-list"><header><div><span>SECURITY WATCH</span><h3>${watchedSecurities.length ? "Investigator watchlist" : "Highest recorded activity"}</h3></div><button type="button" data-fec-jump="securities">Open security desk</button></header><div>${prioritySecurities.map((item,index)=>`<button type="button" data-fec-focus-security="${escapeHtml(item.ticker)}" data-fec-jump="securities"><i>${String(index+1).padStart(2,"0")}</i><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name||item.sector||"FCX security")}</small></span><em>${money(item.price)}<small class="${item.change>=0?"positive":"negative"}">${item.change>=0?"+":""}${item.change.toFixed(2)}%</small></em></button>`).join("")||`<p class="muted">No securities are available for surveillance.</p>`}</div></section>
+      <section class="fec-analytics-card fec-live-feed"><header><div><span>CONSOLIDATED TAPE</span><h3>Latest resident executions</h3></div><button type="button" data-fec-jump="surveillance">Open complete tape</button></header><div>${trades.slice(0,8).map(trade=>{const action=String(trade.action||"trade").toLowerCase();const value=Math.abs(Number(trade.gross_amount||0));return `<article><i class="${["buy","long"].includes(action)?"buy":"sell"}">${["buy","long"].includes(action)?"B":"S"}</i><span><b>${escapeHtml(normalizeTicker(trade.ticker)||"FCX")}</b><small>${escapeHtml(humanLabel(action))} · ${trade.created_at?new Date(trade.created_at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}):"Recorded"}</small></span><strong>${money(value)}</strong></article>`}).join("")||`<p class="muted">The execution tape is awaiting activity.</p>`}</div></section>
+    </div>
+    <section class="fec-case-rail"><header><span>ACTIVE CASE QUEUE</span><strong>${enforcementCount} OPEN</strong></header><button type="button" data-fec-jump="enforcement"><i>IPO</i><span><b>Primary market review</b><small>Resident listings awaiting a decision</small></span><strong>${pendingIpos.length}</strong></button><button type="button" data-fec-jump="securities"><i>H</i><span><b>Trading restrictions</b><small>Live security halts and delistings</small></span><strong>${activeHalts.length+activeDelistings.length}</strong></button><button type="button" data-fec-jump="residents"><i>R</i><span><b>Resident supervision</b><small>Accounts under an active order</small></span><strong>${activeRestrictionsCount}</strong></button><button type="button" data-fec-jump="surveillance"><i>W</i><span><b>Cash surveillance</b><small>High-value withdrawals requiring review</small></span><strong>${withdrawals.length}</strong></button></section>
+  </section>`;
+  void legacyOverviewDashboard;
   const securityIntelligence = `<section class="dev-card fec-security-intelligence">
     <header><div><span>SECURITY INTELLIGENCE</span><h2>FCX surveillance desk</h2><p>Select a listing to inspect its quote, ownership, execution flow, and recent tape.</p></div><label><i>⌕</i><input data-fec-security-search type="search" autocomplete="off" placeholder="Search ticker, company, or sector"/></label></header>
     <div class="fec-security-workspace">
