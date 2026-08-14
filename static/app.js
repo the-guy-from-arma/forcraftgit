@@ -14075,7 +14075,7 @@ function renderDevFecInvestigations(fec = {}) {
         <label class="market-fec-certify"><input name="certify" type="checkbox" required/><span>I certify this listing-specific halt is authorized and its public basis is accurate.</span></label>
         <button class="danger">Halt trading immediately</button>
       </form>
-      <div class="fec-active-halts"><header><span>LIVE RESTRICTIONS</span><strong>${activeHalts.length} ACTIVE</strong></header>${activeHalts.map(halt=>`<article><div class="fec-halt-symbol"><i>||</i><span><b>${escapeHtml(halt.ticker)}</b><small>${escapeHtml(halt.security_name||"FCX security")}</small></span></div><div class="fec-halt-basis"><strong>${escapeHtml(halt.reason_label)}</strong><p>${escapeHtml(halt.public_notice||"Trading is suspended pending FEC review.")}</p><small>${escapeHtml(halt.case_reference||"No case reference")} - ${halt.halted_at?new Date(halt.halted_at).toLocaleString():"Time unavailable"} - ${escapeHtml(halt.halted_by_name||"FEC operator")}</small></div><dl><span><dt>Equity queue</dt><dd>${Number(halt.queued_equity_orders||0)}</dd></span><span><dt>Margin queue</dt><dd>${Number(halt.queued_margin_orders||0)}</dd></span><span><dt>Open margin</dt><dd>${Number(halt.open_margin_positions||0)}</dd></span></dl><button class="primary" type="button" data-fec-resume-halt="${Number(halt.id)}" data-fec-halt-ticker="${escapeHtml(halt.ticker)}">Resume trading</button></article>`).join("")||`<div class="fec-halt-clear"><i>FCX</i><span><strong>No security-specific restrictions</strong><small>All active listings are eligible to trade under the normal exchange session.</small></span></div>`}</div>
+      <div class="fec-active-halts"><header><span>LIVE RESTRICTIONS</span><div class="fec-halt-header-actions"><strong>${activeHalts.length} ACTIVE</strong>${activeHalts.length?`<button class="quiet" type="button" data-fec-select-all-halts>Select all</button><button class="quiet" type="button" data-fec-resume-selected disabled>Resume selected</button><button class="primary" type="button" data-fec-resume-all>Resume all</button>`:""}</div></header>${activeHalts.map(halt=>`<article><div class="fec-halt-symbol"><label class="fec-halt-select" title="Select ${escapeHtml(halt.ticker)}"><input type="checkbox" value="${Number(halt.id)}" data-fec-halt-select aria-label="Select ${escapeHtml(halt.ticker)} for bulk resume"/><span></span></label><i>||</i><span><b>${escapeHtml(halt.ticker)}</b><small>${escapeHtml(halt.security_name||"FCX security")}</small></span></div><div class="fec-halt-basis"><strong>${escapeHtml(halt.reason_label)}</strong><p>${escapeHtml(halt.public_notice||"Trading is suspended pending FEC review.")}</p><small>${escapeHtml(halt.case_reference||"No case reference")} - ${halt.halted_at?new Date(halt.halted_at).toLocaleString():"Time unavailable"} - ${escapeHtml(halt.halted_by_name||"FEC operator")}</small></div><dl><span><dt>Equity queue</dt><dd>${Number(halt.queued_equity_orders||0)}</dd></span><span><dt>Margin queue</dt><dd>${Number(halt.queued_margin_orders||0)}</dd></span><span><dt>Open margin</dt><dd>${Number(halt.open_margin_positions||0)}</dd></span></dl><button class="primary" type="button" data-fec-resume-halt="${Number(halt.id)}" data-fec-halt-ticker="${escapeHtml(halt.ticker)}">Resume trading</button></article>`).join("")||`<div class="fec-halt-clear"><i>FCX</i><span><strong>No security-specific restrictions</strong><small>All active listings are eligible to trade under the normal exchange session.</small></span></div>`}</div>
     </div>
     <details class="fec-halt-history"><summary><span>Trading-halt history</span><strong>${haltHistory.length} AUDIT RECORD${haltHistory.length===1?"":"S"}</strong></summary><div>${haltHistory.map(halt=>`<article class="${escapeHtml(halt.status||"resumed")}"><span><b>${escapeHtml(halt.ticker)}</b><small>${escapeHtml(halt.security_name||"FCX security")}</small></span><span><b>${escapeHtml(halt.reason_label)}</b><small>${escapeHtml(halt.case_reference||"No case reference")}</small></span><span><b>${escapeHtml(humanLabel(halt.status||"resumed"))}</b><small>${halt.resumed_at?`Resumed ${new Date(halt.resumed_at).toLocaleString()}`:`Halted ${halt.halted_at?new Date(halt.halted_at).toLocaleString():""}`}</small></span><p>${escapeHtml(halt.resume_note||halt.public_notice||"No additional filing note.")}</p></article>`).join("")||`<div class="empty">No FEC trading-halt filings have been recorded.</div>`}</div></details>
   </section>`;
@@ -14091,7 +14091,7 @@ function renderDevFecInvestigations(fec = {}) {
         <label class="market-fec-certify"><input name="certify" type="checkbox" required/><span>I certify this security will be removed from public trading while its issuer, holdings, and historical records remain preserved.</span></label>
         <button class="danger">Halt &amp; delist from exchange</button>
       </form>
-      <div class="fec-active-halts fec-active-delistings"><header><span>OFF-EXCHANGE REGISTER</span><strong>${activeDelistings.length} DELISTED</strong></header>${activeDelistings.map(item=>`<article class="delisted"><div class="fec-halt-symbol"><i>DL</i><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.security_name||"FCX security")}</small></span></div><div class="fec-halt-basis"><strong>${escapeHtml(item.reason_label||"FEC listing order")}</strong><p>${escapeHtml(item.public_notice||"This security is no longer available for public exchange trading.")}</p><small>${escapeHtml(item.case_reference||"No case reference")} - ${item.delisted_at?new Date(item.delisted_at).toLocaleString():"Time unavailable"} - ${escapeHtml(item.delisted_by_name||"FEC operator")}</small></div><dl><span><dt>Holders preserved</dt><dd>${Number(item.holder_count||0)}</dd></span><span><dt>Shares preserved</dt><dd>${Number(item.held_shares||0).toLocaleString(undefined,{maximumFractionDigits:4})}</dd></span><span><dt>Suspended queue</dt><dd>${Number(item.queued_equity_orders||0)+Number(item.queued_margin_orders||0)}</dd></span><span><dt>Open margin</dt><dd>${Number(item.open_margin_positions||0)}</dd></span></dl><button class="primary" type="button" data-fec-relist-security="${Number(item.id)}" data-fec-delist-ticker="${escapeHtml(item.ticker)}">Relist on FCX</button></article>`).join("")||`<div class="fec-halt-clear"><i>FCX</i><span><strong>No securities are delisted</strong><small>Use the separate halt panel above when only a temporary trading pause is required.</small></span></div>`}</div>
+      <div class="fec-active-halts fec-active-delistings"><header><span>OFF-EXCHANGE REGISTER</span><strong>${activeDelistings.length} DELISTED</strong></header>${activeDelistings.map(item=>{const removable=Number(item.holder_count||0)===0&&Number(item.held_shares||0)===0&&(Number(item.queued_equity_orders||0)+Number(item.queued_margin_orders||0))===0&&Number(item.open_margin_positions||0)===0;return `<article class="delisted"><div class="fec-halt-symbol"><i>DL</i><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.security_name||"FCX security")}</small></span></div><div class="fec-halt-basis"><strong>${escapeHtml(item.reason_label||"FEC listing order")}</strong><p>${escapeHtml(item.public_notice||"This security is no longer available for public exchange trading.")}</p><small>${escapeHtml(item.case_reference||"No case reference")} - ${item.delisted_at?new Date(item.delisted_at).toLocaleString():"Time unavailable"} - ${escapeHtml(item.delisted_by_name||"FEC operator")}</small></div><dl><span><dt>Holders preserved</dt><dd>${Number(item.holder_count||0)}</dd></span><span><dt>Shares preserved</dt><dd>${Number(item.held_shares||0).toLocaleString(undefined,{maximumFractionDigits:4})}</dd></span><span><dt>Suspended queue</dt><dd>${Number(item.queued_equity_orders||0)+Number(item.queued_margin_orders||0)}</dd></span><span><dt>Open margin</dt><dd>${Number(item.open_margin_positions||0)}</dd></span></dl><div class="fec-delisting-actions"><button class="primary" type="button" data-fec-relist-security="${Number(item.id)}" data-fec-delist-ticker="${escapeHtml(item.ticker)}">Relist on FCX</button>${removable?`<button class="danger quiet" type="button" data-fec-retire-security="${Number(item.id)}" data-fec-retire-ticker="${escapeHtml(item.ticker)}">Remove obsolete record</button>`:""}</div></article>`}).join("")||`<div class="fec-halt-clear"><i>FCX</i><span><strong>No securities are delisted</strong><small>Use the separate halt panel above when only a temporary trading pause is required.</small></span></div>`}</div>
     </div>
     <details class="fec-halt-history fec-delisting-history"><summary><span>Listing-action history</span><strong>${delistingHistory.length} AUDIT RECORD${delistingHistory.length===1?"":"S"}</strong></summary><div>${delistingHistory.map(item=>`<article class="${escapeHtml(item.status||"relisted")}"><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.security_name||"FCX security")}</small></span><span><b>${escapeHtml(item.reason_label||"FEC listing action")}</b><small>${escapeHtml(item.case_reference||"No case reference")}</small></span><span><b>${escapeHtml(humanLabel(item.status||"relisted"))}</b><small>${item.relisted_at?`Relisted ${new Date(item.relisted_at).toLocaleString()}`:`Delisted ${item.delisted_at?new Date(item.delisted_at).toLocaleString():""}`}</small></span><p>${escapeHtml(item.relist_note||item.public_notice||"No additional filing note.")}</p></article>`).join("")||`<div class="empty">No FEC listing actions have been recorded.</div>`}</div></details>
   </section>`;
@@ -15538,6 +15538,62 @@ function bindDevWorkspace() {
       toast(error.message);
     }
   });
+  const fecHaltSelections = $$('[data-fec-halt-select]');
+  const fecSelectAllHalts = $('[data-fec-select-all-halts]');
+  const fecResumeSelected = $('[data-fec-resume-selected]');
+  const fecResumeAll = $('[data-fec-resume-all]');
+  const selectedFecHaltIds = () => fecHaltSelections.filter(input => input.checked).map(input => Number(input.value)).filter(Number.isInteger);
+  const syncFecHaltSelections = () => {
+    const selectedCount = selectedFecHaltIds().length;
+    const allSelected = fecHaltSelections.length > 0 && selectedCount === fecHaltSelections.length;
+    fecHaltSelections.forEach(input => input.closest('article')?.classList.toggle('selected', input.checked));
+    if (fecSelectAllHalts) fecSelectAllHalts.textContent = allSelected ? 'Clear selection' : 'Select all';
+    if (fecResumeSelected) {
+      fecResumeSelected.disabled = selectedCount === 0;
+      fecResumeSelected.textContent = selectedCount ? `Resume selected (${selectedCount})` : 'Resume selected';
+    }
+  };
+  fecHaltSelections.forEach(input => input.addEventListener('change', syncFecHaltSelections));
+  fecSelectAllHalts?.addEventListener('click', () => {
+    const selectAll = fecHaltSelections.some(input => !input.checked);
+    fecHaltSelections.forEach(input => { input.checked = selectAll; });
+    syncFecHaltSelections();
+  });
+  const resumeFecHaltBatch = async (resumeAll, trigger) => {
+    const haltIds = resumeAll ? [] : selectedFecHaltIds();
+    const count = resumeAll ? fecHaltSelections.length : haltIds.length;
+    if (!count) {
+      toast('Select at least one active halt');
+      return;
+    }
+    const scopeLabel = resumeAll ? `all ${count} halted securities` : `${count} selected ${count === 1 ? 'security' : 'securities'}`;
+    const resumeNote = prompt(`Document why ${scopeLabel} may resume trading:`) || '';
+    if (resumeNote.trim().length < 10) {
+      if (resumeNote) toast('A resume filing note of at least 10 characters is required');
+      return;
+    }
+    const requiredAuthorization = resumeAll ? 'RESUME ALL' : 'RESUME SELECTED';
+    const confirmation = prompt(`Type ${requiredAuthorization} to reopen ${scopeLabel}:`) || '';
+    if (confirmation.trim().toUpperCase() !== requiredAuthorization) {
+      toast('Bulk trading resume was cancelled');
+      return;
+    }
+    if (!confirm(`Resume trading for ${scopeLabel} now? Their preserved order queues will become eligible for normal exchange processing.`)) return;
+    trigger.disabled = true;
+    try {
+      const result = await api('/api/dev-tools/market/fec/security-halts/bulk-resume', {
+        method: 'POST', body: { all: resumeAll, halt_ids: haltIds, resume_note: resumeNote, confirmation }
+      });
+      toast(`${Number(result.resumed_count || count)} trading halt${Number(result.resumed_count || count) === 1 ? '' : 's'} resumed`);
+      await refreshDevTools();
+    } catch (error) {
+      trigger.disabled = false;
+      toast(error.message);
+    }
+  };
+  fecResumeSelected?.addEventListener('click', () => resumeFecHaltBatch(false, fecResumeSelected));
+  fecResumeAll?.addEventListener('click', () => resumeFecHaltBatch(true, fecResumeAll));
+  syncFecHaltSelections();
   $$('[data-fec-resume-halt]').forEach(button => button.addEventListener('click', async () => {
     const ticker = button.dataset.fecHaltTicker || 'this security';
     const resumeNote = prompt(`Document why ${ticker} may resume trading:`) || '';
@@ -15609,6 +15665,31 @@ function bindDevWorkspace() {
         method: 'POST', body: { relist_note: relistNote, confirmation }
       });
       toast(`${result.ticker || ticker} relisted on FCX`);
+      await refreshDevTools();
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message);
+    }
+  }));
+  $$('[data-fec-retire-security]').forEach(button => button.addEventListener('click', async () => {
+    const ticker = button.dataset.fecRetireTicker || 'this security';
+    const rationale = prompt(`Document why the obsolete ${ticker} listing should be removed from the active FEC register:`) || '';
+    if (rationale.trim().length < 10) {
+      if (rationale) toast('A removal rationale of at least 10 characters is required');
+      return;
+    }
+    const authorization = `REMOVE ${ticker.toUpperCase()}`;
+    const confirmation = prompt(`This action is limited to zero-exposure listings and cannot relist the security later. Type ${authorization} to continue:`) || '';
+    if (confirmation.trim().toUpperCase() !== authorization) {
+      toast('The obsolete listing was not removed');
+      return;
+    }
+    button.disabled = true;
+    try {
+      const result = await api(`/api/dev-tools/market/fec/security-delistings/${button.dataset.fecRetireSecurity}/retire`, {
+        method: 'POST', body: { rationale, confirmation }
+      });
+      toast(`${result.ticker || ticker} removed from the active FEC register`);
       await refreshDevTools();
     } catch (error) {
       button.disabled = false;

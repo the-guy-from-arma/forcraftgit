@@ -152,6 +152,19 @@ class MarketFecInvestigationWorkspaceTests(unittest.TestCase):
         self.assertIn('re.fullmatch(r"/api/dev-tools/market/fec/security-halts/\\d+/resume", path)', APP_SOURCE)
         self.assertIn('admin_tools_section_required(db, user, "fec-investigations")', APP_SOURCE)
 
+    def test_fec_can_resume_selected_or_all_active_security_halts(self) -> None:
+        self.assertIn('path == "/api/dev-tools/market/fec/security-halts/bulk-resume"', APP_SOURCE)
+        handler = APP_SOURCE.split("def api_dev_market_fec_security_bulk_resume", 1)[1].split(
+            "def api_dev_market_fec_security_delist", 1
+        )[0]
+        self.assertIn('expected_confirmation = "RESUME ALL" if resume_all else "RESUME SELECTED"', handler)
+        self.assertIn("WHERE h.status='active'", handler)
+        self.assertIn("market.fec.trading_bulk_resumed", handler)
+        self.assertIn("data-fec-halt-select", FRONTEND_SOURCE)
+        self.assertIn("data-fec-resume-selected", FRONTEND_SOURCE)
+        self.assertIn("data-fec-resume-all", FRONTEND_SOURCE)
+        self.assertIn("resumeFecHaltBatch", FRONTEND_SOURCE)
+
     def test_halted_security_is_blocked_from_exchange_activity(self) -> None:
         self.assertIn("market_security_halt_error(halt)", APP_SOURCE)
         self.assertIn("AND NOT EXISTS (SELECT 1 FROM market_security_halts h", APP_SOURCE)

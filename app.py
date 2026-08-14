@@ -5363,7 +5363,6 @@ def ensure_migrations(db: Database) -> None:
             (game_key, display_name, min_bet, max_bet, house_edge, config_json, now_iso()),
         )
     securities = (
-        ("FNN", "Faircroft News Network", "stock", "Media", 42.50, 1.2),
         ("FCF", "Faircroft Financial", "stock", "Finance", 118.20, 0.8),
         ("SHV", "Shadowhaven Logistics", "stock", "Logistics", 73.40, 1.4),
         ("RAV", "Raven Aeronautics", "stock", "Aerospace", 156.10, 1.7),
@@ -5391,6 +5390,36 @@ def ensure_migrations(db: Database) -> None:
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?) ON CONFLICT(ticker) DO NOTHING""",
             (ticker, name, kind, sector, f"A Faircroft roleplay {kind} operating in {sector.lower()}.", price, price, volatility, now_iso()),
         )
+    # Retire the obsolete pre-FCX FNN listing once it has no resident or queued
+    # exposure.  The filing remains in the database as an audit record, but it
+    # is no longer an active off-exchange listing and cannot be re-seeded or
+    # relisted through the reversible FEC workflow.
+    obsolete_fnn = one(db, """SELECT s.id,d.id AS delisting_id
+        FROM market_securities s
+        JOIN market_security_delistings d ON d.security_id=s.id AND d.status='active'
+        WHERE UPPER(s.ticker)='FNN' AND s.name='Faircroft News Network'
+          AND COALESCE(s.lifecycle_status,'active')='delisted'
+          AND NOT EXISTS (SELECT 1 FROM market_holdings h
+                          WHERE h.security_id=s.id AND ABS(h.quantity)>0)
+          AND NOT EXISTS (SELECT 1 FROM market_order_requests r
+                          WHERE r.security_id=s.id AND r.status IN ('queued','processing'))
+          AND NOT EXISTS (SELECT 1 FROM market_margin_order_requests r
+                          WHERE r.security_id=s.id AND r.status IN ('queued','processing'))
+          AND NOT EXISTS (SELECT 1 FROM market_margin_positions p
+                          WHERE p.security_id=s.id AND p.status='open')
+        LIMIT 1""")
+    if obsolete_fnn:
+        retired_at = now_iso()
+        db.execute("""UPDATE market_security_delistings
+            SET status='retired',relisted_at=?,relist_note=? WHERE id=? AND status='active'""",
+            (retired_at, "Obsolete zero-exposure legacy FNN listing removed from the active FEC register.",
+             obsolete_fnn["delisting_id"]))
+        db.execute("""UPDATE market_securities SET active=0,lifecycle_status='retired',
+            index_eligible=0,margin_enabled=0,updated_at=? WHERE id=?""",
+            (retired_at, obsolete_fnn["id"]))
+        db.execute("DELETE FROM market_index_members WHERE security_id=?", (obsolete_fnn["id"],))
+        db.execute("""UPDATE market_price_programs SET status='retired_obsolete'
+            WHERE security_id=? AND status IN ('active','scheduled')""", (obsolete_fnn["id"],))
     index_securities = (
         ("FCXS", "Faircroft Stability Index Fund", "Lower-volatility companies selected from the live Ravenhood exchange."),
         ("FCXV", "Faircroft Volatility Index Fund", "Higher-movement companies selected from the live Ravenhood exchange."),
@@ -12451,10 +12480,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_market_fec_security_halt(db, user)
                 elif re.fullmatch(r"/api/dev-tools/market/fec/security-halts/\d+/resume", path) and method == "POST":
                     self.api_dev_market_fec_security_resume(db, user, self.path_int(path, 5))
+                elif path == "/api/dev-tools/market/fec/security-halts/bulk-resume" and method == "POST":
+                    self.api_dev_market_fec_security_bulk_resume(db, user)
                 elif path == "/api/dev-tools/market/fec/security-delistings" and method == "POST":
                     self.api_dev_market_fec_security_delist(db, user)
                 elif re.fullmatch(r"/api/dev-tools/market/fec/security-delistings/\d+/relist", path) and method == "POST":
                     self.api_dev_market_fec_security_relist(db, user, self.path_int(path, 5))
+                elif re.fullmatch(r"/api/dev-tools/market/fec/security-delistings/\d+/retire", path) and method == "POST":
+                    self.api_dev_market_fec_security_retire(db, user, self.path_int(path, 5))
                 elif re.fullmatch(r"/api/dev-tools/market/fec/ipo-reviews/\d+/decision", path) and method == "POST":
                     self.api_dev_market_fec_ipo_decision(db, user, self.path_int(path, 5))
                 elif path == "/api/dev-tools/market/programs" and method == "POST":
@@ -27990,6 +28023,66 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         })
         self.send_json(200, {"ok": True, "halt_id": halt_id, "ticker": halt["ticker"], "resumed_at": timestamp})
 
+    def api_dev_market_fec_security_bulk_resume(self, db: Database, user: DbRow | None) -> None:
+        """Atomically resume selected active halts, or every active halt, under one FEC order."""
+        err = admin_tools_section_required(db, user, "fec-investigations")
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        payload = self.read_json()
+        resume_all = str(payload.get("all") or "").strip().lower() in ("1", "true", "yes", "on")
+        resume_note = str(payload.get("resume_note") or "").strip()[:1000]
+        confirmation = str(payload.get("confirmation") or "").strip().upper()
+        expected_confirmation = "RESUME ALL" if resume_all else "RESUME SELECTED"
+        if len(resume_note) < 10:
+            self.error(400, "Document why orderly trading may resume using at least 10 characters."); return
+        if confirmation != expected_confirmation:
+            self.error(400, f"Type {expected_confirmation} to certify this bulk reopening order."); return
+
+        requested_ids: set[int] = set()
+        if not resume_all:
+            raw_ids = payload.get("halt_ids")
+            if not isinstance(raw_ids, list):
+                self.error(400, "Choose at least one active trading halt to resume."); return
+            try:
+                requested_ids = {int(value) for value in raw_ids if int(value) > 0}
+            except (TypeError, ValueError):
+                self.error(400, "The selected trading-halt list is invalid."); return
+            if not requested_ids:
+                self.error(400, "Choose at least one active trading halt to resume."); return
+
+        active_halts = [dict(row) for row in all_rows(db, """SELECT h.*,s.ticker,s.name AS security_name
+            FROM market_security_halts h JOIN market_securities s ON s.id=h.security_id
+            WHERE h.status='active' ORDER BY h.halted_at,h.id FOR UPDATE OF h,s""")]
+        if resume_all:
+            halts = active_halts
+        else:
+            halts = [halt for halt in active_halts if int(halt["id"]) in requested_ids]
+            if len(halts) != len(requested_ids):
+                self.error(409, "One or more selected halts are no longer active. Refresh the FEC register and try again."); return
+        if not halts:
+            self.error(409, "No active trading halts remain to resume."); return
+
+        timestamp = now_iso()
+        actor_name = user.get("name") or "FEC investigator"
+        for halt in halts:
+            db.execute("""UPDATE market_security_halts
+                SET status='resumed',resumed_by=?,resumed_by_name=?,resumed_at=?,resume_note=?
+                WHERE id=? AND status='active'""",
+                (user["id"], actor_name, timestamp, resume_note, halt["id"]))
+            detail = f"{halt['ticker']} resumed under {halt['case_reference']}. {resume_note}"
+            db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('fec_trading_resumed',?,?,?,?)",
+                (f"FEC resumed {halt['ticker']}", detail, user["id"], timestamp))
+
+        tickers = [str(halt["ticker"]) for halt in halts]
+        add_admin_audit(db, int(user["id"]), "market.fec.trading_bulk_resumed", details={
+            "scope": "all" if resume_all else "selected", "halt_ids": [int(halt["id"]) for halt in halts],
+            "security_ids": [int(halt["security_id"]) for halt in halts], "tickers": tickers,
+            "resume_note": resume_note, "resumed_count": len(halts),
+        })
+        self.send_json(200, {"ok": True, "resumed_count": len(halts), "tickers": tickers,
+            "resumed_at": timestamp})
+
     def api_dev_market_fec_security_delist(self, db: Database, user: DbRow | None) -> None:
         """Remove a security from public FCX trading without deleting or bankrupting its issuer."""
         err = admin_tools_section_required(db, user, "fec-investigations")
@@ -28094,6 +28187,70 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         })
         self.send_json(200, {"ok": True, "delisting_id": delisting_id, "ticker": filing["ticker"],
             "relisted_at": timestamp})
+
+    def api_dev_market_fec_security_retire(self, db: Database, user: DbRow | None, delisting_id: int) -> None:
+        """Permanently retire a zero-exposure legacy listing while preserving its audit filing."""
+        err = admin_tools_section_required(db, user, "fec-investigations")
+        if err:
+            self.error(403 if user else 401, err); return
+        err = strict_developer_required(user)
+        if err:
+            self.error(403 if user else 401, err); return
+        assert user is not None
+        payload = self.read_json()
+        rationale = str(payload.get("rationale") or "").strip()[:1000]
+        confirmation = str(payload.get("confirmation") or "").strip().upper()
+        if len(rationale) < 10:
+            self.error(400, "Document why this obsolete listing record should be removed using at least 10 characters."); return
+
+        filing = one(db, """SELECT d.*,s.ticker,s.name AS security_name,s.active,s.lifecycle_status,
+                (SELECT COUNT(*) FROM market_holdings h
+                 WHERE h.security_id=d.security_id AND ABS(h.quantity)>0) AS holder_count,
+                (SELECT COALESCE(SUM(ABS(h.quantity)),0) FROM market_holdings h
+                 WHERE h.security_id=d.security_id AND ABS(h.quantity)>0) AS held_shares,
+                (SELECT COUNT(*) FROM market_order_requests r
+                 WHERE r.security_id=d.security_id AND r.status IN ('queued','processing')) AS queued_equity_orders,
+                (SELECT COUNT(*) FROM market_margin_order_requests r
+                 WHERE r.security_id=d.security_id AND r.status IN ('queued','processing')) AS queued_margin_orders,
+                (SELECT COUNT(*) FROM market_margin_positions p
+                 WHERE p.security_id=d.security_id AND p.status='open') AS open_margin_positions
+            FROM market_security_delistings d JOIN market_securities s ON s.id=d.security_id
+            WHERE d.id=? FOR UPDATE OF d,s""", (delisting_id,))
+        if not filing:
+            self.error(404, "That FEC delisting filing was not found."); return
+        if confirmation != f"REMOVE {str(filing['ticker']).upper()}":
+            self.error(400, f"Type REMOVE {str(filing['ticker']).upper()} to retire this obsolete listing."); return
+        if str(filing.get("status") or "") != "active" or str(filing.get("lifecycle_status") or "") != "delisted":
+            self.error(409, "Only an active, already-delisted security may be retired from this register."); return
+        exposure = (
+            int(filing.get("holder_count") or 0)
+            + int(filing.get("queued_equity_orders") or 0)
+            + int(filing.get("queued_margin_orders") or 0)
+            + int(filing.get("open_margin_positions") or 0)
+        )
+        if exposure or float(filing.get("held_shares") or 0) != 0:
+            self.error(409, "This listing still has resident holdings, queued orders, or open margin exposure and cannot be removed."); return
+
+        timestamp = now_iso()
+        db.execute("""UPDATE market_security_delistings SET status='retired',relisted_by=?,
+            relisted_by_name=?,relisted_at=?,relist_note=? WHERE id=?""",
+            (user["id"], user.get("name") or "Developer", timestamp, rationale, delisting_id))
+        db.execute("""UPDATE market_securities SET active=0,lifecycle_status='retired',
+            index_eligible=0,margin_enabled=0,updated_at=? WHERE id=?""",
+            (timestamp, filing["security_id"]))
+        db.execute("DELETE FROM market_index_members WHERE security_id=?", (filing["security_id"],))
+        db.execute("""UPDATE market_price_programs SET status='retired_obsolete'
+            WHERE security_id=? AND status IN ('active','scheduled')""", (filing["security_id"],))
+        detail = f"{filing['ticker']} retired from the obsolete-listing register. {rationale}"
+        db.execute("INSERT INTO market_events (event_type,title,detail,created_by,created_at) VALUES ('fec_security_retired',?,?,?,?)",
+            (f"FEC retired {filing['ticker']}", detail, user["id"], timestamp))
+        add_admin_audit(db, int(user["id"]), "market.fec.security_retired", details={
+            "delisting_id": delisting_id, "security_id": int(filing["security_id"]),
+            "ticker": filing["ticker"], "rationale": rationale,
+            "zero_exposure_verified": True, "audit_record_preserved": True,
+        })
+        self.send_json(200, {"ok": True, "delisting_id": delisting_id, "ticker": filing["ticker"],
+            "retired_at": timestamp})
 
     def api_dev_market_fec_equity_cash_reset_all(self, db: Database, user: DbRow | None) -> None:
         """Permanently zero settled Ravenhood cash across every resident equity account."""
