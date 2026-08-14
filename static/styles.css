@@ -19823,6 +19823,54 @@ textarea:focus {
 @media(max-width:900px){.market-v13-analysis{grid-template-columns:1fr 1fr}.market-v13-analysis article:nth-child(3){border-left:0;border-top:1px solid var(--rv-line)}.market-v13-analysis article:nth-child(4){border-top:1px solid var(--rv-line)}}
 @media(max-width:560px){.market-v13-y-axis{display:none}.market-v13-tooltip{width:165px;padding:11px}.market-v13-tooltip strong{font-size:18px}.market-v13-analysis{grid-template-columns:1fr}.market-v13-analysis article+article,.market-v13-analysis article:nth-child(3){border-left:0;border-top:1px solid var(--rv-line)}}
 
+/* Ravenhood header identity — the launcher raven carries through into the exchange. */
+.market-v13-brand>.market-v13-brand-mark{
+  position:relative;
+  width:44px;
+  height:44px;
+  flex:0 0 44px;
+  display:grid;
+  place-items:center;
+  overflow:hidden;
+  border:1px solid rgba(118,255,208,.38);
+  border-radius:15px 6px 15px 6px;
+  background:
+    radial-gradient(circle at 78% 18%,rgba(255,85,174,.2),transparent 27%),
+    linear-gradient(145deg,#103d31 0%,#071e18 58%,#020a07 100%);
+  box-shadow:
+    0 0 0 1px rgba(3,19,13,.95),
+    0 0 24px rgba(73,235,168,.18),
+    inset 0 1px 0 rgba(215,255,241,.12);
+}
+.market-v13-brand-mark:after{
+  content:"";
+  position:absolute;
+  inset:4px;
+  border:1px solid rgba(112,201,255,.12);
+  border-radius:12px 4px 12px 4px;
+  pointer-events:none;
+}
+.market-v13-brand-mark .ravenhood-mark{
+  position:relative;
+  z-index:1;
+  width:37px;
+  height:37px;
+  overflow:visible;
+  filter:drop-shadow(0 0 7px rgba(73,235,168,.24));
+  transition:transform .28s ease,filter .28s ease;
+}
+.market-v13-brand:hover .market-v13-brand-mark .ravenhood-mark{
+  transform:translateY(-1px) rotate(-2deg) scale(1.04);
+  filter:drop-shadow(0 0 10px rgba(103,223,255,.38));
+}
+.market-v13-brand-mark .rh-orbit{fill:none;stroke:rgba(118,255,208,.25);stroke-width:1;stroke-dasharray:2 4}
+.market-v13-brand-mark .rh-raven{fill:rgba(1,10,7,.9);stroke:#76ffd0;stroke-width:1.5}
+.market-v13-brand-mark .rh-wing{fill:none;stroke:#4dcf9d;stroke-width:1.3}
+.market-v13-brand-mark .rh-tape{fill:none;stroke:#67dfff;stroke-width:1.8;filter:drop-shadow(0 0 4px rgba(103,223,255,.56))}
+.market-v13-brand-mark .rh-eye{fill:#ff55ae;stroke:#ffd5eb;stroke-width:.65;filter:drop-shadow(0 0 4px #ff55ae)}
+.market-v13-light .market-v13-brand>.market-v13-brand-mark{background:linear-gradient(145deg,#164a3a,#08261d);box-shadow:0 0 0 1px rgba(3,19,13,.2),0 8px 24px rgba(31,135,94,.2),inset 0 1px 0 rgba(255,255,255,.16)}
+@media(max-width:680px){.market-v13-brand>.market-v13-brand-mark{width:40px;height:40px;flex-basis:40px;border-radius:13px 5px 13px 5px}.market-v13-brand-mark .ravenhood-mark{width:34px;height:34px}}
+
 /* Ravenhood V14 — synchronized OHLC, executed-volume VWAP and EMA analytics. */
 .market-v14-chart .market-v13-canvas{height:480px;background:radial-gradient(ellipse 70% 80% at 72% 40%,rgba(50,181,124,.07),transparent 72%),linear-gradient(180deg,rgba(15,66,43,.2),rgba(2,10,6,.08))}
 .market-v14-chart>header nav{max-width:min(100%,520px);flex-shrink:0;overflow-x:auto;scrollbar-width:none}.market-v14-chart>header nav::-webkit-scrollbar{display:none}
