@@ -4882,6 +4882,7 @@ def ensure_migrations(db: Database) -> None:
         )
         """
     )
+    db.execute("ALTER TABLE market_price_programs ADD COLUMN IF NOT EXISTS target_price NUMERIC(14,4)")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS market_events (
@@ -8818,9 +8819,12 @@ def apply_market_price_programs(db: Database) -> int:
                     db.execute("UPDATE market_price_programs SET status='cancelled' WHERE id=?", (program["id"],))
                     continue
                 program["start_price"] = float(live_security["price"] or 0.01)
+                if program.get("target_price") is not None:
+                    target_price = max(0.01, float(program["target_price"]))
+                    program["percent_change"] = ((target_price / max(0.01, program["start_price"])) - 1.0) * 100.0
             db.execute(
-                "UPDATE market_price_programs SET status='active',start_price=? WHERE id=?",
-                (program.get("start_price"), program["id"]),
+                "UPDATE market_price_programs SET status='active',start_price=?,percent_change=? WHERE id=?",
+                (program.get("start_price"), program.get("percent_change"), program["id"]),
             )
             program["status"] = "active"
         progress = 1.0 if current >= ends else max(0.0, min(1.0, (current - starts).total_seconds() / max(1, (ends - starts).total_seconds())))
@@ -29165,8 +29169,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if "ALL" in tickers and len(tickers) != 1:
             self.error(400, "Entire market cannot be combined with individual securities or indexes."); return
         name = str(payload.get("event_name") or "Market adjustment").strip()[:100]
-        try: percent = max(-500, min(500, float(payload.get("percent_change") or 0))); duration = max(1, min(10080, int(payload.get("duration_minutes") or 60)))
-        except (TypeError, ValueError): self.error(400, "Percent and duration are required."); return
+        pricing_mode = str(payload.get("pricing_mode") or "percent").strip().lower()
+        if pricing_mode not in ("percent", "target_price"):
+            self.error(400, "Choose percentage change or exact target price."); return
+        try:
+            duration = max(1, min(10080, int(payload.get("duration_minutes") or 60)))
+        except (TypeError, ValueError):
+            self.error(400, "A valid duration is required."); return
         if tickers == ["ALL"]:
             targets = all_rows(db, """SELECT s.id,s.ticker,s.price,issuer.id AS issuer_company_id
                 FROM market_securities s
@@ -29190,6 +29199,25 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 self.error(404, f"Active security not found: {', '.join(missing)}"); return
         if not targets:
             self.error(409, "No active securities are available for this movement."); return
+        target_price: float | None = None
+        if pricing_mode == "target_price":
+            if len(targets) != 1 or tickers == ["ALL"]:
+                self.error(400, "Exact target price can be used with one selected security only."); return
+            try:
+                target_price = round(float(payload.get("target_price")), 4)
+            except (TypeError, ValueError):
+                self.error(400, "Enter a valid exact target price."); return
+            if target_price < 0.01 or target_price > 1000000000:
+                self.error(400, "Exact target price must be from $0.01 through $1,000,000,000."); return
+            current_price = max(0.01, float(targets[0]["price"] or 0.01))
+            percent = ((target_price / current_price) - 1.0) * 100.0
+            if percent < -99.9999 or percent > 500:
+                self.error(400, "The exact target must remain within the program limit of a 99.99% decline through a 500% increase."); return
+        else:
+            try:
+                percent = max(-500, min(500, float(payload.get("percent_change") or 0)))
+            except (TypeError, ValueError):
+                self.error(400, "Enter a valid percentage change."); return
         created_at = utcnow()
         requested_start = str(payload.get("starts_at") or "").strip()
         start = created_at
@@ -29208,21 +29236,24 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         status = "scheduled" if start > created_at else "active"
         end = start + dt.timedelta(minutes=duration)
         for target in targets:
-            db.execute("""INSERT INTO market_price_programs (security_id, event_name, percent_change, duration_minutes, start_price, starts_at, ends_at, status, created_by, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (target["id"], name, percent, duration, float(target["price"]), start.isoformat(), end.isoformat(), status, user["id"], created_at.isoformat()))
+            db.execute("""INSERT INTO market_price_programs (security_id, event_name, percent_change, duration_minutes, start_price, starts_at, ends_at, status, created_by, created_at, target_price)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (target["id"], name, percent, duration, float(target["price"]), start.isoformat(), end.isoformat(), status, user["id"], created_at.isoformat(), target_price))
         target_tickers = [str(target["ticker"]) for target in targets]
         resident_issuer_count = sum(1 for target in targets if target.get("issuer_company_id"))
         target_label = "Entire market" if tickers == ["ALL"] else ", ".join(target_tickers)
         timing_detail = f" beginning {start.astimezone(ZoneInfo('America/New_York')).strftime('%b %d, %Y at %I:%M %p %Z')}" if status == "scheduled" else " beginning now"
-        db.execute("INSERT INTO market_events (event_type, title, detail, created_by, created_at) VALUES ('program', ?, ?, ?, ?)", (name, f"{target_label}: {percent:+.2f}% over {duration} minutes{timing_detail}", user["id"], created_at.isoformat()))
+        target_detail = f" to ${target_price:,.4f}" if target_price is not None else ""
+        db.execute("INSERT INTO market_events (event_type, title, detail, created_by, created_at) VALUES ('program', ?, ?, ?, ?)", (name, f"{target_label}: {percent:+.2f}%{target_detail} over {duration} minutes{timing_detail}", user["id"], created_at.isoformat()))
         add_admin_audit(db, int(user["id"]), "market.program.created", details={
             "event_name": name, "tickers": target_tickers, "entire_market": tickers == ["ALL"],
             "target_count": len(targets), "resident_issuer_count": resident_issuer_count,
-            "percent_change": percent, "duration_minutes": duration, "starts_at": start.isoformat(), "status": status,
+            "pricing_mode": pricing_mode, "target_price": target_price, "percent_change": percent,
+            "duration_minutes": duration, "starts_at": start.isoformat(), "status": status,
         })
         self.send_json(201, {"ok": True, "example_one_dollar": max(0.01, round(1 * (1 + percent / 100), 4)),
             "starts_at": start.isoformat(), "ends_at": end.isoformat(), "status": status, "tickers": target_tickers, "target_count": len(targets),
-            "resident_issuer_count": resident_issuer_count})
+            "resident_issuer_count": resident_issuer_count, "pricing_mode": pricing_mode,
+            "target_price": target_price, "percent_change": round(percent, 4)})
 
     def api_dev_market_program_cancel(self, db: Database, user: DbRow | None, program_id: int | None) -> None:
         err = developer_required(user)

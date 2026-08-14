@@ -14305,9 +14305,9 @@ function renderDevMarketSettings(market, users) {
   const nextTransition = market.next_transition_at ? new Date(market.next_transition_at).toLocaleString(undefined, {weekday:"short", month:"short", day:"numeric", hour:"numeric", minute:"2-digit", timeZone:"America/New_York", timeZoneName:"short"}) : "Return to schedule to resume automatic transitions";
   const movementSecurityOptions = [
     `<label class="market-program-option market-wide"><input type="checkbox" name="tickers" value="ALL" data-market-program-all/><i>ALL</i><span><strong>Entire market</strong><small>Every active operating company</small></span></label>`,
-    ...(indexFunds.length ? [`<div class="market-program-option-group"><b>FAIRCROFT INDEXES</b>${indexFunds.map(x => `<label class="market-program-option"><input type="checkbox" name="tickers" value="${escapeHtml(x.ticker)}"/><i>${escapeHtml(x.ticker)}</i><span><strong>${escapeHtml(x.display_name || x.name)}</strong><small>Index fund · may be scheduled alone or in a group</small></span></label>`).join("")}</div>`] : []),
-    ...(residentIssuerListings.length ? [`<div class="market-program-option-group"><b>RESIDENT-CONTROLLED ISSUERS</b>${residentIssuerListings.map(x => `<label class="market-program-option"><input type="checkbox" name="tickers" value="${escapeHtml(x.ticker)}"/><i>${escapeHtml(x.ticker)}</i><span><strong>${escapeHtml(x.name)}</strong><small>${escapeHtml(x.issuer_controller_name || "Resident controller")} · ${x.issuer_control_source === "existing_security" ? "assigned FCX stock" : "resident IPO"}</small></span></label>`).join("")}</div>`] : []),
-    ...(operatingCompanyListings.length ? [`<div class="market-program-option-group"><b>OTHER OPERATING COMPANIES</b>${operatingCompanyListings.map(x => `<label class="market-program-option"><input type="checkbox" name="tickers" value="${escapeHtml(x.ticker)}"/><i>${escapeHtml(x.ticker)}</i><span><strong>${escapeHtml(x.name)}</strong><small>${escapeHtml(x.sector || "Operating company")}</small></span></label>`).join("")}</div>`] : []),
+    ...(indexFunds.length ? [`<div class="market-program-option-group"><b>FAIRCROFT INDEXES</b>${indexFunds.map(x => `<label class="market-program-option"><input type="checkbox" name="tickers" value="${escapeHtml(x.ticker)}" data-market-program-price="${Number(x.price || 0)}" data-market-program-name="${escapeHtml(x.display_name || x.name)}"/><i>${escapeHtml(x.ticker)}</i><span><strong>${escapeHtml(x.display_name || x.name)}</strong><small>Index fund · current ${money(x.price || 0)}</small></span><em>${money(x.price || 0)}</em></label>`).join("")}</div>`] : []),
+    ...(residentIssuerListings.length ? [`<div class="market-program-option-group"><b>RESIDENT-CONTROLLED ISSUERS</b>${residentIssuerListings.map(x => `<label class="market-program-option"><input type="checkbox" name="tickers" value="${escapeHtml(x.ticker)}" data-market-program-price="${Number(x.price || 0)}" data-market-program-name="${escapeHtml(x.name)}"/><i>${escapeHtml(x.ticker)}</i><span><strong>${escapeHtml(x.name)}</strong><small>${escapeHtml(x.issuer_controller_name || "Resident controller")} · current ${money(x.price || 0)}</small></span><em>${money(x.price || 0)}</em></label>`).join("")}</div>`] : []),
+    ...(operatingCompanyListings.length ? [`<div class="market-program-option-group"><b>OTHER OPERATING COMPANIES</b>${operatingCompanyListings.map(x => `<label class="market-program-option"><input type="checkbox" name="tickers" value="${escapeHtml(x.ticker)}" data-market-program-price="${Number(x.price || 0)}" data-market-program-name="${escapeHtml(x.name)}"/><i>${escapeHtml(x.ticker)}</i><span><strong>${escapeHtml(x.name)}</strong><small>${escapeHtml(x.sector || "Operating company")} · current ${money(x.price || 0)}</small></span><em>${money(x.price || 0)}</em></label>`).join("")}</div>`] : []),
   ].join("");
   const ravenhoodAccountRegistry = `<section class="dev-card market-account-registry">
     <header class="market-account-registry-head"><div><span>RAVENHOOD ACCOUNT DIRECTORY</span><h2>Resident portfolios</h2><p>Open an account to inspect its current Ravenhood buying power, equity, and live stock positions. This directory is read only.</p></div><aside><label><i>⌕</i><input data-market-account-search type="search" autocomplete="off" placeholder="Search name, CIV, email, or ticker"/></label><strong data-market-account-count>${ravenhoodAccounts.length} ACCOUNTS</strong></aside></header>
@@ -14371,7 +14371,22 @@ function renderDevMarketSettings(market, users) {
     <section class="market-dev-terminal"><header><span></span><b>RAVENHOOD / MARKET CONTROL LOG</b><em>${activeCycle ? escapeHtml(activeCycle) : "LIVE EXCHANGE"}</em></header><div>${(market.events || []).slice(0,12).map(x => `<p class="${escapeHtml(String(x.event_type || "event").replace(/[^a-z0-9_-]/gi,"-"))}"><time>${escapeHtml(String(x.created_at || "").slice(11,19))}</time><b>${escapeHtml(humanLabel(x.event_type || "market event"))}</b><strong>${escapeHtml(x.title)}</strong><span>${escapeHtml(x.detail)}</span></p>`).join("") || `<p><time>--:--:--</time><b>STATUS</b><strong>Exchange ready</strong><span>No market events have been staged.</span></p>`}</div></section>
     <div class="dev-grid-2">
     <section class="dev-card market-session-control"><div class="dev-card-header"><div><span>TRADING SESSION</span><h2>Exchange clock</h2><p>Ravenhood follows New York core hours, with weekend trading retained for the RP community by default.</p></div><strong class="${market.market_open ? "green" : "red"}">${market.market_open ? "TRADING" : "CLOSED"}</strong></div><div class="market-session-readout"><div><small>SESSION STATE</small><strong>${escapeHtml(sessionReason)}</strong><span>${escapeHtml(marketLocalTime)}</span></div><div><small>AUTOMATIC WINDOW</small><strong>${escapeHtml(market.schedule_open_time || "09:30")} &ndash; ${escapeHtml(market.schedule_close_time || "16:00")}</strong><span>${market.weekends_enabled ? "Every day" : "Monday&ndash;Friday"} &middot; America/New_York</span></div><div><small>NEXT SCHEDULED CHANGE</small><strong>${sessionMode === "schedule" ? (market.market_open ? "Market closes" : "Market opens") : "Manual control active"}</strong><span>${escapeHtml(nextTransition)}</span></div></div><div class="market-session-actions" role="group" aria-label="Market session control"><button type="button" data-market-session-override="open" class="${sessionMode === "open" ? "active open" : ""}" aria-pressed="${sessionMode === "open"}"><b>Force open</b><span>Allow resident orders now</span></button><button type="button" data-market-session-override="closed" class="${sessionMode === "closed" ? "active closed" : ""}" aria-pressed="${sessionMode === "closed"}"><b>Force closed</b><span>Block new resident orders</span></button><button type="button" data-market-session-override="schedule" class="${sessionMode === "schedule" ? "active schedule" : ""}" aria-pressed="${sessionMode === "schedule"}"><b>Use schedule</b><span>Resume automatic hours</span></button></div><form id="devMarketSettingsForm" class="form-grid market-session-form"><label>Daily open<input name="schedule_open_time" type="time" value="${escapeHtml(market.schedule_open_time || "09:30")}" required/><small>New York local time.</small></label><label>Daily close<input name="schedule_close_time" type="time" value="${escapeHtml(market.schedule_close_time || "16:00")}" required/><small>New York local time.</small></label><label>Trade fee %<input name="trade_fee_percent" type="number" min="0" max="10" step="0.01" value="${Number(market.trade_fee_percent || 0)}"/></label><label>Transfer fee %<input name="transfer_fee_percent" type="number" min="0" max="25" step="0.01" value="${Number(market.transfer_fee_percent || 0)}"/></label><label class="dev-certify wide"><input name="weekends_enabled" type="checkbox" ${market.weekends_enabled ? "checked" : ""}/> Keep the same trading hours on Saturday and Sunday</label><label class="dev-certify wide"><input name="fcxv_24h_enabled" type="checkbox" ${market.fcxv_24h_enabled ? "checked" : ""}/> Keep all FCXV trading open 24 hours<small>FCXV share orders and leveraged long/short positions open and close immediately outside core hours. Other securities remain tied to the exchange schedule.</small></label><label class="dev-certify wide"><input name="ai_enabled" type="checkbox" ${market.ai_enabled ? "checked" : ""}/> Allow Gemini market briefing support</label><button class="primary wide">Save schedule and exchange policy</button></form><p class="muted small">Manual controls stay in effect until Use schedule is selected. Collected fees remain outside the active RP economy.</p></section>
-      <section class="dev-card market-program-builder"><div class="dev-card-header"><div><span>PRICE PROGRAM</span><h2>Schedule movement</h2><p>Move one security, an index, a hand-picked group, or the entire operating market immediately or at a precise future time.</p></div><strong>NEW YORK TIME</strong></div><form id="devMarketProgramForm" class="form-grid"><div class="wide market-program-security-field"><span>Security selection</span><details class="market-program-picker"><summary><span><b data-market-program-selection>Choose securities</b><small data-market-program-selection-detail>Select one, several, an index, or the entire market</small></span><i>+</i></summary><div class="market-program-picker-panel"><header><label><span>⌕</span><input type="search" data-market-program-search placeholder="Search ticker or company" autocomplete="off"/></label><button type="button" data-market-program-clear>Clear selection</button></header><div class="market-program-options">${movementSecurityOptions}</div></div></details></div><label>RP event<input name="event_name" maxlength="100" required placeholder="Port expansion announcement"/></label><label>Percentage change<input name="percent_change" type="number" min="-500" max="500" step="0.01" required/><small data-market-example>$1.00 becomes $1.00</small></label><label>Duration in minutes<input name="duration_minutes" type="number" min="1" max="10080" value="60" required/></label><label>Start time<input name="starts_at" type="datetime-local"/><small>Leave blank to begin now. Future times are interpreted in America/New_York.</small></label><div class="market-program-launch-summary wide"><span><small>TARGET GROUP</small><strong data-market-program-count>0 SELECTED</strong></span><p>Every selected security receives the same percentage and duration. Future programs lock their opening quote only when their scheduled time arrives.</p></div><button class="primary wide">Schedule price program</button></form><div class="market-presets"><button data-market-preset="market_crash">Market crash</button><button data-market-preset="flash_crash">Flash crash</button><button data-market-preset="market_rally">Broad rally</button><button data-market-preset="random_skyrocket">Random skyrocket</button></div></section>
+      <section class="dev-card market-program-builder">
+        <div class="dev-card-header"><div><span>PRICE PROGRAM</span><h2>Schedule movement</h2><p>Move one security, an index, a hand-picked group, or the entire operating market immediately or at a precise future time.</p></div><strong>NEW YORK TIME</strong></div>
+        <form id="devMarketProgramForm" class="form-grid">
+          <div class="wide market-program-security-field"><span>Security selection</span><details class="market-program-picker"><summary><span><b data-market-program-selection>Choose securities</b><small data-market-program-selection-detail>Select one, several, an index, or the entire market</small></span><i>+</i></summary><div class="market-program-picker-panel"><header><label><span>⌕</span><input type="search" data-market-program-search placeholder="Search ticker or company" autocomplete="off"/></label><button type="button" data-market-program-clear>Clear selection</button></header><div class="market-program-options">${movementSecurityOptions}</div></div></details></div>
+          <div class="market-program-quote-board wide" data-market-program-quotes><span><small>LIVE QUOTE</small><strong>Select one security</strong></span><p>Choose a stock or index to see its current Ravenhood price before setting the movement.</p></div>
+          <div class="market-program-pricing-mode wide" role="radiogroup" aria-label="Price movement method"><label><input type="radio" name="pricing_mode" value="percent" checked/><span><b>Percentage move</b><small>Move one or several securities by the same percentage.</small></span></label><label data-market-exact-option><input type="radio" name="pricing_mode" value="target_price"/><span><b>Exact target price</b><small>Set the exact destination quote for one security.</small></span></label></div>
+          <label>RP event<input name="event_name" maxlength="100" required placeholder="Port expansion announcement"/></label>
+          <label data-market-percent-field>Percentage change<input name="percent_change" type="number" min="-500" max="500" step="0.01" required/><small data-market-example>$1.00 becomes $1.00</small></label>
+          <label data-market-target-field hidden>Exact target price<input name="target_price" type="number" min="0.01" max="1000000000" step="0.0001" disabled/><small data-market-target-change>Select one security to calculate its exact change.</small></label>
+          <label>Duration in minutes<input name="duration_minutes" type="number" min="1" max="10080" value="60" required/></label>
+          <label>Start time<input name="starts_at" type="datetime-local"/><small>Leave blank to begin now. Future times are interpreted in America/New_York.</small></label>
+          <div class="market-program-launch-summary wide"><span><small>TARGET GROUP</small><strong data-market-program-count>0 SELECTED</strong></span><p data-market-program-summary-copy>Select securities, then choose a percentage move or an exact destination price.</p></div>
+          <button class="primary wide">Schedule price program</button>
+        </form>
+        <div class="market-presets"><button data-market-preset="market_crash">Market crash</button><button data-market-preset="flash_crash">Flash crash</button><button data-market-preset="market_rally">Broad rally</button><button data-market-preset="random_skyrocket">Random skyrocket</button></div>
+      </section>
     </div>
     <section class="dev-card market-listing-foundry">
       <div class="dev-card-header"><div><span>RAVENHOOD LISTING FOUNDRY</span><h2>Introduce companies to the exchange</h2><p>Create one named issuer with its own opening quote, or commission a balanced batch of fictional Faircroft companies. Every listing starts a permanent price-history record.</p></div><strong>${companyListings.length} COMPANIES</strong></div>
@@ -16549,9 +16564,80 @@ function bindDevWorkspace() {
   });
   const marketProgramForm = $("#devMarketProgramForm");
   const marketProgramChecks = marketProgramForm ? Array.from(marketProgramForm.querySelectorAll('[name="tickers"]')) : [];
+  const marketProgramPercentInput = marketProgramForm?.querySelector('[name="percent_change"]');
+  const marketProgramTargetInput = marketProgramForm?.querySelector('[name="target_price"]');
+  const marketProgramPercentField = marketProgramForm?.querySelector('[data-market-percent-field]');
+  const marketProgramTargetField = marketProgramForm?.querySelector('[data-market-target-field]');
+  const marketProgramExactOption = marketProgramForm?.querySelector('[data-market-exact-option]');
+  const selectedMarketProgramInputs = () => marketProgramChecks.filter(input => input.checked);
+  const marketProgramExactSelection = () => {
+    const selected = selectedMarketProgramInputs();
+    if (selected.length !== 1 || selected[0].value === "ALL") return null;
+    const currentPrice = Number(selected[0].dataset.marketProgramPrice || 0);
+    return currentPrice > 0 ? { input: selected[0], currentPrice } : null;
+  };
+  const updateMarketProgramPricing = () => {
+    if (!marketProgramForm) return;
+    const exactSelection = marketProgramExactSelection();
+    const exactRadio = marketProgramForm.querySelector('[name="pricing_mode"][value="target_price"]');
+    const percentRadio = marketProgramForm.querySelector('[name="pricing_mode"][value="percent"]');
+    if (exactRadio) exactRadio.disabled = !exactSelection;
+    marketProgramExactOption?.classList.toggle("disabled", !exactSelection);
+    if (!exactSelection && exactRadio?.checked && percentRadio) percentRadio.checked = true;
+    const exactMode = Boolean(exactSelection && exactRadio?.checked);
+    if (marketProgramPercentField) marketProgramPercentField.hidden = exactMode;
+    if (marketProgramTargetField) marketProgramTargetField.hidden = !exactMode;
+    if (marketProgramPercentInput) {
+      marketProgramPercentInput.disabled = exactMode;
+      marketProgramPercentInput.required = !exactMode;
+    }
+    if (marketProgramTargetInput) {
+      marketProgramTargetInput.disabled = !exactMode;
+      marketProgramTargetInput.required = exactMode;
+    }
+    const quoteBoard = marketProgramForm.querySelector('[data-market-program-quotes]');
+    const selected = selectedMarketProgramInputs();
+    if (quoteBoard) {
+      const heading = quoteBoard.querySelector("strong");
+      const copy = quoteBoard.querySelector("p");
+      if (exactSelection) {
+        const ticker = exactSelection.input.value;
+        const company = exactSelection.input.dataset.marketProgramName || ticker;
+        const percent = Number(marketProgramPercentInput?.value || 0);
+        const enteredTarget = Number(marketProgramTargetInput?.value || 0);
+        const previewTarget = exactMode && enteredTarget > 0 ? enteredTarget : Math.max(0.01, exactSelection.currentPrice * (1 + percent / 100));
+        const previewPercent = ((previewTarget / exactSelection.currentPrice) - 1) * 100;
+        if (heading) heading.textContent = `${ticker} · ${money(exactSelection.currentPrice)}`;
+        if (copy) copy.innerHTML = `<b>${escapeHtml(company)}</b><span>${money(exactSelection.currentPrice)} → ${money(previewTarget)}</span><em class="${previewPercent >= 0 ? "up" : "down"}">${previewPercent >= 0 ? "+" : ""}${previewPercent.toFixed(2)}%</em>`;
+      } else if (selected.some(input => input.value === "ALL")) {
+        if (heading) heading.textContent = "Entire operating market";
+        if (copy) copy.textContent = "Exact prices apply to one security. Use percentage mode for the complete market.";
+      } else if (selected.length > 1) {
+        const totalValue = selected.reduce((sum, input) => sum + Number(input.dataset.marketProgramPrice || 0), 0);
+        if (heading) heading.textContent = `${selected.length} securities · ${money(totalValue)} combined quote`;
+        if (copy) copy.textContent = "Every selected quote receives the same percentage movement.";
+      } else {
+        if (heading) heading.textContent = "Select one security";
+        if (copy) copy.textContent = "Choose a stock or index to see its current Ravenhood price before setting the movement.";
+      }
+    }
+    const targetChange = marketProgramForm.querySelector('[data-market-target-change]');
+    if (targetChange) {
+      if (!exactSelection) targetChange.textContent = "Exact-price mode requires one stock or one index.";
+      else {
+        const target = Number(marketProgramTargetInput?.value || 0);
+        const percent = target > 0 ? ((target / exactSelection.currentPrice) - 1) * 100 : 0;
+        targetChange.textContent = target > 0 ? `${money(exactSelection.currentPrice)} becomes ${money(target)} · ${percent >= 0 ? "+" : ""}${percent.toFixed(2)}%` : `Current quote ${money(exactSelection.currentPrice)} · enter its destination price`;
+        targetChange.classList.toggle("up", target > exactSelection.currentPrice);
+        targetChange.classList.toggle("down", target > 0 && target < exactSelection.currentPrice);
+      }
+    }
+    const summary = marketProgramForm.querySelector('[data-market-program-summary-copy]');
+    if (summary) summary.textContent = exactMode ? "The selected security will finish at the entered price. A future program recalculates the required percentage from its live opening quote." : "Every selected security receives the same percentage and duration. Future programs lock their opening quote only when their scheduled time arrives.";
+  };
   const updateMarketProgramSelection = () => {
     if (!marketProgramForm) return;
-    const selected = marketProgramChecks.filter(input => input.checked);
+    const selected = selectedMarketProgramInputs();
     const entireMarket = selected.some(input => input.value === "ALL");
     const label = marketProgramForm.querySelector("[data-market-program-selection]");
     const detail = marketProgramForm.querySelector("[data-market-program-selection-detail]");
@@ -16559,6 +16645,7 @@ function bindDevWorkspace() {
     if (label) label.textContent = entireMarket ? "Entire operating market" : selected.length === 1 ? selected[0].value : selected.length ? `${selected.length} securities selected` : "Choose securities";
     if (detail) detail.textContent = entireMarket ? "All active operating companies" : selected.length ? selected.map(input => input.value).join(" · ") : "Select one, several, an index, or the entire market";
     if (count) count.textContent = entireMarket ? "ENTIRE MARKET" : `${selected.length} SELECTED`;
+    updateMarketProgramPricing();
   };
   marketProgramChecks.forEach(input => input.addEventListener("change", () => {
     if (input.value === "ALL" && input.checked) marketProgramChecks.forEach(other => { if (other !== input) other.checked = false; });
@@ -16571,8 +16658,11 @@ function bindDevWorkspace() {
     marketProgramForm.querySelectorAll(".market-program-option").forEach(option => { option.hidden = Boolean(query) && !option.textContent.toLowerCase().includes(query); });
     marketProgramForm.querySelectorAll(".market-program-option-group").forEach(group => { group.hidden = !Array.from(group.querySelectorAll(".market-program-option")).some(option => !option.hidden); });
   });
-  marketProgramForm?.querySelector("[name='percent_change']")?.addEventListener("input", event => { const output=$("[data-market-example]"); if(output) output.textContent=`$1.00 becomes ${money(Math.max(0.01, 1 + Number(event.currentTarget.value || 0)/100))}`; });
-  marketProgramForm?.addEventListener("submit", async event => { event.preventDefault(); const formData=new FormData(event.currentTarget); const tickers=formData.getAll("tickers"); if(!tickers.length){toast("Select at least one security, an index, or the entire market");return;} const body=Object.fromEntries(formData); body.tickers=tickers; delete body.ticker; try { const result=await api("/api/dev-tools/market/programs",{method:"POST",body}); const timing=result.status==="scheduled"?`scheduled for ${new Date(result.starts_at).toLocaleString()}`:"started now"; toast(`Price program ${timing} · ${Number(result.target_count||tickers.length)} target${Number(result.target_count||tickers.length)===1?"":"s"} · $1 becomes $${Number(result.example_one_dollar).toFixed(4)}`); await refreshDevTools(); } catch(error){toast(error.message);} });
+  marketProgramPercentInput?.addEventListener("input", event => { const output=marketProgramForm?.querySelector("[data-market-example]"); if(output) output.textContent=`$1.00 becomes ${money(Math.max(0.01, 1 + Number(event.currentTarget.value || 0)/100))}`; updateMarketProgramPricing(); });
+  marketProgramTargetInput?.addEventListener("input", updateMarketProgramPricing);
+  marketProgramForm?.querySelectorAll('[name="pricing_mode"]').forEach(input => input.addEventListener("change", updateMarketProgramPricing));
+  updateMarketProgramSelection();
+  marketProgramForm?.addEventListener("submit", async event => { event.preventDefault(); const formData=new FormData(event.currentTarget); const tickers=formData.getAll("tickers"); if(!tickers.length){toast("Select at least one security, an index, or the entire market");return;} const body=Object.fromEntries(formData); body.tickers=tickers; delete body.ticker; try { const result=await api("/api/dev-tools/market/programs",{method:"POST",body}); const timing=result.status==="scheduled"?`scheduled for ${new Date(result.starts_at).toLocaleString()}`:"started now"; const exactResult=result.pricing_mode==="target_price"&&Number(result.target_price)>0?` · target ${money(result.target_price)}`:` · $1 becomes $${Number(result.example_one_dollar).toFixed(4)}`; toast(`Price program ${timing} · ${Number(result.target_count||tickers.length)} target${Number(result.target_count||tickers.length)===1?"":"s"}${exactResult}`); await refreshDevTools(); } catch(error){toast(error.message);} });
   $$("[data-market-preset]").forEach(button => button.addEventListener("click", async () => { if(!confirm(`Launch ${humanLabel(button.dataset.marketPreset)} market event?`)) return; try { await api("/api/dev-tools/market/presets",{method:"POST",body:{preset:button.dataset.marketPreset}}); toast("Market event launched"); await refreshDevTools(); } catch(error){toast(error.message);} }));
   $$("[data-market-stop-program]").forEach(button=>button.addEventListener("click",async()=>{const name=button.dataset.marketProgramName||"this movement";if(!confirm(`Stop ${name} at its current market price? The remaining scheduled movement will be cancelled and no baseline restoration will occur.`))return;button.disabled=true;try{const result=await api(`/api/dev-tools/market/programs/${button.dataset.marketStopProgram}/stop`,{method:"PATCH",body:"{}"});toast(`Movement stopped · ${result.held} current price(s) preserved`);await refreshDevTools();}catch(error){button.disabled=false;toast(error.message);}}));
   $$("[data-market-cancel-program]").forEach(button=>button.addEventListener("click",async()=>{const name=button.dataset.marketProgramName||"this movement";if(!confirm(`Stop ${name} and restore all affected securities to their pre-movement prices?`))return;button.disabled=true;try{const result=await api(`/api/dev-tools/market/programs/${button.dataset.marketCancelProgram}/cancel`,{method:"PATCH",body:"{}"});toast(`Movement stopped · ${result.restored} price(s) restored`);await refreshDevTools();}catch(error){button.disabled=false;toast(error.message);}}));

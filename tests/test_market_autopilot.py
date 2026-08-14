@@ -195,6 +195,24 @@ class MarketAutopilotTests(unittest.TestCase):
         self.assertIn('name="starts_at" type="datetime-local"', FRONTEND_SOURCE)
         self.assertIn('America/New_York', APP_SOURCE)
 
+    def test_exact_price_programs_are_validated_and_rebased_at_activation(self) -> None:
+        endpoint_source = APP_SOURCE.split("def api_dev_market_program", 1)[1].split(
+            "def api_dev_market_company", 1
+        )[0]
+        function_source = APP_SOURCE.split("def apply_market_price_programs", 1)[1].split(
+            "def execute_ravenhood_order", 1
+        )[0]
+        self.assertIn("ADD COLUMN IF NOT EXISTS target_price", APP_SOURCE)
+        self.assertIn('pricing_mode not in ("percent", "target_price")', endpoint_source)
+        self.assertIn('if pricing_mode == "target_price"', endpoint_source)
+        self.assertIn("Exact target price can be used with one selected security only", endpoint_source)
+        self.assertIn("(target_price / current_price) - 1.0", endpoint_source)
+        self.assertIn('program.get("target_price") is not None', function_source)
+        self.assertIn("SET status='active',start_price=?,percent_change=?", function_source)
+        self.assertIn('name="pricing_mode" value="target_price"', FRONTEND_SOURCE)
+        self.assertIn('name="target_price"', FRONTEND_SOURCE)
+        self.assertIn("data-market-program-price", FRONTEND_SOURCE)
+
     def test_newest_overlapping_program_owns_quote_and_completion_is_durable(self) -> None:
         function_source = APP_SOURCE.split("def apply_market_price_programs", 1)[1].split(
             "def execute_ravenhood_order", 1
