@@ -25895,7 +25895,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     for code, item in MARKET_DELISTING_REASONS.items()
                 ],
                 "securities": [dict(row) for row in all_rows(db, """SELECT s.id,s.ticker,s.name,s.security_type,
-                    s.sector,s.price,s.lifecycle_status,h.id AS active_halt_id,h.reason_label AS active_halt_reason,
+                    s.sector,s.description,s.price,s.previous_price,s.volatility,s.issued_shares,s.updated_at,
+                    ROUND(s.price*s.issued_shares,2) AS market_cap,
+                    s.lifecycle_status,h.id AS active_halt_id,h.reason_label AS active_halt_reason,
                     d.id AS active_delisting_id,d.reason_label AS active_delisting_reason
                     FROM market_securities s
                     LEFT JOIN market_security_halts h ON h.security_id=s.id AND h.status='active'
