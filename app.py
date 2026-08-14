@@ -28070,7 +28070,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"ok": True, **result})
 
     def api_dev_market_fec_security_halt(self, db: Database, user: DbRow | None) -> None:
-        """Suspend every exchange operation for one security under an audited FEC order."""
+        """Suspend every exchange operation for one security under an automatic audited FEC order."""
         err = admin_tools_section_required(db, user, "fec-investigations")
         if err:
             self.error(403 if user else 401, err); return
@@ -28080,21 +28080,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             security_id = int(payload.get("security_id") or 0)
         except (TypeError, ValueError):
             security_id = 0
-        reason_code = str(payload.get("reason_code") or "").strip().lower()
-        reason_info = MARKET_TRADING_HALT_REASONS.get(reason_code)
-        case_reference = str(payload.get("case_reference") or "").strip().upper()[:80]
-        public_notice = str(payload.get("public_notice") or "").strip()[:1000]
-        confirmation = str(payload.get("confirmation") or "").strip().upper()
         if security_id <= 0:
             self.error(400, "Choose the FCX security to halt."); return
-        if not reason_info:
-            self.error(400, "Choose a recognized exchange trading-halt reason."); return
-        if len(case_reference) < 3:
-            self.error(400, "Enter the FEC case or regulatory reference."); return
-        if len(public_notice) < 10:
-            self.error(400, "Provide a public halt notice using at least 10 characters."); return
-        if confirmation != "HALT":
-            self.error(400, "Type HALT to certify this market-integrity action."); return
 
         security = one(db, """SELECT id,ticker,name,active,lifecycle_status FROM market_securities
             WHERE id=? FOR UPDATE""", (security_id,))
@@ -28106,6 +28093,11 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if existing:
             self.error(409, market_security_halt_error(existing)); return
         timestamp = now_iso()
+        reason_code = "investor_protection"
+        reason_info = MARKET_TRADING_HALT_REASONS[reason_code]
+        filing_stamp = "".join(character for character in timestamp if character.isdigit())[:14]
+        case_reference = f"FEC-HALT-{filing_stamp}-{security_id}"
+        public_notice = f"{security['ticker']} trading is temporarily halted by FEC market control."
         halt = one(db, """INSERT INTO market_security_halts
             (security_id,status,reason_code,reason_label,public_notice,case_reference,
              halted_by,halted_by_name,halted_at)
@@ -28209,18 +28201,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "account_id": int(restriction["account_id"]), "released_at": timestamp})
 
     def api_dev_market_fec_security_resume(self, db: Database, user: DbRow | None, halt_id: int) -> None:
-        """Resume a security through a separate, documented FEC order."""
+        """Resume a security through a one-click, automatically documented FEC order."""
         err = admin_tools_section_required(db, user, "fec-investigations")
         if err:
             self.error(403 if user else 401, err); return
         assert user is not None
-        payload = self.read_json()
-        resume_note = str(payload.get("resume_note") or "").strip()[:1000]
-        confirmation = str(payload.get("confirmation") or "").strip().upper()
-        if len(resume_note) < 10:
-            self.error(400, "Document why orderly trading may resume using at least 10 characters."); return
-        if confirmation != "RESUME":
-            self.error(400, "Type RESUME to certify the reopening order."); return
+        self.read_json()
+        resume_note = "Trading resumed through one-click FEC market control."
         halt = one(db, """SELECT h.*,s.ticker,s.name AS security_name
             FROM market_security_halts h JOIN market_securities s ON s.id=h.security_id
             WHERE h.id=? FOR UPDATE OF h,s""", (halt_id,))
@@ -28242,20 +28229,15 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"ok": True, "halt_id": halt_id, "ticker": halt["ticker"], "resumed_at": timestamp})
 
     def api_dev_market_fec_security_bulk_resume(self, db: Database, user: DbRow | None) -> None:
-        """Atomically resume selected active halts, or every active halt, under one FEC order."""
+        """Atomically resume selected or all active halts through one-click FEC control."""
         err = admin_tools_section_required(db, user, "fec-investigations")
         if err:
             self.error(403 if user else 401, err); return
         assert user is not None
         payload = self.read_json()
         resume_all = str(payload.get("all") or "").strip().lower() in ("1", "true", "yes", "on")
-        resume_note = str(payload.get("resume_note") or "").strip()[:1000]
-        confirmation = str(payload.get("confirmation") or "").strip().upper()
-        expected_confirmation = "RESUME ALL" if resume_all else "RESUME SELECTED"
-        if len(resume_note) < 10:
-            self.error(400, "Document why orderly trading may resume using at least 10 characters."); return
-        if confirmation != expected_confirmation:
-            self.error(400, f"Type {expected_confirmation} to certify this bulk reopening order."); return
+        resume_note = ("All active security halts resumed through one-click FEC market control."
+            if resume_all else "Selected security halts resumed through one-click FEC market control.")
 
         requested_ids: set[int] = set()
         if not resume_all:

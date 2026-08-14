@@ -157,13 +157,35 @@ class MarketFecInvestigationWorkspaceTests(unittest.TestCase):
         handler = APP_SOURCE.split("def api_dev_market_fec_security_bulk_resume", 1)[1].split(
             "def api_dev_market_fec_security_delist", 1
         )[0]
-        self.assertIn('expected_confirmation = "RESUME ALL" if resume_all else "RESUME SELECTED"', handler)
+        self.assertNotIn('expected_confirmation = "RESUME ALL" if resume_all else "RESUME SELECTED"', handler)
+        self.assertNotIn('payload.get("confirmation")', handler)
+        self.assertIn("one-click FEC market control", handler)
         self.assertIn("WHERE h.status='active'", handler)
         self.assertIn("market.fec.trading_bulk_resumed", handler)
         self.assertIn("data-fec-halt-select", FRONTEND_SOURCE)
         self.assertIn("data-fec-resume-selected", FRONTEND_SOURCE)
         self.assertIn("data-fec-resume-all", FRONTEND_SOURCE)
         self.assertIn("resumeFecHaltBatch", FRONTEND_SOURCE)
+
+    def test_fec_security_halt_controls_are_one_click_after_selection(self) -> None:
+        halt_handler = APP_SOURCE.split("def api_dev_market_fec_security_halt", 1)[1].split(
+            "def api_dev_market_fec_account_restriction", 1
+        )[0]
+        resume_handler = APP_SOURCE.split("def api_dev_market_fec_security_resume", 1)[1].split(
+            "def api_dev_market_fec_security_bulk_resume", 1
+        )[0]
+        halt_ui = FRONTEND_SOURCE.split('id="devMarketFecHaltForm"', 1)[1].split('</form>', 1)[0]
+        halt_events = FRONTEND_SOURCE.split("const fecHaltForm", 1)[1].split("const fecDelistForm", 1)[0]
+        self.assertNotIn('payload.get("confirmation")', halt_handler)
+        self.assertNotIn('payload.get("case_reference")', halt_handler)
+        self.assertNotIn('payload.get("public_notice")', halt_handler)
+        self.assertIn('reason_code = "investor_protection"', halt_handler)
+        self.assertNotIn('payload.get("confirmation")', resume_handler)
+        self.assertNotIn('name="confirmation"', halt_ui)
+        self.assertNotIn('name="case_reference"', halt_ui)
+        self.assertNotIn('name="public_notice"', halt_ui)
+        self.assertNotIn("prompt(`Document why", halt_events)
+        self.assertNotIn("prompt(`Type RESUME", halt_events)
 
     def test_halted_security_is_blocked_from_exchange_activity(self) -> None:
         self.assertIn("market_security_halt_error(halt)", APP_SOURCE)

@@ -14467,11 +14467,9 @@ function renderDevFecInvestigations(fec = {}) {
   const initialPnlWindow = residentialPnl["1d"] ? "1d" : pnlWindowOrder.find(key => residentialPnl[key]) || "1d";
   const investigatedResidents = new Set(trades.map(trade => Number(trade.user_id || 0)).filter(Boolean)).size;
   const poolBalance = Number(fec.pool_balance || 0);
-  const haltReasons = fec.halt_reasons || [];
   const securities = fec.securities || [];
   const activeHalts = fec.active_halts || [];
   const haltHistory = fec.halt_history || [];
-  const firstHaltReason = haltReasons[0] || {};
   const delistingReasons = fec.delisting_reasons || [];
   const activeDelistings = fec.active_delistings || [];
   const delistingHistory = fec.delisting_history || [];
@@ -14486,13 +14484,10 @@ function renderDevFecInvestigations(fec = {}) {
     <header><div><span>FEC EXCHANGE INTERVENTION</span><h2>Security trading halts</h2><p>Freeze one FCX listing while the rest of the exchange remains operational. New equity and margin orders are refused; existing queued orders are preserved but cannot execute until an authorized resume.</p></div><aside class="${activeHalts.length ? "alert" : "clear"}"><small>ACTIVE HALTS</small><strong>${activeHalts.length}</strong><em>${activeHalts.length ? "FEC RESTRICTION LIVE" : "ORDERLY MARKET"}</em></aside></header>
     <div class="fec-halt-layout">
       <form id="devMarketFecHaltForm" class="fec-halt-form">
-        <div class="market-fec-form-title"><i>H</i><span><small>NEW MARKET ACTION</small><h3>Halt a security</h3></span></div>
+        <div class="market-fec-form-title"><i>H</i><span><small>ONE-CLICK MARKET ACTION</small><h3>Halt trading</h3></span></div>
         <label>FCX security<select name="security_id" required><option value="">Select a security</option>${listedSecurities.map(security=>`<option value="${Number(security.id)}" ${security.active_halt_id ? "disabled" : ""}>${escapeHtml(security.ticker)} - ${escapeHtml(security.name)}${security.active_halt_id ? " - ALREADY HALTED" : ""}</option>`).join("")}</select></label>
-        <label>Exchange halt reason<select name="reason_code" data-fec-halt-reason required><option value="">Select standardized reason</option>${haltReasons.map(reason=>`<option value="${escapeHtml(reason.code)}" data-description="${escapeHtml(reason.description||"")}">${escapeHtml(reason.label)}</option>`).join("")}</select><small data-fec-halt-reason-help>${escapeHtml(firstHaltReason.description || "Choose the exchange condition that requires intervention.")}</small></label>
-        <div class="market-fec-fields"><label>FEC case reference<input name="case_reference" maxlength="80" placeholder="FEC-2026-0001" required/></label><label>Typed authorization<input name="confirmation" maxlength="8" autocomplete="off" placeholder="Type HALT" required/></label></div>
-        <label>Public market notice<textarea name="public_notice" minlength="10" maxlength="1000" placeholder="State what market participants need to know. Do not include private investigative evidence." required></textarea></label>
-        <label class="market-fec-certify"><input name="certify" type="checkbox" required/><span>I certify this listing-specific halt is authorized and its public basis is accurate.</span></label>
-        <button class="danger">Halt trading immediately</button>
+        <p class="market-fec-one-click-note">The FEC case reference, public notice, operator, and timestamp are recorded automatically.</p>
+        <button class="danger">Halt trading</button>
       </form>
       <div class="fec-active-halts"><header><span>LIVE RESTRICTIONS</span><div class="fec-halt-header-actions"><strong>${activeHalts.length} ACTIVE</strong>${activeHalts.length?`<button class="quiet" type="button" data-fec-select-all-halts>Select all</button><button class="quiet" type="button" data-fec-resume-selected disabled>Resume selected</button><button class="primary" type="button" data-fec-resume-all>Resume all</button>`:""}</div></header>${activeHalts.map(halt=>`<article><div class="fec-halt-symbol"><label class="fec-halt-select" title="Select ${escapeHtml(halt.ticker)}"><input type="checkbox" value="${Number(halt.id)}" data-fec-halt-select aria-label="Select ${escapeHtml(halt.ticker)} for bulk resume"/><span></span></label><i>||</i><span><b>${escapeHtml(halt.ticker)}</b><small>${escapeHtml(halt.security_name||"FCX security")}</small></span></div><div class="fec-halt-basis"><strong>${escapeHtml(halt.reason_label)}</strong><p>${escapeHtml(halt.public_notice||"Trading is suspended pending FEC review.")}</p><small>${escapeHtml(halt.case_reference||"No case reference")} - ${halt.halted_at?new Date(halt.halted_at).toLocaleString():"Time unavailable"} - ${escapeHtml(halt.halted_by_name||"FEC operator")}</small></div><dl><span><dt>Equity queue</dt><dd>${Number(halt.queued_equity_orders||0)}</dd></span><span><dt>Margin queue</dt><dd>${Number(halt.queued_margin_orders||0)}</dd></span><span><dt>Open margin</dt><dd>${Number(halt.open_margin_positions||0)}</dd></span></dl><button class="primary" type="button" data-fec-resume-halt="${Number(halt.id)}" data-fec-halt-ticker="${escapeHtml(halt.ticker)}">Resume trading</button></article>`).join("")||`<div class="fec-halt-clear"><i>FCX</i><span><strong>No security-specific restrictions</strong><small>All active listings are eligible to trade under the normal exchange session.</small></span></div>`}</div>
     </div>
@@ -15990,23 +15985,10 @@ function bindDevWorkspace() {
     }
   }));
   const fecHaltForm = $('#devMarketFecHaltForm');
-  const fecHaltReason = fecHaltForm?.querySelector('[data-fec-halt-reason]');
-  const syncFecHaltReason = () => {
-    const help = fecHaltForm?.querySelector('[data-fec-halt-reason-help]');
-    if (help) help.textContent = fecHaltReason?.selectedOptions?.[0]?.dataset.description || 'Choose the exchange condition that requires intervention.';
-  };
-  fecHaltReason?.addEventListener('change', syncFecHaltReason);
-  syncFecHaltReason();
   fecHaltForm?.addEventListener('submit', async event => {
     event.preventDefault();
     const form = event.currentTarget;
     const body = Object.fromEntries(new FormData(form));
-    if (String(body.confirmation || '').trim().toUpperCase() !== 'HALT') {
-      toast('Type HALT to authorize this market action');
-      return;
-    }
-    const security = form.security_id?.selectedOptions?.[0]?.textContent?.trim() || 'this security';
-    if (!confirm(`Immediately halt all equity and leveraged trading in ${security}? Queued orders will be preserved but suspended.`)) return;
     const submit = form.querySelector('button[type="submit"], button:not([type])');
     if (submit) submit.disabled = true;
     try {
@@ -16046,23 +16028,10 @@ function bindDevWorkspace() {
       toast('Select at least one active halt');
       return;
     }
-    const scopeLabel = resumeAll ? `all ${count} halted securities` : `${count} selected ${count === 1 ? 'security' : 'securities'}`;
-    const resumeNote = prompt(`Document why ${scopeLabel} may resume trading:`) || '';
-    if (resumeNote.trim().length < 10) {
-      if (resumeNote) toast('A resume filing note of at least 10 characters is required');
-      return;
-    }
-    const requiredAuthorization = resumeAll ? 'RESUME ALL' : 'RESUME SELECTED';
-    const confirmation = prompt(`Type ${requiredAuthorization} to reopen ${scopeLabel}:`) || '';
-    if (confirmation.trim().toUpperCase() !== requiredAuthorization) {
-      toast('Bulk trading resume was cancelled');
-      return;
-    }
-    if (!confirm(`Resume trading for ${scopeLabel} now? Their preserved order queues will become eligible for normal exchange processing.`)) return;
     trigger.disabled = true;
     try {
       const result = await api('/api/dev-tools/market/fec/security-halts/bulk-resume', {
-        method: 'POST', body: { all: resumeAll, halt_ids: haltIds, resume_note: resumeNote, confirmation }
+        method: 'POST', body: { all: resumeAll, halt_ids: haltIds }
       });
       toast(`${Number(result.resumed_count || count)} trading halt${Number(result.resumed_count || count) === 1 ? '' : 's'} resumed`);
       await refreshDevTools();
@@ -16076,20 +16045,10 @@ function bindDevWorkspace() {
   syncFecHaltSelections();
   $$('[data-fec-resume-halt]').forEach(button => button.addEventListener('click', async () => {
     const ticker = button.dataset.fecHaltTicker || 'this security';
-    const resumeNote = prompt(`Document why ${ticker} may resume trading:`) || '';
-    if (resumeNote.trim().length < 10) {
-      if (resumeNote) toast('A resume filing note of at least 10 characters is required');
-      return;
-    }
-    const confirmation = prompt(`Type RESUME to reopen ${ticker}:`) || '';
-    if (confirmation.trim().toUpperCase() !== 'RESUME') {
-      toast('Trading was not resumed');
-      return;
-    }
     button.disabled = true;
     try {
       const result = await api(`/api/dev-tools/market/fec/security-halts/${button.dataset.fecResumeHalt}/resume`, {
-        method: 'POST', body: { resume_note: resumeNote, confirmation }
+        method: 'POST', body: {}
       });
       toast(`${result.ticker || ticker} trading resumed`);
       await refreshDevTools();
