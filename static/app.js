@@ -77,7 +77,20 @@ const state = {
   marketRange: "LIVE",
   marketOrderFilter: "upcoming",
   marketMarginView: "open",
+  marketTradeTicketOpen: false,
+  marketTradeMode: "equity",
+  marketTradeDraft: {
+    side: "buy",
+    sizeMode: "shares",
+    quantity: "",
+    cashAmount: "",
+    direction: "long",
+    collateral: "",
+    leverage: 5,
+  },
   marketSeriesVisibility: savedMarketSeriesVisibility,
+  marketChartViewport: null,
+  marketChartInteractionUntil: 0,
   bankActivityPage: 1,
   bankActivityStatus: "all",
   bankActivityDirection: "all",
@@ -6162,6 +6175,7 @@ function renderMarketWorkspace() {
   }).join("");
   const chartId = `rh-${String(selected.ticker || "market").replace(/[^a-z0-9]/gi, "")}`;
   const chartSeriesPayload = escapeHtml(JSON.stringify(chartSeries));
+  const chartForecastPayload = escapeHtml(JSON.stringify(forecastPrices));
   const priceMove = currentPrice - open;
   const rangePosition = high > low ? Math.max(0, Math.min(100, (currentPrice - low) / (high - low) * 100)) : 50;
   const periodSwing = open ? (high - low) / open * 100 : 0;
@@ -6279,9 +6293,34 @@ function renderMarketWorkspace() {
     const position = ((value - 5) / (marginLeverageVisualMax - 5)) * 100;
     return `<span class="${value > marginLeverageCap ? "locked" : ""}" style="left:${position.toFixed(2)}%">${value}x</span>`;
   }).join("");
+  const tradeFeePercent = Math.max(0, Number(data.trade_fee_percent || 0));
+  const tradeDraft = state.marketTradeDraft || {};
+  const tradeSide = tradeDraft.side === "sell" ? "sell" : "buy";
+  const tradeSizeMode = tradeDraft.sizeMode === "cash" ? "cash" : "shares";
+  const tradeMode = state.marketTradeMode === "margin" ? "margin" : "equity";
+  const buyShareLimit = currentPrice > 0 ? Math.max(0, Math.floor(cash / (currentPrice * (1 + tradeFeePercent / 100)))) : 0;
+  const sellShareLimit = Math.max(0, Math.floor(owned));
+  const buyCashLimit = Math.max(0, Math.floor(cash));
+  const sellCashLimit = Math.max(0, Math.floor(owned * currentPrice * Math.max(0, 1 - tradeFeePercent / 100)));
+  const equityTicket = `<form class="market-trade-equity" data-market-order data-market-price="${currentPrice}" data-market-fee-percent="${tradeFeePercent}" data-market-open="${selectedTradeOpen ? "true" : "false"}" data-market-restricted="${selectedTradingRestricted ? "true" : "false"}" data-market-owned="${owned}" data-market-cash="${cash}" data-market-buy-share-limit="${buyShareLimit}" data-market-sell-share-limit="${sellShareLimit}" data-market-buy-cash-limit="${buyCashLimit}" data-market-sell-cash-limit="${sellCashLimit}">
+    <input type="hidden" name="ticker" value="${escapeHtml(selected.ticker || "")}"/>
+    <input type="hidden" name="side" value="${tradeSide}"/>
+    <input type="hidden" name="size_mode" value="${tradeSizeMode}"/>
+    <section class="market-trade-choice"><small>ORDER DIRECTION</small><div><button type="button" class="${tradeSide === "buy" ? "active" : ""}" data-market-equity-side="buy"><b>Buy</b><span>Add to your position</span></button><button type="button" class="${tradeSide === "sell" ? "active sell" : "sell"}" data-market-equity-side="sell"><b>Sell</b><span>Reduce your position</span></button></div></section>
+    <section class="market-trade-choice"><small>SIZE THIS ORDER BY</small><div><button type="button" class="${tradeSizeMode === "shares" ? "active" : ""}" data-market-size-mode="shares"><b>Shares</b><span>Whole-share slider</span></button><button type="button" class="${tradeSizeMode === "cash" ? "active" : ""}" data-market-size-mode="cash"><b>Money</b><span>Choose your spend</span></button></div></section>
+    <section class="market-trade-sizing ${tradeSizeMode === "cash" ? "cash-mode" : "share-mode"}">
+      <div class="market-trade-size-panel shares" ${tradeSizeMode === "shares" ? "" : "hidden"}><label><span>Share quantity <small>Decimals accepted</small></span><input name="quantity" type="number" min="0.000001" step="0.000001" inputmode="decimal" placeholder="0.000000" value="${escapeHtml(String(tradeDraft.quantity || ""))}"/></label><input class="market-trade-range" type="range" min="0" max="${tradeSide === "sell" ? sellShareLimit : buyShareLimit}" step="1" value="${Math.max(0, Math.min(tradeSide === "sell" ? sellShareLimit : buyShareLimit, Math.floor(Number(tradeDraft.quantity || 0))))}" data-market-share-slider aria-label="Whole shares"/><footer><span>0 shares</span><strong data-market-slider-limit>${(tradeSide === "sell" ? sellShareLimit : buyShareLimit).toLocaleString()} whole shares available</strong></footer></div>
+      <div class="market-trade-size-panel cash" ${tradeSizeMode === "cash" ? "" : "hidden"}><label><span>${tradeSide === "sell" ? "Target proceeds" : "Amount to invest"} <small>Converted to shares</small></span><input name="order_cash" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="0.00" value="${escapeHtml(String(tradeDraft.cashAmount || ""))}"/></label><input class="market-trade-range" type="range" min="0" max="${tradeSide === "sell" ? sellCashLimit : buyCashLimit}" step="1" value="${Math.max(0, Math.min(tradeSide === "sell" ? sellCashLimit : buyCashLimit, Math.floor(Number(tradeDraft.cashAmount || 0))))}" data-market-cash-slider aria-label="Cash amount"/><footer><span>$0</span><strong data-market-slider-limit>${money(tradeSide === "sell" ? sellCashLimit : buyCashLimit)} available</strong></footer></div>
+      <div class="market-trade-quick">${[25, 50, 75, 100].map(percent => `<button type="button" data-market-quick-percent="${percent}">${percent === 100 ? "Max" : `${percent}%`}</button>`).join("")}</div>
+    </section>
+    <div class="market-trade-receipt"><header><span>LIVE ESTIMATE</span><strong>${escapeHtml(selected.ticker || "--")} @ ${money(currentPrice)}</strong></header><dl><div><dt>Shares</dt><dd data-market-order-shares>0</dd></div><div><dt>Stock subtotal</dt><dd data-market-order-subtotal>${money(0)}</dd></div><div><dt>Commission (${tradeFeePercent.toFixed(2)}%)</dt><dd data-market-order-fee>${money(0)}</dd></div><div class="total"><dt data-market-order-total-label>Total cost</dt><dd data-market-order-total>${money(0)}</dd></div></dl><small data-market-order-guidance>Choose shares or a cash amount to build the order.</small></div>
+    <button type="submit" class="market-trade-submit" ${selectedTradingRestricted ? "disabled" : ""}>${selectedTradingRestricted ? selectedRestrictionLabel : selectedTradeOpen ? (selectedContinuousSession ? "Place FCXV order" : "Place order") : "Queue for market open"}</button>
+    <p class="market-trade-policy">${selectedTradingRestricted ? escapeHtml(selectedRestrictionNotice) : selectedTradeOpen ? "Ravenhood confirms the live quote, settled balance, shares, and commission at execution." : `This order waits until ${escapeHtml(nextMarketOpenLabel)}. The opening quote and account availability are revalidated before execution.`}</p>
+  </form>`;
   const marginTicket = data.margin_enabled && Number(selected.margin_enabled || 0) === 1
-    ? `<section class="market-margin-ticket ${selectedTradingRestricted ? "halted" : ""}"><header><span>ISOLATED MARGIN</span><b>${selectedTradingRestricted ? selectedRestrictionLabel : "Long / Short"}</b></header><form data-market-margin-order data-market-price="${currentPrice}" data-market-fee-percent="${Number(data.trade_fee_percent || 0)}" data-market-maintenance="${Number(data.margin_maintenance_percent || 20)}"><input type="hidden" name="ticker" value="${escapeHtml(selected.ticker || "")}"/><div class="market-margin-direction"><label><input type="radio" name="direction" value="long" checked/><span>LONG<small>Profit if price rises</small></span></label><label><input type="radio" name="direction" value="short"/><span>SHORT<small>Profit if price falls</small></span></label></div><label>Isolated collateral<input name="collateral" type="number" min="10" step="0.01" placeholder="10.00" required/></label><label class="market-margin-leverage"><span>Leverage <output data-margin-leverage-output>5x</output></span><input name="leverage" type="range" min="5" max="${marginLeverageVisualMax}" step="5" value="5" data-leverage-cap="${marginLeverageCap}" aria-label="Leverage, maximum ${marginLeverageCap}x"/><div class="market-leverage-scale">${marginLeverageScale}</div><small>Developer ceiling: ${marginLeverageCap}x</small></label><div class="market-margin-preview" data-market-margin-preview><p><span>Position size</span><strong data-margin-notional>${money(0)}</strong></p><p><span>Opening fee</span><strong data-margin-fee>${money(0)}</strong></p><p><span>Estimated liquidation</span><strong data-margin-liquidation>--</strong></p><p><span>Cash required</span><strong data-margin-required>${money(0)}</strong></p></div><button type="submit" class="market-margin-submit" ${selectedTradingRestricted ? "disabled" : ""}>${selectedTradingRestricted ? selectedRestrictionLabel : selectedTradeOpen ? (selectedContinuousSession ? "Review 24-hour FCXV position" : "Review leveraged position") : "Queue for market open"}</button><small>${selectedTradingRestricted ? escapeHtml(selectedRestrictionNotice) : selectedContinuousSession ? "FCXV long and short positions execute continuously against the current live quote." : "Losses are isolated to collateral. Fees are separate. Liquidation runs server-side while Faircroft quotes continue after hours."}</small></form></section>`
+    ? `<section class="market-margin-ticket ${selectedTradingRestricted ? "halted" : ""}"><header><span>ISOLATED MARGIN</span><b>${selectedTradingRestricted ? selectedRestrictionLabel : "Long / Short"}</b></header><form data-market-margin-order data-market-price="${currentPrice}" data-market-fee-percent="${Number(data.trade_fee_percent || 0)}" data-market-maintenance="${Number(data.margin_maintenance_percent || 20)}"><input type="hidden" name="ticker" value="${escapeHtml(selected.ticker || "")}"/><div class="market-margin-direction"><label><input type="radio" name="direction" value="long" ${tradeDraft.direction === "short" ? "" : "checked"}/><span>LONG<small>Profit if price rises</small></span></label><label><input type="radio" name="direction" value="short" ${tradeDraft.direction === "short" ? "checked" : ""}/><span>SHORT<small>Profit if price falls</small></span></label></div><label>Isolated collateral<input name="collateral" type="number" min="10" step="0.01" placeholder="10.00" value="${escapeHtml(String(tradeDraft.collateral || ""))}" required/></label><label class="market-margin-leverage"><span>Leverage <output data-margin-leverage-output>${Math.max(5, Number(tradeDraft.leverage || 5))}x</output></span><input name="leverage" type="range" min="5" max="${marginLeverageVisualMax}" step="5" value="${Math.max(5, Math.min(marginLeverageCap, Number(tradeDraft.leverage || 5)))}" data-leverage-cap="${marginLeverageCap}" aria-label="Leverage, maximum ${marginLeverageCap}x"/><div class="market-leverage-scale">${marginLeverageScale}</div><small>Developer ceiling: ${marginLeverageCap}x</small></label><div class="market-margin-preview" data-market-margin-preview><p><span>Position size</span><strong data-margin-notional>${money(0)}</strong></p><p><span>Opening fee</span><strong data-margin-fee>${money(0)}</strong></p><p><span>Estimated liquidation</span><strong data-margin-liquidation>--</strong></p><p><span>Cash required</span><strong data-margin-required>${money(0)}</strong></p></div><button type="submit" class="market-margin-submit" ${selectedTradingRestricted ? "disabled" : ""}>${selectedTradingRestricted ? selectedRestrictionLabel : selectedTradeOpen ? (selectedContinuousSession ? "Open 24-hour FCXV position" : "Open leveraged position") : "Queue for market open"}</button><small>${selectedTradingRestricted ? escapeHtml(selectedRestrictionNotice) : selectedContinuousSession ? "FCXV long and short positions execute continuously against the current live quote." : "Losses are isolated to collateral. Fees are separate. Liquidation runs server-side while Faircroft quotes continue after hours."}</small></form></section>`
     : `<section class="market-margin-ticket unavailable"><header><span>ISOLATED MARGIN</span><b>Unavailable</b></header><p>${data.margin_enabled ? "A developer has disabled leveraged positions for this security." : "Leveraged positions are paused exchange-wide."}</p></section>`;
+  const tradeTicket = state.marketTradeTicketOpen ? `<div class="market-trade-overlay" role="presentation"><section class="market-trade-sheet" role="dialog" aria-modal="true" aria-labelledby="marketTradeTitle"><header><div><small>RAVENHOOD EXECUTION TICKET</small><h2 id="marketTradeTitle">Trade ${escapeHtml(selected.ticker || "--")}</h2><p>${escapeHtml(selected.name || "Faircroft security")}</p></div><aside><small>${selectedTradeOpen ? "LIVE QUOTE" : "REFERENCE QUOTE"}</small><strong>${money(currentPrice)}</strong><span class="${change >= 0 ? "up" : "down"}">${change >= 0 ? "+" : ""}${change.toFixed(2)}% / ${range}</span></aside><button type="button" data-market-close-ticket aria-label="Close trade ticket">&times;</button></header><nav class="market-trade-mode"><button type="button" class="${tradeMode === "equity" ? "active" : ""}" data-market-trade-mode="equity"><span>01</span><b>Buy / Sell</b><small>Shares or cash</small></button><button type="button" class="${tradeMode === "margin" ? "active" : ""}" data-market-trade-mode="margin"><span>02</span><b>Long / Short</b><small>Isolated leverage</small></button></nav><div class="market-trade-body">${tradeMode === "margin" ? marginTicket : equityTicket}</div><footer><i></i><span>Ticket refresh paused while you edit</span><small>The server validates the final quote and account balance when you submit.</small></footer></section></div>` : "";
   const marginPositionRows = openMarginPositions.map(position => {
     const pnl = Number(position.unrealized_pnl || 0);
     const equity = Math.max(0, Number(position.equity || 0));
@@ -6314,14 +6353,15 @@ function renderMarketWorkspace() {
       <aside class="market-v13-discovery"><header><small>MARKET PULSE</small><h2>Hot right now</h2></header>${movers.slice(0, 7).map((item, index) => `<button type="button" class="${item.ticker === selected.ticker ? "active" : ""}" data-market-ticker="${escapeHtml(item.ticker)}"><i>${String(index + 1).padStart(2, "0")}</i><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}</small></span><strong>${money(item.price)}<em class="${marketChange(item) >= 0 ? "up" : "down"}">${marketChange(item) >= 0 ? "+" : ""}${marketChange(item).toFixed(2)}%</em></strong></button>`).join("")}<section class="market-live-execution-feed" aria-label="Anonymous live Ravenhood buy and sell executions"><header><span><i></i>Live executions</span><small>Anonymous tape</small></header><div>${anonymousTradeMarkup || `<p><b>Waiting for the next fill</b><small>Executed orders will appear here.</small></p>`}</div></section><section class="market-company-wire"><header><span>COMPANY WIRE</span><small>Issuer releases</small></header><div>${companyWireMarkup || `<p><b>The wire is quiet</b><small>Resident issuer news will appear here.</small></p>`}</div></section></aside>
       <section class="market-v13-stage">
         ${selectedDelisted ? `<section class="market-security-halt delisted" role="status"><div><small>FEC LISTING STATUS NOTICE</small><strong>Delisted from FCX &middot; ${escapeHtml(selected.delisting_reason || "Exchange listing order")}</strong><p>${escapeHtml(selected.delisting_notice || "This security is no longer publicly traded. Its issuer record, resident holdings, and market history remain preserved.")}</p></div><aside>${selected.delisting_case_reference ? `<span>Case ${escapeHtml(selected.delisting_case_reference)}</span>` : ""}<time>${selected.delisted_at ? `Effective ${new Date(selected.delisted_at).toLocaleString()}` : "Effective immediately"}</time></aside></section>` : selectedTradingHalt ? `<section class="market-security-halt" role="status"><div><small>FEC MARKET INTEGRITY NOTICE</small><strong>Trading halted · ${escapeHtml(selected.trading_halt_reason || "Regulatory review")}</strong><p>${escapeHtml(selected.trading_halt_notice || "Trading in this security is temporarily suspended pending FEC review.")}</p></div><aside>${selected.trading_halt_case_reference ? `<span>Case ${escapeHtml(selected.trading_halt_case_reference)}</span>` : ""}<time>${selected.trading_halted_at ? `Effective ${new Date(selected.trading_halted_at).toLocaleString()}` : "Effective immediately"}</time></aside></section>` : ""}
-        <header class="market-v13-instrument"><div><small>${escapeHtml(selected.sector || "FAIRCROFT MARKET")} / ${escapeHtml(humanLabel(selected.security_type || "stock"))}</small><h1>${escapeHtml(selected.ticker || "--")}<span>${escapeHtml(selected.name || "Select a listing")}</span></h1><p>${escapeHtml(selected.description || `${selected.name || selected.ticker} is actively traded through Ravenhood.`)}</p></div><aside><small>LIVE QUOTE</small><strong>${money(currentPrice)}</strong><span class="${change >= 0 ? "up" : "down"}">${change >= 0 ? "+" : ""}${change.toFixed(2)}% / ${range}</span></aside></header>
-        <section class="market-v13-chart market-v14-chart"><header><div><small>RECORDED OHLC + VWAP + DYNAMIC EMA</small><h2>${escapeHtml(selected.ticker || "Market")} live price desk</h2><span data-market-live-clock>${range === "LIVE" ? "Live view auto-syncs every 12 seconds" : "Range synchronized"} · hover any visible series for exact data</span></div><nav>${[["LIVE", "Live"], ["15M", "15 min"], ["1H", "1 hour"], ["1D", "1 day"], ["1W", "1 week"], ["1M", "1 month"], ["1Y", "1 year"]].map(([item, label]) => `<button type="button" class="${range === item ? "active" : ""}" data-market-range="${item}">${label}</button>`).join("")}</nav></header>
-          <div class="market-v13-canvas ${change >= 0 ? "positive" : "negative"} ${hiddenSeriesClasses}" data-market-price-chart data-market-points="${chartSeriesPayload}" data-market-ema-period="${emaPeriod}" tabindex="0" aria-label="Interactive ${escapeHtml(selected.ticker || "Market")} price history. Toggle chart series, then hover or use arrow keys to inspect their recorded values.">
+        <header class="market-v13-instrument"><div><small>${escapeHtml(selected.sector || "FAIRCROFT MARKET")} / ${escapeHtml(humanLabel(selected.security_type || "stock"))}</small><h1>${escapeHtml(selected.ticker || "--")}<span>${escapeHtml(selected.name || "Select a listing")}</span></h1><p>${escapeHtml(selected.description || `${selected.name || selected.ticker} is actively traded through Ravenhood.`)}</p></div><aside><small>LIVE QUOTE</small><strong>${money(currentPrice)}</strong><span class="${change >= 0 ? "up" : "down"}">${change >= 0 ? "+" : ""}${change.toFixed(2)}% / ${range}</span><button type="button" class="market-v18-trade-cta" data-market-open-ticket>${selectedTradingRestricted ? "View restriction" : `Trade ${escapeHtml(selected.ticker || "security")}`}<i>&#8599;</i></button></aside></header>
+        <section class="market-v13-chart market-v14-chart"><header><div><small>RECORDED OHLC + VWAP + DYNAMIC EMA</small><h2>${escapeHtml(selected.ticker || "Market")} live price desk</h2><span data-market-live-clock>${range === "LIVE" ? "Live view auto-syncs every 12 seconds" : "Range synchronized"} · drag or scroll to inspect recorded history</span></div><nav>${[["LIVE", "Live"], ["15M", "15 min"], ["1H", "1 hour"], ["1D", "1 day"], ["1W", "1 week"], ["1M", "1 month"], ["1Y", "1 year"]].map(([item, label]) => `<button type="button" class="${range === item ? "active" : ""}" data-market-range="${item}">${label}</button>`).join("")}</nav></header>
+          <div class="market-v19-chart-tools" aria-label="Chart navigation controls"><span><b>HISTORY NAVIGATOR</b><small>Scroll to zoom · drag to move through time</small></span><button type="button" data-market-chart-zoom-out aria-label="Zoom chart out">−</button><input type="range" min="1" max="12" step=".25" value="1" data-market-chart-zoom aria-label="Chart zoom level"><button type="button" data-market-chart-zoom-in aria-label="Zoom chart in">+</button><button type="button" data-market-chart-reset>Fit</button><output data-market-chart-zoom-label>1.0×</output></div>
+          <div class="market-v13-canvas ${change >= 0 ? "positive" : "negative"} ${hiddenSeriesClasses}" data-market-price-chart data-market-points="${chartSeriesPayload}" data-market-forecast="${chartForecastPayload}" data-market-chart-key="${escapeHtml(`${selected.ticker || "market"}:${range}`)}" data-market-ema-period="${emaPeriod}" tabindex="0" aria-label="Interactive ${escapeHtml(selected.ticker || "Market")} price history. Scroll to zoom, drag to pan, and use arrow keys to inspect recorded values.">
             <div class="market-v13-gridlines"></div><div class="market-v13-y-axis"><span>${money(chartMax)}</span><span>${money((chartMax + chartMin) / 2)}</span><span>${money(chartMin)}</span></div>
-            <svg viewBox="0 0 1360 320" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="${chartId}-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".24"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient><linearGradient id="${chartId}-band" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#57dca8" stop-opacity=".16"/><stop offset="1" stop-color="#57dca8" stop-opacity=".025"/></linearGradient><linearGradient id="${chartId}-outlook" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b89cff" stop-opacity=".02"/><stop offset="1" stop-color="#b89cff" stop-opacity=".12"/></linearGradient></defs><rect class="market-v14-projection-zone" x="${actualEndX}" y="0" width="${forecastEndX - actualEndX}" height="304" fill="url(#${chartId}-outlook)"/><polygon class="trend-band" points="${bandPoints}" fill="url(#${chartId}-band)"/><g class="market-series-price"><polygon class="area" points="28,304 ${actualPoints} ${actualEndX},304" fill="url(#${chartId}-area)"/><g class="market-v14-candles">${candleMarkup}</g><polyline class="actual" points="${actualPoints}"/>${spikeMarker}${dropMarker}<circle class="market-v14-current-quote" cx="${actualEndX}" cy="${yFor(currentPrice).toFixed(1)}" r="5"/></g><polyline class="ema-line" points="${trendPoints}"/>${vwapPoints ? `<polyline class="vwap-line" points="${vwapPoints}"/>` : ""}<line class="market-v14-projection-divider" x1="${actualEndX}" y1="0" x2="${actualEndX}" y2="304"/><g class="market-v14-projection"><polyline class="market-v14-projection-line" points="${forecastPoints}"/>${forecastTicks}<circle class="market-v14-projection-end" cx="${forecastLast.x.toFixed(1)}" cy="${yFor(forecastLast.price).toFixed(1)}" r="4"/></g></svg>
+            <svg class="market-v14-static-svg" viewBox="0 0 1360 320" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="${chartId}-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".24"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient><linearGradient id="${chartId}-band" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#57dca8" stop-opacity=".16"/><stop offset="1" stop-color="#57dca8" stop-opacity=".025"/></linearGradient><linearGradient id="${chartId}-outlook" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b89cff" stop-opacity=".02"/><stop offset="1" stop-color="#b89cff" stop-opacity=".12"/></linearGradient></defs><rect class="market-v14-projection-zone" x="${actualEndX}" y="0" width="${forecastEndX - actualEndX}" height="304" fill="url(#${chartId}-outlook)"/><polygon class="trend-band" points="${bandPoints}" fill="url(#${chartId}-band)"/><g class="market-series-price"><polygon class="area" points="28,304 ${actualPoints} ${actualEndX},304" fill="url(#${chartId}-area)"/><g class="market-v14-candles">${candleMarkup}</g><polyline class="actual" points="${actualPoints}"/>${spikeMarker}${dropMarker}<circle class="market-v14-current-quote" cx="${actualEndX}" cy="${yFor(currentPrice).toFixed(1)}" r="5"/></g><polyline class="ema-line" points="${trendPoints}"/>${vwapPoints ? `<polyline class="vwap-line" points="${vwapPoints}"/>` : ""}<line class="market-v14-projection-divider" x1="${actualEndX}" y1="0" x2="${actualEndX}" y2="304"/><g class="market-v14-projection"><polyline class="market-v14-projection-line" points="${forecastPoints}"/>${forecastTicks}<circle class="market-v14-projection-end" cx="${forecastLast.x.toFixed(1)}" cy="${yFor(forecastLast.price).toFixed(1)}" r="4"/></g></svg><svg class="market-v19-interactive-svg" viewBox="0 0 1360 320" preserveAspectRatio="none" aria-hidden="true"></svg>
             <div class="market-v14-legend" aria-label="Chart series visibility">${[["price", "OHLC candles"], ["ema", `EMA ${emaPeriod}`], ["vwap", vwapValue > 0 ? "Session VWAP" : "VWAP awaiting volume"], ["band", "Volatility band"]].map(([key, label]) => `<button type="button" class="${key} ${seriesVisibility[key] ? "active" : ""}" data-market-series="${key}" aria-pressed="${seriesVisibility[key] ? "true" : "false"}" title="${seriesVisibility[key] ? "Hide" : "Show"} ${escapeHtml(label)}"><i></i>${escapeHtml(label)}</button>`).join("")}<span class="market-v14-projection-key" title="Statistical outlook; not a recorded quote"><i></i>Projection</span><span class="market-v14-direction-key" title="Candle direction"><i class="up"></i>Up<i class="down"></i>Down<i class="neutral"></i>Flat</span></div>
             <div class="market-v13-hover-guide" aria-hidden="true"></div><div class="market-v13-hover-dot" aria-hidden="true"></div><aside class="market-v13-tooltip" aria-live="polite"><small data-market-tooltip-symbol>${escapeHtml(selected.ticker || "MARKET")} · RECORDED CANDLE</small><strong data-market-tooltip-price>${money(currentPrice)}</strong><time data-market-tooltip-time>${new Date(lastRecordedAt).toLocaleString()}</time><span data-market-tooltip-change>Current verified price</span><em data-market-tooltip-detail>OHLC and volume available on hover</em></aside>
-            <div class="market-v13-chart-labels">${chartTimeLabels.map(label => `<span>${escapeHtml(label)}</span>`).join("")}</div>
+            <div class="market-v13-chart-labels">${Array.from({length: 5}, (_, index) => `<span data-market-chart-label>${escapeHtml(chartTimeLabels[Math.min(index, chartTimeLabels.length - 1)] || "")}</span>`).join("")}</div><div class="market-v19-navigator"><button type="button" data-market-chart-earlier aria-label="Move chart earlier">&#8592;</button><input type="range" min="0" max="1000" value="1000" data-market-chart-pan aria-label="Historical chart position"><button type="button" data-market-chart-later aria-label="Move chart later">&#8594;</button><output data-market-chart-window>Latest recorded window</output></div>
           </div>
           <footer class="market-v14-statbar market-v16-statbar"><span><small>OPEN</small><b>${money(open)}</b></span><span><small>${range} LOW</small><b>${money(low)}</b></span><span><small>${range} HIGH</small><b>${money(high)}</b></span><span><small>VWAP</small><b>${vwapValue > 0 ? money(vwapValue) : "No trades"}</b></span><span><small>MARKET CAP</small><b>${money(selectedMarketCap)}</b></span><span><small>CAP RANK</small><b>${selectedMarketCapRank ? `#${selectedMarketCapRank} of ${marketCapRankCount}` : "Index fund"}</b></span><span><small>YOUR POSITION</small><b>${owned ? `${owned.toLocaleString(undefined, {maximumFractionDigits: 4})} shares` : "Not held"}</b></span></footer>
           <div class="market-v13-analysis market-v14-analysis"><article><small>EMA TREND</small><strong class="${trendSlope >= 0 ? "up" : "down"}">${directionLabel}</strong><span>${trendSlope >= 0 ? "+" : ""}${trendSlope.toFixed(2)}% slope</span><p>${directionCopy}</p></article><article><small>PRICE VS VWAP</small><strong class="${priceVsVwap == null ? "" : priceVsVwap >= 0 ? "up" : "down"}">${priceVsVwap == null ? "Awaiting volume" : `${priceVsVwap >= 0 ? "+" : ""}${priceVsVwap.toFixed(2)}%`}</strong><span>${vwapValue > 0 ? money(vwapValue) : "No executed volume in range"}</span><p>Volume-weighted average of executed Ravenhood orders.</p></article><article class="range"><small>RANGE POSITION</small><strong>${rangePosition.toFixed(0)}th percentile</strong><i><b style="left:${rangePosition.toFixed(1)}%"></b></i><span>${money(low)} low · ${money(high)} high</span></article><article class="flow"><small>ORDER FLOW</small><strong>${tradedVolume.toLocaleString(undefined, {maximumFractionDigits: 2})} shares</strong><i><b style="width:${tradedVolume > 0 ? buyPressure.toFixed(1) : "0"}%"></b></i>${tradedVolume > 0 ? `<span class="market-v15-flow-split"><b class="buy">${buyPressure.toFixed(0)}% buy pressure</b><b class="sell">${sellPressure.toFixed(0)}% sell pressure</b><em>${tradeCount} trade${tradeCount === 1 ? "" : "s"}</em></span>` : `<span>No executed flow in this range</span>`}</article><article><small>REALIZED MOVEMENT</small><strong>${periodSwing.toFixed(2)}% range</strong><span>Volatility ${quoteVolatility.toFixed(2)}%</span><p>Largest step: <b class="up">+${largestSpike.pct.toFixed(2)}%</b> / <b class="down">${largestDrop.pct.toFixed(2)}%</b></p></article></div>
@@ -6333,8 +6373,7 @@ function renderMarketWorkspace() {
         <section class="market-v13-portfolio" id="marketPortfolioDesk"><header><div><small>YOUR RAVENHOOD ACCOUNT</small><h2>Portfolio command</h2><p>Every position, current value, and unrealized result in one view.</p></div><strong class="${profit >= 0 ? "up" : "down"}">${profit >= 0 ? "+" : ""}${money(profit)}</strong></header><div>${holdingRows}</div></section>
         <section class="market-v13-board market-v16-board"><header><div><small>FCX 24-HOUR BOARD</small><h2>Explore the exchange</h2></div><span>${listedSecurities.length} active listings</span></header><div>${exchangeListings.map(item => { const dayChange = Number(item.change_24h_percent || 0); const capRank = Number(item.market_cap_rank || 0); const halted = Boolean(Number(item.trading_halted || 0)); return `<button type="button" class="${item.ticker === selected.ticker ? "active" : ""} ${halted ? "halted" : ""}" data-market-ticker="${escapeHtml(item.ticker)}"><span><b>${escapeHtml(item.ticker)}</b><small>${escapeHtml(item.name)}</small></span><em class="market-v16-rank"><b>${halted ? "HALTED" : capRank ? `#${capRank}` : "INDEX"}</b><span>${escapeHtml(halted ? item.trading_halt_reason || "FEC review" : item.sector || "Market")}</span></em><strong class="market-v16-quote">${money(item.price)}<small class="${dayChange >= 0 ? "up" : "down"}">${dayChange >= 0 ? "+" : ""}${dayChange.toFixed(2)}% <i>24H</i></small><span>${money(item.market_cap || 0)} market cap</span></strong></button>`; }).join("")}</div></section>
       </section>
-      <aside class="market-v13-ticket"><header><small>${selectedDelisted ? "FEC DELISTING" : selectedTradingHalt ? "FEC TRADING HALT" : "ORDER ENTRY"}</small><h2>${escapeHtml(selected.ticker || "--")}</h2><p>${escapeHtml(selected.name || "")}</p><i class="${selectedTradeOpen ? "open" : ""}"></i></header><form data-market-order data-market-price="${currentPrice}" data-market-fee-percent="${Number(data.trade_fee_percent || 0)}" data-market-open="${selectedTradeOpen ? "true" : "false"}"><input type="hidden" name="ticker" value="${escapeHtml(selected.ticker || "")}"/><label>Action<select name="side"><option value="buy">Buy shares</option><option value="sell">Sell shares</option></select></label><label>Quantity<input name="quantity" type="number" min="0.000001" step="0.000001" placeholder="0.000000" required/></label><dl><div><dt>Market price</dt><dd>${money(currentPrice)}</dd></div><div><dt>Buying power</dt><dd>${money(cash)}</dd></div><div><dt>Shares owned</dt><dd>${owned.toLocaleString(undefined, {maximumFractionDigits: 6})}</dd></div><div><dt>Commission</dt><dd>${Number(data.trade_fee_percent || 0).toFixed(2)}%</dd></div></dl><div class="market-order-estimate" data-market-order-estimate aria-live="polite"><p><span>Stock subtotal</span><strong data-market-order-subtotal>${money(0)}</strong></p><p><span>Commission fee</span><strong data-market-order-fee>${money(0)}</strong></p><p class="total"><span data-market-order-total-label>Total cost</span><strong data-market-order-total>${money(0)}</strong></p><small data-market-order-guidance>Enter any whole or fractional share quantity.</small></div><button type="submit" class="market-primary" ${selectedTradingRestricted ? "disabled" : ""}>${selectedTradingRestricted ? selectedRestrictionLabel : selectedTradeOpen ? (selectedContinuousSession ? "Review 24-hour FCXV order" : "Review order") : "Queue for market open"}</button><small>${selectedTradingRestricted ? escapeHtml(selectedRestrictionNotice) : selectedTradeOpen ? (selectedContinuousSession ? "FCXV continuous trading is open. Your order executes against the current live FCXV quote." : "Live estimate only. The displayed price and commission are confirmed at execution.") : `The market is closed. Your order will wait until ${escapeHtml(nextMarketOpenLabel)} and execute at that session's first available live quote.`}</small></form>${marginTicket}<section><small>MARKET DIRECTION</small><b class="${trendSlope >= 0 ? "up" : "down"}">${escapeHtml(directionLabel)}</b><p>EMA ${emaPeriod} and executed-volume VWAP for the selected range.</p></section></aside>
-    </section>${renderMarketDialog(data, stockOptions)}
+    </section>${renderMarketDialog(data, stockOptions)}${tradeTicket}
   </main>`;
 }
 
@@ -6455,13 +6494,14 @@ function bindMarketWorkspace() {
   if (!app.dataset.marketActionsBound) {
     app.dataset.marketActionsBound = "true";
     app.addEventListener("click", async event => {
-      const control = event.target instanceof Element ? event.target.closest("[data-market-ticker],[data-market-range],[data-market-series],[data-market-order-filter],[data-market-cancel-request],[data-market-orders],[data-market-margin-desk],[data-market-margin-close],[data-market-margin-cancel],[data-market-dialog],[data-market-overview],[data-market-portfolio],[data-close-market-dialog],[data-close-market],[data-refresh-market],[data-market-theme],[data-create-market-account],[data-change-market-recipient]") : null;
+      const control = event.target instanceof Element ? event.target.closest("[data-market-ticker],[data-market-range],[data-market-series],[data-market-order-filter],[data-market-cancel-request],[data-market-orders],[data-market-margin-desk],[data-market-margin-close],[data-market-margin-cancel],[data-market-dialog],[data-market-overview],[data-market-portfolio],[data-close-market-dialog],[data-market-open-ticket],[data-market-close-ticket],[data-market-trade-mode],[data-market-equity-side],[data-market-size-mode],[data-market-quick-percent],[data-close-market],[data-refresh-market],[data-market-theme],[data-create-market-account],[data-change-market-recipient]") : null;
       if (!control || !app.contains(control)) return;
       event.preventDefault();
       event.stopPropagation();
       if (control.matches("[data-market-ticker]")) {
         const requestedTicker = String(control.dataset.marketTicker || "").toUpperCase();
         state.marketTicker = requestedTicker;
+        state.marketChartViewport = null;
         render();
         if (state.cache.wallstreet?.history_ticker === requestedTicker) return;
         try {
@@ -6479,6 +6519,7 @@ function bindMarketWorkspace() {
         const requestedRange = String(control.dataset.marketRange || "LIVE").toUpperCase();
         if (!["LIVE", "15M", "1H", "1D", "1W", "1M", "1Y"].includes(requestedRange)) return;
         state.marketRange = requestedRange;
+        state.marketChartViewport = null;
         render();
         if (state.cache.wallstreet?.history_range === requestedRange) return;
         try {
@@ -6507,6 +6548,60 @@ function bindMarketWorkspace() {
         state.marketOrderFilter = control.dataset.marketOrderFilter || "upcoming";
         render();
         requestAnimationFrame(() => $("#marketOrdersDesk")?.scrollIntoView({behavior: "smooth", block: "start"}));
+        return;
+      }
+      if (control.matches("[data-market-open-ticket]")) {
+        state.marketTradeTicketOpen = true;
+        state.marketTradeMode = "equity";
+        state.marketTradeDraft = {side: "buy", sizeMode: "shares", quantity: "", cashAmount: "", direction: "long", collateral: "", leverage: 5};
+        render();
+        requestAnimationFrame(() => $(".market-trade-sheet input:not([type=hidden])")?.focus());
+        return;
+      }
+      if (control.matches("[data-market-close-ticket]")) {
+        state.marketTradeTicketOpen = false;
+        render();
+        return;
+      }
+      if (control.matches("[data-market-trade-mode]")) {
+        state.marketTradeMode = control.dataset.marketTradeMode === "margin" ? "margin" : "equity";
+        render();
+        requestAnimationFrame(() => $(".market-trade-sheet input:not([type=hidden])")?.focus());
+        return;
+      }
+      if (control.matches("[data-market-equity-side]")) {
+        const form = control.closest("[data-market-order]");
+        if (!form) return;
+        const side = control.dataset.marketEquitySide === "sell" ? "sell" : "buy";
+        state.marketTradeDraft.side = side;
+        form.elements.side.value = side;
+        form.querySelectorAll("[data-market-equity-side]").forEach(button => button.classList.toggle("active", button.dataset.marketEquitySide === side));
+        form.dispatchEvent(new Event("change", {bubbles: true}));
+        return;
+      }
+      if (control.matches("[data-market-size-mode]")) {
+        const form = control.closest("[data-market-order]");
+        if (!form) return;
+        const mode = control.dataset.marketSizeMode === "cash" ? "cash" : "shares";
+        state.marketTradeDraft.sizeMode = mode;
+        form.elements.size_mode.value = mode;
+        form.querySelectorAll("[data-market-size-mode]").forEach(button => button.classList.toggle("active", button.dataset.marketSizeMode === mode));
+        form.querySelector(".market-trade-size-panel.shares")?.toggleAttribute("hidden", mode !== "shares");
+        form.querySelector(".market-trade-size-panel.cash")?.toggleAttribute("hidden", mode !== "cash");
+        form.querySelector(".market-trade-sizing")?.classList.toggle("cash-mode", mode === "cash");
+        form.querySelector(".market-trade-sizing")?.classList.toggle("share-mode", mode === "shares");
+        form.dispatchEvent(new Event("change", {bubbles: true}));
+        return;
+      }
+      if (control.matches("[data-market-quick-percent]")) {
+        const form = control.closest("[data-market-order]");
+        if (!form) return;
+        const percent = Math.max(0, Math.min(100, Number(control.dataset.marketQuickPercent || 0)));
+        const mode = String(form.elements.size_mode?.value || "shares");
+        const slider = mode === "cash" ? form.querySelector("[data-market-cash-slider]") : form.querySelector("[data-market-share-slider]");
+        if (!slider) return;
+        slider.value = String(Math.floor(Number(slider.max || 0) * percent / 100));
+        slider.dispatchEvent(new Event("input", {bubbles: true}));
         return;
       }
       if (control.matches("[data-market-cancel-request]")) {
@@ -6577,7 +6672,7 @@ function bindMarketWorkspace() {
       if (control.matches("[data-market-theme]")) { state.marketTheme = state.marketTheme === "light" ? "dark" : "light"; localStorage.setItem("rp.market.theme", state.marketTheme); render(); return; }
       if (control.matches("[data-refresh-market]")) { state.cache.wallstreet = await fetchWallstreetData(); render(); return; }
       if (control.matches("[data-create-market-account]")) { await api("/api/wallstreet/account", {method:"POST", body:JSON.stringify({})}); toast("Ravenhood account opened"); await loadAppData("wallstreet"); render(); return; }
-      if (control.matches("[data-close-market]")) { if (marketLiveRefreshTimer) clearInterval(marketLiveRefreshTimer); marketLiveRefreshTimer = null; state.activeApp = null; state.marketDialog = null; state.marketTransferRecipient = null; state.marketPromoSuccess = null; render(); await loadSession(); }
+      if (control.matches("[data-close-market]")) { if (marketLiveRefreshTimer) clearInterval(marketLiveRefreshTimer); marketLiveRefreshTimer = null; state.activeApp = null; state.marketDialog = null; state.marketTradeTicketOpen = false; state.marketTransferRecipient = null; state.marketPromoSuccess = null; render(); await loadSession(); }
     });
     app.addEventListener("submit", async event => {
       const form = event.target instanceof Element ? event.target.closest("[data-market-promo]") : null;
@@ -6615,25 +6710,142 @@ function bindMarketWorkspace() {
   }
   const interactivePriceChart = $("[data-market-price-chart]");
   if (interactivePriceChart) {
+    let sourceChartPoints = [];
+    let forecastPrices = [];
+    try { sourceChartPoints = JSON.parse(interactivePriceChart.dataset.marketPoints || "[]"); } catch (_) { sourceChartPoints = []; }
+    try { forecastPrices = JSON.parse(interactivePriceChart.dataset.marketForecast || "[]"); } catch (_) { forecastPrices = []; }
     let chartPoints = [];
-    try { chartPoints = JSON.parse(interactivePriceChart.dataset.marketPoints || "[]"); } catch (_) { chartPoints = []; }
     const visibleSeries = state.marketSeriesVisibility || {price: true, ema: true, vwap: true, band: true};
     const activeSeries = ["price", "ema", "vwap", "band"].filter(key => visibleSeries[key] !== false);
     const focusedSeries = activeSeries.length === 1 ? activeSeries[0] : "price";
     const emaPeriod = Number(interactivePriceChart.dataset.marketEmaPeriod || 12);
+    const chartKey = String(interactivePriceChart.dataset.marketChartKey || "market:LIVE");
+    const dynamicSvg = $(".market-v19-interactive-svg", interactivePriceChart);
+    const zoomControl = $("[data-market-chart-zoom]");
+    const panControl = $("[data-market-chart-pan]", interactivePriceChart);
+    const zoomLabel = $("[data-market-chart-zoom-label]");
+    const windowLabel = $("[data-market-chart-window]", interactivePriceChart);
+    const chartLabels = [...interactivePriceChart.querySelectorAll("[data-market-chart-label]")];
+    const yAxisLabels = [...interactivePriceChart.querySelectorAll(".market-v13-y-axis span")];
     const tooltip = $(".market-v13-tooltip", interactivePriceChart);
     const tooltipSymbol = $("[data-market-tooltip-symbol]", interactivePriceChart);
     const tooltipPrice = $("[data-market-tooltip-price]", interactivePriceChart);
     const tooltipTime = $("[data-market-tooltip-time]", interactivePriceChart);
     const tooltipChange = $("[data-market-tooltip-change]", interactivePriceChart);
     const tooltipDetail = $("[data-market-tooltip-detail]", interactivePriceChart);
+    if (!state.marketChartViewport || state.marketChartViewport.key !== chartKey) state.marketChartViewport = {key: chartKey, zoom: 1, pan: 1};
+    const maxZoom = Math.max(1, Math.min(12, sourceChartPoints.length / 6));
+    state.marketChartViewport.zoom = Math.max(1, Math.min(maxZoom, Number(state.marketChartViewport.zoom || 1)));
+    state.marketChartViewport.pan = Math.max(0, Math.min(1, Number(state.marketChartViewport.pan ?? 1)));
+    if (zoomControl) zoomControl.max = String(maxZoom);
+
+    const markChartInteraction = () => { state.marketChartInteractionUntil = Date.now() + 2200; };
+    const moneyAxis = value => Number(value || 0).toLocaleString(undefined, {style: "currency", currency: "USD", minimumFractionDigits: value >= 1000 ? 0 : 2, maximumFractionDigits: value >= 1000 ? 0 : 2});
+    const formatChartDate = (value, span) => {
+      const date = new Date(Number(value));
+      if (!Number.isFinite(date.getTime())) return "—";
+      if (span >= 1000 * 60 * 60 * 24 * 120) return date.toLocaleDateString([], {month: "short", year: "numeric"});
+      if (span >= 1000 * 60 * 60 * 36) return date.toLocaleDateString([], {month: "short", day: "numeric", year: "numeric"});
+      return date.toLocaleString([], {month: "short", day: "numeric", hour: "numeric", minute: "2-digit"});
+    };
+    const viewportMetrics = () => {
+      const total = sourceChartPoints.length;
+      const zoom = Math.max(1, Math.min(maxZoom, Number(state.marketChartViewport?.zoom || 1)));
+      const visibleCount = Math.max(6, Math.min(total, Math.ceil(total / zoom)));
+      const maxStart = Math.max(0, total - visibleCount);
+      const pan = Math.max(0, Math.min(1, Number(state.marketChartViewport?.pan ?? 1)));
+      const start = Math.round(maxStart * pan);
+      return {total, zoom, visibleCount, maxStart, start, end: Math.min(total, start + visibleCount), pan};
+    };
+    const renderChartViewport = () => {
+      if (!dynamicSvg || !sourceChartPoints.length) return [];
+      const metrics = viewportMetrics();
+      const visible = sourceChartPoints.slice(metrics.start, metrics.end);
+      const atLatest = metrics.end >= metrics.total;
+      const left = 42;
+      const recordedRight = atLatest && forecastPrices.length ? 1035 : 1320;
+      const priceTop = 14;
+      const priceBottom = 224;
+      const volumeTop = 252;
+      const volumeBottom = 302;
+      const firstTime = Number(visible[0]?.time || 0);
+      const lastTime = Number(visible.at(-1)?.time || firstTime + 1);
+      const timeSpan = Math.max(1, lastTime - firstTime);
+      const xFor = (point, index) => {
+        const time = Number(point?.time || 0);
+        const ratio = timeSpan > 1 && time > 0 ? (time - firstTime) / timeSpan : index / Math.max(1, visible.length - 1);
+        return left + Math.max(0, Math.min(1, ratio)) * (recordedRight - left);
+      };
+      const priceValues = visible.flatMap(point => [point.open, point.high, point.low, point.price, point.ema, point.upper, point.lower, point.vwap]).map(Number).filter(value => Number.isFinite(value) && value > 0);
+      if (atLatest) priceValues.push(...forecastPrices.map(Number).filter(value => Number.isFinite(value) && value > 0));
+      let priceMin = Math.min(...priceValues);
+      let priceMax = Math.max(...priceValues);
+      if (!Number.isFinite(priceMin) || !Number.isFinite(priceMax)) { priceMin = 0; priceMax = 1; }
+      const pricePadding = Math.max((priceMax - priceMin) * .09, Math.abs(priceMax || 1) * .006, .01);
+      priceMin = Math.max(0, priceMin - pricePadding);
+      priceMax += pricePadding;
+      const yFor = value => priceBottom - (Math.max(priceMin, Math.min(priceMax, Number(value || priceMin))) - priceMin) / Math.max(.000001, priceMax - priceMin) * (priceBottom - priceTop);
+      const maxVolume = Math.max(0, ...visible.map(point => Number(point.volume || 0)));
+      const rendered = visible.map((point, index) => ({
+        ...point,
+        x: xFor(point, index),
+        y: yFor(point.price),
+        yEma: yFor(point.ema || point.price),
+        yVwap: Number(point.vwap || 0) > 0 ? yFor(point.vwap) : null,
+        yBand: yFor((Number(point.upper || point.price) + Number(point.lower || point.price)) / 2),
+      }));
+      const pricePoints = rendered.map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(" ");
+      const emaPoints = rendered.map(point => `${point.x.toFixed(1)},${point.yEma.toFixed(1)}`).join(" ");
+      const vwapPoints = rendered.filter(point => point.yVwap != null).map(point => `${point.x.toFixed(1)},${point.yVwap.toFixed(1)}`).join(" ");
+      const bandPoints = [...rendered.map(point => `${point.x.toFixed(1)},${yFor(point.upper || point.price).toFixed(1)}`), ...rendered.map(point => `${point.x.toFixed(1)},${yFor(point.lower || point.price).toFixed(1)}`).reverse()].join(" ");
+      const candleWidth = Math.max(2.4, Math.min(13, (recordedRight - left) / Math.max(1, rendered.length) * .52));
+      const candleMarkup = rendered.map(point => {
+        const openY = yFor(point.open || point.price);
+        const closeY = yFor(point.price);
+        const highY = yFor(point.high || point.price);
+        const lowY = yFor(point.low || point.price);
+        const bodyY = Math.min(openY, closeY);
+        const direction = point.price > point.open ? "up" : point.price < point.open ? "down" : "neutral";
+        return `<g class="market-v14-candle ${direction}"><line class="wick" x1="${point.x.toFixed(1)}" y1="${highY.toFixed(1)}" x2="${point.x.toFixed(1)}" y2="${lowY.toFixed(1)}"/><rect class="body" x="${(point.x - candleWidth / 2).toFixed(1)}" y="${bodyY.toFixed(1)}" width="${candleWidth.toFixed(1)}" height="${Math.max(2.2, Math.abs(closeY - openY)).toFixed(1)}" rx=".8"/></g>`;
+      }).join("");
+      const volumeMarkup = rendered.map(point => {
+        const height = maxVolume > 0 ? Math.max(1.5, Number(point.volume || 0) / maxVolume * (volumeBottom - volumeTop)) : 1.5;
+        const direction = point.price >= point.open ? "up" : "down";
+        return `<rect class="market-v19-volume-bar ${direction}" x="${(point.x - candleWidth / 2).toFixed(1)}" y="${(volumeBottom - height).toFixed(1)}" width="${candleWidth.toFixed(1)}" height="${height.toFixed(1)}" rx=".7"/>`;
+      }).join("");
+      let projectionMarkup = "";
+      if (atLatest && forecastPrices.length) {
+        const projectionStart = rendered.at(-1);
+        const projectionEnd = 1330;
+        const projection = [Number(projectionStart?.price || 0), ...forecastPrices.map(Number).filter(Number.isFinite)].map((price, index, rows) => ({price, x: recordedRight + index / Math.max(1, rows.length - 1) * (projectionEnd - recordedRight)}));
+        const projectionPoints = projection.map(point => `${point.x.toFixed(1)},${yFor(point.price).toFixed(1)}`).join(" ");
+        const ticks = projection.slice(1, -1).map(point => { const y = yFor(point.price); return `<line class="market-v14-projection-tick" x1="${point.x.toFixed(1)}" y1="${(y - 4).toFixed(1)}" x2="${point.x.toFixed(1)}" y2="${(y + 4).toFixed(1)}"/>`; }).join("");
+        projectionMarkup = `<rect class="market-v14-projection-zone" x="${recordedRight}" y="0" width="${projectionEnd - recordedRight}" height="${volumeBottom}" fill="url(#market-v19-outlook)"/><line class="market-v14-projection-divider" x1="${recordedRight}" y1="0" x2="${recordedRight}" y2="${volumeBottom}"/><g class="market-v14-projection"><polyline class="market-v14-projection-line" points="${projectionPoints}"/>${ticks}<circle class="market-v14-projection-end" cx="${projectionEnd}" cy="${yFor(projection.at(-1).price).toFixed(1)}" r="4"/></g>`;
+      }
+      dynamicSvg.innerHTML = `<defs><linearGradient id="market-v19-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".24"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient><linearGradient id="market-v19-band" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#57dca8" stop-opacity=".16"/><stop offset="1" stop-color="#57dca8" stop-opacity=".025"/></linearGradient><linearGradient id="market-v19-outlook" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b89cff" stop-opacity=".02"/><stop offset="1" stop-color="#b89cff" stop-opacity=".12"/></linearGradient></defs>${projectionMarkup}<polygon class="trend-band" points="${bandPoints}" fill="url(#market-v19-band)"/><g class="market-series-price"><polygon class="area" points="${left},${priceBottom} ${pricePoints} ${recordedRight},${priceBottom}" fill="url(#market-v19-area)"/><g class="market-v14-candles">${candleMarkup}</g><polyline class="actual" points="${pricePoints}"/><circle class="market-v14-current-quote" cx="${recordedRight}" cy="${rendered.at(-1).y.toFixed(1)}" r="5"/></g><polyline class="ema-line" points="${emaPoints}"/>${vwapPoints ? `<polyline class="vwap-line" points="${vwapPoints}"/>` : ""}<line class="market-v19-volume-divider" x1="${left}" y1="${volumeTop - 8}" x2="${recordedRight}" y2="${volumeTop - 8}"/><text class="market-v19-volume-label" x="${left}" y="${volumeTop - 14}">VOLUME${maxVolume > 0 ? ` · ${maxVolume.toLocaleString(undefined, {maximumFractionDigits: 0})} MAX` : " · AWAITING EXECUTIONS"}</text><g class="market-v19-volume">${volumeMarkup}</g>`;
+      chartPoints = rendered;
+      interactivePriceChart.classList.add("is-navigable");
+      if (yAxisLabels[0]) yAxisLabels[0].textContent = moneyAxis(priceMax);
+      if (yAxisLabels[1]) yAxisLabels[1].textContent = moneyAxis((priceMax + priceMin) / 2);
+      if (yAxisLabels[2]) yAxisLabels[2].textContent = moneyAxis(priceMin);
+      const labelIndexes = [0, .25, .5, .75, 1].map(ratio => Math.min(rendered.length - 1, Math.max(0, Math.round((rendered.length - 1) * ratio))));
+      chartLabels.forEach((label, index) => { label.textContent = index === 4 && atLatest && forecastPrices.length ? "STATISTICAL OUTLOOK" : formatChartDate(rendered[labelIndexes[index]]?.time, timeSpan); });
+      if (zoomControl) zoomControl.value = String(metrics.zoom);
+      if (zoomLabel) zoomLabel.textContent = `${metrics.zoom.toFixed(1)}×`;
+      if (panControl) { panControl.disabled = metrics.maxStart === 0; panControl.value = String(Math.round(metrics.pan * 1000)); }
+      if (windowLabel) windowLabel.textContent = `${formatChartDate(firstTime, timeSpan)} — ${formatChartDate(lastTime, timeSpan)}${atLatest ? " · latest" : ""}`;
+      return rendered;
+    };
+    renderChartViewport();
+
     const hideChartPoint = () => interactivePriceChart.classList.remove("is-hovering");
     const showChartPoint = (point, index) => {
       if (!point || !tooltip || !activeSeries.length) { hideChartPoint(); return; }
       const rect = interactivePriceChart.getBoundingClientRect();
-      const x = Number(point.x || 0) / 1360 * rect.width;
+      const svgRect = dynamicSvg?.getBoundingClientRect() || rect;
+      const x = svgRect.left - rect.left + Number(point.x || 0) / 1360 * svgRect.width;
       const focusedY = focusedSeries === "ema" ? point.yEma : focusedSeries === "vwap" && point.yVwap != null ? point.yVwap : focusedSeries === "band" ? point.yBand : point.y;
-      const y = 18 + Number(focusedY || point.y || 0) / 320 * Math.max(1, rect.height - 50);
+      const y = svgRect.top - rect.top + Number(focusedY || point.y || 0) / 320 * svgRect.height;
       interactivePriceChart.style.setProperty("--market-hover-x", `${x}px`);
       interactivePriceChart.style.setProperty("--market-hover-y", `${y}px`);
       interactivePriceChart.dataset.marketHoverIndex = String(index);
@@ -6665,8 +6877,8 @@ function bindMarketWorkspace() {
       tooltip.classList.toggle("tip-below", y < tooltipClearance);
     };
     const pointFromPointer = event => {
-      if (!chartPoints.length) return;
-      const rect = interactivePriceChart.getBoundingClientRect();
+      if (!chartPoints.length || interactivePriceChart.classList.contains("is-panning")) return;
+      const rect = dynamicSvg?.getBoundingClientRect() || interactivePriceChart.getBoundingClientRect();
       const chartX = (event.clientX - rect.left) / Math.max(1, rect.width) * 1360;
       if (chartX < 14 || chartX > 1346) { hideChartPoint(); return; }
       let nearestIndex = 0;
@@ -6675,12 +6887,72 @@ function bindMarketWorkspace() {
       }
       showChartPoint(chartPoints[nearestIndex], nearestIndex);
     };
-    interactivePriceChart.addEventListener("pointermove", pointFromPointer);
-    interactivePriceChart.addEventListener("pointerdown", pointFromPointer);
+    const setZoom = (nextZoom, anchorRatio = .5) => {
+      const prior = viewportMetrics();
+      const anchorIndex = prior.start + prior.visibleCount * Math.max(0, Math.min(1, anchorRatio));
+      state.marketChartViewport.zoom = Math.max(1, Math.min(maxZoom, Number(nextZoom || 1)));
+      const next = viewportMetrics();
+      const requestedStart = Math.max(0, Math.min(next.maxStart, anchorIndex - next.visibleCount * anchorRatio));
+      state.marketChartViewport.pan = next.maxStart > 0 ? requestedStart / next.maxStart : 1;
+      markChartInteraction();
+      hideChartPoint();
+      renderChartViewport();
+    };
+    const setPan = value => {
+      state.marketChartViewport.pan = Math.max(0, Math.min(1, Number(value || 0)));
+      markChartInteraction();
+      hideChartPoint();
+      renderChartViewport();
+    };
+    $("[data-market-chart-zoom-in]")?.addEventListener("click", () => setZoom(Number(state.marketChartViewport.zoom || 1) + .5));
+    $("[data-market-chart-zoom-out]")?.addEventListener("click", () => setZoom(Number(state.marketChartViewport.zoom || 1) - .5));
+    $("[data-market-chart-reset]")?.addEventListener("click", () => { state.marketChartViewport = {key: chartKey, zoom: 1, pan: 1}; markChartInteraction(); renderChartViewport(); });
+    zoomControl?.addEventListener("input", event => setZoom(Number(event.currentTarget.value || 1)));
+    panControl?.addEventListener("input", event => setPan(Number(event.currentTarget.value || 0) / 1000));
+    $("[data-market-chart-earlier]", interactivePriceChart)?.addEventListener("click", () => setPan(Number(state.marketChartViewport.pan || 0) - .12));
+    $("[data-market-chart-later]", interactivePriceChart)?.addEventListener("click", () => setPan(Number(state.marketChartViewport.pan || 0) + .12));
+    interactivePriceChart.addEventListener("wheel", event => {
+      event.preventDefault();
+      const rect = interactivePriceChart.getBoundingClientRect();
+      const anchor = (event.clientX - rect.left) / Math.max(1, rect.width);
+      const delta = event.deltaY < 0 ? .5 : -.5;
+      setZoom(Number(state.marketChartViewport.zoom || 1) + delta, anchor);
+    }, {passive: false});
+    let dragState = null;
+    interactivePriceChart.addEventListener("pointerdown", event => {
+      if (event.target instanceof Element && event.target.closest("button,input")) return;
+      if (event.pointerType !== "mouse" || event.button === 0) {
+        dragState = {pointerId: event.pointerId, x: event.clientX, pan: Number(state.marketChartViewport.pan || 0)};
+        interactivePriceChart.setPointerCapture?.(event.pointerId);
+        interactivePriceChart.classList.add("is-panning");
+        markChartInteraction();
+        hideChartPoint();
+      }
+    });
+    interactivePriceChart.addEventListener("pointermove", event => {
+      if (!dragState || event.pointerId !== dragState.pointerId) { pointFromPointer(event); return; }
+      const rect = interactivePriceChart.getBoundingClientRect();
+      const metrics = viewportMetrics();
+      if (!metrics.maxStart) return;
+      const movementScale = Math.max(1, metrics.total / Math.max(1, metrics.visibleCount));
+      setPan(dragState.pan - (event.clientX - dragState.x) / Math.max(1, rect.width) * movementScale);
+    });
+    const endChartDrag = event => {
+      if (!dragState || event.pointerId !== dragState.pointerId) return;
+      interactivePriceChart.releasePointerCapture?.(event.pointerId);
+      dragState = null;
+      interactivePriceChart.classList.remove("is-panning");
+      markChartInteraction();
+    };
+    interactivePriceChart.addEventListener("pointerup", endChartDrag);
+    interactivePriceChart.addEventListener("pointercancel", endChartDrag);
     interactivePriceChart.addEventListener("pointerleave", hideChartPoint);
     interactivePriceChart.addEventListener("focus", () => showChartPoint(chartPoints.at(-1), chartPoints.length - 1));
     interactivePriceChart.addEventListener("blur", hideChartPoint);
     interactivePriceChart.addEventListener("keydown", event => {
+      if (["+", "="].includes(event.key)) { event.preventDefault(); setZoom(Number(state.marketChartViewport.zoom || 1) + .5); return; }
+      if (event.key === "-") { event.preventDefault(); setZoom(Number(state.marketChartViewport.zoom || 1) - .5); return; }
+      if (event.key === "0" || event.key === "Home") { event.preventDefault(); state.marketChartViewport = {key: chartKey, zoom: 1, pan: 1}; renderChartViewport(); return; }
       if (!["ArrowLeft", "ArrowRight"].includes(event.key) || !chartPoints.length) return;
       event.preventDefault();
       const currentIndex = Number(interactivePriceChart.dataset.marketHoverIndex ?? chartPoints.length - 1);
@@ -6691,11 +6963,25 @@ function bindMarketWorkspace() {
   $("[data-market-recipient-search]")?.addEventListener("submit", async event => { event.preventDefault(); const civ=String(new FormData(event.currentTarget).get("civ")||"").trim(); const result=await api(`/api/wallstreet/recipient?civ=${encodeURIComponent(civ)}`); state.marketTransferRecipient=result.recipient; render(); });
   const marketOrderForm = $("[data-market-order]");
   if (marketOrderForm) {
+    const shareSlider = marketOrderForm.querySelector("[data-market-share-slider]");
+    const cashSlider = marketOrderForm.querySelector("[data-market-cash-slider]");
     const updateMarketOrderEstimate = () => {
       const price = Math.max(0, Number(marketOrderForm.dataset.marketPrice || 0));
       const feePercent = Math.max(0, Number(marketOrderForm.dataset.marketFeePercent || 0));
-      const quantity = Math.max(0, Number(marketOrderForm.elements.quantity?.value || 0));
       const side = String(marketOrderForm.elements.side?.value || "buy").toLowerCase();
+      const sizeMode = String(marketOrderForm.elements.size_mode?.value || "shares").toLowerCase();
+      const ownedShares = Math.max(0, Number(marketOrderForm.dataset.marketOwned || Number.POSITIVE_INFINITY));
+      const buyingPower = Math.max(0, Number(marketOrderForm.dataset.marketCash || Number.POSITIVE_INFINITY));
+      const shareLimit = Math.max(0, Number(side === "sell" ? marketOrderForm.dataset.marketSellShareLimit : marketOrderForm.dataset.marketBuyShareLimit) || 0);
+      const cashLimit = Math.max(0, Number(side === "sell" ? marketOrderForm.dataset.marketSellCashLimit : marketOrderForm.dataset.marketBuyCashLimit) || 0);
+      if (shareSlider) shareSlider.max = String(shareLimit);
+      if (cashSlider) cashSlider.max = String(cashLimit);
+      const requestedCash = Math.max(0, Number(marketOrderForm.elements.order_cash?.value || 0));
+      let quantity = Math.max(0, Number(marketOrderForm.elements.quantity?.value || 0));
+      if (sizeMode === "cash" && price > 0) {
+        const rate = side === "sell" ? Math.max(.000001, 1 - feePercent / 100) : 1 + feePercent / 100;
+        quantity = requestedCash / (price * rate);
+      }
       const rawSubtotal = price * quantity;
       const rawFee = rawSubtotal * feePercent / 100;
       const rawFinalAmount = Math.max(0, side === "sell" ? rawSubtotal - rawFee : rawSubtotal + rawFee);
@@ -6706,26 +6992,78 @@ function bindMarketWorkspace() {
       const subtotalNode = $("[data-market-order-subtotal]", marketOrderForm);
       const feeNode = $("[data-market-order-fee]", marketOrderForm);
       const totalNode = $("[data-market-order-total]", marketOrderForm);
+      const sharesNode = $("[data-market-order-shares]", marketOrderForm);
       const labelNode = $("[data-market-order-total-label]", marketOrderForm);
       const guidanceNode = $("[data-market-order-guidance]", marketOrderForm);
       const submitButton = marketOrderForm.querySelector('button[type="submit"]');
+      const overLimit = side === "sell" ? quantity > ownedShares + .0000001 : rawFinalAmount > buyingPower + .005;
+      marketOrderForm.dataset.marketCalculatedQuantity = quantity > 0 ? quantity.toFixed(8).replace(/0+$/, "").replace(/\.$/, "") : "0";
+      if (sharesNode) sharesNode.textContent = quantity.toLocaleString(undefined, {maximumFractionDigits: 6});
       if (subtotalNode) subtotalNode.textContent = belowMinimum ? marketEstimateMoney(rawSubtotal) : money(subtotal);
       if (feeNode) feeNode.textContent = belowMinimum ? marketEstimateMoney(rawFee) : money(fee);
       if (totalNode) totalNode.textContent = belowMinimum ? marketEstimateMoney(rawFinalAmount) : money(finalAmount);
       if (labelNode) labelNode.textContent = side === "sell" ? "Estimated proceeds" : "Total cost";
       if (guidanceNode) {
         guidanceNode.textContent = belowMinimum
-          ? "Fractional estimate shown precisely. Increase the quantity to reach the $0.01 minimum order value."
-          : quantity > 0
-            ? `${quantity.toLocaleString(undefined, {maximumFractionDigits: 6})} share${quantity === 1 ? "" : "s"} selected.`
-            : "Enter any whole or fractional share quantity.";
+          ? "Fractional estimate shown precisely. Increase the order to reach the $0.01 minimum value."
+          : overLimit
+            ? side === "sell" ? "This order exceeds the shares currently held." : "This order exceeds settled Ravenhood buying power."
+            : quantity > 0
+              ? `${quantity.toLocaleString(undefined, {maximumFractionDigits: 6})} share${quantity === 1 ? "" : "s"} selected${sizeMode === "cash" ? ` from ${money(requestedCash)}` : ""}.`
+              : "Choose shares or a cash amount to build the order.";
       }
-      if (submitButton) submitButton.disabled = quantity <= 0 || belowMinimum;
-      marketOrderForm.querySelector("[data-market-order-estimate]")?.classList.toggle("sell", side === "sell");
-      marketOrderForm.querySelector("[data-market-order-estimate]")?.classList.toggle("below-minimum", belowMinimum);
+      if (submitButton) submitButton.disabled = marketOrderForm.dataset.marketRestricted === "true" || quantity <= 0 || belowMinimum || overLimit;
+      const receipt = marketOrderForm.querySelector(".market-trade-receipt");
+      marketOrderForm.classList.toggle("sell-order", side === "sell");
+      receipt?.classList.toggle("sell", side === "sell");
+      receipt?.classList.toggle("below-minimum", belowMinimum);
+      receipt?.classList.toggle("over-limit", overLimit);
+      marketOrderForm.querySelectorAll("[data-market-slider-limit]").forEach(node => {
+        const cashPanel = node.closest(".cash");
+        node.textContent = cashPanel ? `${money(cashLimit)} available` : `${shareLimit.toLocaleString()} whole shares available`;
+      });
     };
-    marketOrderForm.elements.quantity?.addEventListener("input", updateMarketOrderEstimate);
-    marketOrderForm.elements.side?.addEventListener("change", updateMarketOrderEstimate);
+    const rememberMarketDraft = () => {
+      state.marketTradeDraft = {
+        ...(state.marketTradeDraft || {}),
+        side: String(marketOrderForm.elements.side?.value || "buy"),
+        sizeMode: String(marketOrderForm.elements.size_mode?.value || "shares"),
+        quantity: String(marketOrderForm.elements.quantity?.value || ""),
+        cashAmount: String(marketOrderForm.elements.order_cash?.value || ""),
+      };
+    };
+    marketOrderForm.elements.quantity?.addEventListener("input", () => {
+      if (shareSlider) shareSlider.value = String(Math.max(0, Math.min(Number(shareSlider.max || 0), Math.floor(Number(marketOrderForm.elements.quantity.value || 0)))));
+      rememberMarketDraft();
+      updateMarketOrderEstimate();
+    });
+    marketOrderForm.elements.order_cash?.addEventListener("input", () => {
+      if (cashSlider) cashSlider.value = String(Math.max(0, Math.min(Number(cashSlider.max || 0), Math.floor(Number(marketOrderForm.elements.order_cash.value || 0)))));
+      rememberMarketDraft();
+      updateMarketOrderEstimate();
+    });
+    shareSlider?.addEventListener("input", () => {
+      if (marketOrderForm.elements.quantity) marketOrderForm.elements.quantity.value = shareSlider.value;
+      rememberMarketDraft();
+      updateMarketOrderEstimate();
+    });
+    cashSlider?.addEventListener("input", () => {
+      if (marketOrderForm.elements.order_cash) marketOrderForm.elements.order_cash.value = cashSlider.value;
+      rememberMarketDraft();
+      updateMarketOrderEstimate();
+    });
+    marketOrderForm.addEventListener("change", () => {
+      const currentSide = String(marketOrderForm.elements.side?.value || "buy");
+      const currentMode = String(marketOrderForm.elements.size_mode?.value || "shares");
+      const shareMaximum = Number(currentSide === "sell" ? marketOrderForm.dataset.marketSellShareLimit : marketOrderForm.dataset.marketBuyShareLimit) || 0;
+      const cashMaximum = Number(currentSide === "sell" ? marketOrderForm.dataset.marketSellCashLimit : marketOrderForm.dataset.marketBuyCashLimit) || 0;
+      if (shareSlider) { shareSlider.max = String(shareMaximum); shareSlider.value = String(Math.min(Number(shareSlider.value || 0), shareMaximum)); }
+      if (cashSlider) { cashSlider.max = String(cashMaximum); cashSlider.value = String(Math.min(Number(cashSlider.value || 0), cashMaximum)); }
+      marketOrderForm.querySelector(".market-trade-size-panel.shares")?.toggleAttribute("hidden", currentMode !== "shares");
+      marketOrderForm.querySelector(".market-trade-size-panel.cash")?.toggleAttribute("hidden", currentMode !== "cash");
+      rememberMarketDraft();
+      updateMarketOrderEstimate();
+    });
     updateMarketOrderEstimate();
   }
   const marginOrderForm = $("[data-market-margin-order]");
@@ -6769,17 +7107,27 @@ function bindMarketWorkspace() {
       marginOrderForm.classList.toggle("short", direction === "short");
     };
     marginOrderForm.addEventListener("input", updateMarginEstimate);
-    marginOrderForm.addEventListener("change", updateMarginEstimate);
+    const rememberMarginDraft = () => {
+      state.marketTradeDraft = {
+        ...(state.marketTradeDraft || {}),
+        direction: String(new FormData(marginOrderForm).get("direction") || "long"),
+        collateral: String(marginOrderForm.elements.collateral?.value || ""),
+        leverage: Number(marginOrderForm.elements.leverage?.value || 5),
+      };
+    };
+    marginOrderForm.addEventListener("input", rememberMarginDraft);
+    marginOrderForm.addEventListener("change", () => { rememberMarginDraft(); updateMarginEstimate(); });
     marginOrderForm.addEventListener("submit", async event => {
       event.preventDefault();
       const button = marginOrderForm.querySelector('button[type="submit"]');
       if (button?.disabled) return;
       const body = Object.fromEntries(new FormData(marginOrderForm));
-      if (!window.confirm(`Open a ${Number(body.leverage || 1)}x ${String(body.direction || "long").toUpperCase()} with ${money(body.collateral)} isolated collateral?`)) return;
       if (button) button.disabled = true;
       try {
         const result = await api("/api/wallstreet/margin/positions", {method: "POST", body, confirm: false});
         toast(result.status === "queued" ? "Leveraged position queued for market open" : "Leveraged position opened");
+        state.marketTradeTicketOpen = false;
+        state.marketTradeDraft = {side: "buy", sizeMode: "shares", quantity: "", cashAmount: "", direction: "long", collateral: "", leverage: 5};
         state.cache.wallstreet = await fetchWallstreetData();
         render();
         requestAnimationFrame(() => $("#marketMarginDesk")?.scrollIntoView({behavior: "smooth", block: "start"}));
@@ -6790,7 +7138,36 @@ function bindMarketWorkspace() {
     });
     updateMarginEstimate();
   }
-  $("[data-market-order]")?.addEventListener("submit", async event => { event.preventDefault(); const form=event.currentTarget,button=form.querySelector('button[type="submit"],button.market-primary'); if(button?.disabled)return; const body=Object.fromEntries(new FormData(form)); if(button)button.disabled=true; try { const result=await api("/api/wallstreet/orders",{method:"POST",body:JSON.stringify(body)}); toast(result.status==="queued"?"Order queued for market open":"Order executed"); if(result.status==="queued")state.marketOrderFilter="upcoming"; await loadAppData("wallstreet"); render(); if(result.status==="queued")requestAnimationFrame(()=>$("#marketOrdersDesk")?.scrollIntoView({behavior:"smooth",block:"start"})); } catch(error) { if(button)button.disabled=false; toast(error.message); } });
+  $("[data-market-order]")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector('button[type="submit"],button.market-primary');
+    if (button?.disabled) return;
+    const quantity = Number(form.dataset.marketCalculatedQuantity || form.elements.quantity?.value || 0);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      toast("Choose a valid share quantity or cash amount");
+      return;
+    }
+    const body = {
+      ticker: String(form.elements.ticker?.value || ""),
+      side: String(form.elements.side?.value || "buy"),
+      quantity,
+    };
+    if (button) button.disabled = true;
+    try {
+      const result = await api("/api/wallstreet/orders", {method: "POST", body: JSON.stringify(body)});
+      toast(result.status === "queued" ? "Order queued for market open" : "Order executed");
+      if (result.status === "queued") state.marketOrderFilter = "upcoming";
+      state.marketTradeTicketOpen = false;
+      state.marketTradeDraft = {side: "buy", sizeMode: "shares", quantity: "", cashAmount: "", direction: "long", collateral: "", leverage: 5};
+      await loadAppData("wallstreet");
+      render();
+      if (result.status === "queued") requestAnimationFrame(() => $("#marketOrdersDesk")?.scrollIntoView({behavior: "smooth", block: "start"}));
+    } catch (error) {
+      if (button) button.disabled = false;
+      toast(error.message);
+    }
+  });
   $("[data-market-cash]")?.addEventListener("submit", async event => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -6820,7 +7197,7 @@ function bindMarketWorkspace() {
   $("[data-market-transfer]")?.addEventListener("submit", async event => { event.preventDefault(); const body=Object.fromEntries(new FormData(event.currentTarget)); await api("/api/wallstreet/transfers",{method:"POST",body:JSON.stringify(body)}); toast(`Shares transferred to CIV ${body.recipient_civ_number}`); state.marketDialog=null; state.marketTransferRecipient=null; await loadAppData("wallstreet"); render(); });
   if (marketLiveRefreshTimer) clearInterval(marketLiveRefreshTimer);
   marketLiveRefreshTimer = setInterval(async () => {
-    if (state.activeApp !== "wallstreet" || state.marketDialog || document.hidden) return;
+    if (state.activeApp !== "wallstreet" || state.marketDialog || state.marketTradeTicketOpen || Date.now() < Number(state.marketChartInteractionUntil || 0) || document.hidden) return;
     try {
       const prior = (state.cache.wallstreet?.securities || []).find(item => item.ticker === state.marketTicker);
       const priorPrice = Number(prior?.price || 0);
