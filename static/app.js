@@ -322,7 +322,7 @@ const launcherIconSvg = {
   realty: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="m3 15 13-10 13 10v13H3Z"/><path d="m3 15 13-10 13 10M6 13v15h20V13M11 28v-9h6v9M20 18h4"/><path class="glyph-detail" d="m22 8 4-4 3 3-4 4"/></svg>',
   leaderboards: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="M10 4h12v6c0 5-2 8-6 8s-6-3-6-8Z"/><path d="M10 4h12v6c0 5-2 8-6 8s-6-3-6-8ZM10 7H5v3c0 4 2 6 6 6M22 7h5v3c0 4-2 6-6 6M16 18v6M10 28h12M12 24h8"/><path class="glyph-detail" d="m16 7 1 2 2 .3-1.5 1.5.4 2.2-1.9-1-1.9 1 .4-2.2L13 9.3 15 9Z"/></svg>',
   stats: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="M5 25V17h5v8M13.5 25V8h5v17M22 25V13h5v12Z"/><path d="M4 27h24M6 24v-7h4v7M14 24V8h4v16M22 24V13h4v11"/><path class="glyph-detail" d="m4 12 7-6 6 4 10-7M23 3h4v4"/></svg>',
-  wallstreet: '<svg class="launcher-glyph ravenhood-mark" viewBox="0 0 40 40" aria-hidden="true"><path class="glyph-surface" d="M20 3c9 0 15 6 15 15v8l-6-3v8l-9 6-9-6v-8l-6 3v-8C5 9 11 3 20 3Z"/><path class="ravenhood-hood" d="M20 3c9 0 15 6 15 15v8l-6-3v8l-9 6-9-6v-8l-6 3v-8C5 9 11 3 20 3Z"/><path class="ravenhood-r" d="M10 29V12h7c3.7 0 6 2 6 5s-2.3 5-6 5h-7m7 0 6 7"/><path class="ravenhood-h glyph-detail" d="M25 12v17M34 12v17M25 20.5h9"/></svg>',
+  wallstreet: '<svg class="launcher-glyph ravenhood-mark" viewBox="0 0 48 48" aria-hidden="true"><circle class="rh-orbit" cx="24" cy="24" r="20"/><path class="rh-raven" d="M6.5 34.5c6.7-5.7 9.8-12.4 8.7-20.5 5.1 4.1 10.3 4.7 16 1.1l7.5-4.8-2.5 7.5 7.2 3.2-9.1 3.1c-2.1 7.6-7.2 12.6-15.9 15.3l2-7.4c-4.8 2.8-9.4 3.6-13.9 2.5Z"/><path class="rh-wing" d="M14.7 31.8c5.7-2 9.8-5.6 12.4-10.8-1.1 6.6-4.2 11.8-9.4 15.7"/><path class="rh-tape" d="M6.5 41h8l4.2-5.1 5.1 2.7 6.9-8.7 4.6 3.5 6.2-10.2"/><circle class="rh-eye" cx="31.2" cy="18.4" r="1.7"/></svg>',
   messages: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="M4 5h24v18H12l-8 5Z"/><path d="M4 5h24v18H12l-8 5V5Z"/><path class="glyph-detail" d="M9 11h14M9 16h10"/></svg>',
   changelog: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="M8 3h18v26H8Z"/><path d="M8 3h18v26H8a4 4 0 0 1-4-4V7a4 4 0 0 1 4-4ZM8 3v26M12 10h9M12 15h9M12 20h6"/><path class="glyph-detail" d="m20 24 2 2 5-5"/></svg>',
   mdt: '<svg class="launcher-glyph" viewBox="0 0 32 32" aria-hidden="true"><path class="glyph-surface" d="M16 3 27 7v8c0 7-4.7 11.6-11 14-6.3-2.4-11-7-11-14V7Z"/><path d="M16 3 27 7v8c0 7-4.7 11.6-11 14-6.3-2.4-11-7-11-14V7Z"/><path class="glyph-detail" d="m16 9 2 4 4 .5-3 3 .8 4.5-3.8-2-3.8 2 .8-4.5-3-3 4-.5Z"/></svg>',
@@ -340,7 +340,9 @@ const launcherIconSvg = {
 };
 
 function launcherIcon(item) {
-  return launcherIconSvg[item?.id] || iconSvg[item?.icon] || iconSvg.settings;
+  const source = launcherIconSvg[item?.id] || iconSvg[item?.icon] || iconSvg.settings;
+  const mark = String(item?.id || item?.icon || "faircroft").replace(/[^a-z0-9-]/gi, "").toLowerCase();
+  return source.replace("<svg ", `<svg data-launcher-mark="${mark}" `);
 }
 
 const tileColors = {
@@ -18833,7 +18835,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.4.0-foundry-fec-v71").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.4.0-foundry-fec-v76").catch(() => {}));
 }
 
 legalFooterLink?.addEventListener("click", () => {
