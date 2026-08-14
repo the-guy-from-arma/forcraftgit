@@ -4,7 +4,7 @@ const app = $("#app");
 const toastEl = $("#toast");
 const legalPortal = $("#legalPortal");
 const legalFooterLink = $("#legalFooterLink");
-const OS_VERSION = "0.4.0";
+const OS_VERSION = "0.4.1";
 const SESSION_BOOT_TIMEOUT_MS = 14000;
 const SESSION_REFRESH_MS = 15000;
 const pendingMutations = new Map();
@@ -18835,7 +18835,7 @@ async function heartbeat() {
 }
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.4.0-foundry-fec-v77").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker?.register("/service-worker.js?v=0.4.1-ravenhood-engine-v1").catch(() => {}));
 }
 
 legalFooterLink?.addEventListener("click", () => {
