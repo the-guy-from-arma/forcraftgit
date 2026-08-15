@@ -47,12 +47,19 @@ def probe_url(url: str, *, application_name: str, timeout_seconds: int = 5) -> D
             application_name=application_name,
         ) as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT current_database(), 1")
+                cursor.execute(
+                    "SELECT current_database(), "
+                    "inet_server_addr()::text, inet_server_port(), 1"
+                )
                 row = cursor.fetchone()
         return DatabaseProbe(
             configured=True,
-            connected=bool(row and row[1] == 1),
-            database_identity=str(row[0] if row else ""),
+            connected=bool(row and row[3] == 1),
+            # Railway commonly names every provisioned database ``railway``.
+            # Include the PostgreSQL server address and port so two dedicated
+            # services are not mistaken for one database merely because their
+            # database names match.
+            database_identity="|".join(str(part or "") for part in row[:3]) if row else "",
         )
     except Exception as exc:
         return DatabaseProbe(
