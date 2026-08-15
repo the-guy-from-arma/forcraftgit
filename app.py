@@ -30,8 +30,17 @@ import psycopg
 import paramiko
 from psycopg.rows import dict_row
 
-from database_connections import isolated_pair_status
+from database_connections import probe_environment
 from insurance_rules import insurance_claim_filing_error
+from fcx_bank_adapter import handle_fcx_bank_settlement
+from fcx_client import FcxClientError
+from remote_fcx import (
+    build_market_payload as build_remote_fcx_market_payload,
+    connection_status as remote_fcx_connection_status,
+    create_order as create_remote_fcx_order,
+    remote_market_enabled,
+    resolve_account as resolve_remote_fcx_account,
+)
 from market_math import (
     market_cap_weighted_allocations,
     market_gemini_exposure_shares,
@@ -94,6 +103,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 DATABASE_MAX_CONNECTIONS = max(2, int(os.environ.get("DATABASE_MAX_CONNECTIONS", "5")))
 DATABASE_CONNECT_TIMEOUT_SECONDS = max(3, int(os.environ.get("DATABASE_CONNECT_TIMEOUT_SECONDS", "10")))
 DATABASE_CONNECTION_SEMAPHORE = threading.BoundedSemaphore(DATABASE_MAX_CONNECTIONS)
+REMOTE_FCX_ENABLED = remote_market_enabled()
 APPLICATION_READY = threading.Event()
 APPLICATION_STARTUP_ERROR = ""
 APPLICATION_STARTED_AT = dt.datetime.now(dt.timezone.utc).isoformat()
@@ -3442,6 +3452,26 @@ def ensure_schema() -> None:
             CREATE INDEX IF NOT EXISTS bank_bridge_commands_pending_idx
                 ON bank_bridge_commands (server_id, status, created_at);
 
+            CREATE TABLE IF NOT EXISTS fcx_bank_settlements (
+                id SERIAL PRIMARY KEY,
+                settlement_id TEXT NOT NULL UNIQUE,
+                idempotency_key TEXT NOT NULL,
+                community_id TEXT NOT NULL,
+                community_user_id TEXT NOT NULL,
+                ravenhood_account_id TEXT NOT NULL DEFAULT '',
+                operation TEXT NOT NULL,
+                amount NUMERIC(14,2) NOT NULL,
+                currency TEXT NOT NULL DEFAULT 'FC',
+                order_reference TEXT NOT NULL DEFAULT '',
+                command_id TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (community_id, idempotency_key),
+                FOREIGN KEY (command_id) REFERENCES bank_bridge_commands(command_id) ON DELETE RESTRICT
+            );
+            CREATE INDEX IF NOT EXISTS fcx_bank_settlements_community_idx
+                ON fcx_bank_settlements (community_id, created_at DESC);
+
             CREATE TABLE IF NOT EXISTS sportsbook_events (
                 id SERIAL PRIMARY KEY,
                 provider_event_id TEXT NOT NULL UNIQUE,
@@ -6111,8 +6141,9 @@ def ensure_migrations(db: Database) -> None:
         """
     )
     db.execute("CREATE INDEX IF NOT EXISTS cid_internal_affairs_notes_ia_idx ON cid_internal_affairs_notes (ia_id, created_at)")
-    ensure_business_issuer_schema(db, now_iso())
-    ensure_fcx_engine_schema(db, now_iso())
+    if not REMOTE_FCX_ENABLED:
+        ensure_business_issuer_schema(db, now_iso())
+        ensure_fcx_engine_schema(db, now_iso())
 
 
 def normalize_market_clock(value: Any, fallback: str) -> str:
@@ -10695,13 +10726,18 @@ def admin_tools_effective_sections(db: Database, user: DbRow | None) -> set[str]
     if not user:
         return set()
     all_sections = {section_id for section_id, _label in ADMIN_TOOLS_SECTIONS}
+    if REMOTE_FCX_ENABLED:
+        # Global FCX operations belong exclusively to FCX-Control. CAD keeps a
+        # read-only Stock Settings connection panel and no FEC/leverage/global
+        # issuer controls.
+        all_sections -= {"fec-investigations", "leverage-settings", "business-settings"}
     if has_any(user, "owner", "dev"):
         return all_sections
     # This is an intentionally restrictive operational role. It remains scoped
     # to FEC even if an account also carries the general administrator role;
     # only owner/developer authority supersedes the restriction.
     if has_any(user, FEC_INVESTIGATOR_ROLE):
-        return {"fec-investigations"}
+        return set() if REMOTE_FCX_ENABLED else {"fec-investigations"}
     if not has_any(user, "admin"):
         return set()
     settings = get_system_settings(db)
@@ -10710,7 +10746,10 @@ def admin_tools_effective_sections(db: Database, user: DbRow | None) -> set[str]
         for section_id, is_enabled in settings.get("admin_tools_access", {}).items()
         if is_enabled and section_id in ADMIN_TOOLS_CONFIGURABLE_SECTIONS
     }
-    return set(ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS) | enabled
+    effective = set(ADMIN_TOOLS_DEFAULT_ADMIN_SECTIONS) | enabled
+    if REMOTE_FCX_ENABLED:
+        effective -= {"fec-investigations", "leverage-settings", "business-settings"}
+    return effective
 
 
 def admin_tools_section_required(db: Database, user: DbRow | None, section_id: str) -> str | None:
@@ -12045,19 +12084,21 @@ class RoleplayHandler(BaseHTTPRequestHandler):
     def route_api(self, path: str, query: dict[str, list[str]]) -> None:
         method = self.command
         if path == "/api/health/databases" and method == "GET":
-            database_status = isolated_pair_status(
+            cad_probe = probe_environment(
                 "DATABASE_URL",
-                "FCX_DATABASE_URL",
-                application_prefix="faircroft-cad1",
+                application_name="faircroft-cad1-health-probe",
             )
+            fcx_status = remote_fcx_connection_status()
+            healthy = bool(cad_probe.connected and fcx_status.get("connected"))
             self.send_json(
-                200 if database_status["ok"] else 503,
+                200 if healthy else 503,
                 {
                     "service": "cad1",
-                    "cad1": database_status["primary"],
-                    "fcx": database_status["fcx"],
-                    "isolated": database_status["isolated"],
-                    "ok": database_status["ok"],
+                    "cad1": cad_probe.public_payload(),
+                    "fcx": fcx_status,
+                    "boundary": "authenticated_api_only",
+                    "direct_fcx_database": False,
+                    "ok": healthy,
                 },
             )
             return
@@ -12098,6 +12139,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         try:
             with conn() as db:
                 user = self.current_user(db)
+                if path == "/api/fcx/settlements" or path.startswith("/api/fcx/settlements/"):
+                    handle_fcx_bank_settlement(self, db, path, method, arma_server_id=ARMA_SERVER_ID, now_iso=now_iso)
+                    return
                 if user and not legal_policy_allowed_path(path) and not legal_policy_accepted(db, int(user["id"])):
                     self.send_json(
                         428,
@@ -12117,6 +12161,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     section_error = admin_tools_section_required(db, user, routed_section)
                     if section_error:
                         self.error(403 if user else 401, section_error)
+                        return
+                    if REMOTE_FCX_ENABLED and routed_section in {
+                        "fec-investigations", "leverage-settings", "business-settings"
+                    }:
+                        self.error(403, "This FCX control is available only in the standalone FEC/FCX service")
+                        return
+                    if REMOTE_FCX_ENABLED and routed_section == "market-settings" and method != "GET":
+                        self.error(409, "CAD Stock Settings is read-only; use the standalone FEC/FCX service for market changes")
                         return
                 if path.startswith("/api/fine-settlement"):
                     section_error = admin_tools_section_required(db, user, "settlement")

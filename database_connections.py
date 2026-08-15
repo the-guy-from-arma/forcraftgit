@@ -75,32 +75,3 @@ def probe_environment(variable_name: str, *, application_name: str) -> DatabaseP
         application_name=application_name,
     )
 
-
-def isolated_pair_status(
-    primary_variable: str,
-    shared_variable: str,
-    *,
-    application_prefix: str,
-) -> dict[str, Any]:
-    """Probe an app-local DB and FCX, proving they are separate databases."""
-    primary = probe_environment(
-        primary_variable,
-        application_name=f"{application_prefix}-primary-probe",
-    )
-    shared = probe_environment(
-        shared_variable,
-        application_name=f"{application_prefix}-fcx-probe",
-    )
-    identities_known = bool(primary.database_identity and shared.database_identity)
-    isolated = bool(
-        primary.connected
-        and shared.connected
-        and identities_known
-        and primary.database_identity != shared.database_identity
-    )
-    return {
-        "ok": bool(primary.connected and shared.connected and isolated),
-        "primary": primary.public_payload(),
-        "fcx": shared.public_payload(),
-        "isolated": isolated,
-    }
