@@ -21564,6 +21564,31 @@ textarea:focus {
   .fec-trade-mix-list { width: 100%; }
 }
 
+/* CAD 1 owns no FCX controls. This panel is intentionally connection-only. */
+.fcx-connection-panel{display:grid;gap:24px;background:linear-gradient(140deg,rgba(7,28,31,.98),rgba(6,16,23,.98));border-color:rgba(75,230,204,.28)}
+.fcx-connection-panel .dev-section-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding-bottom:22px;border-bottom:1px solid rgba(117,168,180,.2)}
+.fcx-connection-panel .dev-section-heading h2{margin:5px 0 7px;font-size:clamp(28px,3vw,42px);letter-spacing:-.035em}
+.fcx-connection-panel .dev-section-heading p:not(.eyebrow){max-width:760px;margin:0;color:#8aa5ad;line-height:1.65}
+.fcx-connection-panel .eyebrow{margin:0;color:#5ee8c3;font:800 9px/1.2 var(--mono,monospace);letter-spacing:.17em}
+.fcx-connection-panel .pill{flex:0 0 auto}
+.fcx-connection-panel .dev-metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid rgba(117,168,180,.2);border-radius:14px;overflow:hidden}
+.fcx-connection-panel .dev-metric-grid article{min-width:0;padding:20px;display:grid;gap:7px;background:rgba(8,24,30,.74)}
+.fcx-connection-panel .dev-metric-grid article+article{border-left:1px solid rgba(117,168,180,.2)}
+.fcx-connection-panel .dev-metric-grid small{color:#6f8992;font:800 8px var(--mono,monospace);letter-spacing:.13em;text-transform:uppercase}
+.fcx-connection-panel .dev-metric-grid strong{overflow-wrap:anywhere;color:#efffff;font-size:18px}
+.fcx-connection-panel .dev-metric-grid span{color:#7f9ca4;font-size:11px;line-height:1.45}
+.fcx-ownership-grid{gap:16px}
+.fcx-boundary-card{min-height:210px;padding:25px;border:1px solid rgba(117,168,180,.2);border-radius:14px;background:rgba(8,24,30,.64)}
+.fcx-boundary-card h3{margin:9px 0 14px;color:#efffff;font-size:21px}
+.fcx-boundary-card>p:not(.eyebrow){margin:0 0 20px;color:#8ba5ad;line-height:1.6}
+.fcx-boundary-card .primary{display:inline-flex;align-items:center;justify-content:center;min-height:42px;margin-top:8px;padding:0 17px;border-radius:9px;text-decoration:none}
+.fcx-capability-list{display:grid;gap:10px;margin:0;padding:0;list-style:none}
+.fcx-capability-list li{position:relative;padding-left:18px;color:#a8c1c7;line-height:1.5}
+.fcx-capability-list li:before{content:"";position:absolute;left:0;top:.55em;width:7px;height:7px;border-radius:50%;background:#54e9bd;box-shadow:0 0 10px rgba(84,233,189,.5)}
+.fcx-connection-panel .dev-footnote{margin:0;padding:14px 17px;border-left:3px solid #54e9bd;background:rgba(84,233,189,.06);color:#7f9ca4;font-size:11px;line-height:1.55}
+@media(max-width:1050px){.fcx-connection-panel .dev-metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.fcx-connection-panel .dev-metric-grid article:nth-child(3){border-left:0}.fcx-connection-panel .dev-metric-grid article:nth-child(n+3){border-top:1px solid rgba(117,168,180,.2)}}
+@media(max-width:700px){.fcx-connection-panel .dev-section-heading{flex-direction:column}.fcx-connection-panel .dev-metric-grid,.fcx-ownership-grid{grid-template-columns:1fr}.fcx-connection-panel .dev-metric-grid article+article{border-left:0;border-top:1px solid rgba(117,168,180,.2)}}
+
 /* FEC market-intelligence charts and dense investigation telemetry */
 .fec-dashboard-v2 .fec-kpi-card { min-width: 0; grid-template-rows: auto auto auto 38px; }
 .fec-dashboard-v2 .fec-kpi-card > strong {

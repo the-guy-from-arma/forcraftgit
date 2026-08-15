@@ -26013,7 +26013,30 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     ORDER BY d.delisted_at DESC,d.id DESC LIMIT 200""")],
             }
 
-        if section == "market-settings":
+        if section == "market-settings" and REMOTE_FCX_ENABLED:
+            remote_status = remote_fcx_connection_status()
+            payload["market_settings"] = {
+                "remote_fcx": True,
+                "connection": remote_status,
+                "service_name": "FCX Exchange",
+                "control_plane": "Standalone FEC PWA",
+                "ownership": {
+                    "mode": "read_only",
+                    "cad_database_access": False,
+                    "fcx_database_access": False,
+                    "market_controls_available": False,
+                    "player_market_available": True,
+                },
+                "capabilities": [
+                    "Authenticated FCX API connection status",
+                    "Player-facing Ravenhood market data",
+                    "Player orders routed through the FCX API",
+                    "No direct access to the FCX PostgreSQL database",
+                    "No global market, leverage, or FEC controls in CAD 1",
+                ],
+            }
+
+        elif section == "market-settings":
             payload["market_settings"] = {
                 "autonomous_engine": fcx_engine_admin_snapshot(db, settings),
                 "market_open": settings["market_open"],

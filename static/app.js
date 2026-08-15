@@ -13884,7 +13884,7 @@ const ADMIN_TOOL_NAV = [
   ["anticheat", "Anti-Cheat", "05"], ["insurance-claims", "Insurance Claims", "06"],
   ["enforcement", "Cases", "07"], ["warnings", "Internal Notes", "08"],
   ["linking", "Account Linking", "09"], ["campaigns", "Active Campaigns", "10"],
-  ["settlement", "Settlement", "11"], ["banking-settings", "Banking Settings", "12"], ["market-settings", "Stock Market", "13"],
+  ["settlement", "Settlement", "11"], ["banking-settings", "Banking Settings", "12"], ["market-settings", "FCX Connection", "13"],
   ["business-settings", "Business Settings", "14"], ["leverage-settings", "Leverage Settings", "15"], ["fec-investigations", "FEC Investigations", "16"],
   ["lottery-settings", "Lottery Settings", "17"], ["sportsbook-settings", "Sportsbook", "18"], ["casino-tools", "Casino Tools", "19"],
   ["gang-settings", "Gang Settings", "20"], ["dmv-settings", "DMV Settings", "21"], ["mdt-settings", "MDT Settings", "22"],
@@ -13916,7 +13916,7 @@ function renderDevWorkspace() {
   }
   const visibleNav = access.isFecInvestigator
     ? [["fec-investigations", "FEC Investigations", "01"]]
-    : ADMIN_TOOL_NAV;
+    : ADMIN_TOOL_NAV.filter(([id]) => access.effective.has(id));
   const activeTab = {
     dashboard: ["Operations Overview", "Current account-linking and enforcement status"],
     accounts: ["Account Management", "Search, verify, secure, and maintain every resident account"],
@@ -13938,7 +13938,7 @@ function renderDevWorkspace() {
     "fnn-settings": ["FNN Settings", "Control newsroom publishing and Press Pass capacity"],
     "policy-settings": ["Policy Settings", "Monitor required EULA, Terms, acceptable-use, and privacy acceptance"],
     "gang-settings": ["Gang Settings", "Govern organizations, leaders, rosters, and recruitment PINs"],
-    "market-settings": ["Stock Market Settings", "Operate Ravenhood pricing, settlement receipts, fees, and RP events"],
+    "market-settings": ["FCX Exchange Connection", "Read-only connection health for CAD 1's player-facing Ravenhood integration"],
     "business-settings": ["Business Settings", "Assign existing FCX securities and oversee resident-controlled IPO companies"],
     "leverage-settings": ["Leverage Settings", "Control isolated long and short exposure, leverage ceilings, and liquidation policy"],
     "fec-investigations": ["FEC Investigations", "Review resident trading, high-value withdrawals, asset custody, and market-integrity filings"],
@@ -14298,6 +14298,36 @@ function renderFcxEngineConsole(engine = {}) {
 }
 
 function renderDevMarketSettings(market, users) {
+  if (market.remote_fcx) {
+    const connection = market.connection || {};
+    const ownership = market.ownership || {};
+    const online = Boolean(connection.connected && connection.authenticated);
+    const controlOrigin = String(connection.control_origin || "");
+    const capabilities = (market.capabilities || []).map(item => `<li>${escapeHtml(item)}</li>`).join("");
+    return `<section class="dev-card fcx-connection-panel">
+      <div class="dev-section-heading">
+        <div>
+          <p class="eyebrow">CAD 1 / REMOTE MARKET BOUNDARY</p>
+          <h2>FCX Exchange</h2>
+          <p>CAD 1 receives Ravenhood data through the authenticated FCX API. Exchange control remains isolated in the standalone FEC platform.</p>
+        </div>
+        <span class="pill ${online ? "green" : "red"}">${online ? "CONNECTED" : "OFFLINE"}</span>
+      </div>
+      <div class="dev-metric-grid">
+        <article><small>API status</small><strong>${online ? "Authenticated" : "Unavailable"}</strong><span>${escapeHtml(connection.error_type || "Credential accepted")}</span></article>
+        <article><small>Community</small><strong>${escapeHtml(connection.community_id || "Not configured")}</strong><span>Independent CAD identity</span></article>
+        <article><small>Data source</small><strong>FCX API</strong><span>No direct FCX database connection</span></article>
+        <article><small>Control plane</small><strong>${escapeHtml(market.control_plane || "Standalone FEC PWA")}</strong><span>Developer-controlled exchange operations</span></article>
+      </div>
+      <div class="dev-grid-2 fcx-ownership-grid">
+        <div class="fcx-boundary-card"><p class="eyebrow">OWNERSHIP CONTRACT</p><h3>Read-only from CAD 1</h3><ul class="fcx-capability-list">${capabilities}</ul></div>
+        <div class="fcx-boundary-card"><p class="eyebrow">CONTROL LOCATION</p><h3>FEC operations moved out</h3><p>Stock Settings, Leverage Settings, FEC Investigations, the local market engine, and every global market mutation are available only in the standalone FEC PWA.</p>
+          ${controlOrigin ? `<a class="primary" href="${escapeHtml(controlOrigin)}" target="_blank" rel="noopener">Open FEC control platform</a>` : ""}
+        </div>
+      </div>
+      <p class="dev-footnote">Player Ravenhood access remains available. This panel cannot alter exchange settings, leverage, investigations, or FCX records.</p>
+    </section>`;
+  }
   const listings = market.securities || [], codes = market.codes || [], programs = market.programs || [], promotions = market.promotions || [];
   const autonomousEngine = market.autonomous_engine || {};
   const activeListings = listings.filter(item => Number(item.active) === 1 && String(item.lifecycle_status || "active") !== "bankrupt");
