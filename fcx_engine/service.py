@@ -34,9 +34,9 @@ from .sandbox import run_sandbox
 
 
 def _database_url() -> str:
-    value = str(os.environ.get("DATABASE_URL") or "").strip()
+    value = str(os.environ.get("FCX_DATABASE_URL") or "").strip()
     if not value:
-        raise RuntimeError("DATABASE_URL is required for the standalone FCX service")
+        raise RuntimeError("FCX_DATABASE_URL is required for the standalone FCX service")
     if value.startswith("postgres://"):
         value = "postgresql://" + value[len("postgres://"):]
     if value.startswith("postgresql://") and "+psycopg" not in value:

@@ -35,7 +35,7 @@ uvicorn fcx_engine.service:app --host 0.0.0.0 --port 8081
 Required environment:
 
 ```text
-DATABASE_URL=<shared Railway PostgreSQL URL>
+FCX_DATABASE_URL=<dedicated FCX Railway PostgreSQL URL>
 FCX_ENGINE_ADMIN_KEY=<separate strong service-administration secret>
 ```
 
@@ -47,6 +47,9 @@ FCX_DB_MAX_OVERFLOW=1
 ```
 
 Do not run both the integrated worker and the standalone scheduler at the same time. If the standalone service is selected, leave `fcx_engine_enabled` configured centrally but disable the integrated worker at deployment level. Advisory locking prevents duplicate ticks, but one scheduler should own the clock operationally.
+
+`FCX_DATABASE_URL` is intentionally strict. The standalone FCX service never
+falls back to a CAD service's `DATABASE_URL`.
 
 ## Validation
 

@@ -30,6 +30,7 @@ import psycopg
 import paramiko
 from psycopg.rows import dict_row
 
+from database_connections import isolated_pair_status
 from insurance_rules import insurance_claim_filing_error
 from market_math import (
     market_cap_weighted_allocations,
@@ -12043,6 +12044,23 @@ class RoleplayHandler(BaseHTTPRequestHandler):
 
     def route_api(self, path: str, query: dict[str, list[str]]) -> None:
         method = self.command
+        if path == "/api/health/databases" and method == "GET":
+            database_status = isolated_pair_status(
+                "DATABASE_URL",
+                "FCX_DATABASE_URL",
+                application_prefix="faircroft-cad1",
+            )
+            self.send_json(
+                200 if database_status["ok"] else 503,
+                {
+                    "service": "cad1",
+                    "cad1": database_status["primary"],
+                    "fcx": database_status["fcx"],
+                    "isolated": database_status["isolated"],
+                    "ok": database_status["ok"],
+                },
+            )
+            return
         if path == "/api/health" and method == "GET":
             startup_error = APPLICATION_STARTUP_ERROR
             self.send_json(
