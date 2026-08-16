@@ -18879,7 +18879,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     history_ticker=history_ticker,
                     history_range=history_range,
                 )
-            except (FcxClientError, RuntimeError) as exc:
+            except Exception as exc:
+                print(f"CAD1 FCX market adapter failed: {type(exc).__name__}: {exc}", flush=True)
                 self.error(502, f"FCX-Control is unavailable: {exc}"); return
             self.send_json(200, payload)
             return

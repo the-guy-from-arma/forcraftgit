@@ -42,6 +42,22 @@ def _number(value: Any, default: float = 0.0) -> float:
     return parsed if math.isfinite(parsed) else default
 
 
+def _flat_price_history(value: Any) -> list[dict[str, Any]]:
+    """Translate FCX's ticker-grouped history into CAD's legacy flat stream."""
+    flattened: list[dict[str, Any]] = []
+    if isinstance(value, dict):
+        for ticker, rows in value.items():
+            if not isinstance(rows, list):
+                continue
+            for raw in rows:
+                if isinstance(raw, dict):
+                    flattened.append({"ticker": str(ticker).upper(), **raw})
+    elif isinstance(value, list):
+        flattened = [dict(raw) for raw in value if isinstance(raw, dict)]
+    flattened.sort(key=lambda row: str(row.get("recorded_at") or ""))
+    return flattened
+
+
 def connection_status() -> dict[str, Any]:
     """Return a credential-safe, read-only connection panel payload."""
     configured_url = str(os.environ.get("FCX_API_URL") or "").strip()
@@ -105,6 +121,9 @@ def build_market_payload(
     account_id = str(resolved["account_id"])
     market_response = client.market()
     portfolio_response = client.portfolio(user["id"], account_id)
+
+    if not isinstance(market_response, dict) or not isinstance(portfolio_response, dict):
+        raise FcxClientError("FCX returned an invalid Ravenhood payload")
 
     permissions = market_response.get("permissions") if isinstance(market_response.get("permissions"), dict) else {}
     market = market_response.get("market") if isinstance(market_response.get("market"), dict) else {}
@@ -203,7 +222,7 @@ def build_market_payload(
         "exchange_market_cap": round(sum(_number(item.get("market_cap")) for item in securities), 2),
         "anonymous_trade_tape": market_response.get("anonymous_trade_tape") or [],
         "company_wire": market_response.get("company_wire") or [],
-        "price_history": market_response.get("price_history") or [],
+        "price_history": _flat_price_history(market_response.get("price_history")),
         "market_analytics": market_response.get("market_analytics") or {},
         "history_ticker": str(history_ticker or "").upper().strip(),
         "history_range": str(history_range or "LIVE").upper().strip() or "LIVE",
