@@ -557,6 +557,26 @@ def all_rows(db: Database, sql: str, params: tuple[Any, ...] = ()) -> list[DbRow
     return db.execute(sql, params).fetchall()
 
 
+def cad1_remote_fcx_context(db: Database, user: DbRow) -> dict[str, Any]:
+    """Return only CAD 1-owned identity and read-only game-bank state."""
+    row = one(
+        db,
+        """
+        SELECT l.identity_id, b.balance, b.synced_at
+        FROM arma_account_links l
+        LEFT JOIN arma_game_bank_balances b ON b.identity_id = l.identity_id
+        WHERE l.user_id = ? AND l.server_id = ?
+        LIMIT 1
+        """,
+        (int(user["id"]), ARMA_SERVER_ID),
+    )
+    return {
+        "identity_id": str((row or {}).get("identity_id") or ""),
+        "game_bank_balance": (row or {}).get("balance") or 0,
+        "game_bank_synced_at": (row or {}).get("synced_at") or "",
+    }
+
+
 def has_shadowhaven_sftp_credentials() -> bool:
     return bool(
         SHADOWHAVEN_SFTP_HOST
@@ -18847,12 +18867,37 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(403 if user else 401, err); return
         history_ticker = str((query.get("ticker") or [""])[0])
         history_range = str((query.get("range") or ["LIVE"])[0])
+        if REMOTE_FCX_ENABLED:
+            assert user is not None
+            try:
+                context = cad1_remote_fcx_context(db, user)
+                payload = build_remote_fcx_market_payload(
+                    user=dict(user),
+                    identity_id=context["identity_id"],
+                    game_bank_balance=context["game_bank_balance"],
+                    game_bank_synced_at=context["game_bank_synced_at"],
+                    history_ticker=history_ticker,
+                    history_range=history_range,
+                )
+            except (FcxClientError, RuntimeError) as exc:
+                self.error(502, f"FCX-Control is unavailable: {exc}"); return
+            self.send_json(200, payload)
+            return
         self.send_json(200, self.market_payload(db, user, history_ticker, history_range))
 
     def api_wallstreet_create_account(self, db: Database, user: DbRow | None) -> None:
         err = verified_required(user)
         if err:
             self.error(403 if user else 401, err); return
+        if REMOTE_FCX_ENABLED:
+            assert user is not None
+            try:
+                context = cad1_remote_fcx_context(db, user)
+                account = resolve_remote_fcx_account(dict(user), context["identity_id"])
+            except (FcxClientError, RuntimeError) as exc:
+                self.error(502, f"FCX-Control is unavailable: {exc}"); return
+            self.send_json(201, {"ok": True, "remote_fcx": True, "account": account})
+            return
         db.execute("""INSERT INTO market_accounts (user_id, cash_balance, status, created_at, updated_at)
             VALUES (?, 0, 'active', ?, ?) ON CONFLICT(user_id) DO NOTHING""", (user["id"], now_iso(), now_iso()))
         self.send_json(201, {"ok": True})
@@ -29301,6 +29346,20 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         err = developer_required(user)
         if err:
             self.error(403 if user else 401, err); return
+        if REMOTE_FCX_ENABLED:
+            assert user is not None
+            payload = self.read_json()
+            try:
+                context = cad1_remote_fcx_context(db, user)
+                result = create_remote_fcx_order(
+                    user=dict(user), identity_id=context["identity_id"], payload=payload,
+                )
+            except ValueError as exc:
+                self.error(400, str(exc)); return
+            except (FcxClientError, RuntimeError) as exc:
+                self.error(502, f"FCX-Control could not accept the order: {exc}"); return
+            self.send_json(202, {"ok": True, "remote_fcx": True, **result})
+            return
         settings = get_system_settings(db)
         if not settings["market_liquidation_hunts_enabled"]:
             self.error(409, "Enable liquidation hunts in Stock Settings before running a controlled hunt."); return
