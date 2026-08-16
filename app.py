@@ -123,6 +123,7 @@ ANDROID_APK_URL = os.environ.get(
     "https://github.com/the-guy-from-arma/forcraftgit/releases/latest/download/Faircroft-RP.apk",
 ).strip()
 ARMA_BRIDGE_API_KEY = os.environ.get("ARMA_BRIDGE_API_KEY", "").strip()
+ARMA_SERVER_ID = os.environ.get("ARMA_SERVER_ID", "default").strip() or "default"
 BANK_BRIDGE_TEST_MODE = os.environ.get("BANK_BRIDGE_TEST_MODE", "0").lower() in ("1", "true", "yes", "on")
 BANK_BRIDGE_USER_PENDING_LIMIT = 5
 ARMA_LINK_CODE_TTL_MINUTES = int(os.environ.get("ARMA_LINK_CODE_TTL_MINUTES", "30"))
