@@ -6062,14 +6062,21 @@ function renderMarketWorkspace() {
   const previousPrice = Number(selected.previous_price || currentPrice);
   const analytics = data.market_analytics?.ticker === selected.ticker && data.market_analytics?.range === range ? data.market_analytics : {};
   const rawHistory = normalizeMarketPriceHistory(data.price_history?.[selected.ticker] || []);
-  let history = rawHistory.filter(row => row.time >= now - rangeMs);
-  if (history.length < 2) history = rawHistory.slice(-Math.max(2, {"LIVE": 12, "15M": 30, "1H": 48, "1D": 144, "1W": 168, "1M": 240, "1Y": 360}[range]));
+  const responseRange = String(data.history_range || range).toUpperCase();
+  const declaredRangeStart = Date.parse(data.history_range_start || data.history_window_start || "");
+  const declaredRangeEnd = Date.parse(data.history_range_end || "");
+  const requestedChartEnd = responseRange === range && Number.isFinite(declaredRangeEnd) ? declaredRangeEnd : now;
+  const requestedChartStart = responseRange === range && Number.isFinite(declaredRangeStart) ? declaredRangeStart : requestedChartEnd - rangeMs;
+  let history = rawHistory.filter(row => row.time >= requestedChartStart && row.time <= requestedChartEnd);
   if (!history.length) history = [
-    {price: previousPrice, open: previousPrice, high: previousPrice, low: previousPrice, volume: 0, tradeCount: 0, vwap: null, time: now - rangeMs},
-    {price: currentPrice, open: previousPrice, high: Math.max(previousPrice, currentPrice), low: Math.min(previousPrice, currentPrice), volume: 0, tradeCount: 0, vwap: null, time: now},
+    {price: previousPrice, open: previousPrice, high: previousPrice, low: previousPrice, volume: 0, tradeCount: 0, vwap: null, time: requestedChartStart},
+    {price: currentPrice, open: previousPrice, high: Math.max(previousPrice, currentPrice), low: Math.min(previousPrice, currentPrice), volume: 0, tradeCount: 0, vwap: null, time: requestedChartEnd},
   ];
-  if (history.length === 1) history.unshift({...history[0], price: previousPrice, open: previousPrice, high: previousPrice, low: previousPrice, time: history[0].time - Math.min(60000, rangeMs / 3)});
-  if (Math.abs(history.at(-1).price - currentPrice) > .00001 || now - history.at(-1).time > 60000) {
+  if (history.length === 1) {
+    if (history[0].time > requestedChartStart) history.unshift({...history[0], time: requestedChartStart});
+    else history.push({...history[0], price: currentPrice, open: history[0].price, high: Math.max(history[0].price, currentPrice), low: Math.min(history[0].price, currentPrice), time: requestedChartEnd});
+  }
+  if (Math.abs(history.at(-1).price - currentPrice) > .00001 || requestedChartEnd - history.at(-1).time > 60000) {
     const latest = history.at(-1);
     history.push({
       price: currentPrice,
@@ -6082,7 +6089,7 @@ function renderMarketWorkspace() {
       bucketVwap: null,
       quoteCount: 1,
       source: "live_quote",
-      time: now,
+      time: requestedChartEnd,
     });
   }
   history = connectMarketCandles(history);
@@ -6128,12 +6135,8 @@ function renderMarketWorkspace() {
   const yFor = value => 286 - ((value - chartMin) / chartSpan) * 238;
   const actualEndX = 1035;
   const forecastEndX = 1332;
-  const declaredStart = Date.parse(data.history_range_start || "");
-  const requestedChartStart = Number.isFinite(declaredStart) && data.history_range === range ? declaredStart : now - rangeMs;
-  // If a sparse short window is extended with the latest recorded quotes,
-  // include those timestamps instead of stacking every candle against x=0.
-  const chartStart = Math.min(requestedChartStart, history[0]?.time || requestedChartStart);
-  const chartEnd = Math.max(now, history.at(-1)?.time || now);
+  const chartStart = requestedChartStart;
+  const chartEnd = requestedChartEnd;
   const xForTime = value => 28 + Math.max(0, Math.min(1, (value - chartStart) / Math.max(1, chartEnd - chartStart))) * (actualEndX - 28);
   const chartSeries = history.map((row, index) => ({
     x: Number(xForTime(row.time).toFixed(1)),

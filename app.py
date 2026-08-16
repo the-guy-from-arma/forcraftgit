@@ -38,6 +38,7 @@ from remote_fcx import (
     build_market_payload as build_remote_fcx_market_payload,
     connection_status as remote_fcx_connection_status,
     create_order as create_remote_fcx_order,
+    create_wallet_transfer as create_remote_fcx_wallet_transfer,
     remote_market_enabled,
     resolve_account as resolve_remote_fcx_account,
 )
@@ -18908,6 +18909,45 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         err = verified_required(user)
         if err:
             self.error(403 if user else 401, err); return
+        if REMOTE_FCX_ENABLED:
+            assert user is not None
+            payload = self.read_json()
+            tx_type = str(payload.get("transaction_type") or "").strip().lower()
+            try:
+                raw_amount = float(payload.get("amount") or 0)
+            except (TypeError, ValueError):
+                raw_amount = 0
+            if not math.isfinite(raw_amount):
+                raw_amount = 0
+            amount = round(raw_amount, 2)
+            if tx_type not in {"deposit", "withdrawal"} or amount <= 0:
+                self.error(400, "Choose a valid deposit or withdrawal amount."); return
+            if amount > RAVENHOOD_BANK_COMMAND_MAX_AMOUNT:
+                self.error(400, f"Ravenhood deposits and withdrawals are limited to ${RAVENHOOD_BANK_COMMAND_MAX_AMOUNT:,.0f} per request."); return
+            if tx_type == "withdrawal" and not raw_amount.is_integer():
+                self.error(400, "Ravenhood withdrawals must be entered in whole dollar amounts with no cents."); return
+            try:
+                context = cad1_remote_fcx_context(db, user)
+                result = create_remote_fcx_wallet_transfer(
+                    user=dict(user),
+                    identity_id=context["identity_id"],
+                    transaction_type=tx_type,
+                    amount=amount,
+                )
+            except ValueError as exc:
+                self.error(400, str(exc)); return
+            except FcxClientError as exc:
+                self.error(502, f"FCX-Control is unavailable: {exc}"); return
+            settlement = result.get("settlement") if isinstance(result, dict) else {}
+            self.send_json(202, {
+                "ok": True,
+                "remote_fcx": True,
+                "status": str((settlement or {}).get("state") or "CREATED").lower(),
+                "settlement_id": str((settlement or {}).get("settlement_id") or ""),
+                "transaction_type": tx_type,
+                "amount": amount,
+            })
+            return
         bridge_queue = bank_bridge_user_queue_state(db, int(user["id"]), lock=True)
         if bool(bridge_queue["locked"]):
             self.send_json(429, {

@@ -127,7 +127,11 @@ def build_market_payload(
     client = _client()
     resolved = resolve_account(user, identity_id)
     account_id = str(resolved["account_id"])
-    market_response = client.market()
+    normalized_range = str(history_range or "LIVE").lower().strip() or "live"
+    market_response = client.market(
+        ticker=str(history_ticker or "").upper().strip(),
+        history_range=normalized_range,
+    )
     portfolio_response = client.portfolio(user["id"], account_id)
 
     if not isinstance(market_response, dict) or not isinstance(portfolio_response, dict):
@@ -136,7 +140,8 @@ def build_market_payload(
     permissions = market_response.get("permissions") if isinstance(market_response.get("permissions"), dict) else {}
     market = market_response.get("market") if isinstance(market_response.get("market"), dict) else {}
     remote_account = portfolio_response.get("account") if isinstance(portfolio_response.get("account"), dict) else {}
-    balance = round(_number(game_bank_balance), 2)
+    wallet_cash = round(_number(remote_account.get("cash_balance")), 2)
+    game_balance = round(_number(game_bank_balance), 2)
 
     securities: list[dict[str, Any]] = []
     for source in market_response.get("securities") or []:
@@ -188,7 +193,8 @@ def build_market_payload(
     trading_enabled = _bool(permissions.get("trading"), True) and not _bool(market.get("maintenance_mode"))
     buy_enabled = trading_enabled and _bool(permissions.get("buy"), True) and _bool(market.get("buy_enabled"), True)
     sell_enabled = trading_enabled and _bool(permissions.get("sell"), True) and _bool(market.get("sell_enabled"), True)
-    account_active = str(remote_account.get("market_status") or remote_account.get("status") or "active").lower() == "active"
+    restricted = _bool(remote_account.get("is_restricted"), False)
+    account_active = not restricted
     market_open = _bool(market.get("market_open"), True)
 
     account = {
@@ -197,11 +203,15 @@ def build_market_payload(
         "id": account_id,
         "account_id": account_id,
         "user_id": user["id"],
-        "status": "active" if account_active else "restricted",
-        "cash_balance": balance,
-        "buying_power": balance,
+        "status": "restricted" if restricted else ("active" if account_active else "inactive"),
+        "is_restricted": restricted,
+        "restriction_scope": str(remote_account.get("restriction_scope") or ""),
+        "restriction_reason": str(remote_account.get("restriction_reason") or ""),
+        "cash_balance": wallet_cash,
+        "buying_power": wallet_cash,
+        "game_bank_balance": game_balance,
         "game_bank_synced_at": game_bank_synced_at,
-        "balance_source": "cad1_game_bank_snapshot",
+        "balance_source": "fcx_wallet",
     }
     return {
         "ok": True,
@@ -233,11 +243,13 @@ def build_market_payload(
         "price_history": _grouped_price_history(market_response.get("price_history")),
         "market_analytics": market_response.get("market_analytics") or {},
         "history_ticker": str(history_ticker or "").upper().strip(),
-        "history_range": str(history_range or "LIVE").upper().strip() or "LIVE",
-        "history_range_start": "",
+        "history_range": str(market_response.get("history_range") or normalized_range).upper(),
+        "history_range_start": str(market_response.get("history_range_start") or market_response.get("history_window_start") or ""),
+        "history_range_end": str(market_response.get("history_range_end") or ""),
         "pending_withdrawal_amount": 0,
         "available_withdrawal_amount": 0,
         "portfolio_value": round(portfolio_value, 2),
+        "account_equity": round(wallet_cash + portfolio_value, 2),
         "market_open": market_open,
         "fcxv_24h_enabled": _bool(market.get("fcxv_24h_enabled"), False),
         "margin_enabled": _bool(permissions.get("margin"), False),
@@ -268,3 +280,43 @@ def create_order(*, user: dict[str, Any], identity_id: str, payload: dict[str, A
         },
         idempotency_key,
     )
+
+
+def create_wallet_transfer(
+    *,
+    user: dict[str, Any],
+    identity_id: str,
+    transaction_type: str,
+    amount: float,
+) -> dict[str, Any]:
+    direction = str(transaction_type or "").strip().lower()
+    if direction not in {"deposit", "withdrawal"}:
+        raise ValueError("Choose a valid deposit or withdrawal")
+    if amount <= 0 or not math.isfinite(amount):
+        raise ValueError("Enter a positive transfer amount")
+    account = resolve_account(user, identity_id)
+    community = CommunityConfig.load().community_id
+    idempotency_key = f"{community}-wallet-{direction}-{user['id']}-{secrets.token_urlsafe(18)}"
+    response = _client().create_settlement(
+        {
+            "idempotency_key": idempotency_key,
+            "community_user_id": str(user["id"]),
+            "account_id": str(account["account_id"]),
+            "operation": "debit" if direction == "deposit" else "credit",
+            "amount": round(float(amount), 2),
+            "currency": "FC",
+            "order_reference": f"Ravenhood {direction}",
+            "metadata": {
+                "kind": "wallet_transfer",
+                "direction": direction,
+                "display_name": str(user.get("name") or user.get("username") or "Resident")[:200],
+                "bohemia_identity_id": str(identity_id or "")[:200],
+            },
+        },
+        idempotency_key,
+    )
+    settlement = response.get("settlement") if isinstance(response, dict) else None
+    settlement_id = str((settlement or {}).get("settlement_id") or "")
+    if not settlement_id:
+        raise FcxClientError("FCX did not create the wallet transfer")
+    return _client().execute_settlement(settlement_id)

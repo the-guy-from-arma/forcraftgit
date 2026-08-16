@@ -19,7 +19,7 @@ import remote_fcx
 class RemoteFcxPayloadTests(unittest.TestCase):
     def test_grouped_fcx_history_and_execution_volume_are_preserved_for_cad_ui(self):
         client = SimpleNamespace(
-            market=lambda: {
+            market=lambda **_kwargs: {
                 "permissions": {"trading": True, "buy": True, "sell": True},
                 "market": {"market_open": True},
                 "securities": [{
