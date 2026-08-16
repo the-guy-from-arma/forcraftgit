@@ -42,20 +42,28 @@ def _number(value: Any, default: float = 0.0) -> float:
     return parsed if math.isfinite(parsed) else default
 
 
-def _flat_price_history(value: Any) -> list[dict[str, Any]]:
-    """Translate FCX's ticker-grouped history into CAD's legacy flat stream."""
-    flattened: list[dict[str, Any]] = []
+def _grouped_price_history(value: Any) -> dict[str, list[dict[str, Any]]]:
+    """Preserve FCX's ticker grouping so each chart receives only its executions."""
+    grouped: dict[str, list[dict[str, Any]]] = {}
     if isinstance(value, dict):
         for ticker, rows in value.items():
             if not isinstance(rows, list):
                 continue
+            key = str(ticker).upper()
             for raw in rows:
                 if isinstance(raw, dict):
-                    flattened.append({"ticker": str(ticker).upper(), **raw})
+                    grouped.setdefault(key, []).append(dict(raw))
     elif isinstance(value, list):
-        flattened = [dict(raw) for raw in value if isinstance(raw, dict)]
-    flattened.sort(key=lambda row: str(row.get("recorded_at") or ""))
-    return flattened
+        for raw in value:
+            if not isinstance(raw, dict):
+                continue
+            row = dict(raw)
+            key = str(row.pop("ticker", "")).upper()
+            if key:
+                grouped.setdefault(key, []).append(row)
+    for rows in grouped.values():
+        rows.sort(key=lambda row: str(row.get("recorded_at") or ""))
+    return grouped
 
 
 def connection_status() -> dict[str, Any]:
@@ -222,7 +230,7 @@ def build_market_payload(
         "exchange_market_cap": round(sum(_number(item.get("market_cap")) for item in securities), 2),
         "anonymous_trade_tape": market_response.get("anonymous_trade_tape") or [],
         "company_wire": market_response.get("company_wire") or [],
-        "price_history": _flat_price_history(market_response.get("price_history")),
+        "price_history": _grouped_price_history(market_response.get("price_history")),
         "market_analytics": market_response.get("market_analytics") or {},
         "history_ticker": str(history_ticker or "").upper().strip(),
         "history_range": str(history_range or "LIVE").upper().strip() or "LIVE",

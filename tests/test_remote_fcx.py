@@ -17,7 +17,7 @@ import remote_fcx
 
 
 class RemoteFcxPayloadTests(unittest.TestCase):
-    def test_grouped_fcx_history_is_flattened_for_cad_ui(self):
+    def test_grouped_fcx_history_and_execution_volume_are_preserved_for_cad_ui(self):
         client = SimpleNamespace(
             market=lambda: {
                 "permissions": {"trading": True, "buy": True, "sell": True},
@@ -30,8 +30,22 @@ class RemoteFcxPayloadTests(unittest.TestCase):
                 }],
                 "price_history": {
                     "FCF": [
-                        {"price": 12, "recorded_at": "2026-08-15T12:01:00Z"},
-                        {"price": 11, "recorded_at": "2026-08-15T12:00:00Z"},
+                        {
+                            "price": 12,
+                            "recorded_at": "2026-08-15T12:01:00Z",
+                            "volume": 9,
+                            "buy_volume": 6,
+                            "sell_volume": 3,
+                            "trade_count": 2,
+                        },
+                        {
+                            "price": 11,
+                            "recorded_at": "2026-08-15T12:00:00Z",
+                            "volume": 4,
+                            "buy_volume": 1,
+                            "sell_volume": 3,
+                            "trade_count": 1,
+                        },
                     ]
                 },
             },
@@ -50,8 +64,10 @@ class RemoteFcxPayloadTests(unittest.TestCase):
 
         self.assertTrue(payload["market_open"])
         self.assertEqual(payload["exchange_market_cap"], 120000)
-        self.assertEqual([row["price"] for row in payload["price_history"]], [11, 12])
-        self.assertEqual({row["ticker"] for row in payload["price_history"]}, {"FCF"})
+        self.assertEqual([row["price"] for row in payload["price_history"]["FCF"]], [11, 12])
+        self.assertEqual([row["volume"] for row in payload["price_history"]["FCF"]], [4, 9])
+        self.assertEqual(payload["price_history"]["FCF"][-1]["buy_volume"], 6)
+        self.assertEqual(payload["price_history"]["FCF"][-1]["sell_volume"], 3)
 
 
 if __name__ == "__main__":

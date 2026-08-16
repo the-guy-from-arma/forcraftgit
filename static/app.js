@@ -5974,6 +5974,8 @@ function normalizeMarketPriceHistory(rows) {
         high: Math.max(high, open, close),
         low: Math.min(low, open, close),
         volume: Math.max(0, Number(row.volume || 0)),
+        buyVolume: Math.max(0, Number(row.buy_volume || 0)),
+        sellVolume: Math.max(0, Number(row.sell_volume || 0)),
         tradeCount: Math.max(0, Number(row.trade_count || 0)),
         vwap: row.cumulative_vwap == null ? null : Number(row.cumulative_vwap),
         bucketVwap: row.bucket_vwap == null ? null : Number(row.bucket_vwap),
@@ -6214,9 +6216,15 @@ function renderMarketWorkspace() {
   const directionCopy = trendSlope > .25 ? "Price is carrying above a rising EMA." : trendSlope < -.25 ? "Price is trading beneath a falling EMA." : "Price and its EMA are moving inside a narrow channel.";
   const vwapValue = Number(analytics.vwap ?? [...history].reverse().find(row => Number.isFinite(row.vwap) && row.vwap > 0)?.vwap ?? 0);
   const priceVsVwap = vwapValue > 0 ? (currentPrice / vwapValue - 1) * 100 : null;
-  const tradedVolume = Math.max(0, Number(analytics.traded_volume || 0));
-  const tradeCount = Math.max(0, Number(analytics.trade_count || 0));
-  const buyPressure = Math.max(0, Math.min(100, Number(analytics.buy_pressure_percent ?? 50)));
+  const historyTradedVolume = history.reduce((total, row) => total + Number(row.volume || 0), 0);
+  const historyTradeCount = history.reduce((total, row) => total + Number(row.tradeCount || 0), 0);
+  const historyBuyVolume = history.reduce((total, row) => total + Number(row.buyVolume || 0), 0);
+  const historySellVolume = history.reduce((total, row) => total + Number(row.sellVolume || 0), 0);
+  const historyDirectionalVolume = historyBuyVolume + historySellVolume;
+  const tradedVolume = Math.max(0, Number(analytics.traded_volume ?? historyTradedVolume));
+  const tradeCount = Math.max(0, Number(analytics.trade_count ?? historyTradeCount));
+  const derivedBuyPressure = historyDirectionalVolume > 0 ? historyBuyVolume / historyDirectionalVolume * 100 : 50;
+  const buyPressure = Math.max(0, Math.min(100, Number(analytics.buy_pressure_percent ?? derivedBuyPressure)));
   const sellPressure = Math.max(0, Math.min(100, Number(analytics.sell_pressure_percent ?? (100 - buyPressure))));
   const quoteVolatility = Math.sqrt(Math.max(0, variance)) * 100;
   const movementRows = history.slice(1).map((row, index) => ({
