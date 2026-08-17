@@ -338,6 +338,15 @@ def create_order(*, user: dict[str, Any], identity_id: str, payload: dict[str, A
     )
 
 
+def redeem_promotion(*, user: dict[str, Any], identity_id: str, code: str) -> dict[str, Any]:
+    account = resolve_account(user, identity_id)
+    return _client().redeem_promotion({
+        "community_user_id": str(user["id"]),
+        "account_id": str(account["account_id"]),
+        "code": str(code or "").strip(),
+    })
+
+
 def create_wallet_transfer(
     *,
     user: dict[str, Any],

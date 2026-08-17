@@ -70,6 +70,9 @@ class FcxClient:
         query = urlencode({"account_id": str(account_id)})
         return self.request("GET", f"/api/v1/community/ravenhood/{community_user_id}/portfolio?{query}")
 
+    def redeem_promotion(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.request("POST", "/api/v1/community/promotions/redeem", payload)
+
     def create_order(self, payload: dict[str, Any], idempotency_key: str) -> dict[str, Any]:
         return self.request("POST", "/api/v1/community/orders", payload, idempotency_key=idempotency_key)
 

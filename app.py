@@ -39,6 +39,7 @@ from remote_fcx import (
     connection_status as remote_fcx_connection_status,
     create_order as create_remote_fcx_order,
     create_wallet_transfer as create_remote_fcx_wallet_transfer,
+    redeem_promotion as redeem_remote_fcx_promotion,
     remote_market_enabled,
     resolve_account as resolve_remote_fcx_account,
 )
@@ -19265,6 +19266,13 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if err:
             self.error(403 if user else 401, err); return
         assert user is not None
+        if REMOTE_FCX_ENABLED:
+            try:
+                context = cad1_remote_fcx_context(db, user)
+                result = redeem_remote_fcx_promotion(user=dict(user), identity_id=context["identity_id"], code=str(self.read_json().get("code") or ""))
+            except (FcxClientError, ValueError) as exc:
+                self.error(502, str(exc)); return
+            self.send_json(200, {"ok": True, "remote_fcx": True, **result}); return
         entered_code = str(self.read_json().get("code") or "").upper()
         raw_code = "".join(entered_code.split())
         if len(raw_code) < 6:
