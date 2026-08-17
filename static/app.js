@@ -15372,7 +15372,7 @@ function renderDevTools() {
         </section>
         <div class="dev-campaign-publish"><div><strong>Campaign changes affect all eligible users</strong><span>The publishing developer will preview the splash on their next fresh entrance, not immediately.</span></div><button class="primary" type="submit">Publish campaign schedule</button></div>
       </form>
-      <section class="dev-card dev-promo-command">
+      <section class="dev-card dev-promo-command" hidden aria-hidden="true" data-retired-control="fcx-control-only">
         <header><div><span>RAVENHOOD ACQUISITION</span><h2>Portfolio promotional codes</h2><p>Launch controlled resident rewards for buying power, a selected security, or a randomized starter portfolio.</p></div><strong>${promotions.filter(x=>x.active).length} ACTIVE</strong></header>
         <form id="devMarketPromoForm" class="dev-promo-form">
           <div class="dev-promo-lanes" role="group" aria-label="Promotion reward type">
@@ -18139,24 +18139,6 @@ function bindDevTools() {
     toast("Individual application statuses updated");
     await refreshDevTools();
   });
-  const promoReward = $("[data-promo-reward-type]");
-  const syncPromoFields = () => { const type=promoReward?.value; if($("[data-promo-cash]")) $("[data-promo-cash]").hidden=type!=="cash"; if($("[data-promo-stock]")) $("[data-promo-stock]").hidden=type!=="stock"; if($("[data-promo-shares]")) $("[data-promo-shares]").hidden=!(["stock","random_bundle"].includes(type)); if($("[data-promo-bundle]")) $("[data-promo-bundle]").hidden=type!=="random_bundle"; };
-  promoReward?.addEventListener("change", syncPromoFields);
-  $$('[data-promo-lane]').forEach(button=>button.addEventListener('click',()=>{ if(promoReward) promoReward.value=button.dataset.promoLane; $$('[data-promo-lane]').forEach(item=>item.classList.toggle('active',item===button)); syncPromoFields(); }));
-  syncPromoFields();
-  $("#devMarketPromoForm")?.addEventListener("submit", async event => { event.preventDefault(); try { state.generatedMarketPromo=await api("/api/dev-tools/market/promotions",{method:"POST",body:Object.fromEntries(new FormData(event.currentTarget))}); toast("Ravenhood promotional code issued"); await refreshDevTools(); } catch(error){toast(error.message);} });
-  $$('[data-market-promo-status]').forEach(button=>button.addEventListener('click',async()=>{try{await api(`/api/dev-tools/market/promotions/${button.dataset.marketPromoStatus}`,{method:'PATCH',body:{active:button.dataset.active==='1'}});toast("Promotion status updated");await refreshDevTools();}catch(error){toast(error.message);}}));
-  $$('[data-market-promo-delete]').forEach(button=>button.addEventListener('click',async()=>{
-    const name = button.dataset.marketPromoName || "this promotion";
-    if (!confirm(`Delete ${name}? This permanently removes the promo code and its redemption records.`)) return;
-    try {
-      await api(`/api/dev-tools/market/promotions/${button.dataset.marketPromoDelete}`, { method: "DELETE" });
-      toast("Promotion deleted");
-      await refreshDevTools();
-    } catch (error) {
-      toast(error.message);
-    }
-  }));
   $("#accountDeletionSearch")?.addEventListener("input", (event) => {
     const query = String(event.target.value || "").trim().toLowerCase();
     $$("[data-deletion-account]").forEach((row) => {

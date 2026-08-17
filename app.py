@@ -12705,12 +12705,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                     self.api_dev_market_liquidation_hunt(db, user)
                 elif path == "/api/dev-tools/market/ai-briefing" and method == "POST":
                     self.api_dev_market_ai_briefing(db, user)
-                elif path == "/api/dev-tools/market/promotions" and method == "POST":
-                    self.api_dev_market_promotion(db, user)
-                elif path.startswith("/api/dev-tools/market/promotions/") and method == "PATCH":
-                    self.api_dev_market_promotion_status(db, user, self.path_int(path, 4))
-                elif path.startswith("/api/dev-tools/market/promotions/") and method == "DELETE":
-                    self.api_dev_market_promotion_delete(db, user, self.path_int(path, 4))
                 elif path == "/api/dev-tools/lottery/settings" and method == "PATCH":
                     self.api_dev_lottery_settings(db, user)
                 elif path == "/api/dev-tools/lottery/player-pool" and method == "PATCH":
@@ -27963,6 +27957,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(201, {"ok": True, "code": raw_code, "transaction_type": tx_type, "amount": amount, "unassigned": True, "expires_at": expires.isoformat()})
 
     def api_dev_market_promotion(self, db: Database, user: DbRow | None) -> None:
+        self.error(410, "Promotional campaigns are managed exclusively in FCX-Control.")
+        return
         err = developer_required(user)
         if err:
             self.error(403 if user else 401, err); return
@@ -28015,6 +28011,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(201, {"ok": True, "code": raw_code, "campaign_name": campaign_name, "expires_at": expires.isoformat()})
 
     def api_dev_market_promotion_status(self, db: Database, user: DbRow | None, promo_id: int | None) -> None:
+        self.error(410, "Promotional campaigns are managed exclusively in FCX-Control.")
+        return
         err = developer_required(user)
         if err:
             self.error(403 if user else 401, err); return
@@ -28026,6 +28024,8 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"ok": True, "active": bool(active)})
 
     def api_dev_market_promotion_delete(self, db: Database, user: DbRow | None, promo_id: int | None) -> None:
+        self.error(410, "Promotional campaigns are managed exclusively in FCX-Control.")
+        return
         err = developer_required(user)
         if err:
             self.error(403 if user else 401, err); return
