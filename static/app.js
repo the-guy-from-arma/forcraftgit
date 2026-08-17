@@ -69,7 +69,6 @@ const state = {
   armaLinkPromptDismissed: false,
   dmvComplianceDismissed: false,
   generatedDevCode: null,
-  generatedMarketPromo: null,
   marketPromoSuccess: null,
   marketPromoSubmitting: false,
   marketPromoError: "",
@@ -15348,9 +15347,6 @@ function renderDevTools() {
   if (state.devTab === "linking") return `<div class="stack dev-ops-view dev-linking-view"><div class="dev-view-intro"><div><span>IDENTITY CONTROL</span><h2>Account-link registry</h2><p>Review verified identity claims and issue tightly scoped unlink authorization.</p></div><strong>${users.filter((x) => x.arma_linked).length} LINKED</strong></div>${metrics}<div class="dev-grid-2"><section class="dev-card dev-access-panel"><p class="eyebrow">Secure unlink authorization</p><h2>One-time developer code</h2><p class="muted">Single-purpose credentials for supervised identity maintenance.</p><form id="devCodeForm" class="form-grid"><label>Validity window<input name="expiry_minutes" type="number" min="5" max="1440" value="30" required /><small>Minutes until automatic expiration</small></label><button class="primary">Generate authorization</button></form>${state.generatedDevCode ? `<div class="dev-generated-code"><span>Shown once</span><strong>${escapeHtml(state.generatedDevCode.code)}</strong><small>Expires ${escapeHtml(state.generatedDevCode.expires_at)}</small></div>` : ""}<div class="dev-code-ledger">${codes.slice(0,12).map((x) => `<div><code>••••-${escapeHtml(x.code_hint)}</code><span>${escapeHtml(x.created_by_name)}</span><strong class="${x.uses_remaining ? "available" : ""}">${x.uses_remaining ? "Available" : "Consumed"}</strong></div>`).join("") || `<div class="empty">No authorization codes issued</div>`}</div></section><section class="dev-card dev-record-panel"><div class="dev-card-header"><div><span>RECENT CLAIMS</span><h2>Identity activity</h2></div></div>${devRecentLinks(data.recent_links || [])}</section></div><section class="dev-card dev-linked-registry"><div class="dev-card-header"><div><span>VERIFIED DIRECTORY</span><h2>Linked accounts</h2></div><strong>${users.filter((x) => x.arma_linked).length}</strong></div>${devLinkedAccounts(users)}</section></div>`;
   if (state.devTab === "campaigns") {
     const experience = data.experience || {};
-    const market = data.market_settings || {};
-    const promotions = market.promotions || [];
-    const redemptions = market.promotion_redemptions || [];
     return `<div class="stack dev-campaigns-view">
       <div class="dev-view-intro"><div><span>COMMUNITY BROADCAST CONTROL</span><h2>Active campaigns</h2><p>Promote communities, gangs, events, operational notices, and rule changes for a controlled period.</p></div><strong>${Number(Boolean(experience.system_banner_enabled)) + Number(Boolean(experience.splash_enabled))} LIVE</strong></div>
       <form id="devExperienceForm" class="dev-campaign-grid">
@@ -15371,29 +15367,6 @@ function renderDevTools() {
         </section>
         <div class="dev-campaign-publish"><div><strong>Campaign changes affect all eligible users</strong><span>The publishing developer will preview the splash on their next fresh entrance, not immediately.</span></div><button class="primary" type="submit">Publish campaign schedule</button></div>
       </form>
-      <section class="dev-card dev-promo-command" hidden aria-hidden="true" data-retired-control="fcx-control-only">
-        <header><div><span>RAVENHOOD ACQUISITION</span><h2>Portfolio promotional codes</h2><p>Launch controlled resident rewards for buying power, a selected security, or a randomized starter portfolio.</p></div><strong>${promotions.filter(x=>x.active).length} ACTIVE</strong></header>
-        <form id="devMarketPromoForm" class="dev-promo-form">
-          <div class="dev-promo-lanes" role="group" aria-label="Promotion reward type">
-            <button type="button" class="active" data-promo-lane="cash"><b>01</b><span><strong>Cash drop</strong><small>Buying power added to Ravenhood</small></span></button>
-            <button type="button" data-promo-lane="stock"><b>02</b><span><strong>Free stock</strong><small>Give one security and shares</small></span></button>
-            <button type="button" data-promo-lane="random_bundle"><b>03</b><span><strong>Starter portfolio</strong><small>Give a random 3, 5, or 9-stock bundle</small></span></button>
-          </div>
-          <input type="hidden" name="reward_type" data-promo-reward-type value="cash" />
-          <label>Promotion name<input name="campaign_name" maxlength="120" placeholder="New resident portfolio launch" required /><small>Internal name shown in the redemption ledger.</small></label>
-          <label>Code to issue<input name="custom_code" maxlength="32" placeholder="Leave blank to generate securely" /><small>Optional. Codes are uppercase and single-use per resident.</small></label>
-          <label class="promo-reward-field" data-promo-cash>Buying power<input name="cash_amount" type="number" min="0.01" step="0.01" value="5000" /><small>Ravenhood cash credited instantly on redemption.</small></label>
-          <label data-promo-stock hidden>Security<select name="ticker">${(market.securities||[]).filter(x=>x.active).map(x=>`<option value="${escapeHtml(x.ticker)}">${escapeHtml(x.ticker)} · ${escapeHtml(x.name)}</option>`).join("")}</select></label>
-          <label data-promo-shares hidden>Shares per security<input name="share_quantity" type="number" min="0.000001" step="0.000001" value="1" /><small>Quantity granted for each selected security.</small></label>
-          <label data-promo-bundle hidden>Starter portfolio size<select name="bundle_size"><option value="3">3 random stocks</option><option value="5">5 random stocks</option><option value="9">9 random stocks</option></select><small>Randomized from the active market directory.</small></label>
-          <label>Redemption limit<input name="max_redemptions" type="number" min="1" max="100000" value="100" required /><small>How many residents may claim it.</small></label>
-          <label>Expires after (days)<input name="expiry_days" type="number" min="1" max="365" value="30" required /><small>Set the claim window before issuing.</small></label>
-          <button class="primary" type="submit">Issue this promotion</button>
-        </form>
-        ${state.generatedMarketPromo ? `<div class="dev-generated-code"><span>COPY THIS CODE NOW · SHOWN ONCE</span><strong>${escapeHtml(state.generatedMarketPromo.code)}</strong><small>${escapeHtml(state.generatedMarketPromo.campaign_name)} · expires ${escapeHtml(state.generatedMarketPromo.expires_at)}</small></div>` : ""}
-        <div class="dev-promo-ledger"><div class="dev-promo-ledger-head"><span>Campaign</span><span>Reward</span><span>Claims</span><span>Control</span></div>${promotions.map(p=>`<article><span><strong>${escapeHtml(p.campaign_name)}</strong><small>${escapeHtml(p.code_plain || `legacy code ending ${p.code_hint}`)} · ${escapeHtml(p.created_by_name)}</small></span><span>${p.reward_type==="cash"?money(p.cash_amount):p.reward_type==="stock"?`${Number(p.share_quantity)} ${escapeHtml(p.ticker||"")}`:`${p.bundle_size} random stocks × ${Number(p.share_quantity)}`}</span><span><strong>${Number(p.redemption_count)}/${Number(p.max_redemptions)}</strong><small>expires ${escapeHtml(String(p.expires_at||"Never").slice(0,10))}</small></span><span class="dev-promo-controls"><button class="${p.active?"danger":"secondary"}" data-market-promo-status="${p.id}" data-active="${p.active?0:1}">${p.active?"Pause":"Resume"}</button><button class="danger" data-market-promo-delete="${p.id}" data-market-promo-name="${escapeHtml(p.campaign_name)}">Delete</button></span></article>`).join("")||`<div class="empty">No Ravenhood promotions issued.</div>`}</div>
-        <footer class="dev-promo-redemptions"><strong>Recent redemptions</strong>${redemptions.slice(0,12).map(r=>`<span><b>${escapeHtml(r.name)} · CIV ${escapeHtml(r.civ_number||"")}</b><em>${escapeHtml(r.reward_summary)}</em><small>${escapeHtml(r.code_plain || `legacy code ending ${r.code_hint || ""}`)} · ${escapeHtml(r.campaign_name)} · ${escapeHtml(r.redeemed_at)}</small></span>`).join("")||`<small>No codes redeemed yet.</small>`}</footer>
-      </section>
     </div>`;
   }
   if (state.devTab === "settlement") {

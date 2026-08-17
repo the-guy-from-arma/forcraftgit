@@ -25709,29 +25709,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
                 "splash_end_at": settings["splash_end_at"],
                 "splash_revision": settings["splash_revision"],
             }
-            payload["market_settings"] = {
-                "securities": [dict(row) for row in all_rows(
-                    db,
-                    "SELECT id,ticker,name,security_type,active FROM market_securities ORDER BY security_type,ticker",
-                )],
-                "promotions": [dict(row) for row in all_rows(
-                    db,
-                    """
-                    SELECT p.id,p.campaign_name,p.code_hint,p.code_plain,p.reward_type,p.cash_amount,p.share_quantity,p.bundle_size,
-                           p.max_redemptions,p.redemption_count,p.expires_at,p.active,p.created_at,s.ticker,creator.name AS created_by_name
-                    FROM market_promo_codes p LEFT JOIN market_securities s ON s.id=p.security_id
-                    JOIN users creator ON creator.id=p.created_by ORDER BY p.created_at DESC LIMIT 100
-                    """,
-                )],
-                "promotion_redemptions": [dict(row) for row in all_rows(
-                    db,
-                    """
-                    SELECT r.reward_summary,r.redeemed_at,p.campaign_name,p.code_plain,p.code_hint,u.name,u.civ_number
-                    FROM market_promo_redemptions r JOIN market_promo_codes p ON p.id=r.promo_id
-                    JOIN users u ON u.id=r.user_id ORDER BY r.redeemed_at DESC LIMIT 100
-                    """,
-                )],
-            }
         elif section in {"autopilot", "system-update"}:
             payload["system_settings"] = settings
             if section == "autopilot":
