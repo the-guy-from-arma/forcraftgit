@@ -21581,6 +21581,10 @@ textarea:focus {
 .fcx-boundary-card{min-height:210px;padding:25px;border:1px solid rgba(117,168,180,.2);border-radius:14px;background:rgba(8,24,30,.64)}
 .fcx-boundary-card h3{margin:9px 0 14px;color:#efffff;font-size:21px}
 .fcx-boundary-card>p:not(.eyebrow){margin:0 0 20px;color:#8ba5ad;line-height:1.6}
+.fcx-capability-list li{position:relative;padding-left:24px}
+.fcx-capability-list li::before{content:"✓";position:absolute;left:0;color:#54e9bd;font-weight:900}
+.fcx-integrity-notice{border-color:rgba(84,233,189,.32);background:linear-gradient(145deg,rgba(84,233,189,.08),rgba(8,24,30,.64) 44%)}
+.fcx-integrity-notice>p:not(.eyebrow){margin-bottom:12px}
 .fcx-boundary-card .primary{display:inline-flex;align-items:center;justify-content:center;min-height:42px;margin-top:8px;padding:0 17px;border-radius:9px;text-decoration:none}
 .fcx-capability-list{display:grid;gap:10px;margin:0;padding:0;list-style:none}
 .fcx-capability-list li{position:relative;padding-left:18px;color:#a8c1c7;line-height:1.5}

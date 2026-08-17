@@ -14311,7 +14311,6 @@ function renderDevMarketSettings(market, users) {
     const connection = market.connection || {};
     const ownership = market.ownership || {};
     const online = Boolean(connection.connected && connection.authenticated);
-    const controlOrigin = String(connection.control_origin || "");
     const capabilities = (market.capabilities || []).map(item => `<li>${escapeHtml(item)}</li>`).join("");
     return `<section class="dev-card fcx-connection-panel">
       <div class="dev-section-heading">
@@ -14330,9 +14329,7 @@ function renderDevMarketSettings(market, users) {
       </div>
       <div class="dev-grid-2 fcx-ownership-grid">
         <div class="fcx-boundary-card"><p class="eyebrow">OWNERSHIP CONTRACT</p><h3>Read-only from CAD 1</h3><ul class="fcx-capability-list">${capabilities}</ul></div>
-        <div class="fcx-boundary-card"><p class="eyebrow">CONTROL LOCATION</p><h3>FEC operations moved out</h3><p>Stock Settings, Leverage Settings, FEC Investigations, the local market engine, and every global market mutation are available only in the standalone FEC PWA.</p>
-          ${controlOrigin ? `<a class="primary" href="${escapeHtml(controlOrigin)}" target="_blank" rel="noopener">Open FEC control platform</a>` : ""}
-        </div>
+        <div class="fcx-boundary-card fcx-integrity-notice"><p class="eyebrow">INDEPENDENT MARKET GOVERNANCE</p><h3>FCX is governed outside this CAD</h3><p>FCX is an independent third-party market service. The Federal Exchange Commission controls listings, pricing policy, leverage, surveillance, investigations, and the integrity of the shared exchange.</p><p>CAD administrators provide authenticated resident access and identity linkage, but cannot rewrite global FCX records or override FEC audit controls.</p></div>
       </div>
       <p class="dev-footnote">Player Ravenhood access remains available. This panel cannot alter exchange settings, leverage, investigations, or FCX records.</p>
     </section>`;
