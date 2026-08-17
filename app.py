@@ -15043,7 +15043,6 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             "ranked_boards": sum(1 for board_rows in ranked_boards.values() if any(int(row.get("user_id") or 0) == int(user["id"]) for row in board_rows)),
             "perks": [
                 {"type": "lottery_entry", "cost": 250, "label": "Lottery ticket credit", "detail": "Receive enough Lottery Wallet credit to choose one weekly number line. Limited to five prestige credits per drawing."},
-                {"type": "stock_share", "cost": 750, "label": "Starter stock share", "detail": "Receive one free share in the active Faircroft market."},
             ],
         }
         self.send_json(
@@ -15104,59 +15103,43 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         payload = self.read_json()
         perk_type = str(payload.get("perk_type") or "").strip().lower()
         perks = {
-            "lottery_entry": (250, "Faircroft Lottery ticket credit"),
-            "stock_share": (750, "One free share in the active Faircroft market"),
+            "lottery_entry": 250,
         }
         if perk_type not in perks:
             self.error(400, "Choose a valid leaderboard perk.")
             return
-        cost, reward_label = perks[perk_type]
+        cost = perks[perk_type]
         # Serialize point spending so rapid clicks cannot award a perk before a
         # competing request has committed its point deduction.
         progress = one(db, "SELECT * FROM leaderboard_progress WHERE user_id=? FOR UPDATE", (user["id"],))
         if not progress or int(progress["season_points"] or 0) < cost:
             self.error(409, f"You need {cost:,} rank points for this perk.")
             return
-        summary = reward_label
-        if perk_type == "lottery_entry":
-            settings = get_system_settings(db)
-            if not settings["lottery_enabled"]:
-                self.error(409, "Lottery entries are currently closed.")
-                return
-            excluded = sorted(set(roles_for(user)) & set(settings["lottery_excluded_roles"]))
-            if excluded:
-                self.error(403, "This account is excluded from lottery participation by role policy.")
-                return
-            draw = ensure_lottery_draw(db, settings)
-            one(db, "SELECT id FROM users WHERE id=? FOR UPDATE", (user["id"],))
-            legacy_count = int(one(db, "SELECT COUNT(*) AS count FROM lottery_entries WHERE draw_id=? AND user_id=? AND source='leaderboard_perk'", (draw["id"], user["id"]))["count"] or 0)
-            credit_count = int(one(db, """SELECT COUNT(*) AS count FROM lottery_wallet_transactions
-                WHERE user_id=? AND transaction_type='prestige_lottery_credit' AND created_at>=?""",
-                (user["id"], draw["created_at"]))["count"] or 0)
-            prestige_count = legacy_count + credit_count
-            if prestige_count >= 5:
-                self.error(409, "You have already redeemed the maximum of five prestige lottery credits for this drawing.")
-                return
-            lottery_wallet_snapshot(db, int(user["id"]), settings, False)
-            credit = round(float(settings["lottery_ticket_price"]), 2)
-            ts = now_iso()
-            db.execute("UPDATE lottery_wallets SET balance=balance+?,updated_at=? WHERE user_id=?", (credit, ts, user["id"]))
-            db.execute("INSERT INTO lottery_wallet_transactions (user_id,amount,transaction_type,detail,created_at) VALUES (?,?,?,?,?)",
-                (user["id"], credit, "prestige_lottery_credit", f"Prestige weekly ticket credit {prestige_count + 1}/5", ts))
-            summary = f"${credit:,.2f} Lottery Wallet credit ({prestige_count + 1}/5 this drawing)"
-        else:
-            security = one(db, "SELECT * FROM market_securities WHERE active<>0 ORDER BY id LIMIT 1")
-            if not security:
-                self.error(409, "No active market security is available for this perk.")
-                return
-            account = one(db, "SELECT * FROM market_accounts WHERE user_id=?", (user["id"],))
-            if not account:
-                ts = now_iso()
-                db.execute("INSERT INTO market_accounts (user_id,cash_balance,status,created_at,updated_at) VALUES (?,?,?,?,?)", (user["id"], 0, "active", ts, ts))
-                account = one(db, "SELECT * FROM market_accounts WHERE user_id=?", (user["id"],))
-            db.execute("""INSERT INTO market_holdings (account_id,security_id,quantity,average_cost) VALUES (?,?,?,0)
-                ON CONFLICT (account_id,security_id) DO UPDATE SET quantity=market_holdings.quantity+EXCLUDED.quantity""", (account["id"], security["id"], 1))
-            summary = f"1 share of {security['ticker']}"
+        settings = get_system_settings(db)
+        if not settings["lottery_enabled"]:
+            self.error(409, "Lottery entries are currently closed.")
+            return
+        excluded = sorted(set(roles_for(user)) & set(settings["lottery_excluded_roles"]))
+        if excluded:
+            self.error(403, "This account is excluded from lottery participation by role policy.")
+            return
+        draw = ensure_lottery_draw(db, settings)
+        one(db, "SELECT id FROM users WHERE id=? FOR UPDATE", (user["id"],))
+        legacy_count = int(one(db, "SELECT COUNT(*) AS count FROM lottery_entries WHERE draw_id=? AND user_id=? AND source='leaderboard_perk'", (draw["id"], user["id"]))["count"] or 0)
+        credit_count = int(one(db, """SELECT COUNT(*) AS count FROM lottery_wallet_transactions
+            WHERE user_id=? AND transaction_type='prestige_lottery_credit' AND created_at>=?""",
+            (user["id"], draw["created_at"]))["count"] or 0)
+        prestige_count = legacy_count + credit_count
+        if prestige_count >= 5:
+            self.error(409, "You have already redeemed the maximum of five prestige lottery credits for this drawing.")
+            return
+        lottery_wallet_snapshot(db, int(user["id"]), settings, False)
+        credit = round(float(settings["lottery_ticket_price"]), 2)
+        ts = now_iso()
+        db.execute("UPDATE lottery_wallets SET balance=balance+?,updated_at=? WHERE user_id=?", (credit, ts, user["id"]))
+        db.execute("INSERT INTO lottery_wallet_transactions (user_id,amount,transaction_type,detail,created_at) VALUES (?,?,?,?,?)",
+            (user["id"], credit, "prestige_lottery_credit", f"Prestige weekly ticket credit {prestige_count + 1}/5", ts))
+        summary = f"${credit:,.2f} Lottery Wallet credit ({prestige_count + 1}/5 this drawing)"
         updated = one(db, """UPDATE leaderboard_progress SET season_points=season_points-?, redeemed_points=redeemed_points+?, updated_at=?
             WHERE user_id=? AND season_points>=? RETURNING season_points,redeemed_points""", (cost, cost, now_iso(), user["id"], cost))
         if not updated:
@@ -19486,33 +19469,9 @@ class RoleplayHandler(BaseHTTPRequestHandler):
             self.error(409, str(exc)); return
         reward_type = "cash"
         cash_amount = float(secrets.choice(get_system_settings(db)["lottery_scratch_prizes"]))
-        security = None
-        share_quantity = 0.0
         promo_id = None
         promo_code = None
-        # A portion of scratch cards are stock rewards. They receive a real,
-        # single-use Ravenhood promotion code tied to an active security.
-        securities = all_rows(db, """SELECT id,ticker FROM market_securities s WHERE active=1
-            AND NOT EXISTS (SELECT 1 FROM market_security_halts h
-                            WHERE h.security_id=s.id AND h.status='active') ORDER BY ticker""")
-        if securities and secrets.randbelow(100) < 25:
-            reward_type = "stock"
-            cash_amount = 0.0
-            security = secrets.choice(securities)
-            share_quantity = float(secrets.choice((1, 2, 5)))
-            reward_summary = f"{share_quantity:g} {security['ticker']} stock share{'s' if share_quantity != 1 else ''}"
-            alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-            for _ in range(30):
-                promo_code = "FCX-SCR-" + "".join(secrets.choice(alphabet) for _ in range(4)) + "-" + "".join(secrets.choice(alphabet) for _ in range(4))
-                code_hash = hashlib.sha256(promo_code.replace("-", "").encode("utf-8")).hexdigest()
-                if not one(db, "SELECT id FROM market_promo_codes WHERE code_hash=?", (code_hash,)):
-                    break
-            expires = utcnow() + dt.timedelta(days=30)
-            promo_id = db.execute("""INSERT INTO market_promo_codes
-                (campaign_name,code_hash,code_hint,code_plain,reward_type,cash_amount,security_id,share_quantity,bundle_size,max_redemptions,expires_at,created_by,created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id""", ("Faircroft Instant Scratch Stock", code_hash, promo_code[-4:], promo_code, "stock", 0, security["id"], share_quantity, 0, 1, expires.isoformat(), user["id"], utcnow().isoformat())).fetchone()["id"]
-        else:
-            reward_summary = f"${cash_amount:,.2f} in-game bank payout"
+        reward_summary = f"${cash_amount:,.2f} in-game bank payout"
         created = utcnow()
         expires = created + dt.timedelta(days=30)
         number = int(one(db, "SELECT COALESCE(MAX(card_number),0) AS maximum FROM lottery_scratch_cards WHERE user_id=? AND card_date=?", (user["id"], today))["maximum"] or 0) + 1
