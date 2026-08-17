@@ -185,8 +185,18 @@ def build_market_payload(
 
     permissions = market_response.get("permissions") if isinstance(market_response.get("permissions"), dict) else {}
     market = market_response.get("market") if isinstance(market_response.get("market"), dict) else {}
+    if _bool(market.get("market_open"), True):
+        queued_ids = [str(order.get("trade_request_id") or "") for order in portfolio_response.get("orders") or [] if str(order.get("status") or "").upper() == "QUEUED"]
+        for request_id in queued_ids[:25]:
+            if request_id:
+                try:
+                    client.refresh_order(request_id)
+                except FcxClientError:
+                    pass
+        if queued_ids:
+            portfolio_response = client.portfolio(user["id"], account_id)
     remote_account = portfolio_response.get("account") if isinstance(portfolio_response.get("account"), dict) else {}
-    wallet_cash = round(_number(remote_account.get("cash_balance")), 2)
+    wallet_cash = round(_number(remote_account.get("available_buying_power"), _number(remote_account.get("cash_balance"))), 2)
     game_balance = round(_number(game_bank_balance), 2)
 
     securities: list[dict[str, Any]] = []
@@ -224,17 +234,21 @@ def build_market_payload(
         })
 
     orders: list[dict[str, Any]] = []
+    order_requests: list[dict[str, Any]] = []
     for source in portfolio_response.get("orders") or []:
         if not isinstance(source, dict):
             continue
-        orders.append({
+        normalized_status = str(source.get("status") or "pending").lower()
+        display_status = "queued" if normalized_status == "queued" else "executed" if normalized_status == "settled" else "failed" if normalized_status in {"failed", "cancelled"} else "processing"
+        normalized_order = {
             **source,
             "id": str(source.get("trade_request_id") or source.get("id") or ""),
-            "status": str(source.get("status") or "pending").lower(),
+            "status": display_status,
             "unit_price": _number(source.get("submitted_price")),
             "gross_amount": _number(source.get("estimated_gross")),
             "fee_amount": _number(source.get("estimated_fee")),
-        })
+        }
+        (orders if display_status == "executed" else order_requests).append(normalized_order)
 
     trading_enabled = _bool(permissions.get("trading"), True) and not _bool(market.get("maintenance_mode"))
     buy_enabled = trading_enabled and _bool(permissions.get("buy"), True) and _bool(market.get("buy_enabled"), True)
@@ -285,7 +299,7 @@ def build_market_payload(
         "securities": securities,
         "holdings": holdings,
         "orders": orders,
-        "order_requests": [],
+        "order_requests": order_requests,
         "cash_transactions": [],
         "transfers": [],
         "promo_redemptions": [],
@@ -325,7 +339,7 @@ def create_order(*, user: dict[str, Any], identity_id: str, payload: dict[str, A
     account = resolve_account(user, identity_id)
     community = CommunityConfig.load().community_id
     idempotency_key = f"{community}-{user['id']}-{secrets.token_urlsafe(18)}"
-    return _client().create_order(
+    response = _client().create_order(
         {
             "idempotency_key": idempotency_key,
             "community_user_id": str(user["id"]),
@@ -336,6 +350,8 @@ def create_order(*, user: dict[str, Any], identity_id: str, payload: dict[str, A
         },
         idempotency_key,
     )
+    trade = response.get("trade") if isinstance(response.get("trade"), dict) else {}
+    return {**response, **trade, "status": str(trade.get("status") or "processing").lower()}
 
 
 def redeem_promotion(*, user: dict[str, Any], identity_id: str, code: str) -> dict[str, Any]:

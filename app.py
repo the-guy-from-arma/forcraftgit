@@ -18971,6 +18971,18 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         err = verified_required(user)
         if err:
             self.error(403 if user else 401, err); return
+        if REMOTE_FCX_ENABLED:
+            assert user is not None
+            payload = self.read_json()
+            try:
+                context = cad1_remote_fcx_context(db, user)
+                result = create_remote_fcx_order(user=dict(user), identity_id=context["identity_id"], payload=payload)
+            except ValueError as exc:
+                self.error(400, str(exc)); return
+            except (FcxClientError, RuntimeError) as exc:
+                self.error(502, f"FCX-Control could not accept the order: {exc}"); return
+            self.send_json(202, {"ok": True, "remote_fcx": True, **result})
+            return
         settings = get_system_settings(db)
         account = one(db, "SELECT * FROM market_accounts WHERE user_id=? FOR UPDATE", (user["id"],))
         payload = self.read_json(); ticker = str(payload.get("ticker") or "").upper().strip(); side = str(payload.get("side") or "").lower()
