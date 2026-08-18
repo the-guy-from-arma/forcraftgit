@@ -317,8 +317,12 @@ def build_market_payload(
         "history_range": str(market_response.get("history_range") or normalized_range).upper(),
         "history_range_start": str(market_response.get("history_range_start") or market_response.get("history_window_start") or ""),
         "history_range_end": str(market_response.get("history_range_end") or ""),
-        "pending_withdrawal_amount": 0,
-        "available_withdrawal_amount": 0,
+        # FCX reserves a withdrawal from wallet cash when its settlement is
+        # created. available_buying_power already excludes queued buy orders,
+        # so it is the authoritative amount the resident may send back to the
+        # game bank. Never replace it with the old remote-adapter zero.
+        "pending_withdrawal_amount": _number(remote_account.get("pending_withdrawal_amount")),
+        "available_withdrawal_amount": wallet_cash,
         "portfolio_value": round(portfolio_value, 2),
         "account_equity": round(wallet_cash + portfolio_value, 2),
         "market_open": market_open,

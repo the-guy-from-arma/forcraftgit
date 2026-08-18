@@ -17,6 +17,18 @@ import remote_fcx
 
 
 class RemoteFcxPayloadTests(unittest.TestCase):
+    def test_settled_buying_power_is_available_for_whole_dollar_withdrawal(self):
+        client = SimpleNamespace(
+            market=lambda **_kwargs: {"permissions": {}, "market": {"market_open": False}, "securities": []},
+            portfolio=lambda *_: {"account": {"status": "active", "cash_balance": 95100, "available_buying_power": 95028.65}, "holdings": [], "orders": []},
+        )
+        with patch.object(remote_fcx, "_client", return_value=client), \
+             patch.object(remote_fcx, "resolve_account", return_value={"account_id": "acct-7"}), \
+             patch.object(remote_fcx.CommunityConfig, "load", return_value=SimpleNamespace(community_id="faircroft")):
+            payload = remote_fcx.build_market_payload(user={"id": 7, "name": "Resident"}, identity_id="bohemia-7", game_bank_balance=0, game_bank_synced_at="now")
+
+        self.assertEqual(payload["available_withdrawal_amount"], 95028.65)
+
     def test_grouped_fcx_history_and_execution_volume_are_preserved_for_cad_ui(self):
         client = SimpleNamespace(
             market=lambda **_kwargs: {
