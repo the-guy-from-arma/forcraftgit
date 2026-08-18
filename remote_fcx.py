@@ -290,7 +290,7 @@ def build_market_payload(
             "can_trade_equity": account_active and equity_restriction is None and trading_enabled,
             "can_buy": account_active and equity_restriction is None and buy_enabled,
             "can_sell": account_active and equity_restriction is None and sell_enabled,
-            "can_trade_margin": account_active and leverage_restriction is None and _bool(permissions.get("margin"), False),
+            "can_trade_margin": account_active and leverage_restriction is None and trading_enabled and _bool(permissions.get("margin"), False) and _bool(market.get("market_margin_enabled"), False),
             "can_transfer_shares": _bool(permissions.get("transfers"), False),
             "restriction": equity_restriction or leverage_restriction,
             "restriction_scope": str((equity_restriction or leverage_restriction or {}).get("scope") or ""),
@@ -353,6 +353,16 @@ def create_order(*, user: dict[str, Any], identity_id: str, payload: dict[str, A
     )
     trade = response.get("trade") if isinstance(response.get("trade"), dict) else {}
     return {**response, **trade, "status": str(trade.get("status") or "processing").lower()}
+
+
+def create_margin_order(*, user: dict[str, Any], identity_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    account = resolve_account(user, identity_id)
+    return _client().create_margin_order({**payload, "community_user_id": str(user["id"]), "account_id": str(account["account_id"])})
+
+
+def close_margin_position(*, user: dict[str, Any], identity_id: str, position_id: int) -> dict[str, Any]:
+    account = resolve_account(user, identity_id)
+    return _client().close_margin_position(position_id, str(user["id"]), str(account["account_id"]))
 
 
 def redeem_promotion(*, user: dict[str, Any], identity_id: str, code: str) -> dict[str, Any]:

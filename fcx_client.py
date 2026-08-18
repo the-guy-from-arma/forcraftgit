@@ -82,6 +82,12 @@ class FcxClient:
     def refresh_order(self, trade_request_id: str) -> dict[str, Any]:
         return self.request("POST", f"/api/v1/community/orders/{trade_request_id}/refresh", {})
 
+    def create_margin_order(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.request("POST", "/api/v1/community/margin/orders", payload)
+
+    def close_margin_position(self, position_id: int, community_user_id: str, account_id: str) -> dict[str, Any]:
+        return self.request("POST", f"/api/v1/community/margin/positions/{position_id}/close?community_user_id={community_user_id}&account_id={account_id}", {})
+
     def create_settlement(self, payload: dict[str, Any], idempotency_key: str) -> dict[str, Any]:
         return self.request(
             "POST",

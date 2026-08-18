@@ -38,6 +38,8 @@ from remote_fcx import (
     build_market_payload as build_remote_fcx_market_payload,
     connection_status as remote_fcx_connection_status,
     create_order as create_remote_fcx_order,
+    create_margin_order as create_remote_fcx_margin_order,
+    close_margin_position as close_remote_fcx_margin_position,
     create_wallet_transfer as create_remote_fcx_wallet_transfer,
     redeem_promotion as redeem_remote_fcx_promotion,
     remote_market_enabled,
@@ -19081,6 +19083,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         err = verified_required(user)
         if err:
             self.error(403 if user else 401, err); return
+        if REMOTE_FCX_ENABLED:
+            assert user is not None
+            try:
+                context = remote_fcx_context(db, user)
+                result = create_remote_fcx_margin_order(user=dict(user), identity_id=context["identity_id"], payload=self.read_json())
+            except (ValueError, FcxClientError, RuntimeError) as exc:
+                self.error(502, f"FCX-Control could not open the leveraged position: {exc}"); return
+            self.send_json(201, {"ok": True, "remote_fcx": True, **result}); return
         assert user is not None
         settings = get_system_settings(db)
         if not settings["market_margin_enabled"]:
@@ -19166,6 +19176,14 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         err = verified_required(user)
         if err:
             self.error(403 if user else 401, err); return
+        if REMOTE_FCX_ENABLED:
+            assert user is not None
+            try:
+                context = remote_fcx_context(db, user)
+                result = close_remote_fcx_margin_position(user=dict(user), identity_id=context["identity_id"], position_id=position_id)
+            except (ValueError, FcxClientError, RuntimeError) as exc:
+                self.error(502, f"FCX-Control could not close the leveraged position: {exc}"); return
+            self.send_json(200, {"ok": True, "remote_fcx": True, **result}); return
         assert user is not None
         settings = get_system_settings(db)
         position_security = one(db, """SELECT s.ticker FROM market_margin_positions p
