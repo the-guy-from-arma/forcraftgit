@@ -19086,7 +19086,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if REMOTE_FCX_ENABLED:
             assert user is not None
             try:
-                context = remote_fcx_context(db, user)
+                context = cad1_remote_fcx_context(db, user)
                 result = create_remote_fcx_margin_order(user=dict(user), identity_id=context["identity_id"], payload=self.read_json())
             except (ValueError, FcxClientError, RuntimeError) as exc:
                 self.error(502, f"FCX-Control could not open the leveraged position: {exc}"); return
@@ -19179,7 +19179,7 @@ class RoleplayHandler(BaseHTTPRequestHandler):
         if REMOTE_FCX_ENABLED:
             assert user is not None
             try:
-                context = remote_fcx_context(db, user)
+                context = cad1_remote_fcx_context(db, user)
                 result = close_remote_fcx_margin_position(user=dict(user), identity_id=context["identity_id"], position_id=position_id)
             except (ValueError, FcxClientError, RuntimeError) as exc:
                 self.error(502, f"FCX-Control could not close the leveraged position: {exc}"); return
