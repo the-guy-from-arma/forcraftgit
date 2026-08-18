@@ -6268,11 +6268,13 @@ function renderMarketWorkspace() {
   const profit = invested - cost;
   const selectedHolding = holdings.find(row => row.ticker === selected.ticker);
   const owned = Number(selectedHolding?.quantity || 0);
-  const selectedMarketCap = Number(selected.market_cap || 0);
   const selectedMarketCapRank = Number(selected.market_cap_rank || 0);
   const marketCapRankCount = Number(selected.market_cap_rank_count || 0);
   const indexFunds = data.index_funds || [];
   const selectedFund = indexFunds.find(fund => fund.ticker === selected.ticker);
+  const selectedMarketCap = selectedFund
+    ? Number(selectedFund.market_cap || (selectedFund.constituents || selectedFund.members || []).reduce((sum, item) => sum + Number(item.market_cap || item.current_market_cap || 0), 0))
+    : Number(selected.market_cap || 0);
   const indexFundShelf = indexFunds.map(fund => {
     const constituents = fund.constituents || fund.members || [];
     const previousFundPrice = Number(fund.previous_price || fund.price || 0);
