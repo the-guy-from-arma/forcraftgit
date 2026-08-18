@@ -186,14 +186,15 @@ def build_market_payload(
     permissions = market_response.get("permissions") if isinstance(market_response.get("permissions"), dict) else {}
     market = market_response.get("market") if isinstance(market_response.get("market"), dict) else {}
     if _bool(market.get("market_open"), True):
-        queued_ids = [str(order.get("trade_request_id") or "") for order in portfolio_response.get("orders") or [] if str(order.get("status") or "").upper() == "QUEUED"]
-        for request_id in queued_ids[:25]:
+        refreshable_statuses = {"QUEUED", "BANK_PENDING", "BANK_RETRY_REQUIRED", "PAYOUT_PENDING"}
+        pending_ids = [str(order.get("trade_request_id") or "") for order in portfolio_response.get("orders") or [] if str(order.get("status") or "").upper() in refreshable_statuses]
+        for request_id in pending_ids[:25]:
             if request_id:
                 try:
                     client.refresh_order(request_id)
                 except FcxClientError:
                     pass
-        if queued_ids:
+        if pending_ids:
             portfolio_response = client.portfolio(user["id"], account_id)
     remote_account = portfolio_response.get("account") if isinstance(portfolio_response.get("account"), dict) else {}
     wallet_cash = round(_number(remote_account.get("available_buying_power"), _number(remote_account.get("cash_balance"))), 2)
