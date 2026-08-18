@@ -1,6 +1,45 @@
 {
-  "version": "0.4.1",
+  "version": "0.4.4",
   "entries": [
+    {
+      "date": "2026-08-18",
+      "version": "0.4.4",
+      "title": "ThunderLink 0.4.4 - FEC Separation, Shared FCX, and Cloud CAD",
+      "added": [
+        "Added FCX Control as the centralized FEC regulatory and market-control system while preserving independent CAD 1 and CAD 2 community data, banking, permissions, and PostgreSQL boundaries.",
+        "Added authenticated remote FCX adapters for shared Ravenhood quotes, market history, market-maker flow, wallets, equity orders, leverage positions, trading restrictions, and community-scoped account access.",
+        "Added ThunderLink Cloud and its customer Launch PWA for community account registration, guided CAD setup, isolated Railway project and PostgreSQL provisioning, protected owner credentials, and managed deployment ownership.",
+        "Added Cloud deployment recovery and lifecycle controls, including failed-provision retry, test-community cleanup, permanent managed-CAD deletion, live Railway status reconciliation, and safe fallback branding.",
+        "Added the Release Center readiness workflow to detect deployable CAD builds, document changes and fixes, publish semantic releases, show eligible client CADs, and let each client install an update through the audited deployment path.",
+        "Added English and Spanish launcher coverage, a redesigned public product and FAQ experience, and responsive community-management screens.",
+        "Added Arma setup guidance for the required ThunderBuddies Bank Bridge and TBSRP Network Workshop mods, conditional AntiCheat guidance, and secure generation of the Railway ARMA_BRIDGE_API_KEY used by the CAD and Arma server.",
+        "Added a fully white-labeled blank Cloud CAD that uses the customer's configured community name, CAD name, colors, logo, PWA identity, accessibility labels, government seals, and service branding, with TBN - Thunder Buddies News as the Cloud newsroom."
+      ],
+      "changed": [
+        "Moved FCX engine, market, leverage, investigation, promotion, and emergency authority out of the community CADs and into FCX Control with server-side authorization and audit responsibility.",
+        "Changed CAD 1 and CAD 2 Ravenhood from local market ownership to community-scoped consumers of the shared FCX market while retaining their own resident and community-account boundaries.",
+        "Changed portfolio promotional campaigns so codes are created and governed centrally by FEC administrators; CADs now only redeem eligible campaigns through FCX Control.",
+        "Changed CAD 2 owner bootstrap credentials to Railway environment variables instead of source-controlled login values.",
+        "Changed the shared margin workflow so both connected CADs use FCX leverage state and correct community/Arma context without creating duplicate market engines.",
+        "Changed index reporting to show correct FCXS and FCXV prices, per-index capitalization, and combined index market capitalization across CAD 1, CAD 2, and the blank Cloud template.",
+        "Changed the blank CAD launcher, installed PWA metadata, casino and service icons, insurance, banking, statistics, credentials, and dynamically opened workspaces to use customer branding instead of inherited Faircroft or WRLD labels."
+      ],
+      "fixed": [
+        "Fixed CAD-to-FCX connection governance, live market adapter context, Arma server routing, market-maker activity display, wallet synchronization, ranged history, and scoped trading restrictions.",
+        "Fixed queued and pending FCX orders becoming stranded by repairing execution-state transitions, recovering eligible orders, and reloading resident portfolios after settlement.",
+        "Fixed Cloud CAD creation failures caused by request validation and Railway provisioning errors, and added clearer retry behavior for failed deployments.",
+        "Fixed deployed CADs remaining stuck in DEPLOYING after Railway reported a running service by reconciling the latest service deployment state.",
+        "Fixed the deployed CAD language selector layout and completed Spanish localization for dynamic management data and public launcher content.",
+        "Fixed stale or incorrect Ravenhood index metrics and restored aggregate market-cap visibility on the price desk.",
+        "Fixed legacy Faircroft and WRLD names or artwork reappearing in the blank Cloud CAD after dynamic screens opened or cached PWA assets were reused."
+      ],
+      "removed": [
+        "Removed local FEC and FCX administrative control surfaces from CAD 1 and CAD 2 so community owners cannot operate the shared exchange.",
+        "Removed portfolio promotional-code issuance and retired promotional controls from both CADs.",
+        "Removed stock lottery-ticket rewards and reward-point stock purchases from the community CAD reward systems.",
+        "Removed legacy Faircroft and WRLD brand assets from the blank Cloud CAD offline cache and customer-facing fallback experience."
+      ]
+    },
     {
       "date": "2026-08-14",
       "version": "0.4.1",

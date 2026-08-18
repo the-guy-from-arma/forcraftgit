@@ -1,11 +1,11 @@
-const CACHE = "faircroft-rp-v041-lottery-cash-v1";
+const CACHE = "faircroft-rp-v044-shared-changelog-v1";
 const ASSETS = [
   "/",
   "/static/styles.css?v=0.4.1-ravenhood-engine-v1",
   "/static/ravenhood-mobile.css?v=0.4.1-ravenhood-engine-v1",
   "/static/insurance-v7.css?v=0.4.1-ravenhood-engine-v1",
   "/static/roadmap.css?v=0.1.1-ops4",
-  "/static/app.js?v=0.4.1-lottery-cash-v1",
+  "/static/app.js?v=0.4.4-shared-changelog-v1",
   "/static/thunderlink-eula-v1.0.txt",
   "/static/brand/platforms/windows.svg",
   "/static/brand/platforms/xbox.svg",
